@@ -1,8 +1,16 @@
-[package]
-name = "fastserv"
+[workspace]
+members = [
+    "fastserv",
+    "fastserv-core",
+]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
+description = "Fast and easy LLM serving."
+homepage = "https://github.com/EricLBuehler/fastserv"
+repository = "https://github.com/EricLBuehler/fastserv"
+keywords = ["machine-learning"]
+categories = ["science"]
+license = "MIT"
