@@ -403,6 +403,10 @@ impl Model {
 
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
+        if seqlen_offsets.len() > b_size {
+            candle_core::bail!("Expected seqlen offsets have length equal to batch size.")
+        }
+
         let past_key_values_length = self.calculate_past_kv_len(seq_len)?;
         let attention_mask = if seq_len <= 1 {
             None
