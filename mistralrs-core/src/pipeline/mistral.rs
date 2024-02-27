@@ -153,7 +153,7 @@ impl Loader for MistralLoader {
 
 impl Pipeline for MistralPipeline {
     fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
-        Ok(self.model.forward(input_ids, todo!())?)
+        Ok(self.model.forward(input_ids)?)
     }
     fn tokenize_prompt(&self, prompt: String) -> Result<Tensor> {
         todo!()
