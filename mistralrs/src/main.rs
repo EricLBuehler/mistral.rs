@@ -2,7 +2,7 @@ use anyhow::Result;
 use axum::{routing::get, Router};
 use candle_core::{DType, Device};
 use clap::Parser;
-use mistralrs_core::{run_mistral, Loader, MistralLoader, MistralSpecificConfig, TokenSource};
+use mistralrs_core::{Loader, MistralLoader, MistralSpecificConfig, TokenSource};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -22,11 +22,11 @@ fn get_router() -> Router {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    //let args = Args::parse();
+    let args = Args::parse();
 
     let app = get_router();
 
-    /*let model_id = "mistralai/Mistral-7B-Instruct-v0.1";
+    let model_id = "mistralai/Mistral-7B-Instruct-v0.1";
     let loader = MistralLoader::new(
         model_id.to_string(),
         MistralSpecificConfig {
@@ -34,11 +34,10 @@ async fn main() -> Result<()> {
         },
         Some(DType::F32),
     );
-    let pipeline = loader.load_model(None, TokenSource::CacheToken, None, &Device::Cpu)?;*/
-    run_mistral()?;
+    let pipeline = loader.load_model(None, TokenSource::CacheToken, None, &Device::Cpu)?;
 
-    /*let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", args.port)).await?;
-    axum::serve(listener, app).await?;*/
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", args.port)).await?;
+    axum::serve(listener, app).await?;
 
     Ok(())
 }
