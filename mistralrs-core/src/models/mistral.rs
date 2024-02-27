@@ -79,11 +79,13 @@ impl RotaryEmbedding {
         &self,
         q: &Tensor,
         k: &Tensor,
-        position_ids: &Tensor,
+        seqlen_offset: usize,
     ) -> Result<(Tensor, Tensor)> {
-        let cos = self.cos.i(position_ids)?;
-        let sin = self.sin.i(position_ids)?;
-
+        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
+        let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
+        let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
+        let cos = cos.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
+        let sin = sin.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
         let q_embed = (q.broadcast_mul(&cos)? + rotate_half(q)?.broadcast_mul(&sin))?;
         let k_embed = (k.broadcast_mul(&cos)? + rotate_half(k)?.broadcast_mul(&sin))?;
         Ok((q_embed, k_embed))
@@ -198,7 +200,7 @@ impl Attention {
         &mut self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
-        position_ids: &Tensor,
+        seqlen_offset: usize,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -218,7 +220,7 @@ impl Attention {
 
         let (query_states, key_states) =
             self.rotary_emb
-                .apply_rotary_emb_qkv(&query_states, &key_states, position_ids)?;
+                .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offset)?;
 
         let (key_states, value_states) = match &self.kv_cache {
             None => (key_states, value_states),
@@ -293,11 +295,11 @@ impl DecoderLayer {
         &mut self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
-        position_ids: &Tensor,
+        seqlen_offset: usize,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self.self_attn.forward(&xs, attention_mask, position_ids)?;
+        let xs = self.self_attn.forward(&xs, attention_mask, seqlen_offset)?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = xs.apply(&self.post_attention_layernorm)?.apply(&self.mlp)?;
@@ -349,7 +351,7 @@ impl Model {
         &self,
         b_size: usize,
         tgt_len: usize,
-        past_kvs_len: usize,
+        seqlen_offset: usize,
     ) -> Result<Tensor> {
         // Sliding window mask?
         let mask: Vec<_> = (0..tgt_len)
@@ -364,13 +366,13 @@ impl Model {
             })
             .collect();
         let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
-        let mask = if past_kvs_len > 0 {
-            let mask0 = Tensor::zeros((tgt_len, past_kvs_len), DType::F32, &self.device)?;
+        let mask = if seqlen_offset > 0 {
+            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, &self.device)?;
             Tensor::cat(&[&mask0, &mask], D::Minus1)?
         } else {
             mask
         };
-        mask.expand((b_size, 1, tgt_len, tgt_len + past_kvs_len))?
+        mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
             .to_dtype(self.dtype)
     }
 
@@ -389,9 +391,8 @@ impl Model {
         }
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
-
         let past_key_values_length = self.calculate_past_kv_len(seq_len)?;
         let attention_mask = if seq_len <= 1 {
             None
@@ -399,17 +400,10 @@ impl Model {
             let mask =
                 self.prepare_decoder_attention_mask(b_size, seq_len, past_key_values_length)?;
             Some(mask)
-        }; 
-
-        let position_ids = Tensor::arange(
-            past_key_values_length as i64,
-            (past_key_values_length + seq_len) as i64,
-            input_ids.device(),
-        )?;
-        
+        };
         let mut xs = self.embed_tokens.forward(input_ids)?;
         for layer in self.layers.iter_mut() {
-            xs = layer.forward(&xs, attention_mask.as_ref(), &position_ids)?
+            xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?
         }
         xs.narrow(1, seq_len - 1, 1)?
             .apply(&self.norm)?
