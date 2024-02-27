@@ -64,6 +64,6 @@ pub trait Loader {
 }
 
 pub trait Pipeline {
-    fn forward(&self, input_ids: &Tensor) -> Tensor;
-    fn tokenize_prompt(&self, prompt: String) -> Tensor;
+    fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor>;
+    fn tokenize_prompt(&self, prompt: String) -> Result<Tensor>;
 }
