@@ -138,7 +138,7 @@ impl Loader for MistralLoader {
         let vb = from_mmaped_safetensors(
             paths.get_weight_filenames(),
             dtype.unwrap_or(default_dtype),
-            &device,
+            device,
             false,
         )?;
 
