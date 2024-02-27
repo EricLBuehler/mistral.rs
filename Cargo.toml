@@ -14,3 +14,7 @@ repository = "https://github.com/EricLBuehler/fastserv"
 keywords = ["machine-learning"]
 categories = ["science"]
 license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1.0.80"
+candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.4.0"}

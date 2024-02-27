@@ -20,63 +20,6 @@ pub struct Config {
     pub(crate) use_flash_attn: bool,
 }
 
-impl Config {
-    // https://huggingface.co/mistralai/Mistral-7B-v0.1/blob/main/config.json
-    pub fn config_7b_v0_1(use_flash_attn: bool) -> Self {
-        Self {
-            vocab_size: 32000,
-            hidden_size: 4096,
-            intermediate_size: 14336,
-            num_hidden_layers: 32,
-            num_attention_heads: 32,
-            num_key_value_heads: 8,
-            hidden_act: Activation::Silu,
-            max_position_embeddings: 32768,
-            rms_norm_eps: 1e-5,
-            rope_theta: 10_000.,
-            sliding_window: 4096,
-            use_flash_attn,
-        }
-    }
-
-    // https://huggingface.co/Open-Orca/Mistral-7B-OpenOrca/blob/main/config.json
-    // https://huggingface.co/teknium/OpenHermes-2.5-Mistral-7B/blob/main/config.json
-    pub fn config_chat_ml(use_flash_attn: bool) -> Self {
-        Self {
-            vocab_size: 32002,
-            hidden_size: 4096,
-            intermediate_size: 14336,
-            num_hidden_layers: 32,
-            num_attention_heads: 32,
-            num_key_value_heads: 8,
-            hidden_act: Activation::Silu,
-            max_position_embeddings: 32768,
-            rms_norm_eps: 1e-5,
-            rope_theta: 10_000.,
-            sliding_window: 4096,
-            use_flash_attn,
-        }
-    }
-
-    // https://huggingface.co/amazon/MistralLite/blob/main/config.json
-    pub fn config_amazon_mistral_lite(use_flash_attn: bool) -> Self {
-        Self {
-            vocab_size: 32003,
-            hidden_size: 4096,
-            intermediate_size: 14336,
-            num_hidden_layers: 32,
-            num_attention_heads: 32,
-            num_key_value_heads: 8,
-            hidden_act: Activation::Silu,
-            max_position_embeddings: 32768,
-            rms_norm_eps: 1e-5,
-            rope_theta: 10_000.,
-            sliding_window: 4096,
-            use_flash_attn,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 struct RmsNorm {
     inner: candle_nn::RmsNorm,
