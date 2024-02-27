@@ -1,7 +1,7 @@
 [workspace]
 members = [
-    "fastserv",
-    "fastserv-core",
+    "mistralrs",
+    "mistralrs-core",
 ]
 resolver = "2"
 

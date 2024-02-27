@@ -53,7 +53,11 @@ enum TokenizerError {
 }
 
 impl MistralLoader {
-    pub fn new(model_id: String, config: MistralSpecificConfig, forced_dtype: Option<DType>) -> Self {
+    pub fn new(
+        model_id: String,
+        config: MistralSpecificConfig,
+        forced_dtype: Option<DType>,
+    ) -> Self {
         Self {
             model_id,
             default_dtype: DType::BF16,

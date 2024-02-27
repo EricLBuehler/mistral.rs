@@ -1,5 +1,5 @@
 [package]
-name = "fastserv-core"
+name = "mistralrs-core"
 readme = "README.md"
 authors = ["Eric Buehler"]
 version.workspace = true
