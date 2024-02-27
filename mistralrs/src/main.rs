@@ -2,7 +2,7 @@ use anyhow::Result;
 use axum::{routing::get, Router};
 use candle_core::{DType, Device};
 use clap::Parser;
-use mistralrs_core::{Loader, MistralLoader, MistralSpecificConfig, TokenSource};
+use mistralrs_core::{Loader, MistralLoader, MistralRs, MistralSpecificConfig, TokenSource};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -35,6 +35,7 @@ async fn main() -> Result<()> {
         Some(DType::F32),
     );
     let pipeline = loader.load_model(None, TokenSource::CacheToken, None, &Device::Cpu)?;
+    let mistralrs = MistralRs::new(pipeline);
 
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", args.port)).await?;
     axum::serve(listener, app).await?;
