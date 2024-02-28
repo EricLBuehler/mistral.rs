@@ -7,7 +7,7 @@ use tokenizers::Tokenizer;
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 
-use crate::{models::Cache, request::Sequence};
+use crate::{models::Cache, sequence::Sequence};
 
 pub trait ModelPaths {
     fn get_weight_filenames(&self) -> &[PathBuf];

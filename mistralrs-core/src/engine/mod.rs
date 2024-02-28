@@ -13,9 +13,10 @@ use crate::{
     deref_mut_refcell, deref_refcell, get_mut_arcmutex, handle_seq_error,
     handle_seq_error_stateaware,
     pipeline::Pipeline,
-    request::{Request, Sequence, SequenceState},
+    request::Request,
     response::Response,
     scheduler::{Scheduler, SchedulerOutput},
+    sequence::{Sequence, SequenceState},
 };
 
 const SEED: u64 = 0;

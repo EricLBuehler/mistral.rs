@@ -2,7 +2,7 @@ use super::{Loader, ModelPaths, Pipeline, SimpleModelPaths, TokenSource};
 use crate::{deref_mut_refcell, deref_refcell};
 use crate::{
     models::mistral::{Config, Model},
-    request::Sequence,
+    sequence::Sequence,
     utils::{
         dtype::get_dtype_from_torch_dtype, tokens::get_token,
         varbuilder_utils::from_mmaped_safetensors,

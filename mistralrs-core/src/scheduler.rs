@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     deref_mut_refcell, deref_refcell,
-    request::{Sequence, SequenceState},
+    sequence::{Sequence, SequenceState},
 };
 
 pub trait FcfsBacker {

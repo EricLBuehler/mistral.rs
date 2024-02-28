@@ -35,7 +35,7 @@ macro_rules! handle_seq_error_stateaware {
             Ok(v) => v,
             Err(e) => {
                 use $crate::response::Response;
-                use $crate::request::SequenceState;
+                use $crate::sequence::SequenceState;
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                 deref_mut_refcell!($seq).responder().send(Response::Error(e.into())).unwrap();
                 deref_mut_refcell!($seq).set_state(SequenceState::Error);

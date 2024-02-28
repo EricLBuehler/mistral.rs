@@ -16,6 +16,7 @@ mod request;
 mod response;
 mod sampling;
 mod scheduler;
+mod sequence;
 mod utils;
 
 pub use pipeline::{Loader, MistralLoader, MistralSpecificConfig, TokenSource};
