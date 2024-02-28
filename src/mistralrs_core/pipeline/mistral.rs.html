@@ -421,7 +421,7 @@
         <span class="comment">// Pad each sequence by the padding token to the max len.
         </span><span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>seqlen_offsets = Vec::new();
-        <span class="kw">for </span>seq <span class="kw">in </span>input_toks.into_iter() {
+        <span class="kw">for </span>seq <span class="kw">in </span>input_toks.iter() {
             <span class="kw">let </span>context_size = <span class="kw">if </span><span class="kw-2">*</span><span class="macro">deref_mut_refcell!</span>(seq).gen_idx() &gt; <span class="number">0 </span>{
                 <span class="number">1
             </span>} <span class="kw">else </span>{

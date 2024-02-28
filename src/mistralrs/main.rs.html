@@ -82,7 +82,7 @@
         <span class="prelude-val">Some</span>(DType::F32),
     );
     <span class="kw">let </span>pipeline = loader.load_model(<span class="prelude-val">None</span>, TokenSource::CacheToken, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>;
-    <span class="kw">let </span>mistralrs = MistralRs::new(pipeline);
+    <span class="kw">let </span>_mistralrs = MistralRs::new(pipeline);
 
     <span class="kw">let </span>listener = tokio::net::TcpListener::bind(<span class="macro">format!</span>(<span class="string">"127.0.0.1:{}"</span>, args.port)).<span class="kw">await</span><span class="question-mark">?</span>;
     axum::serve(listener, app).<span class="kw">await</span><span class="question-mark">?</span>;
