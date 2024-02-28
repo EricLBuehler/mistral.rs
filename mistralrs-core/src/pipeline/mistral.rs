@@ -1,6 +1,5 @@
-use std::{iter::repeat, sync::Mutex};
-
 use super::{Loader, ModelPaths, Pipeline, SimpleModelPaths, TokenSource};
+use crate::{deref_mut_refcell, deref_refcell};
 use crate::{
     models::mistral::{Config, Model},
     request::Sequence,
@@ -12,14 +11,18 @@ use crate::{
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Activation;
+use candle_sampling::logits_processor::Logprobs;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use serde::Deserialize;
+use std::cell::RefCell;
+use std::{iter::repeat, rc::Rc, sync::Mutex};
 use thiserror::Error;
 use tokenizers::Tokenizer;
 
 pub struct MistralPipeline {
     model: Model,
     tokenizer: Tokenizer,
+    config: MistralSpecificConfig,
 }
 
 pub struct MistralLoader {
@@ -29,8 +32,10 @@ pub struct MistralLoader {
     forced_dtype: Option<DType>,
 }
 
+#[derive(Clone, Copy)]
 pub struct MistralSpecificConfig {
     pub use_flash_attn: bool,
+    pub repeat_last_n: usize,
 }
 
 #[derive(Deserialize)]
@@ -150,28 +155,39 @@ impl Loader for MistralLoader {
         let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
 
-        Ok(Box::new(Mutex::new(MistralPipeline { model, tokenizer })))
+        Ok(Box::new(Mutex::new(MistralPipeline {
+            model,
+            tokenizer,
+            config: self.config,
+        })))
     }
 }
 
 impl Pipeline for MistralPipeline {
-    fn forward(&mut self, input_toks: Vec<&mut Sequence>) -> Result<Tensor> {
+    fn forward(&mut self, input_toks: Vec<Rc<RefCell<Sequence>>>) -> Result<Tensor> {
         // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
-        let max_len = input_toks.iter().map(|seq| seq.len()).max().unwrap();
+        let max_len = input_toks
+            .iter()
+            .map(|seq| deref_refcell!(seq).len())
+            .max()
+            .unwrap();
         let padding_tok = 0;
         // Pad each sequence by the padding token to the max len.
         let mut seqs_tensors = Vec::new();
         let mut seqlen_offsets = Vec::new();
         for seq in input_toks.into_iter() {
-            let context_size = if *seq.gen_idx() > 0 {
+            let context_size = if *deref_mut_refcell!(seq).gen_idx() > 0 {
                 1
             } else {
-                seq.get_toks().len()
+                deref_refcell!(seq).get_toks().len()
             };
-            let start_pos = seq.get_toks().len().saturating_sub(context_size);
-            let mut ctxt = seq.get_toks()[start_pos..].to_vec();
+            let start_pos = deref_refcell!(seq)
+                .get_toks()
+                .len()
+                .saturating_sub(context_size);
+            let mut ctxt = deref_refcell!(seq).get_toks()[start_pos..].to_vec();
             seqlen_offsets.push(start_pos);
-            *seq.gen_idx() += 1;
+            *deref_mut_refcell!(seq).gen_idx() += 1;
 
             ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
 
@@ -203,5 +219,27 @@ impl Pipeline for MistralPipeline {
     }
     fn cache(&self) -> &crate::models::Cache {
         todo!()
+    }
+    fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs> {
+        let logits = logits.squeeze(0).unwrap().to_dtype(DType::F32).unwrap();
+        let start_at = deref_refcell!(seq)
+            .get_toks()
+            .len()
+            .saturating_sub(self.config.repeat_last_n);
+        let ctxt = deref_refcell!(seq).get_toks()[start_at..].to_vec();
+
+        Ok(deref_mut_refcell!(seq)
+            .logits_processor()
+            .sample(&logits, Some(&ctxt))?)
+    }
+    fn tokenizer(&self) -> Tokenizer {
+        self.tokenizer.clone()
+    }
+    fn eos_tok(&self) -> u32 {
+        self.tokenizer
+            .get_vocab(true)
+            .get("</s>")
+            .copied()
+            .expect("Unable to extract `</s>` EOS token.")
     }
 }

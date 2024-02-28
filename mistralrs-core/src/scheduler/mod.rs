@@ -1,39 +1,44 @@
 use std::{
+    cell::RefCell,
     collections::{vec_deque::Iter, VecDeque},
     iter::zip,
+    rc::Rc,
 };
 
-use crate::request::Sequence;
+use crate::{
+    deref_mut_refcell, deref_refcell,
+    request::{Sequence, SequenceState},
+};
 
 pub trait FcfsBacker {
     fn new() -> Self;
-    fn next(&mut self) -> Option<Sequence>;
-    fn add(&mut self, item: Sequence);
-    fn iter(&self) -> impl Iterator<Item = &Sequence>;
+    fn next(&mut self) -> Option<Rc<RefCell<Sequence>>>;
+    fn add(&mut self, item: Rc<RefCell<Sequence>>);
+    fn iter(&self) -> impl Iterator<Item = &Rc<RefCell<Sequence>>>;
 }
 
-impl FcfsBacker for VecDeque<Sequence> {
+impl FcfsBacker for VecDeque<Rc<RefCell<Sequence>>> {
     fn new() -> Self {
         Self::new()
     }
-    fn add(&mut self, item: Sequence) {
+    fn add(&mut self, item: Rc<RefCell<Sequence>>) {
         self.push_back(item)
     }
-    fn next(&mut self) -> Option<Sequence> {
+    fn next(&mut self) -> Option<Rc<RefCell<Sequence>>> {
         self.pop_front()
     }
-    fn iter(&self) -> Iter<'_, Sequence> {
+    fn iter(&self) -> Iter<'_, Rc<RefCell<Sequence>>> {
         self.iter()
     }
 }
 
 pub struct SchedulerOutput {
-    pub seqs: Vec<Sequence>,
+    pub seqs: Vec<Rc<RefCell<Sequence>>>,
 }
 
 pub struct Scheduler<Backer: FcfsBacker> {
     waiting: Backer,
-    running: Vec<Sequence>,
+    running: Vec<Rc<RefCell<Sequence>>>,
 }
 
 impl<Backer: FcfsBacker> Scheduler<Backer> {
@@ -45,7 +50,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
     }
 
     pub fn add_seq(&mut self, seq: Sequence) {
-        self.waiting.add(seq)
+        self.waiting.add(Rc::new(RefCell::new(seq)))
     }
 
     /// Schedule all sequences based on their state and the available space.
@@ -54,15 +59,15 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
         let running = self.running.clone();
         let mut running = running
             .iter()
-            .filter(|seq| seq.is_running())
+            .filter(|seq| deref_refcell!(seq).is_running())
             .cloned()
             .collect::<Vec<_>>();
 
         // If the waiting sequence will fit, add it. Keep track of its id.
         let mut waiting_to_remove = Vec::new();
         for seq in self.waiting.iter() {
-            if self.sequence_fits(&running, seq) {
-                waiting_to_remove.push(seq.id());
+            if self.sequence_fits(&running, &*deref_refcell!(seq)) {
+                waiting_to_remove.push(deref_refcell!(seq).id().clone());
                 running.push(seq.clone());
             }
         }
@@ -70,9 +75,13 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
         // Remove sequences moved from waiting -> running.
         let mut waiting = Backer::new();
         for (id, seq) in zip(waiting_to_remove, self.waiting.iter()) {
-            if seq.id() != id {
+            if *deref_refcell!(seq).id() != id {
                 waiting.add(seq.clone());
             }
+        }
+
+        for seq in &running {
+            deref_mut_refcell!(seq).set_state(SequenceState::Running);
         }
 
         self.waiting = waiting;
@@ -81,7 +90,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
         SchedulerOutput { seqs: running }
     }
 
-    fn sequence_fits(&self, running: &[Sequence], seq: &Sequence) -> bool {
+    fn sequence_fits(&self, running: &[Rc<RefCell<Sequence>>], seq: &Sequence) -> bool {
         todo!()
     }
 }

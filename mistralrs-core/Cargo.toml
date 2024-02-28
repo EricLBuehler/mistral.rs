@@ -24,9 +24,7 @@ thiserror = "1.0.57"
 tokenizers = "0.15.2"
 tqdm = "0.6.0"
 tracing = "0.1.40"
-
-clap = { version = "4.5.1", features = ["derive"] }
-candle-examples = { git = "https://github.com/huggingface/candle.git", version = "0.4.0" }
+candle-sampling = { git = "https://github.com/EricLBuehler/candle-sampling.git", version = "0.2.0" }
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]

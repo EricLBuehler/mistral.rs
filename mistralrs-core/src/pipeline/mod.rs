@@ -1,6 +1,8 @@
 mod mistral;
+use candle_sampling::logits_processor::Logprobs;
 pub use mistral::{MistralLoader, MistralSpecificConfig};
-use std::{path::PathBuf, sync::Mutex};
+use std::{cell::RefCell, path::PathBuf, rc::Rc, sync::Mutex};
+use tokenizers::Tokenizer;
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -66,9 +68,12 @@ pub trait Loader {
 }
 
 pub trait Pipeline: Send + Sync {
-    fn forward(&mut self, input_toks: Vec<&mut Sequence>) -> Result<Tensor>;
+    fn forward(&mut self, input_toks: Vec<Rc<RefCell<Sequence>>>) -> Result<Tensor>;
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>>;
     fn device(&self) -> &Device;
     fn num_hidden_layers(&self) -> usize;
     fn cache(&self) -> &Cache;
+    fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs>;
+    fn tokenizer(&self) -> Tokenizer;
+    fn eos_tok(&self) -> u32;
 }
