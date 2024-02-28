@@ -53,7 +53,7 @@ impl Engine {
             for seq in &scheduled.seqs {
                 let cache = seq.cache().lock();
                 let cache = cache.get(layer).unwrap();
-                // TODO(EricLBuehler): This is certainly incorrect. Need to find a way to handle some caches with values, some without.
+                // TODO(EricLBuehler): Unwrapping is certainly incorrect. Need to find a way to handle some caches with values, some without.
                 let cache = cache.as_ref().unwrap();
                 k_vec.push(cache.0.clone().unsqueeze(0).unwrap());
                 v_vec.push(cache.1.clone().unsqueeze(0).unwrap());
