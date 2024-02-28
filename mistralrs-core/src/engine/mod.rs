@@ -11,6 +11,7 @@ use candle_sampling::logits_processor::{LogitsProcessor, Logprobs, SamplingMetho
 
 use crate::{
     deref_mut_refcell, deref_refcell, get_mut_arcmutex, handle_seq_error,
+    handle_seq_error_stateaware,
     pipeline::Pipeline,
     request::{Request, Sequence, SequenceState},
     response::Response,
@@ -54,9 +55,9 @@ impl Engine {
             let logits_seq = logits.chunk(seqs_len, 0).unwrap();
             debug_assert_eq!(logits_seq.len(), seqs_len);
             for (logits_per_seq, seq) in zip(logits_seq, scheduled.seqs.iter()) {
-                let next_token: Logprobs = handle_seq_error!(
+                let next_token: Logprobs = handle_seq_error_stateaware!(
                     get_mut_arcmutex!(self.pipeline).sample(logits_per_seq, seq.clone()),
-                    deref_refcell!(seq).responder()
+                    seq
                 );
                 let next_token = next_token.token as u32;
                 deref_mut_refcell!(seq).add_token(next_token);

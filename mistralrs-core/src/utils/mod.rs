@@ -29,6 +29,23 @@ macro_rules! handle_seq_error {
 }
 
 #[macro_export]
+macro_rules! handle_seq_error_stateaware {
+    ($fallible:expr, $seq:expr) => {
+        match $fallible {
+            Ok(v) => v,
+            Err(e) => {
+                use $crate::response::Response;
+                use $crate::request::SequenceState;
+                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
+                deref_mut_refcell!($seq).responder().send(Response::Error(e.into())).unwrap();
+                deref_mut_refcell!($seq).set_state(SequenceState::Error);
+                return;
+            }
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! deref_refcell {
     ($thing:expr) => {
         loop {

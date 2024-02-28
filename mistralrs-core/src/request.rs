@@ -20,6 +20,7 @@ pub enum SequenceState {
     Done(StopReason),
     Running,
     Waiting,
+    Error,
 }
 
 pub struct Sequence {
