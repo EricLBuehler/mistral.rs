@@ -27,7 +27,7 @@ jobs:
         run: |
           cargo doc --no-deps
           rm -rf ./docs
-          echo "<meta http-equiv=\"refresh\" content=\"0; url=mistral.rs\">" > target/doc/index.html
+          echo "<meta http-equiv=\"refresh\" content=\"0; url=mistralrs_core\">" > target/doc/index.html
           cp -r target/doc ./docs
       - name: Deploy
         uses: JamesIves/github-pages-deploy-action@v4
