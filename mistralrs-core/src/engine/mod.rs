@@ -153,7 +153,7 @@ impl Engine {
                 .sampling_params
                 .stop_toks
                 .clone()
-                .unwrap_or(Vec::new()),
+                .unwrap_or_default(),
         );
         self.id += 1;
 
