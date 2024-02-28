@@ -162,6 +162,8 @@
 <a href="#161" id="161">161</a>
 <a href="#162" id="162">162</a>
 <a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -175,10 +177,12 @@
 
 <span class="kw">use crate</span>::{
     deref_mut_refcell, deref_refcell, get_mut_arcmutex, handle_seq_error,
+    handle_seq_error_stateaware,
     pipeline::Pipeline,
-    request::{Request, Sequence, SequenceState},
+    request::Request,
     response::Response,
     scheduler::{Scheduler, SchedulerOutput},
+    sequence::{Sequence, SequenceState},
 };
 
 <span class="kw">const </span>SEED: u64 = <span class="number">0</span>;
@@ -218,9 +222,9 @@
             <span class="kw">let </span>logits_seq = logits.chunk(seqs_len, <span class="number">0</span>).unwrap();
             <span class="macro">debug_assert_eq!</span>(logits_seq.len(), seqs_len);
             <span class="kw">for </span>(logits_per_seq, seq) <span class="kw">in </span>zip(logits_seq, scheduled.seqs.iter()) {
-                <span class="kw">let </span>next_token: Logprobs = <span class="macro">handle_seq_error!</span>(
+                <span class="kw">let </span>next_token: Logprobs = <span class="macro">handle_seq_error_stateaware!</span>(
                     <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).sample(logits_per_seq, seq.clone()),
-                    <span class="macro">deref_refcell!</span>(seq).responder()
+                    seq
                 );
                 <span class="kw">let </span>next_token = next_token.token <span class="kw">as </span>u32;
                 <span class="macro">deref_mut_refcell!</span>(seq).add_token(next_token);
