@@ -1,0 +1,35 @@
+name: docs
+#https://dev.to/deciduously/prepare-your-rust-api-docs-for-github-pages-2n5i
+on:
+  push:
+    branches: ["master"]
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Setup Pages
+        uses: actions/configure-pages@v3
+      - name: Build docs
+        run: |
+          cargo doc --no-deps
+          rm -rf ./docs
+          echo "<meta http-equiv=\"refresh\" content=\"0; url=mistral.rs\">" > target/doc/index.html
+          cp -r target/doc ./docs
+      - name: Deploy
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: ./docs

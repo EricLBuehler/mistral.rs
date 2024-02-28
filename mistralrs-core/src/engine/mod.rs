@@ -126,7 +126,7 @@ impl Engine {
             (Some(topk), None) => SamplingMethod::TopK(topk),
             (None, Some(topp)) => SamplingMethod::TopP(topp),
             (None, None) | (Some(_), Some(_)) => {
-                // NOTE(EricLBuehler): Unwrap reasoning: The reciever should really be there, otherwise it is their fault.
+                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                 request
                     .response
                     .send(Response::Error(

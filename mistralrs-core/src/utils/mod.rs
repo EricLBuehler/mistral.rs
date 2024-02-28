@@ -20,7 +20,7 @@ macro_rules! handle_seq_error {
             Ok(v) => v,
             Err(e) => {
                 use $crate::response::Response;
-                // NOTE(EricLBuehler): Unwrap reasoning: The reciever should really be there, otherwise it is their fault.
+                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                 $response.send(Response::Error(e.into())).unwrap();
                 return;
             }
