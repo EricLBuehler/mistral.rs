@@ -47,4 +47,8 @@ impl Sequence {
     pub fn set_state(&self, state: SequenceState) {
         self.state.set(state)
     }
+
+    pub fn get_toks(&self) -> &[u32] {
+        &self.tokens
+    }
 }

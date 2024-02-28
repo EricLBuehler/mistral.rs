@@ -160,4 +160,7 @@ impl Pipeline for MistralPipeline {
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
         todo!()
     }
+    fn device(&self) -> &Device {
+        todo!()
+    }
 }

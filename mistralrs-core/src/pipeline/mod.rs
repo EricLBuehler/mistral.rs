@@ -66,4 +66,5 @@ pub trait Loader {
 pub trait Pipeline: Send + Sync {
     fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor>;
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>>;
+    fn device(&self) -> &Device;
 }

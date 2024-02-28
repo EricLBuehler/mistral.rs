@@ -28,7 +28,7 @@ impl FcfsBacker for VecDeque<Sequence> {
 }
 
 pub struct SchedulerOutput {
-    seqs: Vec<Sequence>,
+    pub seqs: Vec<Sequence>,
 }
 
 pub struct Scheduler<Backer: FcfsBacker> {
