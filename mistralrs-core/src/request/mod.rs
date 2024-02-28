@@ -1,5 +1,8 @@
 use crate::response::Response;
-use std::{cell::Cell, sync::mpsc::Sender};
+use std::{
+    cell::{Cell, RefCell, RefMut},
+    sync::mpsc::Sender,
+};
 
 pub struct Request {
     pub prompt: String,
@@ -18,6 +21,7 @@ pub struct Sequence {
     tokens: Vec<u32>,
     id: usize,
     state: Cell<SequenceState>,
+    gen_idx: usize,
 }
 
 impl Sequence {
@@ -26,6 +30,7 @@ impl Sequence {
             tokens,
             id,
             state: Cell::new(SequenceState::Waiting),
+            gen_idx: 0,
         }
     }
 
@@ -43,5 +48,9 @@ impl Sequence {
 
     pub fn get_toks(&self) -> &[u32] {
         &self.tokens
+    }
+
+    pub fn gen_idx(&mut self) -> &mut usize {
+        &mut self.gen_idx
     }
 }

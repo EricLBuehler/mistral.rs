@@ -1,8 +1,9 @@
-use std::{iter::repeat, sync::Mutex};
+use std::{cell::RefMut, iter::repeat, sync::Mutex};
 
 use super::{Loader, ModelPaths, Pipeline, SimpleModelPaths, TokenSource};
 use crate::{
     models::mistral::{Config, Model},
+    request::Sequence,
     utils::{
         dtype::get_dtype_from_torch_dtype, tokens::get_token,
         varbuilder_utils::from_mmaped_safetensors,
@@ -154,18 +155,29 @@ impl Loader for MistralLoader {
 }
 
 impl Pipeline for MistralPipeline {
-    fn forward(&mut self, input_toks: &[&[u32]]) -> Result<Tensor> {
+    fn forward(&mut self, input_toks: Vec<&mut Sequence>) -> Result<Tensor> {
         // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
         let max_len = input_toks.iter().map(|seq| seq.len()).max().unwrap();
         let padding_tok = 0;
         // Pad each sequence by the padding token to the max len.
         let mut seqs_tensors = Vec::new();
-        for toks in input_toks {
-            let mut toks = toks.to_vec();
-            toks.extend(repeat(padding_tok).take(max_len - toks.len()));
+        let mut seqlen_offsets = Vec::new();
+        for seq in input_toks.into_iter() {
+            let context_size = if *seq.gen_idx() > 0 {
+                1
+            } else {
+                seq.get_toks().len()
+            };
+            let start_pos = seq.get_toks().len().saturating_sub(context_size);
+            let mut ctxt = seq.get_toks()[start_pos..].to_vec();
+            seqlen_offsets.push(start_pos);
+            *seq.gen_idx() += 1;
+
+            ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
+
             // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
             seqs_tensors.push(
-                Tensor::from_vec(toks, max_len, self.device())
+                Tensor::new(ctxt, self.device())
                     .unwrap()
                     .unsqueeze(0)
                     .unwrap(),
@@ -174,7 +186,7 @@ impl Pipeline for MistralPipeline {
         // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
         let input_ids = Tensor::cat(&seqs_tensors, 0).unwrap();
 
-        Ok(self.model.forward(&input_ids, todo!())?)
+        Ok(self.model.forward(&input_ids, &seqlen_offsets)?)
     }
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
         let encoding = self

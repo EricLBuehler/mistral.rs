@@ -1,9 +1,11 @@
 mod mistral;
 pub use mistral::{MistralLoader, MistralSpecificConfig};
-use std::{path::PathBuf, sync::Mutex};
+use std::{cell::RefMut, path::PathBuf, sync::Mutex};
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
+
+use crate::request::Sequence;
 
 pub trait ModelPaths {
     fn get_weight_filenames(&self) -> &[PathBuf];
@@ -64,7 +66,7 @@ pub trait Loader {
 }
 
 pub trait Pipeline: Send + Sync {
-    fn forward(&mut self, input_toks: &[&[u32]]) -> Result<Tensor>;
+    fn forward(&mut self, input_toks: Vec<&mut Sequence>) -> Result<Tensor>;
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>>;
     fn device(&self) -> &Device;
 }
