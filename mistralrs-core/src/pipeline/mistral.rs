@@ -164,7 +164,7 @@ impl Loader for MistralLoader {
 }
 
 impl Pipeline for MistralPipeline {
-    fn forward(&mut self, input_toks: Vec<Rc<RefCell<Sequence>>>) -> Result<Tensor> {
+    fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>) -> Result<Tensor> {
         // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
         let max_len = input_toks
             .iter()

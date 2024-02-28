@@ -53,7 +53,7 @@ impl Engine {
             let seqs_len = scheduled.seqs.len();
             let logits_seq = logits.chunk(seqs_len, 0).unwrap();
             debug_assert_eq!(logits_seq.len(), seqs_len);
-            for (logits_per_seq, seq) in zip(logits_seq, &scheduled.seqs) {
+            for (logits_per_seq, seq) in zip(logits_seq, scheduled.seqs.iter()) {
                 let next_token: Logprobs = handle_seq_error!(
                     get_mut_arcmutex!(self.pipeline).sample(logits_per_seq, seq.clone()),
                     deref_refcell!(seq).responder()
@@ -74,7 +74,7 @@ impl Engine {
         for layer in 0..get_mut_arcmutex!(self.pipeline).num_hidden_layers() {
             let mut k_vec = Vec::new();
             let mut v_vec = Vec::new();
-            for seq in &scheduled.seqs {
+            for seq in scheduled.seqs.iter() {
                 let seq = deref_refcell!(seq);
                 let cache = seq.cache().lock();
                 let cache = cache.get(layer).unwrap();

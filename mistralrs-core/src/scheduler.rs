@@ -33,7 +33,7 @@ impl FcfsBacker for VecDeque<Rc<RefCell<Sequence>>> {
 }
 
 pub struct SchedulerOutput {
-    pub seqs: Vec<Rc<RefCell<Sequence>>>,
+    pub seqs: Box<[Rc<RefCell<Sequence>>]>,
 }
 
 pub struct Scheduler<Backer: FcfsBacker> {
@@ -87,7 +87,9 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
         self.waiting = waiting;
         self.running = running.clone();
 
-        SchedulerOutput { seqs: running }
+        SchedulerOutput {
+            seqs: running.into(),
+        }
     }
 
     fn sequence_fits(&self, running: &[Rc<RefCell<Sequence>>], seq: &Sequence) -> bool {
