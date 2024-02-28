@@ -4,6 +4,8 @@ use candle_nn::{Activation, VarBuilder};
 use candle_transformers::models::with_tracing::{linear_no_bias, Linear};
 use std::{iter::zip, sync::Arc};
 
+use super::Cache;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     pub(crate) vocab_size: usize,
@@ -161,7 +163,6 @@ struct Attention {
     head_dim: usize,
     hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: Option<(Tensor, Tensor)>,
     use_flash_attn: bool,
 }
 
@@ -187,7 +188,6 @@ impl Attention {
             head_dim,
             hidden_size: hidden_sz,
             rotary_emb,
-            kv_cache: None,
             use_flash_attn: cfg.use_flash_attn,
         })
     }
@@ -209,6 +209,7 @@ impl Attention {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
+        kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -230,7 +231,7 @@ impl Attention {
             self.rotary_emb
                 .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offsets)?;
 
-        let (key_states, value_states) = match &self.kv_cache {
+        let (key_states, value_states) = match &*kv_cache {
             None => (key_states, value_states),
             Some((prev_k, prev_v)) => {
                 let key_states = Tensor::cat(&[prev_k, &key_states], 2)?;
@@ -238,7 +239,7 @@ impl Attention {
                 (key_states, value_states)
             }
         };
-        self.kv_cache = Some((key_states.clone(), value_states.clone()));
+        *kv_cache = Some((key_states.clone(), value_states.clone()));
 
         let key_states = self.repeat_kv(key_states)?;
         let value_states = self.repeat_kv(value_states)?;
@@ -265,10 +266,6 @@ impl Attention {
             .transpose(1, 2)?
             .reshape((b_sz, q_len, self.hidden_size))?
             .apply(&self.o_proj)
-    }
-
-    fn clear_kv_cache(&mut self) {
-        self.kv_cache = None
     }
 }
 
@@ -304,20 +301,17 @@ impl DecoderLayer {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
+        kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
         let xs = self
             .self_attn
-            .forward(&xs, attention_mask, seqlen_offsets)?;
+            .forward(&xs, attention_mask, seqlen_offsets, kv_cache)?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = xs.apply(&self.post_attention_layernorm)?.apply(&self.mlp)?;
         residual + xs
-    }
-
-    fn clear_kv_cache(&mut self) {
-        self.self_attn.clear_kv_cache()
     }
 }
 
@@ -330,6 +324,7 @@ pub struct Model {
     sliding_window: usize,
     device: Device,
     dtype: DType,
+    cache: Cache,
 }
 
 impl Model {
@@ -354,6 +349,7 @@ impl Model {
             sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
             dtype: vb.dtype(),
+            cache: Cache::new(cfg.num_hidden_layers),
         })
     }
 
@@ -386,8 +382,9 @@ impl Model {
             .to_dtype(self.dtype)
     }
 
-    fn calculate_past_kv_len(&self, seq_len: usize) -> Result<usize> {
-        let kv_cache_1 = &self.layers.first().as_ref().unwrap().self_attn.kv_cache;
+    fn calculate_past_kv_len(&mut self, seq_len: usize) -> Result<usize> {
+        let cache = self.cache.lock();
+        let kv_cache_1 = cache.get(0).unwrap();
         if kv_cache_1.is_none() {
             return Ok(0);
         }
@@ -416,17 +413,17 @@ impl Model {
             Some(mask)
         };
         let mut xs = self.embed_tokens.forward(input_ids)?;
-        for layer in self.layers.iter_mut() {
-            xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offsets)?
+        let mut cache = self.cache.lock();
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            xs = layer.forward(
+                &xs,
+                attention_mask.as_ref(),
+                seqlen_offsets,
+                cache.get_mut(i).unwrap(),
+            )?
         }
         xs.narrow(1, seq_len - 1, 1)?
             .apply(&self.norm)?
             .apply(&self.lm_head)
-    }
-
-    pub fn clear_kv_cache(&mut self) {
-        for layer in self.layers.iter_mut() {
-            layer.clear_kv_cache()
-        }
     }
 }

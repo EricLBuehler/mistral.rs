@@ -4,6 +4,7 @@ use std::{
 };
 
 use crate::{
+    get_mut_arcmutex,
     pipeline::Pipeline,
     request::{Request, Sequence},
     response::Response,
@@ -16,16 +17,6 @@ pub struct Engine {
     requests: VecDeque<Request>,
     scheduler: Scheduler<VecDeque<Sequence>>,
     id: usize,
-}
-
-macro_rules! get_mut_pipeline {
-    ($pipeline:expr) => {
-        loop {
-            if let Ok(inner) = $pipeline.lock() {
-                break inner;
-            }
-        }
-    };
 }
 
 impl Engine {
@@ -45,13 +36,13 @@ impl Engine {
                 self.add_request(request);
             }
             let mut scheduled = self.scheduler.schedule();
-            let logits = get_mut_pipeline!(self.pipeline)
+            let logits = get_mut_arcmutex!(self.pipeline)
                 .forward(scheduled.seqs.iter_mut().collect::<Vec<_>>());
         }
     }
 
     fn add_request(&mut self, request: Request) {
-        let prompt = match get_mut_pipeline!(self.pipeline).tokenize_prompt(&request.prompt) {
+        let prompt = match get_mut_arcmutex!(self.pipeline).tokenize_prompt(&request.prompt) {
             Ok(prompt) => prompt,
             Err(e) => {
                 // NOTE(EricLBuehler): Unwrap reasoning: The reciever should really be there, otherwise it is their fault.
