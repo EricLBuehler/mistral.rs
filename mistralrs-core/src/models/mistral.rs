@@ -322,9 +322,9 @@ pub struct Model {
     norm: RmsNorm,
     lm_head: Linear,
     sliding_window: usize,
-    device: Device,
     dtype: DType,
-    cache: Cache,
+    pub device: Device,
+    pub cache: Cache,
 }
 
 impl Model {

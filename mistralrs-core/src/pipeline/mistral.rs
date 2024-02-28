@@ -212,13 +212,13 @@ impl Pipeline for MistralPipeline {
         Ok(encoding.get_ids().to_vec())
     }
     fn device(&self) -> &Device {
-        todo!()
+        &self.model.device
     }
     fn num_hidden_layers(&self) -> usize {
-        todo!()
+        self.model.cache.lock().len()
     }
     fn cache(&self) -> &crate::models::Cache {
-        todo!()
+        &self.model.cache
     }
     fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs> {
         let logits = logits.squeeze(0).unwrap().to_dtype(DType::F32).unwrap();
