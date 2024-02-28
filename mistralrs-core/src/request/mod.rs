@@ -1,8 +1,5 @@
 use crate::response::Response;
-use std::{
-    cell::{Cell, RefCell, RefMut},
-    sync::mpsc::Sender,
-};
+use std::{cell::Cell, sync::mpsc::Sender};
 
 pub struct Request {
     pub prompt: String,

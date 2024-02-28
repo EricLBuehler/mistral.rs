@@ -1,6 +1,6 @@
 mod mistral;
 pub use mistral::{MistralLoader, MistralSpecificConfig};
-use std::{cell::RefMut, path::PathBuf, sync::Mutex};
+use std::{path::PathBuf, sync::Mutex};
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};

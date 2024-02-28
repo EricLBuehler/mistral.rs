@@ -1,4 +1,4 @@
-use std::{cell::RefMut, iter::repeat, sync::Mutex};
+use std::{iter::repeat, sync::Mutex};
 
 use super::{Loader, ModelPaths, Pipeline, SimpleModelPaths, TokenSource};
 use crate::{

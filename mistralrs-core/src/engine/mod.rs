@@ -1,10 +1,7 @@
 use std::{
     collections::VecDeque,
-    iter::repeat,
     sync::{mpsc::Receiver, Mutex},
 };
-
-use candle_core::{Device, Tensor};
 
 use crate::{
     pipeline::Pipeline,
