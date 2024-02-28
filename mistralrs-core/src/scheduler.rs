@@ -67,7 +67,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
         let mut waiting_to_remove = Vec::new();
         for seq in self.waiting.iter() {
             if self.sequence_fits(&running, &*deref_refcell!(seq)) {
-                waiting_to_remove.push(deref_refcell!(seq).id().clone());
+                waiting_to_remove.push(*deref_refcell!(seq).id());
                 running.push(seq.clone());
             }
         }
