@@ -175,7 +175,7 @@ impl Pipeline for MistralPipeline {
         // Pad each sequence by the padding token to the max len.
         let mut seqs_tensors = Vec::new();
         let mut seqlen_offsets = Vec::new();
-        for seq in input_toks.into_iter() {
+        for seq in input_toks.iter() {
             let context_size = if *deref_mut_refcell!(seq).gen_idx() > 0 {
                 1
             } else {

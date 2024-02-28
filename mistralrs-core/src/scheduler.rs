@@ -92,7 +92,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
         }
     }
 
-    fn sequence_fits(&self, running: &[Rc<RefCell<Sequence>>], seq: &Sequence) -> bool {
+    fn sequence_fits(&self, _running: &[Rc<RefCell<Sequence>>], _seq: &Sequence) -> bool {
         todo!()
     }
 }
