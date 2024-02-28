@@ -1,8 +1,7 @@
 use std::{
-    collections::VecDeque,
     sync::{
-        mpsc::{channel, Receiver, Sender},
-        Arc,
+        mpsc::{channel, Sender},
+        Arc, Mutex,
     },
     thread,
 };
@@ -22,22 +21,17 @@ pub use pipeline::{Loader, MistralLoader, MistralSpecificConfig, TokenSource};
 use request::Request;
 
 pub struct MistralRs {
-    pipeline: Arc<dyn Pipeline>,
     sender: Sender<Request>,
 }
 
 impl MistralRs {
-    pub fn new(pipeline: Arc<dyn Pipeline>) -> Arc<Self> {
+    pub fn new(pipeline: Box<Mutex<dyn Pipeline>>) -> Arc<Self> {
         let (tx, rx) = channel();
-        let pipeline_clone = pipeline.clone();
 
-        let this = Arc::new(Self {
-            pipeline,
-            sender: tx,
-        });
+        let this = Arc::new(Self { sender: tx });
 
         thread::spawn(move || {
-            let mut engine = Engine::new(rx, pipeline_clone);
+            let mut engine = Engine::new(rx, pipeline);
             engine.run();
         });
 

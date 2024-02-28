@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{iter::repeat, sync::Mutex};
 
 use super::{Loader, ModelPaths, Pipeline, SimpleModelPaths, TokenSource};
 use crate::{
@@ -114,7 +114,7 @@ impl Loader for MistralLoader {
         paths: &dyn ModelPaths,
         dtype: Option<DType>,
         device: &Device,
-    ) -> Result<Arc<dyn Pipeline>> {
+    ) -> Result<Box<Mutex<dyn Pipeline>>> {
         let basic_config: BasicConfig =
             serde_json::from_slice(&std::fs::read(paths.get_config_filename())?)?;
         let config = Config {
@@ -149,16 +149,39 @@ impl Loader for MistralLoader {
         let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
 
-        Ok(Arc::new(MistralPipeline { model, tokenizer }))
+        Ok(Box::new(Mutex::new(MistralPipeline { model, tokenizer })))
     }
 }
 
 impl Pipeline for MistralPipeline {
-    fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
-        Ok(self.model.forward(input_ids, todo!())?)
+    fn forward(&mut self, input_toks: &[&[u32]]) -> Result<Tensor> {
+        // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
+        let max_len = input_toks.iter().map(|seq| seq.len()).max().unwrap();
+        let padding_tok = 0;
+        // Pad each sequence by the padding token to the max len.
+        let mut seqs_tensors = Vec::new();
+        for toks in input_toks {
+            let mut toks = toks.to_vec();
+            toks.extend(repeat(padding_tok).take(max_len - toks.len()));
+            // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
+            seqs_tensors.push(
+                Tensor::from_vec(toks, max_len, self.device())
+                    .unwrap()
+                    .unsqueeze(0)
+                    .unwrap(),
+            );
+        }
+        // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
+        let input_ids = Tensor::cat(&seqs_tensors, 0).unwrap();
+
+        Ok(self.model.forward(&input_ids, todo!())?)
     }
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
-        todo!()
+        let encoding = self
+            .tokenizer
+            .encode(prompt, false)
+            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
+        Ok(encoding.get_ids().to_vec())
     }
     fn device(&self) -> &Device {
         todo!()

@@ -1,8 +1,5 @@
 use crate::response::Response;
-use std::{
-    cell::{Cell, RefCell},
-    sync::mpsc::Sender,
-};
+use std::{cell::Cell, sync::mpsc::Sender};
 
 pub struct Request {
     pub prompt: String,
@@ -42,10 +39,6 @@ impl Sequence {
 
     pub fn is_running(&self) -> bool {
         self.state.get() == SequenceState::Running
-    }
-
-    pub fn set_state(&self, state: SequenceState) {
-        self.state.set(state)
     }
 
     pub fn get_toks(&self) -> &[u32] {

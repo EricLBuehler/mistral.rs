@@ -55,7 +55,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
         let mut running = running
             .iter()
             .filter(|seq| seq.is_running())
-            .map(|seq| seq.clone())
+            .cloned()
             .collect::<Vec<_>>();
 
         // If the waiting sequence will fit, add it. Keep track of its id.

@@ -1,6 +1,6 @@
 mod mistral;
 pub use mistral::{MistralLoader, MistralSpecificConfig};
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Mutex};
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -47,7 +47,7 @@ pub trait Loader {
         paths: &dyn ModelPaths,
         dtype: Option<DType>,
         device: &Device,
-    ) -> Result<Arc<dyn Pipeline>>;
+    ) -> Result<Box<Mutex<dyn Pipeline>>>;
 
     /// If `revision` is None, then it defaults to `main`.
     /// If `dtype` is None, then it defaults to the model default (usually F32). TODO(EricLBuehler): refine
@@ -57,14 +57,14 @@ pub trait Loader {
         token_source: TokenSource,
         dtype: Option<DType>,
         device: &Device,
-    ) -> Result<Arc<dyn Pipeline>> {
+    ) -> Result<Box<Mutex<dyn Pipeline>>> {
         let paths = self.download_model(revision, token_source)?;
         self._setup_model(&*paths, dtype, device)
     }
 }
 
 pub trait Pipeline: Send + Sync {
-    fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor>;
+    fn forward(&mut self, input_toks: &[&[u32]]) -> Result<Tensor>;
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>>;
     fn device(&self) -> &Device;
 }
