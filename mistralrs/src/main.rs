@@ -31,6 +31,7 @@ async fn main() -> Result<()> {
         model_id.to_string(),
         MistralSpecificConfig {
             use_flash_attn: false,
+            repeat_last_n: 64,
         },
         Some(DType::F32),
     );

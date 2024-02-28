@@ -1,8 +1,11 @@
-use crate::{models::Cache, response::Response};
+use candle_sampling::logits_processor::LogitsProcessor;
+
+use crate::{models::Cache, response::Response, sampling::SamplingParams};
 use std::{cell::Cell, sync::mpsc::Sender};
 
 pub struct Request {
     pub prompt: String,
+    pub sampling_params: SamplingParams,
     pub response: Sender<Response>,
 }
 
@@ -13,23 +16,32 @@ pub enum SequenceState {
     Waiting,
 }
 
-#[derive(Clone)]
 pub struct Sequence {
     tokens: Vec<u32>,
     id: usize,
     state: Cell<SequenceState>,
     gen_idx: usize,
     cache: Cache,
+    responder: Sender<Response>,
+    logits_processor: LogitsProcessor,
 }
 
 impl Sequence {
-    pub fn new_waiting(tokens: Vec<u32>, id: usize, layers: usize) -> Self {
+    pub fn new_waiting(
+        tokens: Vec<u32>,
+        id: usize,
+        layers: usize,
+        responder: Sender<Response>,
+        logits_processor: LogitsProcessor,
+    ) -> Self {
         Self {
             tokens,
             id,
             state: Cell::new(SequenceState::Waiting),
             gen_idx: 0,
             cache: Cache::new(layers),
+            responder,
+            logits_processor,
         }
     }
 
@@ -55,5 +67,17 @@ impl Sequence {
 
     pub fn cache(&self) -> &Cache {
         &self.cache
+    }
+
+    pub fn logits_processor(&mut self) -> &mut LogitsProcessor {
+        &mut self.logits_processor
+    }
+
+    pub fn add_token(&mut self, tok: u32) {
+        self.tokens.push(tok);
+    }
+
+    pub fn responder(&self) -> Sender<Response> {
+        self.responder.clone()
     }
 }

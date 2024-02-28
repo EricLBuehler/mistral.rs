@@ -14,6 +14,7 @@ mod models;
 mod pipeline;
 mod request;
 mod response;
+mod sampling;
 mod scheduler;
 mod utils;
 
