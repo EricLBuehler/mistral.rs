@@ -75,4 +75,5 @@ pub trait Pipeline: Send + Sync {
     fn cache(&self) -> &Cache;
     fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs>;
     fn tokenizer(&self) -> Tokenizer;
+    fn eos_tok(&self) -> u32;
 }

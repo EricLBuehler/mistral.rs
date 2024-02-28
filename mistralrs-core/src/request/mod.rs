@@ -10,8 +10,14 @@ pub struct Request {
 }
 
 #[derive(Clone, Copy, PartialEq)]
+pub enum StopReason {
+    Eos,
+    StopTok(u32),
+}
+
+#[derive(Clone, Copy, PartialEq)]
 pub enum SequenceState {
-    Done,
+    Done(StopReason),
     Running,
     Waiting,
 }
@@ -24,6 +30,7 @@ pub struct Sequence {
     cache: Cache,
     responder: Sender<Response>,
     logits_processor: LogitsProcessor,
+    stop_tokens: Vec<u32>,
 }
 
 impl Sequence {
@@ -33,6 +40,7 @@ impl Sequence {
         layers: usize,
         responder: Sender<Response>,
         logits_processor: LogitsProcessor,
+        stop_tokens: Vec<u32>,
     ) -> Self {
         Self {
             tokens,
@@ -42,6 +50,7 @@ impl Sequence {
             cache: Cache::new(layers),
             responder,
             logits_processor,
+            stop_tokens,
         }
     }
 
@@ -79,5 +88,19 @@ impl Sequence {
 
     pub fn responder(&self) -> Sender<Response> {
         self.responder.clone()
+    }
+
+    pub fn set_state(&self, state: SequenceState) {
+        self.state.set(state);
+    }
+
+    pub fn is_done(&self, tok: u32, eos_tok: u32) -> Option<StopReason> {
+        if tok == eos_tok {
+            Some(StopReason::Eos)
+        } else if self.stop_tokens.contains(&tok) {
+            Some(StopReason::StopTok(tok))
+        } else {
+            None
+        }
     }
 }

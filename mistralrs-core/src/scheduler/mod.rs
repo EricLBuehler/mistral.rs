@@ -5,7 +5,10 @@ use std::{
     rc::Rc,
 };
 
-use crate::{deref_refcell, request::Sequence};
+use crate::{
+    deref_mut_refcell, deref_refcell,
+    request::{Sequence, SequenceState},
+};
 
 pub trait FcfsBacker {
     fn new() -> Self;
@@ -75,6 +78,10 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             if *deref_refcell!(seq).id() != id {
                 waiting.add(seq.clone());
             }
+        }
+
+        for seq in &running {
+            deref_mut_refcell!(seq).set_state(SequenceState::Running);
         }
 
         self.waiting = waiting;

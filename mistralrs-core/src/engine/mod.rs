@@ -12,7 +12,7 @@ use candle_sampling::logits_processor::{LogitsProcessor, Logprobs, SamplingMetho
 use crate::{
     deref_mut_refcell, deref_refcell, get_mut_arcmutex, handle_seq_error,
     pipeline::Pipeline,
-    request::{Request, Sequence},
+    request::{Request, Sequence, SequenceState},
     response::Response,
     scheduler::{Scheduler, SchedulerOutput},
 };
@@ -58,7 +58,13 @@ impl Engine {
                     get_mut_arcmutex!(self.pipeline).sample(logits_per_seq, seq.clone()),
                     deref_refcell!(seq).responder()
                 );
-                deref_mut_refcell!(seq).add_token(next_token.token as u32);
+                let next_token = next_token.token as u32;
+                deref_mut_refcell!(seq).add_token(next_token);
+                if let Some(state) = deref_refcell!(seq)
+                    .is_done(next_token, get_mut_arcmutex!(self.pipeline).eos_tok())
+                {
+                    deref_mut_refcell!(seq).set_state(SequenceState::Done(state));
+                }
             }
         }
     }
@@ -143,6 +149,11 @@ impl Engine {
                 get_mut_arcmutex!(self.pipeline).tokenizer(),
                 request.sampling_params.repeat_penalty,
             ),
+            request
+                .sampling_params
+                .stop_toks
+                .clone()
+                .unwrap_or(Vec::new()),
         );
         self.id += 1;
 

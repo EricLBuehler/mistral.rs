@@ -235,4 +235,11 @@ impl Pipeline for MistralPipeline {
     fn tokenizer(&self) -> Tokenizer {
         self.tokenizer.clone()
     }
+    fn eos_tok(&self) -> u32 {
+        self.tokenizer
+            .get_vocab(true)
+            .get("</s>")
+            .copied()
+            .expect("Unable to extract `</s>` EOS token.")
+    }
 }
