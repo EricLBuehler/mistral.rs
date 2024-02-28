@@ -384,7 +384,7 @@ impl Model {
 
     fn calculate_past_kv_len(&mut self, seq_len: usize) -> Result<usize> {
         let cache = self.cache.lock();
-        let kv_cache_1 = cache.get(0).unwrap();
+        let kv_cache_1 = cache.first().unwrap();
         if kv_cache_1.is_none() {
             return Ok(0);
         }

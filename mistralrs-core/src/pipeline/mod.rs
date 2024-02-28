@@ -5,7 +5,7 @@ use std::{path::PathBuf, sync::Mutex};
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 
-use crate::request::Sequence;
+use crate::{models::Cache, request::Sequence};
 
 pub trait ModelPaths {
     fn get_weight_filenames(&self) -> &[PathBuf];
@@ -69,4 +69,6 @@ pub trait Pipeline: Send + Sync {
     fn forward(&mut self, input_toks: Vec<&mut Sequence>) -> Result<Tensor>;
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>>;
     fn device(&self) -> &Device;
+    fn num_hidden_layers(&self) -> usize;
+    fn cache(&self) -> &Cache;
 }

@@ -7,7 +7,7 @@ use crate::get_mut_arcmutex;
 pub(crate) mod mistral;
 
 #[derive(Debug, Clone)]
-pub(crate) struct Cache {
+pub struct Cache {
     cache: Arc<Mutex<Vec<Option<(Tensor, Tensor)>>>>,
 }
 

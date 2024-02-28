@@ -198,4 +198,10 @@ impl Pipeline for MistralPipeline {
     fn device(&self) -> &Device {
         todo!()
     }
+    fn num_hidden_layers(&self) -> usize {
+        todo!()
+    }
+    fn cache(&self) -> &crate::models::Cache {
+        todo!()
+    }
 }

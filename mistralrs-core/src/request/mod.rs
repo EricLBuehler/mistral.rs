@@ -1,4 +1,4 @@
-use crate::response::Response;
+use crate::{models::Cache, response::Response};
 use std::{cell::Cell, sync::mpsc::Sender};
 
 pub struct Request {
@@ -19,15 +19,17 @@ pub struct Sequence {
     id: usize,
     state: Cell<SequenceState>,
     gen_idx: usize,
+    cache: Cache,
 }
 
 impl Sequence {
-    pub fn new_waiting(tokens: Vec<u32>, id: usize) -> Self {
+    pub fn new_waiting(tokens: Vec<u32>, id: usize, layers: usize) -> Self {
         Self {
             tokens,
             id,
             state: Cell::new(SequenceState::Waiting),
             gen_idx: 0,
+            cache: Cache::new(layers),
         }
     }
 
@@ -49,5 +51,9 @@ impl Sequence {
 
     pub fn gen_idx(&mut self) -> &mut usize {
         &mut self.gen_idx
+    }
+
+    pub fn cache(&self) -> &Cache {
+        &self.cache
     }
 }
