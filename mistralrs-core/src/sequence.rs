@@ -13,7 +13,8 @@ pub enum StopReason {
 #[derive(Clone, Copy, PartialEq)]
 pub enum SequenceState {
     Done(StopReason),
-    Running,
+    RunningPrompt,
+    RunningCompletion,
     Waiting,
     Error,
 }
@@ -59,7 +60,16 @@ impl Sequence {
     }
 
     pub fn is_running(&self) -> bool {
-        self.state.get() == SequenceState::Running
+        self.state.get() == SequenceState::RunningCompletion
+            || self.state.get() == SequenceState::RunningPrompt
+    }
+
+    pub fn is_completion(&self) -> bool {
+        self.state.get() == SequenceState::RunningCompletion
+    }
+
+    pub fn is_prompt(&self) -> bool {
+        self.state.get() == SequenceState::RunningPrompt
     }
 
     pub fn get_toks(&self) -> &[u32] {

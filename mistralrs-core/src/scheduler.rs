@@ -33,7 +33,8 @@ impl FcfsBacker for VecDeque<Rc<RefCell<Sequence>>> {
 }
 
 pub struct SchedulerOutput {
-    pub seqs: Box<[Rc<RefCell<Sequence>>]>,
+    pub completion: Box<[Rc<RefCell<Sequence>>]>,
+    pub prompt: Box<[Rc<RefCell<Sequence>>]>,
 }
 
 pub struct Scheduler<Backer: FcfsBacker> {
@@ -68,6 +69,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
         for seq in self.waiting.iter() {
             if self.sequence_fits(&running, &*deref_refcell!(seq)) {
                 waiting_to_remove.push(*deref_refcell!(seq).id());
+                deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
                 running.push(seq.clone());
             }
         }
@@ -80,15 +82,21 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             }
         }
 
-        for seq in &running {
-            deref_mut_refcell!(seq).set_state(SequenceState::Running);
-        }
-
         self.waiting = waiting;
         self.running = running.clone();
 
+        let mut completion = Vec::new();
+        let mut prompt = Vec::new();
+        for seq in running {
+            if deref_refcell!(seq).is_completion() {
+                completion.push(seq);
+            } else {
+                prompt.push(seq);
+            }
+        }
         SchedulerOutput {
-            seqs: running.into(),
+            completion: completion.into(),
+            prompt: prompt.into(),
         }
     }
 

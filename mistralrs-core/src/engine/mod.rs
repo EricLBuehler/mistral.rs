@@ -15,7 +15,7 @@ use crate::{
     pipeline::Pipeline,
     request::Request,
     response::Response,
-    scheduler::{Scheduler, SchedulerOutput},
+    scheduler::Scheduler,
     sequence::{Sequence, SequenceState},
 };
 
@@ -46,39 +46,54 @@ impl Engine {
                 self.add_request(request);
             }
             let scheduled = self.scheduler.schedule();
-            self.clone_in_cache(&scheduled);
-            let logits = get_mut_arcmutex!(self.pipeline).forward(scheduled.seqs.clone());
-            self.clone_out_cache(&scheduled);
 
-            let seqs_len = scheduled.seqs.len();
-            let logits_seq = logits.chunk(seqs_len, 0).unwrap();
-            debug_assert_eq!(logits_seq.len(), seqs_len);
-            for (logits_per_seq, seq) in zip(logits_seq, scheduled.seqs.iter()) {
-                let next_token: Logprobs = handle_seq_error_stateaware!(
-                    get_mut_arcmutex!(self.pipeline).sample(logits_per_seq, seq.clone()),
-                    seq
-                );
-                let next_token = next_token.token as u32;
-                deref_mut_refcell!(seq).add_token(next_token);
-                if let Some(state) = deref_refcell!(seq)
-                    .is_done(next_token, get_mut_arcmutex!(self.pipeline).eos_tok())
-                {
-                    deref_mut_refcell!(seq).set_state(SequenceState::Done(state));
-                }
+            // Run the completion seqs
+            self.clone_in_cache(&scheduled.completion);
+            let logits = get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone());
+            self.sample_seqs(&scheduled.completion, logits);
+            self.clone_out_cache(&scheduled.completion);
+
+            // Run the prompt seqs
+            self.set_none_cache();
+            let logits = get_mut_arcmutex!(self.pipeline).forward(scheduled.prompt.clone());
+            self.sample_seqs(&scheduled.prompt, logits);
+            self.clone_out_cache(&scheduled.prompt);
+            for seq in scheduled.prompt.iter() {
+                deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
             }
         }
     }
 
-    fn clone_in_cache(&self, scheduled: &SchedulerOutput) {
+    fn sample_seqs(&self, seqs: &[Rc<RefCell<Sequence>>], logits: Tensor) {
+        let seqs_len = seqs.len();
+        let logits_seq = logits.chunk(seqs_len, 0).unwrap();
+        debug_assert_eq!(logits_seq.len(), seqs_len);
+        for (logits_per_seq, seq) in zip(logits_seq, seqs.iter()) {
+            let next_token: Logprobs = handle_seq_error_stateaware!(
+                get_mut_arcmutex!(self.pipeline).sample(logits_per_seq, seq.clone()),
+                seq
+            );
+            let next_token = next_token.token as u32;
+            deref_mut_refcell!(seq).add_token(next_token);
+            if let Some(state) =
+                deref_refcell!(seq).is_done(next_token, get_mut_arcmutex!(self.pipeline).eos_tok())
+            {
+                deref_mut_refcell!(seq).set_state(SequenceState::Done(state));
+            }
+        }
+    }
+
+    /// Clone the cache FROM the sequences' cache TO the model cache. Only used for completion seqs.
+    fn clone_in_cache(&self, seqs: &[Rc<RefCell<Sequence>>]) {
         let mut new_cache = Vec::new();
         for layer in 0..get_mut_arcmutex!(self.pipeline).num_hidden_layers() {
             let mut k_vec = Vec::new();
             let mut v_vec = Vec::new();
-            for seq in scheduled.seqs.iter() {
+            for seq in seqs.iter() {
                 let seq = deref_refcell!(seq);
                 let cache = seq.cache().lock();
                 let cache = cache.get(layer).unwrap();
-                // TODO(EricLBuehler): Unwrapping is certainly incorrect. Need to find a way to handle some caches with values, some without.
+                // Note(EricLBuehler): Unwrap reasoning: We are handling completions seqs so unwrap is OK.
                 let cache = cache.as_ref().unwrap();
                 k_vec.push(cache.0.clone().unsqueeze(0).unwrap());
                 v_vec.push(cache.1.clone().unsqueeze(0).unwrap());
@@ -92,7 +107,17 @@ impl Engine {
         *get_mut_arcmutex!(self.pipeline).cache().lock() = new_cache;
     }
 
-    fn clone_out_cache(&self, scheduled: &SchedulerOutput) {
+    /// Set the model cache to all None. Only used for prompt seqs.
+    fn set_none_cache(&self) {
+        let mut new_cache = Vec::new();
+        for _ in 0..get_mut_arcmutex!(self.pipeline).num_hidden_layers() {
+            new_cache.push(None);
+        }
+        *get_mut_arcmutex!(self.pipeline).cache().lock() = new_cache;
+    }
+
+    /// Clone the cache FROM the model cache TO the sequences. Used for prompt, completion seqs.
+    fn clone_out_cache(&self, seqs: &[Rc<RefCell<Sequence>>]) {
         for layer in 0..get_mut_arcmutex!(self.pipeline).num_hidden_layers() {
             let pipeline = get_mut_arcmutex!(self.pipeline);
             let cache = pipeline.cache().lock();
@@ -100,12 +125,12 @@ impl Engine {
             let k_cache = cache.as_ref().unwrap().0.clone();
             let v_cache = cache.as_ref().unwrap().1.clone();
 
-            let k_caches = k_cache.chunk(scheduled.seqs.len(), 0).unwrap();
-            debug_assert_eq!(k_caches.len(), scheduled.seqs.len());
-            let v_caches = v_cache.chunk(scheduled.seqs.len(), 0).unwrap();
-            debug_assert_eq!(v_caches.len(), scheduled.seqs.len());
+            let k_caches = k_cache.chunk(seqs.len(), 0).unwrap();
+            debug_assert_eq!(k_caches.len(), seqs.len());
+            let v_caches = v_cache.chunk(seqs.len(), 0).unwrap();
+            debug_assert_eq!(v_caches.len(), seqs.len());
 
-            for (seq_i, seq) in scheduled.seqs.iter().enumerate() {
+            for (seq_i, seq) in seqs.iter().enumerate() {
                 let seq = deref_refcell!(seq);
                 let mut seq_cache = seq.cache().lock();
                 let seq_cache = seq_cache.get_mut(layer).unwrap();
