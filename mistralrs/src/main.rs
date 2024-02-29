@@ -73,7 +73,7 @@ async fn main() -> Result<()> {
         },
         Some(DType::F32),
     );
-    let pipeline = loader.load_model(None, TokenSource::CacheToken, None, &Device::Cpu)?;
+    let pipeline = loader.load_model(None, TokenSource::CacheToken, None, &Device::cuda_if_available(0)?)?;
     let mistralrs = MistralRs::new(
         pipeline,
         SchedulerMethod::Fixed(2.try_into().unwrap()),
