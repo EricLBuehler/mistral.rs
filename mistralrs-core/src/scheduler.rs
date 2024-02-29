@@ -9,6 +9,7 @@ use crate::{
     deref_mut_refcell, deref_refcell,
     sequence::{Sequence, SequenceState},
 };
+use range_checked::UsizeBounded;
 
 pub trait FcfsBacker {
     fn new() -> Self;
@@ -42,8 +43,10 @@ pub struct SchedulerOutput {
     pub prompt: Box<[Rc<RefCell<Sequence>>]>,
 }
 
+const FIXED_MAX: usize = usize::MAX;
+
 pub enum SchedulerMethod {
-    Fixed(usize),
+    Fixed(UsizeBounded<0, FIXED_MAX, false>),
 }
 
 pub struct Scheduler<Backer: FcfsBacker> {
@@ -115,8 +118,8 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
     }
 
     fn sequence_fits(&self, running: &[Rc<RefCell<Sequence>>], _seq: &Sequence) -> bool {
-        match self.method {
-            SchedulerMethod::Fixed(n) => running.len() + 1 < n,
+        match &self.method {
+            SchedulerMethod::Fixed(n) => (running.len() + 1) < **n,
         }
     }
 }

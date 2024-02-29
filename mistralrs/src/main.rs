@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
         Some(DType::F32),
     );
     let pipeline = loader.load_model(None, TokenSource::CacheToken, None, &Device::Cpu)?;
-    let _mistralrs = MistralRs::new(pipeline, SchedulerMethod::Fixed(2));
+    let _mistralrs = MistralRs::new(pipeline, SchedulerMethod::Fixed(2.try_into().unwrap()));
 
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", args.port)).await?;
     axum::serve(listener, app).await?;
