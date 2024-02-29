@@ -187,6 +187,10 @@
 <a href="#186" id="186">186</a>
 <a href="#187" id="187">187</a>
 <a href="#188" id="188">188</a>
+<a href="#189" id="189">189</a>
+<a href="#190" id="190">190</a>
+<a href="#191" id="191">191</a>
+<a href="#192" id="192">192</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -204,7 +208,7 @@
     pipeline::Pipeline,
     request::Request,
     response::Response,
-    scheduler::Scheduler,
+    scheduler::{Scheduler, SchedulerMethod},
     sequence::{Sequence, SequenceState},
 };
 
@@ -219,12 +223,16 @@
 }
 
 <span class="kw">impl </span>Engine {
-    <span class="kw">pub fn </span>new(rx: Receiver&lt;Request&gt;, pipeline: Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;) -&gt; <span class="self">Self </span>{
+    <span class="kw">pub fn </span>new(
+        rx: Receiver&lt;Request&gt;,
+        pipeline: Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
+        method: SchedulerMethod,
+    ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             rx,
             pipeline,
             requests: VecDeque::new(),
-            scheduler: Scheduler::new(),
+            scheduler: Scheduler::new(method),
             id: <span class="number">0</span>,
         }
     }

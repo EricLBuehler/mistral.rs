@@ -45,6 +45,7 @@
 <a href="#44" id="44">44</a>
 <a href="#45" id="45">45</a>
 <a href="#46" id="46">46</a>
+<a href="#47" id="47">47</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     sync::{
         mpsc::{channel, Sender},
@@ -68,19 +69,20 @@
 
 <span class="kw">pub use </span>pipeline::{Loader, MistralLoader, MistralSpecificConfig, TokenSource};
 <span class="kw">use </span>request::Request;
+<span class="kw">pub use </span>scheduler::SchedulerMethod;
 
 <span class="kw">pub struct </span>MistralRs {
     sender: Sender&lt;Request&gt;,
 }
 
 <span class="kw">impl </span>MistralRs {
-    <span class="kw">pub fn </span>new(pipeline: Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;) -&gt; Arc&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">pub fn </span>new(pipeline: Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;, method: SchedulerMethod) -&gt; Arc&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>(tx, rx) = channel();
 
         <span class="kw">let </span>this = Arc::new(<span class="self">Self </span>{ sender: tx });
 
         thread::spawn(<span class="kw">move </span>|| {
-            <span class="kw">let </span><span class="kw-2">mut </span>engine = Engine::new(rx, pipeline);
+            <span class="kw">let </span><span class="kw-2">mut </span>engine = Engine::new(rx, pipeline, method);
             engine.run();
         });
 
