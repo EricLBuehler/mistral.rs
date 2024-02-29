@@ -97,6 +97,14 @@
 <a href="#96" id="96">96</a>
 <a href="#97" id="97">97</a>
 <a href="#98" id="98">98</a>
+<a href="#99" id="99">99</a>
+<a href="#100" id="100">100</a>
+<a href="#101" id="101">101</a>
+<a href="#102" id="102">102</a>
+<a href="#103" id="103">103</a>
+<a href="#104" id="104">104</a>
+<a href="#105" id="105">105</a>
+<a href="#106" id="106">106</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::{vec_deque::Iter, VecDeque},
@@ -132,7 +140,8 @@
 }
 
 <span class="kw">pub struct </span>SchedulerOutput {
-    <span class="kw">pub </span>seqs: Box&lt;[Rc&lt;RefCell&lt;Sequence&gt;&gt;]&gt;,
+    <span class="kw">pub </span>completion: Box&lt;[Rc&lt;RefCell&lt;Sequence&gt;&gt;]&gt;,
+    <span class="kw">pub </span>prompt: Box&lt;[Rc&lt;RefCell&lt;Sequence&gt;&gt;]&gt;,
 }
 
 <span class="kw">pub struct </span>Scheduler&lt;Backer: FcfsBacker&gt; {
@@ -167,6 +176,7 @@
         <span class="kw">for </span>seq <span class="kw">in </span><span class="self">self</span>.waiting.iter() {
             <span class="kw">if </span><span class="self">self</span>.sequence_fits(<span class="kw-2">&amp;</span>running, <span class="kw-2">&amp;*</span><span class="macro">deref_refcell!</span>(seq)) {
                 waiting_to_remove.push(<span class="kw-2">*</span><span class="macro">deref_refcell!</span>(seq).id());
+                <span class="macro">deref_mut_refcell!</span>(seq).set_state(SequenceState::RunningCompletion);
                 running.push(seq.clone());
             }
         }
@@ -179,15 +189,21 @@
             }
         }
 
-        <span class="kw">for </span>seq <span class="kw">in </span><span class="kw-2">&amp;</span>running {
-            <span class="macro">deref_mut_refcell!</span>(seq).set_state(SequenceState::Running);
-        }
-
         <span class="self">self</span>.waiting = waiting;
         <span class="self">self</span>.running = running.clone();
 
+        <span class="kw">let </span><span class="kw-2">mut </span>completion = Vec::new();
+        <span class="kw">let </span><span class="kw-2">mut </span>prompt = Vec::new();
+        <span class="kw">for </span>seq <span class="kw">in </span>running {
+            <span class="kw">if </span><span class="macro">deref_refcell!</span>(seq).is_completion() {
+                completion.push(seq);
+            } <span class="kw">else </span>{
+                prompt.push(seq);
+            }
+        }
         SchedulerOutput {
-            seqs: running.into(),
+            completion: completion.into(),
+            prompt: prompt.into(),
         }
     }
 

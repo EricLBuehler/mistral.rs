@@ -244,6 +244,12 @@
 <a href="#243" id="243">243</a>
 <a href="#244" id="244">244</a>
 <a href="#245" id="245">245</a>
+<a href="#246" id="246">246</a>
+<a href="#247" id="247">247</a>
+<a href="#248" id="248">248</a>
+<a href="#249" id="249">249</a>
+<a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{Loader, ModelPaths, Pipeline, SimpleModelPaths, TokenSource};
 <span class="kw">use crate</span>::{deref_mut_refcell, deref_refcell};
 <span class="kw">use crate</span>::{
@@ -410,7 +416,7 @@
 }
 
 <span class="kw">impl </span>Pipeline <span class="kw">for </span>MistralPipeline {
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;mut </span><span class="self">self</span>, input_toks: Box&lt;[Rc&lt;RefCell&lt;Sequence&gt;&gt;]&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+    <span class="kw">fn </span>forward(<span class="kw-2">&amp;mut </span><span class="self">self</span>, input_toks: Box&lt;[Rc&lt;RefCell&lt;Sequence&gt;&gt;]&gt;) -&gt; Tensor {
         <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
         </span><span class="kw">let </span>max_len = input_toks
             .iter()
@@ -448,7 +454,13 @@
         <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
         </span><span class="kw">let </span>input_ids = Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap();
 
-        <span class="prelude-val">Ok</span>(<span class="self">self</span>.model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets)<span class="question-mark">?</span>)
+        <span class="kw">let </span>result = <span class="self">self</span>.model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets);
+        <span class="kw">match </span>result {
+            <span class="prelude-val">Ok</span>(v) =&gt; v,
+            <span class="prelude-val">Err</span>(e) =&gt; {
+                <span class="macro">panic!</span>(<span class="string">"Model failed with error `{e}`. Please raise an issue."</span>);
+            }
+        }
     }
     <span class="kw">fn </span>tokenize_prompt(<span class="kw-2">&amp;</span><span class="self">self</span>, prompt: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u32&gt;&gt; {
         <span class="kw">let </span>encoding = <span class="self">self
@@ -458,13 +470,13 @@
         <span class="prelude-val">Ok</span>(encoding.get_ids().to_vec())
     }
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {
-        <span class="macro">todo!</span>()
+        <span class="kw-2">&amp;</span><span class="self">self</span>.model.device
     }
     <span class="kw">fn </span>num_hidden_layers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-        <span class="macro">todo!</span>()
+        <span class="self">self</span>.model.cache.lock().len()
     }
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="kw">crate</span>::models::Cache {
-        <span class="macro">todo!</span>()
+        <span class="kw-2">&amp;</span><span class="self">self</span>.model.cache
     }
     <span class="kw">fn </span>sample(<span class="kw-2">&amp;mut </span><span class="self">self</span>, logits: Tensor, seq: Rc&lt;RefCell&lt;Sequence&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
         <span class="kw">let </span>logits = logits.squeeze(<span class="number">0</span>).unwrap().to_dtype(DType::F32).unwrap();

@@ -752,9 +752,9 @@
     norm: RmsNorm,
     lm_head: Linear,
     sliding_window: usize,
-    device: Device,
     dtype: DType,
-    cache: Cache,
+    <span class="kw">pub </span>device: Device,
+    <span class="kw">pub </span>cache: Cache,
 }
 
 <span class="kw">impl </span>Model {
