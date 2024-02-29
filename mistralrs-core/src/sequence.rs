@@ -4,10 +4,11 @@ use candle_sampling::logits_processor::LogitsProcessor;
 
 use crate::{models::Cache, response::Response};
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum StopReason {
     Eos,
     StopTok(u32),
+    Length(usize),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -21,6 +22,7 @@ pub enum SequenceState {
 
 pub struct Sequence {
     tokens: Vec<u32>,
+    prompt_len: usize,
     id: usize,
     state: Cell<SequenceState>,
     gen_idx: usize,
@@ -28,6 +30,7 @@ pub struct Sequence {
     responder: Sender<Response>,
     logits_processor: LogitsProcessor,
     stop_tokens: Vec<u32>,
+    max_len: usize,
 }
 
 impl Sequence {
@@ -38,9 +41,12 @@ impl Sequence {
         responder: Sender<Response>,
         logits_processor: LogitsProcessor,
         stop_tokens: Vec<u32>,
+        max_len: Option<usize>,
     ) -> Self {
+        let prompt_len = tokens.len();
         Self {
             tokens,
+            prompt_len,
             id,
             state: Cell::new(SequenceState::Waiting),
             gen_idx: 0,
@@ -48,6 +54,7 @@ impl Sequence {
             responder,
             logits_processor,
             stop_tokens,
+            max_len: max_len.unwrap_or(64),
         }
     }
 
@@ -105,6 +112,9 @@ impl Sequence {
             Some(StopReason::Eos)
         } else if self.stop_tokens.contains(&tok) {
             Some(StopReason::StopTok(tok))
+        } else if self.tokens.len().saturating_sub(self.prompt_len) == self.max_len {
+            // add_token was already called
+            Some(StopReason::Length(self.max_len))
         } else {
             None
         }

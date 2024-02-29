@@ -7,7 +7,7 @@ use std::{
 };
 
 use candle_core::Tensor;
-use candle_sampling::logits_processor::{LogitsProcessor, Logprobs, SamplingMethod};
+use candle_sampling::logits_processor::{LogitsProcessor, SamplingMethod};
 
 use crate::{
     deref_mut_refcell, deref_refcell, get_mut_arcmutex, handle_seq_error,
@@ -46,25 +46,31 @@ impl Engine {
 
     pub fn run(&mut self) {
         loop {
-            if let Ok(request) = self.rx.recv() {
+            if let Ok(request) = self.rx.try_recv() {
                 self.add_request(request);
             }
             let scheduled = self.scheduler.schedule();
 
-            // Run the completion seqs
-            self.clone_in_cache(&scheduled.completion);
-            let logits = get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone());
-            self.sample_seqs(&scheduled.completion, logits);
-            self.clone_out_cache(&scheduled.completion);
-
-            // Run the prompt seqs
-            self.set_none_cache();
-            let logits = get_mut_arcmutex!(self.pipeline).forward(scheduled.prompt.clone());
-            for seq in scheduled.prompt.iter() {
-                deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
+            if scheduled.completion.len() > 0 {
+                // Run the completion seqs
+                self.clone_in_cache(&scheduled.completion);
+                let logits =
+                    get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
+                self.sample_seqs(&scheduled.completion, logits);
+                self.clone_out_cache(&scheduled.completion);
             }
-            self.sample_seqs(&scheduled.prompt, logits);
-            self.clone_out_cache(&scheduled.prompt);
+
+            if scheduled.prompt.len() > 0 {
+                // Run the prompt seqs
+                self.set_none_cache();
+                let logits =
+                    get_mut_arcmutex!(self.pipeline).forward(scheduled.prompt.clone(), true);
+                for seq in scheduled.prompt.iter() {
+                    deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
+                }
+                self.sample_seqs(&scheduled.prompt, logits);
+                self.clone_out_cache(&scheduled.prompt);
+            }
         }
     }
 
@@ -72,17 +78,33 @@ impl Engine {
         let seqs_len = seqs.len();
         let logits_seq = logits.chunk(seqs_len, 0).unwrap();
         debug_assert_eq!(logits_seq.len(), seqs_len);
+        let eos_tok = get_mut_arcmutex!(self.pipeline).eos_tok();
         for (logits_per_seq, seq) in zip(logits_seq, seqs.iter()) {
-            let next_token: Logprobs = handle_seq_error_stateaware!(
-                get_mut_arcmutex!(self.pipeline).sample(logits_per_seq, seq.clone()),
-                seq
-            );
+            let sampled = get_mut_arcmutex!(self.pipeline).sample(logits_per_seq, seq.clone());
+            let next_token = handle_seq_error_stateaware!(sampled, seq);
             let next_token = next_token.token as u32;
             deref_mut_refcell!(seq).add_token(next_token);
-            if let Some(reason) =
-                deref_refcell!(seq).is_done(next_token, get_mut_arcmutex!(self.pipeline).eos_tok())
-            {
+            let res = handle_seq_error!(
+                get_mut_arcmutex!(self.pipeline)
+                    .tokenizer()
+                    .decode(deref_refcell!(seq).get_toks(), false),
+                deref_refcell!(seq).responder()
+            );
+            dbg!(&res);
+            let is_done = deref_refcell!(seq).is_done(next_token, eos_tok);
+            if let Some(reason) = is_done {
                 deref_mut_refcell!(seq).set_state(SequenceState::Done(reason));
+                let res = handle_seq_error!(
+                    get_mut_arcmutex!(self.pipeline)
+                        .tokenizer()
+                        .decode(deref_refcell!(seq).get_toks(), false),
+                    deref_refcell!(seq).responder()
+                );
+                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
+                deref_refcell!(seq)
+                    .responder()
+                    .send(Response::Done((reason, res)))
+                    .unwrap();
             }
         }
     }
@@ -99,13 +121,21 @@ impl Engine {
                 let cache = cache.get(layer).unwrap();
                 // Note(EricLBuehler): Unwrap reasoning: We are handling completions seqs so unwrap is OK.
                 let cache = cache.as_ref().unwrap();
-                k_vec.push(cache.0.clone().unsqueeze(0).unwrap());
-                v_vec.push(cache.1.clone().unsqueeze(0).unwrap());
+                k_vec.push(cache.0.clone());
+                v_vec.push(cache.1.clone());
             }
             // NOTE(EricLBuehler): Unwrap reasoning: We have the correct dims
             new_cache.push(Some((
-                Tensor::cat(&k_vec, 0).unwrap(),
-                Tensor::cat(&v_vec, 0).unwrap(),
+                if k_vec.len() > 1 {
+                    Tensor::cat(&k_vec, 0).unwrap()
+                } else {
+                    k_vec[0].clone()
+                },
+                if v_vec.len() > 1 {
+                    Tensor::cat(&v_vec, 0).unwrap()
+                } else {
+                    v_vec[0].clone()
+                },
             )));
         }
         *get_mut_arcmutex!(self.pipeline).cache().lock() = new_cache;
@@ -122,7 +152,8 @@ impl Engine {
 
     /// Clone the cache FROM the model cache TO the sequences. Used for prompt, completion seqs.
     fn clone_out_cache(&self, seqs: &[Rc<RefCell<Sequence>>]) {
-        for layer in 0..get_mut_arcmutex!(self.pipeline).num_hidden_layers() {
+        let num_hidden_layers = get_mut_arcmutex!(self.pipeline).num_hidden_layers();
+        for layer in 0..num_hidden_layers {
             let pipeline = get_mut_arcmutex!(self.pipeline);
             let cache = pipeline.cache().lock();
             let cache = cache.get(layer).unwrap();
@@ -151,31 +182,38 @@ impl Engine {
             get_mut_arcmutex!(self.pipeline).tokenize_prompt(&request.prompt),
             request.response
         );
-        let sampling_method = match (request.sampling_params.top_k, request.sampling_params.top_p) {
-            (Some(topk), None) => SamplingMethod::TopK(topk),
-            (None, Some(topp)) => SamplingMethod::TopP(topp),
-            (None, None) | (Some(_), Some(_)) => {
+        let sampling_method = match (
+            request.sampling_params.top_k,
+            request.sampling_params.top_p,
+            request.sampling_params.temperature,
+        ) {
+            (Some(topk), None, _) => SamplingMethod::TopK(topk),
+            (None, Some(topp), _) => SamplingMethod::TopP(topp),
+            (None, None, Some(_)) | (Some(_), Some(_), Some(_)) | (Some(_), Some(_), None) => {
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                 request
                     .response
                     .send(Response::Error(
-                        "Please specify either topk or topp.".into(),
+                        "Please specify either topk or topp, or neither if temperature is not specified.".into(),
                     ))
                     .unwrap();
                 return;
             }
+            (None, None, None) => SamplingMethod::Multinomial,
         };
+        let num_hidden_layers = get_mut_arcmutex!(self.pipeline).num_hidden_layers();
+        let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
         let seq = Sequence::new_waiting(
             prompt,
             self.id,
-            get_mut_arcmutex!(self.pipeline).num_hidden_layers(),
+            num_hidden_layers,
             request.response.clone(),
             LogitsProcessor::new(
                 SEED,
                 request.sampling_params.temperature,
                 sampling_method,
                 request.sampling_params.top_n_logprobs,
-                get_mut_arcmutex!(self.pipeline).tokenizer(),
+                tokenizer,
                 request.sampling_params.repeat_penalty,
             ),
             request
@@ -183,6 +221,7 @@ impl Engine {
                 .stop_toks
                 .clone()
                 .unwrap_or_default(),
+            request.sampling_params.max_len,
         );
         self.id += 1;
 

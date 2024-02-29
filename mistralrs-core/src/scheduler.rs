@@ -84,7 +84,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
         for seq in self.waiting.iter() {
             if self.sequence_fits(&running, &*deref_refcell!(seq)) {
                 waiting_to_remove.push(*deref_refcell!(seq).id());
-                deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
+                deref_mut_refcell!(seq).set_state(SequenceState::RunningPrompt);
                 running.push(seq.clone());
             }
         }

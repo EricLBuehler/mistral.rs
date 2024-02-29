@@ -68,7 +68,7 @@ pub trait Loader {
 }
 
 pub trait Pipeline: Send + Sync {
-    fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>) -> Tensor;
+    fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor;
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>>;
     fn device(&self) -> &Device;
     fn num_hidden_layers(&self) -> usize;

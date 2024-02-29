@@ -20,7 +20,9 @@ mod sequence;
 mod utils;
 
 pub use pipeline::{Loader, MistralLoader, MistralSpecificConfig, TokenSource};
-use request::Request;
+pub use request::Request;
+pub use response::Response;
+pub use sampling::SamplingParams;
 pub use scheduler::SchedulerMethod;
 
 pub struct MistralRs {

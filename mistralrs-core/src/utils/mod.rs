@@ -6,7 +6,7 @@ pub(crate) mod varbuilder_utils;
 macro_rules! get_mut_arcmutex {
     ($thing:expr) => {
         loop {
-            if let Ok(inner) = $thing.lock() {
+            if let Ok(inner) = $thing.try_lock() {
                 break inner;
             }
         }

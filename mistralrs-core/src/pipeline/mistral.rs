@@ -164,44 +164,56 @@ impl Loader for MistralLoader {
 }
 
 impl Pipeline for MistralPipeline {
-    fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>) -> Tensor {
-        // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
-        let max_len = input_toks
-            .iter()
-            .map(|seq| deref_refcell!(seq).len())
-            .max()
-            .unwrap();
-        let padding_tok = 0;
-        // Pad each sequence by the padding token to the max len.
-        let mut seqs_tensors = Vec::new();
-        let mut seqlen_offsets = Vec::new();
-        for seq in input_toks.iter() {
-            let context_size = if *deref_mut_refcell!(seq).gen_idx() > 0 {
-                1
-            } else {
-                deref_refcell!(seq).get_toks().len()
-            };
-            let start_pos = deref_refcell!(seq)
-                .get_toks()
-                .len()
-                .saturating_sub(context_size);
-            let mut ctxt = deref_refcell!(seq).get_toks()[start_pos..].to_vec();
-            seqlen_offsets.push(start_pos);
-            *deref_mut_refcell!(seq).gen_idx() += 1;
+    fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor {
+        let (input_ids, seqlen_offsets) = if is_prompt {
+            // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
+            let max_len = input_toks
+                .iter()
+                .map(|seq| deref_refcell!(seq).len())
+                .max()
+                .unwrap();
+            let padding_tok = 0;
+            // Pad each sequence by the padding token to the max len.
+            let mut seqs_tensors = Vec::new();
+            let mut seqlen_offsets = Vec::new();
+            for seq in input_toks.iter() {
+                let mut ctxt = deref_refcell!(seq).get_toks().to_vec();
+                seqlen_offsets.push(0);
+                *deref_mut_refcell!(seq).gen_idx() += 1;
 
-            ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
+                ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
 
-            // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
-            seqs_tensors.push(
-                Tensor::new(ctxt, self.device())
-                    .unwrap()
-                    .unsqueeze(0)
-                    .unwrap(),
-            );
-        }
-        // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
-        let input_ids = Tensor::cat(&seqs_tensors, 0).unwrap();
+                // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
+                seqs_tensors.push(
+                    Tensor::new(ctxt, self.device())
+                        .unwrap()
+                        .unsqueeze(0)
+                        .unwrap(),
+                );
+            }
+            // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
+            (Tensor::cat(&seqs_tensors, 0).unwrap(), seqlen_offsets)
+        } else {
+            // Pad each sequence by the padding token to the max len.
+            let mut seqs_tensors = Vec::new();
+            let mut seqlen_offsets = Vec::new();
+            for seq in input_toks.iter() {
+                let start_pos = deref_refcell!(seq).get_toks().len().saturating_sub(1);
+                let ctxt = deref_refcell!(seq).get_toks()[start_pos..].to_vec();
+                seqlen_offsets.push(start_pos);
+                *deref_mut_refcell!(seq).gen_idx() += 1;
 
+                // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
+                seqs_tensors.push(
+                    Tensor::new(ctxt, self.device())
+                        .unwrap()
+                        .unsqueeze(0)
+                        .unwrap(),
+                );
+            }
+            // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
+            (Tensor::cat(&seqs_tensors, 0).unwrap(), seqlen_offsets)
+        };
         let result = self.model.forward(&input_ids, &seqlen_offsets);
         match result {
             Ok(v) => v,
@@ -227,7 +239,13 @@ impl Pipeline for MistralPipeline {
         &self.model.cache
     }
     fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs> {
-        let logits = logits.squeeze(0).unwrap().to_dtype(DType::F32).unwrap();
+        let logits = logits
+            .squeeze(0)
+            .unwrap()
+            .squeeze(0)
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap();
         let start_at = deref_refcell!(seq)
             .get_toks()
             .len()
