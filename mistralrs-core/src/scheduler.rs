@@ -37,16 +37,22 @@ pub struct SchedulerOutput {
     pub prompt: Box<[Rc<RefCell<Sequence>>]>,
 }
 
+pub enum SchedulerMethod {
+    Fixed(usize),
+}
+
 pub struct Scheduler<Backer: FcfsBacker> {
     waiting: Backer,
     running: Vec<Rc<RefCell<Sequence>>>,
+    method: SchedulerMethod,
 }
 
 impl<Backer: FcfsBacker> Scheduler<Backer> {
-    pub fn new() -> Self {
+    pub fn new(method: SchedulerMethod) -> Self {
         Self {
             running: Vec::new(),
             waiting: Backer::new(),
+            method,
         }
     }
 
@@ -100,7 +106,9 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
         }
     }
 
-    fn sequence_fits(&self, _running: &[Rc<RefCell<Sequence>>], _seq: &Sequence) -> bool {
-        todo!()
+    fn sequence_fits(&self, running: &[Rc<RefCell<Sequence>>], _seq: &Sequence) -> bool {
+        match self.method {
+            SchedulerMethod::Fixed(n) => running.len() + 1 < n,
+        }
     }
 }

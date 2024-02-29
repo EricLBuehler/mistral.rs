@@ -15,7 +15,7 @@ use crate::{
     pipeline::Pipeline,
     request::Request,
     response::Response,
-    scheduler::Scheduler,
+    scheduler::{Scheduler, SchedulerMethod},
     sequence::{Sequence, SequenceState},
 };
 
@@ -30,12 +30,16 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(rx: Receiver<Request>, pipeline: Box<Mutex<dyn Pipeline>>) -> Self {
+    pub fn new(
+        rx: Receiver<Request>,
+        pipeline: Box<Mutex<dyn Pipeline>>,
+        method: SchedulerMethod,
+    ) -> Self {
         Self {
             rx,
             pipeline,
             requests: VecDeque::new(),
-            scheduler: Scheduler::new(),
+            scheduler: Scheduler::new(method),
             id: 0,
         }
     }

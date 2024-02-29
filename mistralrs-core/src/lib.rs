@@ -21,19 +21,20 @@ mod utils;
 
 pub use pipeline::{Loader, MistralLoader, MistralSpecificConfig, TokenSource};
 use request::Request;
+pub use scheduler::SchedulerMethod;
 
 pub struct MistralRs {
     sender: Sender<Request>,
 }
 
 impl MistralRs {
-    pub fn new(pipeline: Box<Mutex<dyn Pipeline>>) -> Arc<Self> {
+    pub fn new(pipeline: Box<Mutex<dyn Pipeline>>, method: SchedulerMethod) -> Arc<Self> {
         let (tx, rx) = channel();
 
         let this = Arc::new(Self { sender: tx });
 
         thread::spawn(move || {
-            let mut engine = Engine::new(rx, pipeline);
+            let mut engine = Engine::new(rx, pipeline, method);
             engine.run();
         });
 
