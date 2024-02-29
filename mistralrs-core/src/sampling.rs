@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Debug)]
 pub struct SamplingParams {
     pub temperature: Option<f64>,
     pub top_k: Option<usize>,

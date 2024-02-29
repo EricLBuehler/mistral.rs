@@ -84,13 +84,6 @@ impl Engine {
             let next_token = handle_seq_error_stateaware!(sampled, seq);
             let next_token = next_token.token as u32;
             deref_mut_refcell!(seq).add_token(next_token);
-            let res = handle_seq_error!(
-                get_mut_arcmutex!(self.pipeline)
-                    .tokenizer()
-                    .decode(deref_refcell!(seq).get_toks(), false),
-                deref_refcell!(seq).responder()
-            );
-            dbg!(&res);
             let is_done = deref_refcell!(seq).is_done(next_token, eos_tok);
             if let Some(reason) = is_done {
                 deref_mut_refcell!(seq).set_state(SequenceState::Done(reason));

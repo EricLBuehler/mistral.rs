@@ -1,7 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::{vec_deque::Iter, VecDeque},
-    iter::zip,
+    collections::{vec_deque::Iter, HashMap, VecDeque},
     rc::Rc,
 };
 
@@ -84,31 +83,65 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
         for seq in self.waiting.iter() {
             if self.sequence_fits(&running, &*deref_refcell!(seq)) {
                 waiting_to_remove.push(*deref_refcell!(seq).id());
-                deref_mut_refcell!(seq).set_state(SequenceState::RunningPrompt);
+                if deref_refcell!(seq).is_waiting() {
+                    deref_mut_refcell!(seq).set_state(SequenceState::RunningPrompt);
+                }
                 running.push(seq.clone());
             }
         }
 
         // Remove sequences moved from waiting -> running.
         let mut waiting = Backer::new();
-        for (id, seq) in zip(waiting_to_remove, self.waiting.iter()) {
-            if *deref_refcell!(seq).id() != id {
+        for seq in self.waiting.iter() {
+            if !waiting_to_remove.contains(deref_refcell!(seq).id()) {
                 waiting.add(seq.clone());
             }
         }
 
-        self.waiting = waiting;
-        self.running = running.clone();
+        // Now, get the sequences with the smallest sequence lengths, and allow them to catch up.
+        let mut seq_buckets: HashMap<usize, Vec<Rc<RefCell<Sequence>>>> = HashMap::new();
+        let mut min_len = usize::MAX;
+        for seq in &running {
+            let len = deref_refcell!(seq).len();
+            if len < min_len {
+                min_len = len;
+            }
+            match seq_buckets.get_mut(&len) {
+                Some(bucket) => bucket.push(seq.clone()),
+                None => {
+                    seq_buckets.insert(len, vec![seq.clone()]);
+                }
+            }
+        }
+        let (running, waiting) = if seq_buckets.len() <= 1 {
+            // Full steam ahead or have everything
+            (running, waiting)
+        } else {
+            // Set the min seqs to be the running ones, and the rest to be waiting (but their states are not changed!)
+            // Allow the min seqs to catch up.
+            let min_seqs = seq_buckets.remove(&min_len).unwrap();
+            for (_, seqs) in seq_buckets {
+                for seq in seqs {
+                    waiting.add(seq);
+                }
+            }
+            // Know min_seqs.len < running.len() <= max
+            (min_seqs, waiting)
+        };
 
         let mut completion = Vec::new();
         let mut prompt = Vec::new();
-        for seq in running {
+        for seq in &running {
             if deref_refcell!(seq).is_completion() {
-                completion.push(seq);
+                completion.push(seq.clone());
             } else {
-                prompt.push(seq);
+                prompt.push(seq.clone());
             }
         }
+
+        self.waiting = waiting;
+        self.running = running;
+
         SchedulerOutput {
             completion: completion.into(),
             prompt: prompt.into(),
@@ -117,7 +150,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
 
     fn sequence_fits(&self, running: &[Rc<RefCell<Sequence>>], _seq: &Sequence) -> bool {
         match &self.method {
-            SchedulerMethod::Fixed(n) => (running.len() + 1) < **n,
+            SchedulerMethod::Fixed(n) => (running.len() + 1) <= **n,
         }
     }
 }

@@ -20,6 +20,10 @@ struct Args {
     /// Port to serve on.
     #[arg(short, long)]
     port: String,
+
+    /// Log all responses and requests to responses.log
+    #[clap(long, short, action)]
+    log: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -29,15 +33,15 @@ struct RawRequest {
 }
 
 async fn root(State(state): State<Arc<MistralRs>>, Json(request): Json<RawRequest>) -> String {
-    let sender = state.get_sender();
     let (tx, rx) = channel();
-    sender
-        .send(Request {
-            prompt: request.prompt,
-            sampling_params: request.sampling_params,
-            response: tx,
-        })
-        .unwrap();
+    let request = Request {
+        prompt: request.prompt,
+        sampling_params: request.sampling_params,
+        response: tx,
+    };
+    MistralRs::maybe_log_request(state.clone(), &request);
+    let sender = state.get_sender();
+    sender.send(request).unwrap();
     let response = rx.recv().unwrap();
 
     match response {
@@ -45,7 +49,10 @@ async fn root(State(state): State<Arc<MistralRs>>, Json(request): Json<RawReques
             dbg!(&e);
             e.to_string()
         }
-        Response::Done((_reason, out)) => out,
+        Response::Done((reason, out)) => {
+            MistralRs::maybe_log_response(state, (reason, &out));
+            out
+        }
     }
 }
 
@@ -67,7 +74,11 @@ async fn main() -> Result<()> {
         Some(DType::F32),
     );
     let pipeline = loader.load_model(None, TokenSource::CacheToken, None, &Device::Cpu)?;
-    let mistralrs = MistralRs::new(pipeline, SchedulerMethod::Fixed(2.try_into().unwrap()));
+    let mistralrs = MistralRs::new(
+        pipeline,
+        SchedulerMethod::Fixed(2.try_into().unwrap()),
+        args.log,
+    );
 
     let app = get_router(mistralrs);
 

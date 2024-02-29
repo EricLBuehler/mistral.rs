@@ -79,6 +79,10 @@ impl Sequence {
         self.state.get() == SequenceState::RunningPrompt
     }
 
+    pub fn is_waiting(&self) -> bool {
+        self.state.get() == SequenceState::Waiting
+    }
+
     pub fn get_toks(&self) -> &[u32] {
         &self.tokens
     }
