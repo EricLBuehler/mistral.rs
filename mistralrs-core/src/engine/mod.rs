@@ -50,8 +50,6 @@ impl Engine {
             let logits = get_mut_arcmutex!(self.pipeline).forward(scheduled.seqs.clone());
             self.clone_out_cache(&scheduled);
 
-            // TODO(EricLBuehler): Unwrapping is certainly incorrect. Must handle error
-            let logits = logits.unwrap();
             let seqs_len = scheduled.seqs.len();
             let logits_seq = logits.chunk(seqs_len, 0).unwrap();
             debug_assert_eq!(logits_seq.len(), seqs_len);

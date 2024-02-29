@@ -164,7 +164,7 @@ impl Loader for MistralLoader {
 }
 
 impl Pipeline for MistralPipeline {
-    fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>) -> Result<Tensor> {
+    fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>) -> Tensor {
         // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
         let max_len = input_toks
             .iter()
@@ -202,7 +202,13 @@ impl Pipeline for MistralPipeline {
         // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
         let input_ids = Tensor::cat(&seqs_tensors, 0).unwrap();
 
-        Ok(self.model.forward(&input_ids, &seqlen_offsets)?)
+        let result = self.model.forward(&input_ids, &seqlen_offsets);
+        match result {
+            Ok(v) => v,
+            Err(e) => {
+                panic!("Model failed with error `{e}`. Please raise an issue.");
+            }
+        }
     }
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
         let encoding = self
