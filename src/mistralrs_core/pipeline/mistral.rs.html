@@ -250,6 +250,24 @@
 <a href="#249" id="249">249</a>
 <a href="#250" id="250">250</a>
 <a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
+<a href="#253" id="253">253</a>
+<a href="#254" id="254">254</a>
+<a href="#255" id="255">255</a>
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a>
+<a href="#260" id="260">260</a>
+<a href="#261" id="261">261</a>
+<a href="#262" id="262">262</a>
+<a href="#263" id="263">263</a>
+<a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
+<a href="#269" id="269">269</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{Loader, ModelPaths, Pipeline, SimpleModelPaths, TokenSource};
 <span class="kw">use crate</span>::{deref_mut_refcell, deref_refcell};
 <span class="kw">use crate</span>::{
@@ -416,44 +434,56 @@
 }
 
 <span class="kw">impl </span>Pipeline <span class="kw">for </span>MistralPipeline {
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;mut </span><span class="self">self</span>, input_toks: Box&lt;[Rc&lt;RefCell&lt;Sequence&gt;&gt;]&gt;) -&gt; Tensor {
-        <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
-        </span><span class="kw">let </span>max_len = input_toks
-            .iter()
-            .map(|seq| <span class="macro">deref_refcell!</span>(seq).len())
-            .max()
-            .unwrap();
-        <span class="kw">let </span>padding_tok = <span class="number">0</span>;
-        <span class="comment">// Pad each sequence by the padding token to the max len.
-        </span><span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
-        <span class="kw">let </span><span class="kw-2">mut </span>seqlen_offsets = Vec::new();
-        <span class="kw">for </span>seq <span class="kw">in </span>input_toks.iter() {
-            <span class="kw">let </span>context_size = <span class="kw">if </span><span class="kw-2">*</span><span class="macro">deref_mut_refcell!</span>(seq).gen_idx() &gt; <span class="number">0 </span>{
-                <span class="number">1
-            </span>} <span class="kw">else </span>{
-                <span class="macro">deref_refcell!</span>(seq).get_toks().len()
-            };
-            <span class="kw">let </span>start_pos = <span class="macro">deref_refcell!</span>(seq)
-                .get_toks()
-                .len()
-                .saturating_sub(context_size);
-            <span class="kw">let </span><span class="kw-2">mut </span>ctxt = <span class="macro">deref_refcell!</span>(seq).get_toks()[start_pos..].to_vec();
-            seqlen_offsets.push(start_pos);
-            <span class="kw-2">*</span><span class="macro">deref_mut_refcell!</span>(seq).gen_idx() += <span class="number">1</span>;
+    <span class="kw">fn </span>forward(<span class="kw-2">&amp;mut </span><span class="self">self</span>, input_toks: Box&lt;[Rc&lt;RefCell&lt;Sequence&gt;&gt;]&gt;, is_prompt: bool) -&gt; Tensor {
+        <span class="kw">let </span>(input_ids, seqlen_offsets) = <span class="kw">if </span>is_prompt {
+            <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
+            </span><span class="kw">let </span>max_len = input_toks
+                .iter()
+                .map(|seq| <span class="macro">deref_refcell!</span>(seq).len())
+                .max()
+                .unwrap();
+            <span class="kw">let </span>padding_tok = <span class="number">0</span>;
+            <span class="comment">// Pad each sequence by the padding token to the max len.
+            </span><span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
+            <span class="kw">let </span><span class="kw-2">mut </span>seqlen_offsets = Vec::new();
+            <span class="kw">for </span>seq <span class="kw">in </span>input_toks.iter() {
+                <span class="kw">let </span><span class="kw-2">mut </span>ctxt = <span class="macro">deref_refcell!</span>(seq).get_toks().to_vec();
+                seqlen_offsets.push(<span class="number">0</span>);
+                <span class="kw-2">*</span><span class="macro">deref_mut_refcell!</span>(seq).gen_idx() += <span class="number">1</span>;
 
-            ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
+                ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
 
-            <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
-            </span>seqs_tensors.push(
-                Tensor::new(ctxt, <span class="self">self</span>.device())
-                    .unwrap()
-                    .unsqueeze(<span class="number">0</span>)
-                    .unwrap(),
-            );
-        }
-        <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
-        </span><span class="kw">let </span>input_ids = Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap();
+                <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
+                </span>seqs_tensors.push(
+                    Tensor::new(ctxt, <span class="self">self</span>.device())
+                        .unwrap()
+                        .unsqueeze(<span class="number">0</span>)
+                        .unwrap(),
+                );
+            }
+            <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
+            </span>(Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap(), seqlen_offsets)
+        } <span class="kw">else </span>{
+            <span class="comment">// Pad each sequence by the padding token to the max len.
+            </span><span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
+            <span class="kw">let </span><span class="kw-2">mut </span>seqlen_offsets = Vec::new();
+            <span class="kw">for </span>seq <span class="kw">in </span>input_toks.iter() {
+                <span class="kw">let </span>start_pos = <span class="macro">deref_refcell!</span>(seq).get_toks().len().saturating_sub(<span class="number">1</span>);
+                <span class="kw">let </span>ctxt = <span class="macro">deref_refcell!</span>(seq).get_toks()[start_pos..].to_vec();
+                seqlen_offsets.push(start_pos);
+                <span class="kw-2">*</span><span class="macro">deref_mut_refcell!</span>(seq).gen_idx() += <span class="number">1</span>;
 
+                <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
+                </span>seqs_tensors.push(
+                    Tensor::new(ctxt, <span class="self">self</span>.device())
+                        .unwrap()
+                        .unsqueeze(<span class="number">0</span>)
+                        .unwrap(),
+                );
+            }
+            <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
+            </span>(Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap(), seqlen_offsets)
+        };
         <span class="kw">let </span>result = <span class="self">self</span>.model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets);
         <span class="kw">match </span>result {
             <span class="prelude-val">Ok</span>(v) =&gt; v,
@@ -479,7 +509,13 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>.model.cache
     }
     <span class="kw">fn </span>sample(<span class="kw-2">&amp;mut </span><span class="self">self</span>, logits: Tensor, seq: Rc&lt;RefCell&lt;Sequence&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
-        <span class="kw">let </span>logits = logits.squeeze(<span class="number">0</span>).unwrap().to_dtype(DType::F32).unwrap();
+        <span class="kw">let </span>logits = logits
+            .squeeze(<span class="number">0</span>)
+            .unwrap()
+            .squeeze(<span class="number">0</span>)
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap();
         <span class="kw">let </span>start_at = <span class="macro">deref_refcell!</span>(seq)
             .get_toks()
             .len()

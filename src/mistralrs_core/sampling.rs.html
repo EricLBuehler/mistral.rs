@@ -7,12 +7,20 @@
 <a href="#6" id="6">6</a>
 <a href="#7" id="7">7</a>
 <a href="#8" id="8">8</a>
-</pre></div><pre class="rust"><code><span class="kw">pub struct </span>SamplingParams {
+<a href="#9" id="9">9</a>
+<a href="#10" id="10">10</a>
+<a href="#11" id="11">11</a>
+<a href="#12" id="12">12</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>serde::Deserialize;
+
+<span class="attr">#[derive(Clone, Deserialize)]
+</span><span class="kw">pub struct </span>SamplingParams {
     <span class="kw">pub </span>temperature: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     <span class="kw">pub </span>top_k: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="kw">pub </span>top_p: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     <span class="kw">pub </span>top_n_logprobs: usize,
     <span class="kw">pub </span>repeat_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
     <span class="kw">pub </span>stop_toks: <span class="prelude-ty">Option</span>&lt;Vec&lt;u32&gt;&gt;,
+    <span class="kw">pub </span>max_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 </code></pre></div></section></main></body></html>

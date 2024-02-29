@@ -75,7 +75,7 @@
 </span><span class="macro">macro_rules! </span>get_mut_arcmutex {
     (<span class="macro-nonterminal">$thing</span>:expr) =&gt; {
         <span class="kw">loop </span>{
-            <span class="kw">if let </span><span class="prelude-val">Ok</span>(inner) = <span class="macro-nonterminal">$thing</span>.lock() {
+            <span class="kw">if let </span><span class="prelude-val">Ok</span>(inner) = <span class="macro-nonterminal">$thing</span>.try_lock() {
                 <span class="kw">break </span>inner;
             }
         }

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["get_router","main","root"],"struct":["Args"]};
+window.SIDEBAR_ITEMS = {"fn":["get_router","main","root"],"struct":["Args","RawRequest"]};

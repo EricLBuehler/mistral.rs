@@ -111,16 +111,27 @@
 <a href="#110" id="110">110</a>
 <a href="#111" id="111">111</a>
 <a href="#112" id="112">112</a>
+<a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+<a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{cell::Cell, sync::mpsc::Sender};
 
 <span class="kw">use </span>candle_sampling::logits_processor::LogitsProcessor;
 
 <span class="kw">use crate</span>::{models::Cache, response::Response};
 
-<span class="attr">#[derive(Clone, Copy, PartialEq)]
+<span class="attr">#[derive(Clone, Copy, PartialEq, Debug)]
 </span><span class="kw">pub enum </span>StopReason {
     Eos,
     StopTok(u32),
+    Length(usize),
 }
 
 <span class="attr">#[derive(Clone, Copy, PartialEq)]
@@ -134,6 +145,7 @@
 
 <span class="kw">pub struct </span>Sequence {
     tokens: Vec&lt;u32&gt;,
+    prompt_len: usize,
     id: usize,
     state: Cell&lt;SequenceState&gt;,
     gen_idx: usize,
@@ -141,6 +153,7 @@
     responder: Sender&lt;Response&gt;,
     logits_processor: LogitsProcessor,
     stop_tokens: Vec&lt;u32&gt;,
+    max_len: usize,
 }
 
 <span class="kw">impl </span>Sequence {
@@ -151,9 +164,12 @@
         responder: Sender&lt;Response&gt;,
         logits_processor: LogitsProcessor,
         stop_tokens: Vec&lt;u32&gt;,
+        max_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     ) -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span>prompt_len = tokens.len();
         <span class="self">Self </span>{
             tokens,
+            prompt_len,
             id,
             state: Cell::new(SequenceState::Waiting),
             gen_idx: <span class="number">0</span>,
@@ -161,6 +177,7 @@
             responder,
             logits_processor,
             stop_tokens,
+            max_len: max_len.unwrap_or(<span class="number">64</span>),
         }
     }
 
@@ -218,6 +235,9 @@
             <span class="prelude-val">Some</span>(StopReason::Eos)
         } <span class="kw">else if </span><span class="self">self</span>.stop_tokens.contains(<span class="kw-2">&amp;</span>tok) {
             <span class="prelude-val">Some</span>(StopReason::StopTok(tok))
+        } <span class="kw">else if </span><span class="self">self</span>.tokens.len().saturating_sub(<span class="self">self</span>.prompt_len) == <span class="self">self</span>.max_len {
+            <span class="comment">// add_token was already called
+            </span><span class="prelude-val">Some</span>(StopReason::Length(<span class="self">self</span>.max_len))
         } <span class="kw">else </span>{
             <span class="prelude-val">None
         </span>}
