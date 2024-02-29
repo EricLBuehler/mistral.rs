@@ -13,7 +13,7 @@
 <a href="#12" id="12">12</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>serde::Deserialize;
 
-<span class="attr">#[derive(Clone, Deserialize)]
+<span class="attr">#[derive(Clone, Deserialize, Debug)]
 </span><span class="kw">pub struct </span>SamplingParams {
     <span class="kw">pub </span>temperature: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     <span class="kw">pub </span>top_k: <span class="prelude-ty">Option</span>&lt;usize&gt;,

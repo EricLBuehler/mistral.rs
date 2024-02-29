@@ -7,12 +7,32 @@
 <a href="#6" id="6">6</a>
 <a href="#7" id="7">7</a>
 <a href="#8" id="8">8</a>
+<a href="#9" id="9">9</a>
+<a href="#10" id="10">10</a>
+<a href="#11" id="11">11</a>
+<a href="#12" id="12">12</a>
+<a href="#13" id="13">13</a>
+<a href="#14" id="14">14</a>
+<a href="#15" id="15">15</a>
+<a href="#16" id="16">16</a>
+<a href="#17" id="17">17</a>
+<a href="#18" id="18">18</a>
 </pre></div><pre class="rust"><code><span class="kw">use crate</span>::{response::Response, sampling::SamplingParams};
-<span class="kw">use </span>std::sync::mpsc::Sender;
+<span class="kw">use </span>std::{fmt::Debug, sync::mpsc::Sender};
 
 <span class="kw">pub struct </span>Request {
     <span class="kw">pub </span>prompt: String,
     <span class="kw">pub </span>sampling_params: SamplingParams,
     <span class="kw">pub </span>response: Sender&lt;Response&gt;,
+}
+
+<span class="kw">impl </span>Debug <span class="kw">for </span>Request {
+    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
+        <span class="macro">write!</span>(
+            f,
+            <span class="string">"Request {{ prompt: `{}`, sampling_params: {:?}}}"</span>,
+            <span class="self">self</span>.prompt, <span class="self">self</span>.sampling_params
+        )
+    }
 }
 </code></pre></div></section></main></body></html>

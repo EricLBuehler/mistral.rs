@@ -122,10 +122,42 @@
 <a href="#121" id="121">121</a>
 <a href="#122" id="122">122</a>
 <a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
-    collections::{vec_deque::Iter, VecDeque},
-    iter::zip,
+    collections::{vec_deque::Iter, HashMap, VecDeque},
     rc::Rc,
 };
 
@@ -208,31 +240,65 @@
         <span class="kw">for </span>seq <span class="kw">in </span><span class="self">self</span>.waiting.iter() {
             <span class="kw">if </span><span class="self">self</span>.sequence_fits(<span class="kw-2">&amp;</span>running, <span class="kw-2">&amp;*</span><span class="macro">deref_refcell!</span>(seq)) {
                 waiting_to_remove.push(<span class="kw-2">*</span><span class="macro">deref_refcell!</span>(seq).id());
-                <span class="macro">deref_mut_refcell!</span>(seq).set_state(SequenceState::RunningPrompt);
+                <span class="kw">if </span><span class="macro">deref_refcell!</span>(seq).is_waiting() {
+                    <span class="macro">deref_mut_refcell!</span>(seq).set_state(SequenceState::RunningPrompt);
+                }
                 running.push(seq.clone());
             }
         }
 
         <span class="comment">// Remove sequences moved from waiting -&gt; running.
         </span><span class="kw">let </span><span class="kw-2">mut </span>waiting = Backer::new();
-        <span class="kw">for </span>(id, seq) <span class="kw">in </span>zip(waiting_to_remove, <span class="self">self</span>.waiting.iter()) {
-            <span class="kw">if </span><span class="kw-2">*</span><span class="macro">deref_refcell!</span>(seq).id() != id {
+        <span class="kw">for </span>seq <span class="kw">in </span><span class="self">self</span>.waiting.iter() {
+            <span class="kw">if </span>!waiting_to_remove.contains(<span class="macro">deref_refcell!</span>(seq).id()) {
                 waiting.add(seq.clone());
             }
         }
 
-        <span class="self">self</span>.waiting = waiting;
-        <span class="self">self</span>.running = running.clone();
+        <span class="comment">// Now, get the sequences with the smallest sequence lengths, and allow them to catch up.
+        </span><span class="kw">let </span><span class="kw-2">mut </span>seq_buckets: HashMap&lt;usize, Vec&lt;Rc&lt;RefCell&lt;Sequence&gt;&gt;&gt;&gt; = HashMap::new();
+        <span class="kw">let </span><span class="kw-2">mut </span>min_len = usize::MAX;
+        <span class="kw">for </span>seq <span class="kw">in </span><span class="kw-2">&amp;</span>running {
+            <span class="kw">let </span>len = <span class="macro">deref_refcell!</span>(seq).len();
+            <span class="kw">if </span>len &lt; min_len {
+                min_len = len;
+            }
+            <span class="kw">match </span>seq_buckets.get_mut(<span class="kw-2">&amp;</span>len) {
+                <span class="prelude-val">Some</span>(bucket) =&gt; bucket.push(seq.clone()),
+                <span class="prelude-val">None </span>=&gt; {
+                    seq_buckets.insert(len, <span class="macro">vec!</span>[seq.clone()]);
+                }
+            }
+        }
+        <span class="kw">let </span>(running, waiting) = <span class="kw">if </span>seq_buckets.len() &lt;= <span class="number">1 </span>{
+            <span class="comment">// Full steam ahead or have everything
+            </span>(running, waiting)
+        } <span class="kw">else </span>{
+            <span class="comment">// Set the min seqs to be the running ones, and the rest to be waiting (but their states are not changed!)
+            // Allow the min seqs to catch up.
+            </span><span class="kw">let </span>min_seqs = seq_buckets.remove(<span class="kw-2">&amp;</span>min_len).unwrap();
+            <span class="kw">for </span>(<span class="kw">_</span>, seqs) <span class="kw">in </span>seq_buckets {
+                <span class="kw">for </span>seq <span class="kw">in </span>seqs {
+                    waiting.add(seq);
+                }
+            }
+            <span class="comment">// Know min_seqs.len &lt; running.len() &lt;= max
+            </span>(min_seqs, waiting)
+        };
 
         <span class="kw">let </span><span class="kw-2">mut </span>completion = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>prompt = Vec::new();
-        <span class="kw">for </span>seq <span class="kw">in </span>running {
+        <span class="kw">for </span>seq <span class="kw">in </span><span class="kw-2">&amp;</span>running {
             <span class="kw">if </span><span class="macro">deref_refcell!</span>(seq).is_completion() {
-                completion.push(seq);
+                completion.push(seq.clone());
             } <span class="kw">else </span>{
-                prompt.push(seq);
+                prompt.push(seq.clone());
             }
         }
+
+        <span class="self">self</span>.waiting = waiting;
+        <span class="self">self</span>.running = running;
+
         SchedulerOutput {
             completion: completion.into(),
             prompt: prompt.into(),
@@ -241,7 +307,7 @@
 
     <span class="kw">fn </span>sequence_fits(<span class="kw-2">&amp;</span><span class="self">self</span>, running: <span class="kw-2">&amp;</span>[Rc&lt;RefCell&lt;Sequence&gt;&gt;], _seq: <span class="kw-2">&amp;</span>Sequence) -&gt; bool {
         <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.method {
-            SchedulerMethod::Fixed(n) =&gt; (running.len() + <span class="number">1</span>) &lt; <span class="kw-2">**</span>n,
+            SchedulerMethod::Fixed(n) =&gt; (running.len() + <span class="number">1</span>) &lt;= <span class="kw-2">**</span>n,
         }
     }
 }

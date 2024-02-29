@@ -223,13 +223,6 @@
 <a href="#222" id="222">222</a>
 <a href="#223" id="223">223</a>
 <a href="#224" id="224">224</a>
-<a href="#225" id="225">225</a>
-<a href="#226" id="226">226</a>
-<a href="#227" id="227">227</a>
-<a href="#228" id="228">228</a>
-<a href="#229" id="229">229</a>
-<a href="#230" id="230">230</a>
-<a href="#231" id="231">231</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -316,13 +309,6 @@
             <span class="kw">let </span>next_token = <span class="macro">handle_seq_error_stateaware!</span>(sampled, seq);
             <span class="kw">let </span>next_token = next_token.token <span class="kw">as </span>u32;
             <span class="macro">deref_mut_refcell!</span>(seq).add_token(next_token);
-            <span class="kw">let </span>res = <span class="macro">handle_seq_error!</span>(
-                <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
-                    .tokenizer()
-                    .decode(<span class="macro">deref_refcell!</span>(seq).get_toks(), <span class="bool-val">false</span>),
-                <span class="macro">deref_refcell!</span>(seq).responder()
-            );
-            <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>res);
             <span class="kw">let </span>is_done = <span class="macro">deref_refcell!</span>(seq).is_done(next_token, eos_tok);
             <span class="kw">if let </span><span class="prelude-val">Some</span>(reason) = is_done {
                 <span class="macro">deref_mut_refcell!</span>(seq).set_state(SequenceState::Done(reason));

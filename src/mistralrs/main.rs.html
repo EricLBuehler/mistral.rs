@@ -77,6 +77,17 @@
 <a href="#76" id="76">76</a>
 <a href="#77" id="77">77</a>
 <a href="#78" id="78">78</a>
+<a href="#79" id="79">79</a>
+<a href="#80" id="80">80</a>
+<a href="#81" id="81">81</a>
+<a href="#82" id="82">82</a>
+<a href="#83" id="83">83</a>
+<a href="#84" id="84">84</a>
+<a href="#85" id="85">85</a>
+<a href="#86" id="86">86</a>
+<a href="#87" id="87">87</a>
+<a href="#88" id="88">88</a>
+<a href="#89" id="89">89</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{mpsc::channel, Arc};
 
 <span class="kw">use </span>anyhow::Result;
@@ -99,6 +110,10 @@
     <span class="doccomment">/// Port to serve on.
     </span><span class="attr">#[arg(short, long)]
     </span>port: String,
+
+    <span class="doccomment">/// Log all responses and requests to responses.log
+    </span><span class="attr">#[clap(long, short, action)]
+    </span>log: bool,
 }
 
 <span class="attr">#[derive(Clone, Deserialize)]
@@ -108,15 +123,15 @@
 }
 
 <span class="kw">async fn </span>root(State(state): State&lt;Arc&lt;MistralRs&gt;&gt;, Json(request): Json&lt;RawRequest&gt;) -&gt; String {
-    <span class="kw">let </span>sender = state.get_sender();
     <span class="kw">let </span>(tx, rx) = channel();
-    sender
-        .send(Request {
-            prompt: request.prompt,
-            sampling_params: request.sampling_params,
-            response: tx,
-        })
-        .unwrap();
+    <span class="kw">let </span>request = Request {
+        prompt: request.prompt,
+        sampling_params: request.sampling_params,
+        response: tx,
+    };
+    MistralRs::maybe_log_request(state.clone(), <span class="kw-2">&amp;</span>request);
+    <span class="kw">let </span>sender = state.get_sender();
+    sender.send(request).unwrap();
     <span class="kw">let </span>response = rx.recv().unwrap();
 
     <span class="kw">match </span>response {
@@ -124,7 +139,10 @@
             <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>e);
             e.to_string()
         }
-        Response::Done((_reason, out)) =&gt; out,
+        Response::Done((reason, out)) =&gt; {
+            MistralRs::maybe_log_response(state, (reason, <span class="kw-2">&amp;</span>out));
+            out
+        }
     }
 }
 
@@ -146,7 +164,11 @@
         <span class="prelude-val">Some</span>(DType::F32),
     );
     <span class="kw">let </span>pipeline = loader.load_model(<span class="prelude-val">None</span>, TokenSource::CacheToken, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>;
-    <span class="kw">let </span>mistralrs = MistralRs::new(pipeline, SchedulerMethod::Fixed(<span class="number">2</span>.try_into().unwrap()));
+    <span class="kw">let </span>mistralrs = MistralRs::new(
+        pipeline,
+        SchedulerMethod::Fixed(<span class="number">2</span>.try_into().unwrap()),
+        args.log,
+    );
 
     <span class="kw">let </span>app = get_router(mistralrs);
 
