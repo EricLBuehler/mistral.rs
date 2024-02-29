@@ -245,11 +245,11 @@
             <span class="comment">// Run the prompt seqs
             </span><span class="self">self</span>.set_none_cache();
             <span class="kw">let </span>logits = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).forward(scheduled.prompt.clone());
-            <span class="self">self</span>.sample_seqs(<span class="kw-2">&amp;</span>scheduled.prompt, logits);
-            <span class="self">self</span>.clone_out_cache(<span class="kw-2">&amp;</span>scheduled.prompt);
             <span class="kw">for </span>seq <span class="kw">in </span>scheduled.prompt.iter() {
                 <span class="macro">deref_mut_refcell!</span>(seq).set_state(SequenceState::RunningCompletion);
             }
+            <span class="self">self</span>.sample_seqs(<span class="kw-2">&amp;</span>scheduled.prompt, logits);
+            <span class="self">self</span>.clone_out_cache(<span class="kw-2">&amp;</span>scheduled.prompt);
         }
     }
 
