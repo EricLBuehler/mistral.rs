@@ -15,6 +15,7 @@ pub trait FcfsBacker {
     fn next(&mut self) -> Option<Rc<RefCell<Sequence>>>;
     fn add(&mut self, item: Rc<RefCell<Sequence>>);
     fn iter(&self) -> impl Iterator<Item = &Rc<RefCell<Sequence>>>;
+    fn sort_ascending_ids(&mut self);
 }
 
 impl FcfsBacker for VecDeque<Rc<RefCell<Sequence>>> {
@@ -29,6 +30,10 @@ impl FcfsBacker for VecDeque<Rc<RefCell<Sequence>>> {
     }
     fn iter(&self) -> Iter<'_, Rc<RefCell<Sequence>>> {
         self.iter()
+    }
+    fn sort_ascending_ids(&mut self) {
+        let slice = self.make_contiguous();
+        slice.sort_by_key(|seq| *deref_refcell!(seq).id());
     }
 }
 
@@ -69,6 +74,9 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             .filter(|seq| deref_refcell!(seq).is_running())
             .cloned()
             .collect::<Vec<_>>();
+
+        // Sort the waiting seqs
+        self.waiting.sort_ascending_ids();
 
         // If the waiting sequence will fit, add it. Keep track of its id.
         let mut waiting_to_remove = Vec::new();
