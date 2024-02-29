@@ -46,7 +46,7 @@ pub struct SchedulerOutput {
 const FIXED_MAX: usize = usize::MAX;
 
 pub enum SchedulerMethod {
-    Fixed(UsizeBounded<0, FIXED_MAX, false>),
+    Fixed(UsizeBounded<1, FIXED_MAX, false>),
 }
 
 pub struct Scheduler<Backer: FcfsBacker> {
