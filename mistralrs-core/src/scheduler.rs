@@ -43,10 +43,8 @@ pub struct SchedulerOutput {
     pub prompt: Box<[Rc<RefCell<Sequence>>]>,
 }
 
-const FIXED_MAX: usize = usize::MAX;
-
 pub enum SchedulerMethod {
-    Fixed(UsizeBounded<1, FIXED_MAX, false>),
+    Fixed(UsizeBounded<1, { usize::MAX }, false>),
 }
 
 pub struct Scheduler<Backer: FcfsBacker> {
