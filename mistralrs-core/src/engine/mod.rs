@@ -75,10 +75,10 @@ impl Engine {
             );
             let next_token = next_token.token as u32;
             deref_mut_refcell!(seq).add_token(next_token);
-            if let Some(state) =
+            if let Some(reason) =
                 deref_refcell!(seq).is_done(next_token, get_mut_arcmutex!(self.pipeline).eos_tok())
             {
-                deref_mut_refcell!(seq).set_state(SequenceState::Done(state));
+                deref_mut_refcell!(seq).set_state(SequenceState::Done(reason));
             }
         }
     }
