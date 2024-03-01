@@ -212,7 +212,7 @@ impl Engine {
                     request
                         .response
                         .send(Response::Error(
-                            format!("Stop sequence '{s:?}' encodes to mutliple tokens when it should only encode to 1.").into(),
+                            format!("Stop sequence '{s:?}' encodes to multiple tokens when it should only encode to 1.").into(),
                         ))
                         .unwrap();
                 }

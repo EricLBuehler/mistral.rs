@@ -55,7 +55,7 @@ async fn root(
     let stop_toks = match request.stop_seqs {
         Some(StopTokens::Multi(m)) => Some(InternalStopTokens::Seqs(m)),
         Some(StopTokens::Single(s)) => Some(InternalStopTokens::Seqs(vec![s])),
-        Some(StopTokens::MutliId(m)) => Some(InternalStopTokens::Ids(m)),
+        Some(StopTokens::MultiId(m)) => Some(InternalStopTokens::Ids(m)),
         Some(StopTokens::SingleId(s)) => Some(InternalStopTokens::Ids(vec![s])),
         None => None,
     };

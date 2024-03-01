@@ -14,7 +14,7 @@ pub struct Message {
 pub enum StopTokens {
     Multi(Vec<String>),
     Single(String),
-    MutliId(Vec<u32>),
+    MultiId(Vec<u32>),
     SingleId(u32),
 }
 
