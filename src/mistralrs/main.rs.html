@@ -156,6 +156,47 @@
 <a href="#155" id="155">155</a>
 <a href="#156" id="156">156</a>
 <a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a>
+<a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
+<a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
+<a href="#168" id="168">168</a>
+<a href="#169" id="169">169</a>
+<a href="#170" id="170">170</a>
+<a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
+<a href="#175" id="175">175</a>
+<a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a>
+<a href="#178" id="178">178</a>
+<a href="#179" id="179">179</a>
+<a href="#180" id="180">180</a>
+<a href="#181" id="181">181</a>
+<a href="#182" id="182">182</a>
+<a href="#183" id="183">183</a>
+<a href="#184" id="184">184</a>
+<a href="#185" id="185">185</a>
+<a href="#186" id="186">186</a>
+<a href="#187" id="187">187</a>
+<a href="#188" id="188">188</a>
+<a href="#189" id="189">189</a>
+<a href="#190" id="190">190</a>
+<a href="#191" id="191">191</a>
+<a href="#192" id="192">192</a>
+<a href="#193" id="193">193</a>
+<a href="#194" id="194">194</a>
+<a href="#195" id="195">195</a>
+<a href="#196" id="196">196</a>
+<a href="#197" id="197">197</a>
+<a href="#198" id="198">198</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     sync::{mpsc::channel, Arc},
@@ -168,13 +209,54 @@
     Router,
 };
 <span class="kw">use </span>candle_core::Device;
-<span class="kw">use </span>clap::Parser;
+<span class="kw">use </span>clap::{Parser, Subcommand};
 <span class="kw">use </span>mistralrs_core::{
-    Conversation, Loader, MistralLoader, MistralRs, MistralSpecificConfig, Request, Response,
-    SamplingParams, SchedulerMethod, StopTokens <span class="kw">as </span>InternalStopTokens, TokenSource,
+    Conversation, Loader, MistralLoader, MistralRs, MistralSpecificConfig, ModelKind, Request,
+    Response, SamplingParams, SchedulerMethod, StopTokens <span class="kw">as </span>InternalStopTokens, TokenSource,
 };
 <span class="kw">use </span>openai::{ChatCompletionRequest, StopTokens};
 <span class="kw">mod </span>openai;
+
+<span class="attr">#[derive(Debug, Subcommand)]
+</span><span class="kw">pub enum </span>ModelSelected {
+    <span class="doccomment">/// Select the mistral instruct model.
+    </span>Mistral {
+        <span class="doccomment">/// Model ID to load from
+        </span><span class="attr">#[arg(short, long, default_value = <span class="string">"mistralai/Mistral-7B-Instruct-v0.1"</span>)]
+        </span>model_id: String,
+
+        <span class="doccomment">/// Control the application of repeat penalty for the last n tokens
+        </span><span class="attr">#[arg(long, default_value_t = <span class="number">64</span>)]
+        </span>repeat_last_n: usize,
+    },
+
+    <span class="doccomment">/// Select the quantized mistral instruct model with gguf.
+    </span>MistralGGUF {
+        <span class="doccomment">/// Model ID to load the tokenizer from
+        </span><span class="attr">#[arg(short, long, default_value = <span class="string">"mistralai/Mistral-7B-Instruct-v0.1"</span>)]
+        </span>tok_model_id: String,
+
+        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        </span><span class="attr">#[arg(
+            short = <span class="string">'m'</span>,
+            long,
+            default_value = <span class="string">"TheBloke/Mistral-7B-Instruct-v0.1-GGUF"
+        </span>)]
+        </span>quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
+
+        <span class="doccomment">/// Quantized filename, only applicable if `quantized` is set.
+        </span><span class="attr">#[arg(
+            short = <span class="string">'f'</span>,
+            long,
+            default_value = <span class="string">"mistral-7b-instruct-v0.1.Q4_K_M.gguf"
+        </span>)]
+        </span>quantized_filename: <span class="prelude-ty">Option</span>&lt;String&gt;,
+
+        <span class="doccomment">/// Control the application of repeat penalty for the last n tokens
+        </span><span class="attr">#[arg(long, default_value_t = <span class="number">64</span>)]
+        </span>repeat_last_n: usize,
+    },
+}
 
 <span class="attr">#[derive(Parser)]
 #[command(version, about, long_about = <span class="prelude-val">None</span>)]
@@ -187,21 +269,13 @@
     </span><span class="attr">#[clap(long, short, action)]
     </span>log: bool,
 
-    <span class="doccomment">/// Model ID to load the
-    </span><span class="attr">#[arg(short, long, default_value = <span class="string">"mistralai/Mistral-7B-Instruct-v0.1"</span>)]
-    </span>model_id: String,
+    <span class="doccomment">/// Model
+    </span><span class="attr">#[clap(subcommand)]
+    </span>model: ModelSelected,
 
-    <span class="doccomment">/// Enable quantized.
-    </span><span class="attr">#[clap(long, short, action)]
-    </span>quantized: bool,
-
-    <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-    </span><span class="attr">#[arg(short, long, default_value = <span class="string">"TheBloke/Mistral-7B-Instruct-v0.1-GGUF"</span>)]
-    </span>quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
-
-    <span class="doccomment">/// Quantized filename, only applicable if `quantized` is set.
-    </span><span class="attr">#[arg(short, long, default_value = <span class="string">"mistral-7b-instruct-v0.1.Q4_K_M.gguf"</span>)]
-    </span>quantized_filename: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    <span class="doccomment">/// Maximum running sequences at any time
+    </span><span class="attr">#[arg(long, default_value_t = <span class="number">2</span>)]
+    </span>max_seqs: usize,
 }
 
 <span class="kw">async fn </span>chatcompletions(
@@ -271,29 +345,37 @@
 </span><span class="kw">async fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
     <span class="kw">let </span>args = Args::parse();
 
-    <span class="kw">let </span>loader = MistralLoader::new(
-        args.model_id,
-        MistralSpecificConfig {
-            use_flash_attn: <span class="bool-val">false</span>,
-            repeat_last_n: <span class="number">64</span>,
-        },
-        <span class="kw">if </span>args.quantized {
-            <span class="prelude-val">Some</span>(
-                args.quantized_model_id
-                    .expect(<span class="string">"Quantized model ID must be set if quantized is."</span>),
-            )
-        } <span class="kw">else </span>{
-            <span class="prelude-val">None
-        </span>},
-        <span class="kw">if </span>args.quantized {
-            <span class="prelude-val">Some</span>(
-                args.quantized_filename
-                    .expect(<span class="string">"Quantized filename must be set if quantized is."</span>),
-            )
-        } <span class="kw">else </span>{
-            <span class="prelude-val">None
-        </span>},
-    );
+    <span class="kw">let </span>loader: Box&lt;<span class="kw">dyn </span>Loader&gt; = <span class="kw">match </span>args.model {
+        ModelSelected::Mistral {
+            model_id,
+            repeat_last_n,
+        } =&gt; Box::new(MistralLoader::new(
+            model_id,
+            MistralSpecificConfig {
+                use_flash_attn: <span class="bool-val">false</span>,
+                repeat_last_n,
+            },
+            <span class="prelude-val">None</span>,
+            <span class="prelude-val">None</span>,
+            ModelKind::Normal,
+        )),
+        ModelSelected::MistralGGUF {
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+        } =&gt; Box::new(MistralLoader::new(
+            tok_model_id,
+            MistralSpecificConfig {
+                use_flash_attn: <span class="bool-val">false</span>,
+                repeat_last_n,
+            },
+            quantized_model_id,
+            quantized_filename,
+            ModelKind::QuantizedGGUF,
+        )),
+    };
+
     <span class="kw">let </span>(pipeline, conv) = loader.load_model(
         <span class="prelude-val">None</span>,
         TokenSource::CacheToken,
@@ -302,7 +384,7 @@
     )<span class="question-mark">?</span>;
     <span class="kw">let </span>mistralrs = MistralRs::new(
         pipeline,
-        SchedulerMethod::Fixed(<span class="number">2</span>.try_into().unwrap()),
+        SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
         args.log,
     );
 

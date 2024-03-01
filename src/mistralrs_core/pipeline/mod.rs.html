@@ -102,6 +102,7 @@
 <a href="#101" id="101">101</a>
 <a href="#102" id="102">102</a>
 <a href="#103" id="103">103</a>
+<a href="#104" id="104">104</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>mistral;
 <span class="kw">use </span>candle_sampling::logits_processor::Logprobs;
 <span class="kw">pub use </span>mistral::{MistralLoader, MistralSpecificConfig};
@@ -123,7 +124,6 @@
     <span class="kw">fn </span>get_weight_filenames(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[PathBuf];
     <span class="kw">fn </span>get_config_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf;
     <span class="kw">fn </span>get_tokenizer_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf;
-    <span class="kw">fn </span>is_quantized(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
 }
 
 <span class="kw">pub enum </span>TokenSource {
@@ -136,7 +136,6 @@
     tokenizer_filename: P,
     config_filename: P,
     filenames: Vec&lt;P&gt;,
-    quantized: bool,
 }
 
 <span class="kw">impl </span>ModelPaths <span class="kw">for </span>SimpleModelPaths&lt;PathBuf&gt; {
@@ -149,9 +148,12 @@
     <span class="kw">fn </span>get_weight_filenames(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[PathBuf] {
         <span class="kw-2">&amp;</span><span class="self">self</span>.filenames
     }
-    <span class="kw">fn </span>is_quantized(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-        <span class="self">self</span>.quantized
-    }
+}
+
+<span class="kw">pub enum </span>ModelKind {
+    Normal,
+    QuantizedGGUF,
+    QuantizedGGML,
 }
 
 <span class="kw">pub trait </span>Conversation {

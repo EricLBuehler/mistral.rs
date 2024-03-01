@@ -370,20 +370,17 @@
 <a href="#369" id="369">369</a>
 <a href="#370" id="370">370</a>
 <a href="#371" id="371">371</a>
-<a href="#372" id="372">372</a>
-<a href="#373" id="373">373</a>
-<a href="#374" id="374">374</a>
-<a href="#375" id="375">375</a>
-</pre></div><pre class="rust"><code><span class="kw">use super</span>::{Conversation, Loader, ModelPaths, Pipeline, SimpleModelPaths, TokenSource};
+</pre></div><pre class="rust"><code><span class="kw">use super</span>::{Conversation, Loader, ModelKind, ModelPaths, Pipeline, SimpleModelPaths, TokenSource};
 <span class="kw">use </span><span class="kw">crate</span>::models::Cache;
 <span class="kw">use crate</span>::{deref_mut_refcell, deref_refcell};
 <span class="kw">use crate</span>::{
     models::mistral::{Config, Model <span class="kw">as </span>NormalModel},
-    models::qmistral::Model <span class="kw">as </span>QModel,
+    models::quantized_llama::ModelWeights <span class="kw">as </span>QModelWeights,
     sequence::Sequence,
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
 };
 <span class="kw">use </span>anyhow::Result;
+<span class="kw">use </span>candle_core::quantized::gguf_file;
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
 <span class="kw">use </span>candle_nn::Activation;
 <span class="kw">use </span>candle_sampling::logits_processor::Logprobs;
@@ -398,7 +395,7 @@
 
 <span class="kw">enum </span>Model {
     Normal(NormalModel),
-    Quantized(QModel),
+    Quantized(QModelWeights),
 }
 
 <span class="kw">struct </span>MistralConversation {}
@@ -456,6 +453,7 @@
     config: MistralSpecificConfig,
     quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     quantized_filename: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    kind: ModelKind,
 }
 
 <span class="attr">#[derive(Clone, Copy)]
@@ -491,12 +489,14 @@
         config: MistralSpecificConfig,
         quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         quantized_filename: <span class="prelude-ty">Option</span>&lt;String&gt;,
+        kind: ModelKind,
     ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             model_id,
             config,
             quantized_model_id,
             quantized_filename,
+            kind,
         }
     }
 }
@@ -555,7 +555,6 @@
             tokenizer_filename,
             config_filename,
             filenames,
-            quantized: <span class="self">self</span>.quantized_filename.is_some(),
         }))
     }
 
@@ -590,23 +589,16 @@
             DType::F32
         };
 
-        <span class="kw">let </span>model = <span class="kw">match </span>paths.is_quantized() {
-            <span class="bool-val">true </span>=&gt; {
-                <span class="kw">let </span>vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
-                    paths
-                        .get_weight_filenames()
-                        .first()
-                        .unwrap()
-                        .clone()
-                        .into_os_string()
-                        .into_string()
-                        .unwrap(),
-                    device,
-                )<span class="question-mark">?</span>;
-                <span class="kw">let </span>model = QModel::new(<span class="kw-2">&amp;</span>config, vb)<span class="question-mark">?</span>;
+        <span class="kw">let </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
+            ModelKind::QuantizedGGUF =&gt; {
+                <span class="kw">let </span><span class="kw-2">mut </span>file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())<span class="question-mark">?</span>;
+                <span class="kw">let </span>model = gguf_file::Content::read(<span class="kw-2">&amp;mut </span>file)
+                    .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))<span class="question-mark">?</span>;
+                <span class="kw">let </span>model = QModelWeights::from_gguf(model, <span class="kw-2">&amp;mut </span>file, device)<span class="question-mark">?</span>;
                 Model::Quantized(model)
             }
-            <span class="bool-val">false </span>=&gt; {
+            ModelKind::QuantizedGGML =&gt; <span class="macro">unreachable!</span>(),
+            ModelKind::Normal =&gt; {
                 <span class="kw">let </span>vb = from_mmaped_safetensors(
                     paths.get_weight_filenames(),
                     dtype.unwrap_or(default_dtype),
