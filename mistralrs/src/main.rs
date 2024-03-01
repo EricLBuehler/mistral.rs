@@ -82,7 +82,7 @@ async fn main() -> Result<()> {
         },
         Some(DType::F32),
         Some("TheBloke/Mistral-7B-Instruct-v0.1-GGUF".to_string()),
-        Some("mistral-7b-instruct-v0.1.Q2_K.gguf".to_string()),
+        Some("mistral-7b-instruct-v0.1.Q4_K.gguf".to_string()),
     );
     let pipeline = loader.load_model(
         None,
