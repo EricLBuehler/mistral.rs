@@ -1,6 +1,6 @@
 use std::{cell::Cell, sync::mpsc::Sender};
 
-use candle_sampling::logits_processor::LogitsProcessor;
+use candle_sampling::logits_processor::{LogitsProcessor, Logprobs};
 
 use crate::{models::Cache, response::Response};
 
@@ -22,8 +22,10 @@ pub enum SequenceState {
 
 pub struct Sequence {
     tokens: Vec<u32>,
+    logprobs: Vec<Logprobs>,
     prompt_len: usize,
     id: usize,
+    timestamp: u64,
     state: Cell<SequenceState>,
     gen_idx: usize,
     cache: Cache,
@@ -31,23 +33,29 @@ pub struct Sequence {
     logits_processor: LogitsProcessor,
     stop_tokens: Vec<u32>,
     max_len: usize,
+    return_logprobs: bool,
 }
 
 impl Sequence {
+    #[allow(clippy::too_many_arguments)]
     pub fn new_waiting(
         tokens: Vec<u32>,
         id: usize,
+        timestamp: u64,
         layers: usize,
         responder: Sender<Response>,
         logits_processor: LogitsProcessor,
         stop_tokens: Vec<u32>,
         max_len: Option<usize>,
+        return_logprobs: bool,
     ) -> Self {
         let prompt_len = tokens.len();
         Self {
             tokens,
+            logprobs: Vec::new(),
             prompt_len,
             id,
+            timestamp,
             state: Cell::new(SequenceState::Waiting),
             gen_idx: 0,
             cache: Cache::new(layers),
@@ -55,6 +63,7 @@ impl Sequence {
             logits_processor,
             stop_tokens,
             max_len: max_len.unwrap_or(64),
+            return_logprobs,
         }
     }
 
@@ -99,8 +108,9 @@ impl Sequence {
         &mut self.logits_processor
     }
 
-    pub fn add_token(&mut self, tok: u32) {
-        self.tokens.push(tok);
+    pub fn add_token(&mut self, tok: Logprobs) {
+        self.tokens.push(tok.token as u32);
+        self.logprobs.push(tok);
     }
 
     pub fn responder(&self) -> Sender<Response> {
@@ -122,5 +132,21 @@ impl Sequence {
         } else {
             None
         }
+    }
+
+    pub fn logprobs(&self) -> &[Logprobs] {
+        &self.logprobs
+    }
+
+    pub fn return_logprobs(&self) -> bool {
+        self.return_logprobs
+    }
+
+    pub fn prompt_tokens(&self) -> usize {
+        self.prompt_len
+    }
+
+    pub fn timestamp(&self) -> u64 {
+        self.timestamp
     }
 }

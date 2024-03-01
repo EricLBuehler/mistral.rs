@@ -23,10 +23,10 @@ mod utils;
 
 pub use pipeline::{Loader, MistralLoader, MistralSpecificConfig, TokenSource};
 pub use request::Request;
+pub use response::ChatCompletionResponse;
 pub use response::Response;
 pub use sampling::{SamplingParams, StopTokens};
 pub use scheduler::SchedulerMethod;
-use sequence::StopReason;
 
 pub struct MistralRs {
     sender: Sender<Request>,
@@ -55,7 +55,7 @@ impl MistralRs {
         self.sender.clone()
     }
 
-    pub fn maybe_log_request(this: Arc<Self>, request: &Request) {
+    pub fn maybe_log_request(this: Arc<Self>, repr: String) {
         if this.log {
             let mut f = OpenOptions::new()
                 .append(true)
@@ -63,12 +63,12 @@ impl MistralRs {
                 .open("output.log")
                 .expect("Unable to open file");
             let time = chrono::offset::Local::now();
-            f.write_all(format!("Request at {time}: {request:?}\n\n").as_bytes())
+            f.write_all(format!("Request at {time}: {repr}\n\n").as_bytes())
                 .expect("Unable to write data");
         }
     }
 
-    pub fn maybe_log_response(this: Arc<Self>, (reason, out): (StopReason, &str)) {
+    pub fn maybe_log_response(this: Arc<Self>, resp: &ChatCompletionResponse) {
         if this.log {
             let mut f = OpenOptions::new()
                 .append(true)
@@ -76,11 +76,9 @@ impl MistralRs {
                 .open("output.log")
                 .expect("Unable to open file");
             let time = chrono::offset::Local::now();
-            f.write_all(
-                format!("Response at {time}: Response {{reason: {reason:?}, text: `{out}`}}\n\n")
-                    .as_bytes(),
-            )
-            .expect("Unable to write data");
+            let repr = serde_json::to_string(resp).unwrap();
+            f.write_all(format!("Response at {time}: {repr}\n\n").as_bytes())
+                .expect("Unable to write data");
         }
     }
 }

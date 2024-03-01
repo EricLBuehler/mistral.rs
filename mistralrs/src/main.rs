@@ -49,10 +49,11 @@ fn get_prompt(_messages: Vec<Message>) -> String {
 
 async fn root(
     State(state): State<Arc<MistralRs>>,
-    Json(request): Json<ChatCompletionRequest>,
+    Json(oairequest): Json<ChatCompletionRequest>,
 ) -> String {
     let (tx, rx) = channel();
-    let stop_toks = match request.stop_seqs {
+    let repr = serde_json::to_string(&oairequest).unwrap();
+    let stop_toks = match oairequest.stop_seqs {
         Some(StopTokens::Multi(m)) => Some(InternalStopTokens::Seqs(m)),
         Some(StopTokens::Single(s)) => Some(InternalStopTokens::Seqs(vec![s])),
         Some(StopTokens::MultiId(m)) => Some(InternalStopTokens::Ids(m)),
@@ -60,21 +61,22 @@ async fn root(
         None => None,
     };
     let request = Request {
-        prompt: get_prompt(request.messages),
+        prompt: get_prompt(oairequest.messages),
         sampling_params: SamplingParams {
-            temperature: request.temperature,
-            top_k: request.top_k,
-            top_p: request.top_p,
-            top_n_logprobs: request.top_logprobs.unwrap_or(1),
-            repeat_penalty: request.repetition_penalty,
-            presence_penalty: request.presence_penalty,
-            max_len: request.max_tokens,
+            temperature: oairequest.temperature,
+            top_k: oairequest.top_k,
+            top_p: oairequest.top_p,
+            top_n_logprobs: oairequest.top_logprobs.unwrap_or(1),
+            repeat_penalty: oairequest.repetition_penalty,
+            presence_penalty: oairequest.presence_penalty,
+            max_len: oairequest.max_tokens,
             stop_toks,
         },
         response: tx,
+        return_logprobs: oairequest.logprobs,
     };
 
-    MistralRs::maybe_log_request(state.clone(), &request);
+    MistralRs::maybe_log_request(state.clone(), repr);
     let sender = state.get_sender();
     sender.send(request).unwrap();
     let response = rx.recv().unwrap();
@@ -84,9 +86,9 @@ async fn root(
             dbg!(&e);
             e.to_string()
         }
-        Response::Done((reason, out)) => {
-            MistralRs::maybe_log_response(state, (reason, &out));
-            out
+        Response::Done(response) => {
+            MistralRs::maybe_log_response(state, &response);
+            serde_json::to_string(&response).unwrap()
         }
     }
 }

@@ -326,4 +326,7 @@ impl Pipeline for MistralPipeline {
             .copied()
             .expect("Unable to extract `</s>` EOS token.")
     }
+    fn name(&self) -> &'static str {
+        "mistral"
+    }
 }

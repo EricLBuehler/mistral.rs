@@ -81,4 +81,5 @@ pub trait Pipeline: Send + Sync {
     fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs>;
     fn tokenizer(&self) -> Tokenizer;
     fn eos_tok(&self) -> u32;
+    fn name(&self) -> &'static str;
 }

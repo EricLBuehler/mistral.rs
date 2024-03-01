@@ -5,6 +5,7 @@ pub struct Request {
     pub prompt: String,
     pub sampling_params: SamplingParams,
     pub response: Sender<Response>,
+    pub return_logprobs: bool,
 }
 
 impl Debug for Request {

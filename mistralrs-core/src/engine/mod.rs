@@ -4,6 +4,7 @@ use std::{
     iter::zip,
     rc::Rc,
     sync::{mpsc::Receiver, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use candle_core::Tensor;
@@ -14,9 +15,12 @@ use crate::{
     handle_seq_error_stateaware,
     pipeline::Pipeline,
     request::Request,
-    response::Response,
+    response::{
+        ChatCompletionResponse, ChatCompletionUsage, Choice, Logprobs, Response, ResponseLogprob,
+        ResponseMessage,
+    },
     scheduler::{Scheduler, SchedulerMethod},
-    sequence::{Sequence, SequenceState},
+    sequence::{Sequence, SequenceState, StopReason},
     StopTokens,
 };
 
@@ -83,21 +87,70 @@ impl Engine {
         for (logits_per_seq, seq) in zip(logits_seq, seqs.iter()) {
             let sampled = get_mut_arcmutex!(self.pipeline).sample(logits_per_seq, seq.clone());
             let next_token = handle_seq_error_stateaware!(sampled, seq);
-            let next_token = next_token.token as u32;
+            let next_token_id = next_token.token as u32;
             deref_mut_refcell!(seq).add_token(next_token);
-            let is_done = deref_refcell!(seq).is_done(next_token, eos_tok);
+            let is_done = deref_refcell!(seq).is_done(next_token_id, eos_tok);
             if let Some(reason) = is_done {
                 deref_mut_refcell!(seq).set_state(SequenceState::Done(reason));
+
+                let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer().clone();
+                let mut logprobs = Vec::new();
+                for logprob in deref_refcell!(seq).logprobs() {
+                    let resp_logprob = ResponseLogprob {
+                        token: handle_seq_error!(
+                            tokenizer.decode(&[logprob.token as u32], false),
+                            deref_refcell!(seq).responder()
+                        ),
+                        bytes: logprob.bytes.clone().into_bytes(),
+                        logprob: logprob.logprob,
+                        top_logprobs: logprob.top_logprobs.clone(),
+                    };
+                    logprobs.push(resp_logprob);
+                }
+
                 let res = handle_seq_error!(
                     get_mut_arcmutex!(self.pipeline)
                         .tokenizer()
                         .decode(deref_refcell!(seq).get_toks(), false),
                     deref_refcell!(seq).responder()
                 );
+
+                let choice = Choice {
+                    stopreason: match reason {
+                        StopReason::Eos => "stop".to_string(),
+                        StopReason::Length(_) => "length".to_string(),
+                        StopReason::StopTok(_) => "stop".to_string(),
+                    },
+                    index: 0,
+                    message: ResponseMessage {
+                        content: res,
+                        role: "assistant".to_string(),
+                    },
+                    logprobs: if deref_refcell!(seq).return_logprobs() {
+                        Some(Logprobs {
+                            content: Some(logprobs),
+                        })
+                    } else {
+                        None
+                    },
+                };
+
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                 deref_refcell!(seq)
                     .responder()
-                    .send(Response::Done((reason, res)))
+                    .send(Response::Done(ChatCompletionResponse {
+                        id: deref_refcell!(seq).id().to_string(),
+                        choices: vec![choice],
+                        created: deref_refcell!(seq).timestamp(),
+                        model: get_mut_arcmutex!(self.pipeline).name(),
+                        system_fingerprint: "local".to_string(),
+                        object: "chat.completion".to_string(),
+                        usage: ChatCompletionUsage {
+                            completion_tokens: deref_refcell!(seq).logprobs().len(),
+                            prompt_tokens: deref_refcell!(seq).prompt_tokens(),
+                            total_tokens: deref_refcell!(seq).len(),
+                        },
+                    }))
                     .unwrap();
             }
         }
@@ -224,6 +277,10 @@ impl Engine {
         let seq = Sequence::new_waiting(
             prompt,
             self.id,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Time travel has occured!")
+                .as_secs(),
             num_hidden_layers,
             request.response.clone(),
             LogitsProcessor::new(
@@ -237,6 +294,7 @@ impl Engine {
             ),
             stop_toks,
             request.sampling_params.max_len,
+            request.return_logprobs,
         );
         self.id += 1;
 
