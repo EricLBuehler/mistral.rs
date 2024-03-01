@@ -81,8 +81,8 @@ async fn main() -> Result<()> {
             repeat_last_n: 64,
         },
         Some(DType::F32),
-        Some("TheBloke/Mistral-7B-Instruct-v0.1-GGUF".to_string()),
-        Some("mistral-7b-instruct-v0.1.Q4_K_M.gguf".to_string()),
+        Some("lmz/candle-mistral".to_string()),
+        Some("model-q4k.gguf".to_string()),
     );
     let pipeline = loader.load_model(
         None,
