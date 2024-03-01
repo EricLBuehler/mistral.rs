@@ -34,9 +34,7 @@ pub struct MistralPipeline {
 
 pub struct MistralLoader {
     model_id: String,
-    default_dtype: DType,
     config: MistralSpecificConfig,
-    forced_dtype: Option<DType>,
     quantized_model_id: Option<String>,
     quantized_filename: Option<String>,
 }
@@ -73,15 +71,12 @@ impl MistralLoader {
     pub fn new(
         model_id: String,
         config: MistralSpecificConfig,
-        forced_dtype: Option<DType>,
         quantized_model_id: Option<String>,
         quantized_filename: Option<String>,
     ) -> Self {
         Self {
             model_id,
-            default_dtype: DType::BF16,
             config,
-            forced_dtype,
             quantized_model_id,
             quantized_filename,
         }
@@ -168,10 +163,15 @@ impl Loader for MistralLoader {
             sliding_window: basic_config.sliding_window,
             use_flash_attn: self.config.use_flash_attn,
         };
-        let default_dtype = match (basic_config.torch_dtype, self.forced_dtype) {
-            (_, Some(forced)) => forced,
-            (Some(value), _) => get_dtype_from_torch_dtype(value)?,
-            (None, _) => self.default_dtype,
+        let default_dtype = match basic_config.torch_dtype {
+            Some(value) => get_dtype_from_torch_dtype(value)?,
+            None => {
+                if device.is_cuda() {
+                    DType::BF16
+                } else {
+                    DType::F32
+                }
+            }
         };
 
         let model = match paths.is_quantized() {

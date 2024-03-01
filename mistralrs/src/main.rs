@@ -6,7 +6,7 @@ use axum::{
     routing::get,
     Router,
 };
-use candle_core::{DType, Device};
+use candle_core::Device;
 use clap::Parser;
 use mistralrs_core::{
     Loader, MistralLoader, MistralRs, MistralSpecificConfig, Request, Response, SamplingParams,
@@ -25,6 +25,7 @@ struct Args {
     #[clap(long, short, action)]
     log: bool,
 
+    /// Model ID to load the 
     #[arg(short, long, default_value = "mistralai/Mistral-7B-Instruct-v0.1")]
     model_id: String,
 
@@ -37,7 +38,7 @@ struct Args {
     quantized_model_id: Option<String>,
 
     /// Quantized filename, only applicable if `quantized` is set.
-    #[arg(short, long, default_value = "lmz/candle-mistral")]
+    #[arg(short, long, default_value = "model-q4k.gguf")]
     quantized_filename: Option<String>,
 }
 
@@ -85,7 +86,6 @@ async fn main() -> Result<()> {
             use_flash_attn: false,
             repeat_last_n: 64,
         },
-        Some(DType::F32),
         if args.quantized {
             Some(
                 args.quantized_model_id
