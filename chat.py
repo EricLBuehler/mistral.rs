@@ -17,5 +17,5 @@ while True:
         max_tokens = 256,
     )
     resp = completion.choices[0].message.content
-    print(resp["[/INST]"][-1])
+    print(resp.split("[/INST]")[-1])
     messages.append({"role":"assistant", "content":resp})
