@@ -217,6 +217,7 @@ impl Loader for MistralLoader {
             DType::F32
         };
 
+        println!("Loading model...");
         let model = match self.kind {
             ModelKind::QuantizedGGUF => {
                 let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
@@ -238,6 +239,7 @@ impl Loader for MistralLoader {
                 Model::Normal(model)
             }
         };
+        println!("Model loaded.");
 
         let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
