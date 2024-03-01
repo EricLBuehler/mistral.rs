@@ -244,6 +244,7 @@
 <a href="#243" id="243">243</a>
 <a href="#244" id="244">244</a>
 <a href="#245" id="245">245</a>
+<a href="#246" id="246">246</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -479,6 +480,7 @@
                 request.sampling_params.top_n_logprobs,
                 tokenizer,
                 request.sampling_params.repeat_penalty,
+                request.sampling_params.presence_penalty,
             ),
             stop_toks,
             request.sampling_params.max_len,

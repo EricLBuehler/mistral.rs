@@ -141,6 +141,7 @@
 <a href="#140" id="140">140</a>
 <a href="#141" id="141">141</a>
 <a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{mpsc::channel, Arc};
 
 <span class="kw">use </span>anyhow::Result;
@@ -209,7 +210,8 @@
             top_k: request.top_k,
             top_p: request.top_p,
             top_n_logprobs: request.top_logprobs.unwrap_or(<span class="number">1</span>),
-            repeat_penalty: request.repeat_penalty,
+            repeat_penalty: request.repetition_penalty,
+            presence_penalty: request.presence_penalty,
             max_len: request.max_tokens,
             stop_toks,
         },
