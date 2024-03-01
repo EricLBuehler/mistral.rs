@@ -38,11 +38,11 @@ struct Args {
     quantized: bool,
 
     /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-    #[arg(short, long, default_value = "lmz/candle-mistral")]
+    #[arg(short, long, default_value = "TheBloke/Mistral-7B-Instruct-v0.1-GGUF")]
     quantized_model_id: Option<String>,
 
     /// Quantized filename, only applicable if `quantized` is set.
-    #[arg(short, long, default_value = "model-q4k.gguf")]
+    #[arg(short, long, default_value = "mistral-7b-instruct-v0.1.Q4_K_M.gguf")]
     quantized_filename: Option<String>,
 }
 
