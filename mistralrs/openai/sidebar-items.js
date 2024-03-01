@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["StopTokens"],"fn":["default_0f64","default_1usize","default_false"],"struct":["ChatCompletionRequest","Message"]};

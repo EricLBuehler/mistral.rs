@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["get_router","main","root"],"struct":["Args","RawRequest"]};
+window.SIDEBAR_ITEMS = {"fn":["get_prompt","get_router","main","root"],"mod":["openai"],"struct":["Args"]};

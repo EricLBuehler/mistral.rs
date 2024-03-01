@@ -123,6 +123,24 @@
 <a href="#122" id="122">122</a>
 <a href="#123" id="123">123</a>
 <a href="#124" id="124">124</a>
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{mpsc::channel, Arc};
 
 <span class="kw">use </span>anyhow::Result;
@@ -135,9 +153,10 @@
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>mistralrs_core::{
     Loader, MistralLoader, MistralRs, MistralSpecificConfig, Request, Response, SamplingParams,
-    SchedulerMethod, TokenSource,
+    SchedulerMethod, StopTokens <span class="kw">as </span>InternalStopTokens, TokenSource,
 };
-<span class="kw">use </span>serde::Deserialize;
+<span class="kw">use </span>openai::{ChatCompletionRequest, Message, StopTokens};
+<span class="kw">mod </span>openai;
 
 <span class="attr">#[derive(Parser)]
 #[command(version, about, long_about = <span class="prelude-val">None</span>)]
@@ -150,7 +169,7 @@
     </span><span class="attr">#[clap(long, short, action)]
     </span>log: bool,
 
-    <span class="doccomment">/// Model ID to load the 
+    <span class="doccomment">/// Model ID to load the
     </span><span class="attr">#[arg(short, long, default_value = <span class="string">"mistralai/Mistral-7B-Instruct-v0.1"</span>)]
     </span>model_id: String,
 
@@ -167,19 +186,36 @@
     </span>quantized_filename: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
-<span class="attr">#[derive(Clone, Deserialize)]
-</span><span class="kw">struct </span>RawRequest {
-    <span class="kw">pub </span>prompt: String,
-    <span class="kw">pub </span>sampling_params: SamplingParams,
+<span class="kw">fn </span>get_prompt(_messages: Vec&lt;Message&gt;) -&gt; String {
+    <span class="macro">todo!</span>()
 }
 
-<span class="kw">async fn </span>root(State(state): State&lt;Arc&lt;MistralRs&gt;&gt;, Json(request): Json&lt;RawRequest&gt;) -&gt; String {
+<span class="kw">async fn </span>root(
+    State(state): State&lt;Arc&lt;MistralRs&gt;&gt;,
+    Json(request): Json&lt;ChatCompletionRequest&gt;,
+) -&gt; String {
     <span class="kw">let </span>(tx, rx) = channel();
+    <span class="kw">let </span>stop_toks = <span class="kw">match </span>request.stop_seqs {
+        <span class="prelude-val">Some</span>(StopTokens::Multi(m)) =&gt; <span class="prelude-val">Some</span>(InternalStopTokens::Seqs(m)),
+        <span class="prelude-val">Some</span>(StopTokens::Single(s)) =&gt; <span class="prelude-val">Some</span>(InternalStopTokens::Seqs(<span class="macro">vec!</span>[s])),
+        <span class="prelude-val">Some</span>(StopTokens::MutliId(m)) =&gt; <span class="prelude-val">Some</span>(InternalStopTokens::Ids(m)),
+        <span class="prelude-val">Some</span>(StopTokens::SingleId(s)) =&gt; <span class="prelude-val">Some</span>(InternalStopTokens::Ids(<span class="macro">vec!</span>[s])),
+        <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
+    };
     <span class="kw">let </span>request = Request {
-        prompt: request.prompt,
-        sampling_params: request.sampling_params,
+        prompt: get_prompt(request.messages),
+        sampling_params: SamplingParams {
+            temperature: request.temperature,
+            top_k: request.top_k,
+            top_p: request.top_p,
+            top_n_logprobs: request.top_logprobs.unwrap_or(<span class="number">1</span>),
+            repeat_penalty: request.repeat_penalty,
+            max_len: request.max_tokens,
+            stop_toks,
+        },
         response: tx,
     };
+
     MistralRs::maybe_log_request(state.clone(), <span class="kw-2">&amp;</span>request);
     <span class="kw">let </span>sender = state.get_sender();
     sender.send(request).unwrap();
