@@ -591,7 +591,7 @@
             DType::F32
         };
 
-        <span class="macro">println!</span>(<span class="string">"Loading model..."</span>);
+        <span class="macro">println!</span>(<span class="string">"Loading model on {device:?}..."</span>);
         <span class="kw">let </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
             ModelKind::QuantizedGGUF =&gt; {
                 <span class="kw">let </span><span class="kw-2">mut </span>file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())<span class="question-mark">?</span>;
