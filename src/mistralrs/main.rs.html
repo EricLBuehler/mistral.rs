@@ -104,6 +104,25 @@
 <a href="#103" id="103">103</a>
 <a href="#104" id="104">104</a>
 <a href="#105" id="105">105</a>
+<a href="#106" id="106">106</a>
+<a href="#107" id="107">107</a>
+<a href="#108" id="108">108</a>
+<a href="#109" id="109">109</a>
+<a href="#110" id="110">110</a>
+<a href="#111" id="111">111</a>
+<a href="#112" id="112">112</a>
+<a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+<a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{mpsc::channel, Arc};
 
 <span class="kw">use </span>anyhow::Result;
@@ -112,7 +131,7 @@
     routing::get,
     Router,
 };
-<span class="kw">use </span>candle_core::{DType, Device};
+<span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>mistralrs_core::{
     Loader, MistralLoader, MistralRs, MistralSpecificConfig, Request, Response, SamplingParams,
@@ -127,9 +146,25 @@
     </span><span class="attr">#[arg(short, long)]
     </span>port: String,
 
-    <span class="doccomment">/// Log all responses and requests to responses.log
+    <span class="doccomment">/// Log all responses and requests to output.log
     </span><span class="attr">#[clap(long, short, action)]
     </span>log: bool,
+
+    <span class="doccomment">/// Model ID to load the 
+    </span><span class="attr">#[arg(short, long, default_value = <span class="string">"mistralai/Mistral-7B-Instruct-v0.1"</span>)]
+    </span>model_id: String,
+
+    <span class="doccomment">/// Enable quantized.
+    </span><span class="attr">#[clap(long, short, action)]
+    </span>quantized: bool,
+
+    <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+    </span><span class="attr">#[arg(short, long, default_value = <span class="string">"lmz/candle-mistral"</span>)]
+    </span>quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
+
+    <span class="doccomment">/// Quantized filename, only applicable if `quantized` is set.
+    </span><span class="attr">#[arg(short, long, default_value = <span class="string">"model-q4k.gguf"</span>)]
+    </span>quantized_filename: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
 <span class="attr">#[derive(Clone, Deserialize)]
@@ -170,25 +205,28 @@
 </span><span class="kw">async fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
     <span class="kw">let </span>args = Args::parse();
 
-    <span class="kw">let </span>model_id = <span class="string">"mistralai/Mistral-7B-Instruct-v0.1"</span>;
-    <span class="comment">/*
-    let loader = MistralLoader::new(
-        model_id.to_string(),
-        MistralSpecificConfig {
-            use_flash_attn: false,
-            repeat_last_n: 64,
-        },
-        Some(DType::F32),
-    );*/
-    </span><span class="kw">let </span>loader = MistralLoader::new(
-        model_id.to_string(),
+    <span class="kw">let </span>loader = MistralLoader::new(
+        args.model_id,
         MistralSpecificConfig {
             use_flash_attn: <span class="bool-val">false</span>,
             repeat_last_n: <span class="number">64</span>,
         },
-        <span class="prelude-val">Some</span>(DType::F32),
-        <span class="prelude-val">Some</span>(<span class="string">"lmz/candle-mistral"</span>.to_string()),
-        <span class="prelude-val">Some</span>(<span class="string">"model-q4k.gguf"</span>.to_string()),
+        <span class="kw">if </span>args.quantized {
+            <span class="prelude-val">Some</span>(
+                args.quantized_model_id
+                    .expect(<span class="string">"Quantized model ID must be set if quantized is."</span>),
+            )
+        } <span class="kw">else </span>{
+            <span class="prelude-val">None
+        </span>},
+        <span class="kw">if </span>args.quantized {
+            <span class="prelude-val">Some</span>(
+                args.quantized_filename
+                    .expect(<span class="string">"Quantized filename must be set if quantized is."</span>),
+            )
+        } <span class="kw">else </span>{
+            <span class="prelude-val">None
+        </span>},
     );
     <span class="kw">let </span>pipeline = loader.load_model(
         <span class="prelude-val">None</span>,
