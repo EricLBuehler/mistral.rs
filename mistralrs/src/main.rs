@@ -21,9 +21,24 @@ struct Args {
     #[arg(short, long)]
     port: String,
 
-    /// Log all responses and requests to responses.log
+    /// Log all responses and requests to output.log
     #[clap(long, short, action)]
     log: bool,
+
+    #[arg(short, long, default_value = "mistralai/Mistral-7B-Instruct-v0.1")]
+    model_id: String,
+
+    /// Enable quantized.
+    #[clap(long, short, action)]
+    quantized: bool,
+
+    /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+    #[arg(short, long, default_value = "lmz/candle-mistral")]
+    quantized_model_id: Option<String>,
+
+    /// Quantized filename, only applicable if `quantized` is set.
+    #[arg(short, long, default_value = "lmz/candle-mistral")]
+    quantized_filename: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -64,25 +79,29 @@ fn get_router(state: Arc<MistralRs>) -> Router {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    let model_id = "mistralai/Mistral-7B-Instruct-v0.1";
-    /*
     let loader = MistralLoader::new(
-        model_id.to_string(),
+        args.model_id,
         MistralSpecificConfig {
             use_flash_attn: false,
             repeat_last_n: 64,
         },
         Some(DType::F32),
-    );*/
-    let loader = MistralLoader::new(
-        model_id.to_string(),
-        MistralSpecificConfig {
-            use_flash_attn: false,
-            repeat_last_n: 64,
+        if args.quantized {
+            Some(
+                args.quantized_model_id
+                    .expect("Quantized model ID must be set if quantized is."),
+            )
+        } else {
+            None
         },
-        Some(DType::F32),
-        Some("lmz/candle-mistral".to_string()),
-        Some("model-q4k.gguf".to_string()),
+        if args.quantized {
+            Some(
+                args.quantized_filename
+                    .expect("Quantized filename must be set if quantized is."),
+            )
+        } else {
+            None
+        },
     );
     let pipeline = loader.load_model(
         None,
