@@ -37,6 +37,7 @@ pub struct MistralLoader {
     default_dtype: DType,
     config: MistralSpecificConfig,
     forced_dtype: Option<DType>,
+    quantized_model_id: Option<String>,
     quantized_filename: Option<String>,
 }
 
@@ -73,6 +74,7 @@ impl MistralLoader {
         model_id: String,
         config: MistralSpecificConfig,
         forced_dtype: Option<DType>,
+        quantized_model_id: Option<String>,
         quantized_filename: Option<String>,
     ) -> Self {
         Self {
@@ -80,6 +82,7 @@ impl MistralLoader {
             default_dtype: DType::BF16,
             config,
             forced_dtype,
+            quantized_model_id,
             quantized_filename,
         }
     }
@@ -99,7 +102,7 @@ impl Loader for MistralLoader {
         let api = api.repo(Repo::with_revision(
             self.model_id.clone(),
             RepoType::Model,
-            revision,
+            revision.clone(),
         ));
 
         let tokenizer_filename = api.get("tokenizer.json")?;
@@ -108,7 +111,16 @@ impl Loader for MistralLoader {
 
         let filenames = match &self.quantized_filename {
             Some(name) => {
-                vec![name.into()]
+                let qapi = ApiBuilder::new()
+                    .with_progress(true)
+                    .with_token(Some(get_token(&token_source)?))
+                    .build()?;
+                let qapi = qapi.repo(Repo::with_revision(
+                    self.quantized_model_id.as_ref().unwrap().clone(),
+                    RepoType::Model,
+                    revision,
+                ));
+                vec![qapi.get(name).unwrap()]
             }
             None => {
                 let mut filenames = vec![];
@@ -165,7 +177,14 @@ impl Loader for MistralLoader {
         let model = match paths.is_quantized() {
             true => {
                 let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
-                    self.quantized_filename.as_ref().unwrap(),
+                    paths
+                        .get_weight_filenames()
+                        .first()
+                        .unwrap()
+                        .clone()
+                        .into_os_string()
+                        .into_string()
+                        .unwrap(),
                     device,
                 )?;
                 let model = QModel::new(&config, vb)?;

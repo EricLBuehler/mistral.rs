@@ -64,7 +64,8 @@ fn get_router(state: Arc<MistralRs>) -> Router {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    /*let model_id = "mistralai/Mistral-7B-Instruct-v0.1";
+    let model_id = "mistralai/Mistral-7B-Instruct-v0.1";
+    /*
     let loader = MistralLoader::new(
         model_id.to_string(),
         MistralSpecificConfig {
@@ -73,7 +74,6 @@ async fn main() -> Result<()> {
         },
         Some(DType::F32),
     );*/
-    let model_id = "TheBloke/Mistral-7B-Instruct-v0.1-GGUF";
     let loader = MistralLoader::new(
         model_id.to_string(),
         MistralSpecificConfig {
@@ -81,6 +81,7 @@ async fn main() -> Result<()> {
             repeat_last_n: 64,
         },
         Some(DType::F32),
+        Some("TheBloke/Mistral-7B-Instruct-v0.1-GGUF".to_string()),
         Some("mistral-7b-instruct-v0.1.Q2_K.gguf".to_string()),
     );
     let pipeline = loader.load_model(
