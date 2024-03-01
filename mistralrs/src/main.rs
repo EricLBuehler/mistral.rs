@@ -66,7 +66,7 @@ struct Args {
     #[arg(short, long)]
     port: String,
 
-    /// Log all responses and requests to output.log
+    /// Log all responses and requests to this file
     #[clap(long, short)]
     log: Option<String>,
 
