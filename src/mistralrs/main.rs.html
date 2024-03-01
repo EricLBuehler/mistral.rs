@@ -265,9 +265,9 @@
     </span><span class="attr">#[arg(short, long)]
     </span>port: String,
 
-    <span class="doccomment">/// Log all responses and requests to output.log
-    </span><span class="attr">#[clap(long, short, action)]
-    </span>log: bool,
+    <span class="doccomment">/// Log all responses and requests to this file
+    </span><span class="attr">#[clap(long, short)]
+    </span>log: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
     <span class="doccomment">/// Model
     </span><span class="attr">#[clap(subcommand)]
