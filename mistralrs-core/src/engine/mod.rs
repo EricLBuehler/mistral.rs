@@ -279,7 +279,7 @@ impl Engine {
             self.id,
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .expect("Time travel has occured!")
+                .expect("Time travel has occurred!")
                 .as_secs(),
             num_hidden_layers,
             request.response.clone(),
