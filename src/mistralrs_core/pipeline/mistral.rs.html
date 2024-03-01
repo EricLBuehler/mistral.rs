@@ -309,6 +309,25 @@
 <a href="#308" id="308">308</a>
 <a href="#309" id="309">309</a>
 <a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{Loader, ModelPaths, Pipeline, SimpleModelPaths, TokenSource};
 <span class="kw">use </span><span class="kw">crate</span>::models::Cache;
 <span class="kw">use crate</span>::{deref_mut_refcell, deref_refcell};
@@ -348,6 +367,7 @@
     default_dtype: DType,
     config: MistralSpecificConfig,
     forced_dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
+    quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     quantized_filename: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
@@ -384,6 +404,7 @@
         model_id: String,
         config: MistralSpecificConfig,
         forced_dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
+        quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         quantized_filename: <span class="prelude-ty">Option</span>&lt;String&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
@@ -391,6 +412,7 @@
             default_dtype: DType::BF16,
             config,
             forced_dtype,
+            quantized_model_id,
             quantized_filename,
         }
     }
@@ -410,7 +432,7 @@
         <span class="kw">let </span>api = api.repo(Repo::with_revision(
             <span class="self">self</span>.model_id.clone(),
             RepoType::Model,
-            revision,
+            revision.clone(),
         ));
 
         <span class="kw">let </span>tokenizer_filename = api.get(<span class="string">"tokenizer.json"</span>)<span class="question-mark">?</span>;
@@ -419,7 +441,16 @@
 
         <span class="kw">let </span>filenames = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.quantized_filename {
             <span class="prelude-val">Some</span>(name) =&gt; {
-                <span class="macro">vec!</span>[name.into()]
+                <span class="kw">let </span>qapi = ApiBuilder::new()
+                    .with_progress(<span class="bool-val">true</span>)
+                    .with_token(<span class="prelude-val">Some</span>(get_token(<span class="kw-2">&amp;</span>token_source)<span class="question-mark">?</span>))
+                    .build()<span class="question-mark">?</span>;
+                <span class="kw">let </span>qapi = qapi.repo(Repo::with_revision(
+                    <span class="self">self</span>.quantized_model_id.as_ref().unwrap().clone(),
+                    RepoType::Model,
+                    revision,
+                ));
+                <span class="macro">vec!</span>[qapi.get(name).unwrap()]
             }
             <span class="prelude-val">None </span>=&gt; {
                 <span class="kw">let </span><span class="kw-2">mut </span>filenames = <span class="macro">vec!</span>[];
@@ -476,7 +507,14 @@
         <span class="kw">let </span>model = <span class="kw">match </span>paths.is_quantized() {
             <span class="bool-val">true </span>=&gt; {
                 <span class="kw">let </span>vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
-                    <span class="self">self</span>.quantized_filename.as_ref().unwrap(),
+                    paths
+                        .get_weight_filenames()
+                        .first()
+                        .unwrap()
+                        .clone()
+                        .into_os_string()
+                        .into_string()
+                        .unwrap(),
                     device,
                 )<span class="question-mark">?</span>;
                 <span class="kw">let </span>model = QModel::new(<span class="kw-2">&amp;</span>config, vb)<span class="question-mark">?</span>;
