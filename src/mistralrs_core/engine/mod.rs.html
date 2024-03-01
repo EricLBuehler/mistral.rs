@@ -505,9 +505,9 @@
             <span class="kw">let </span><span class="kw-2">mut </span>k_vec = Vec::new();
             <span class="kw">let </span><span class="kw-2">mut </span>v_vec = Vec::new();
             <span class="kw">for </span>seq <span class="kw">in </span>seqs.iter() {
-                <span class="kw">let </span>seq = <span class="macro">deref_refcell!</span>(seq);
-                <span class="kw">let </span>cache = seq.cache().lock();
-                <span class="kw">let </span>cache = cache.get(layer).unwrap();
+                <span class="kw">let </span><span class="kw-2">mut </span>seq = <span class="macro">deref_mut_refcell!</span>(seq);
+                <span class="kw">let </span>seq_cache = <span class="kw-2">&amp;*</span>seq.cache();
+                <span class="kw">let </span>cache = seq_cache.get(layer).unwrap();
                 <span class="comment">// Note(EricLBuehler): Unwrap reasoning: We are handling completions seqs so unwrap is OK.
                 </span><span class="kw">let </span>cache = cache.as_ref().unwrap();
                 k_vec.push(cache.<span class="number">0</span>.clone());
@@ -555,8 +555,8 @@
             <span class="macro">debug_assert_eq!</span>(v_caches.len(), seqs.len());
 
             <span class="kw">for </span>(seq_i, seq) <span class="kw">in </span>seqs.iter().enumerate() {
-                <span class="kw">let </span>seq = <span class="macro">deref_refcell!</span>(seq);
-                <span class="kw">let </span><span class="kw-2">mut </span>seq_cache = seq.cache().lock();
+                <span class="kw">let </span><span class="kw-2">mut </span>seq = <span class="macro">deref_mut_refcell!</span>(seq);
+                <span class="kw">let </span>seq_cache = seq.cache();
                 <span class="kw">let </span>seq_cache = seq_cache.get_mut(layer).unwrap();
                 <span class="kw-2">*</span>seq_cache = <span class="prelude-val">Some</span>((
                     k_caches.get(seq_i).unwrap().clone(),
