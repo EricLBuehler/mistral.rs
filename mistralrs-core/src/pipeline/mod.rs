@@ -13,6 +13,7 @@ pub trait ModelPaths {
     fn get_weight_filenames(&self) -> &[PathBuf];
     fn get_config_filename(&self) -> &PathBuf;
     fn get_tokenizer_filename(&self) -> &PathBuf;
+    fn is_quantized(&self) -> bool;
 }
 
 pub enum TokenSource {
@@ -25,6 +26,7 @@ pub struct SimpleModelPaths<P> {
     tokenizer_filename: P,
     config_filename: P,
     filenames: Vec<P>,
+    quantized: bool,
 }
 
 impl ModelPaths for SimpleModelPaths<PathBuf> {
@@ -36,6 +38,9 @@ impl ModelPaths for SimpleModelPaths<PathBuf> {
     }
     fn get_weight_filenames(&self) -> &[PathBuf] {
         &self.filenames
+    }
+    fn is_quantized(&self) -> bool {
+        self.quantized
     }
 }
 

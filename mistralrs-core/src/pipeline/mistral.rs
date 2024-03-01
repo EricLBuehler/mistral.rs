@@ -1,7 +1,9 @@
 use super::{Loader, ModelPaths, Pipeline, SimpleModelPaths, TokenSource};
+use crate::models::Cache;
 use crate::{deref_mut_refcell, deref_refcell};
 use crate::{
-    models::mistral::{Config, Model},
+    models::mistral::{Config, Model as NormalModel},
+    models::qmistral::Model as QModel,
     sequence::Sequence,
     utils::{
         dtype::get_dtype_from_torch_dtype, tokens::get_token,
@@ -19,6 +21,11 @@ use std::{iter::repeat, rc::Rc, sync::Mutex};
 use thiserror::Error;
 use tokenizers::Tokenizer;
 
+enum Model {
+    Normal(NormalModel),
+    Quantized(QModel),
+}
+
 pub struct MistralPipeline {
     model: Model,
     tokenizer: Tokenizer,
@@ -30,6 +37,7 @@ pub struct MistralLoader {
     default_dtype: DType,
     config: MistralSpecificConfig,
     forced_dtype: Option<DType>,
+    quantized_filename: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -65,12 +73,14 @@ impl MistralLoader {
         model_id: String,
         config: MistralSpecificConfig,
         forced_dtype: Option<DType>,
+        quantized_filename: Option<String>,
     ) -> Self {
         Self {
             model_id,
             default_dtype: DType::BF16,
             config,
             forced_dtype,
+            quantized_filename,
         }
     }
 }
@@ -96,22 +106,31 @@ impl Loader for MistralLoader {
 
         let config_filename = api.get("config.json")?;
 
-        let mut filenames = vec![];
-        for rfilename in api
-            .info()?
-            .siblings
-            .iter()
-            .map(|x| x.rfilename.clone())
-            .filter(|x| x.ends_with(".safetensors"))
-        {
-            let filename = api.get(&rfilename)?;
-            filenames.push(filename);
-        }
+        let filenames = match &self.quantized_filename {
+            Some(name) => {
+                vec![name.into()]
+            }
+            None => {
+                let mut filenames = vec![];
+                for rfilename in api
+                    .info()?
+                    .siblings
+                    .iter()
+                    .map(|x| x.rfilename.clone())
+                    .filter(|x| x.ends_with(".safetensors"))
+                {
+                    let filename = api.get(&rfilename)?;
+                    filenames.push(filename);
+                }
+                filenames
+            }
+        };
 
         Ok(Box::new(SimpleModelPaths {
             tokenizer_filename,
             config_filename,
             filenames,
+            quantized: self.quantized_filename.is_none(),
         }))
     }
 
@@ -143,14 +162,27 @@ impl Loader for MistralLoader {
             (None, _) => self.default_dtype,
         };
 
-        let vb = from_mmaped_safetensors(
-            paths.get_weight_filenames(),
-            dtype.unwrap_or(default_dtype),
-            device,
-            false,
-        )?;
+        let model = match paths.is_quantized() {
+            true => {
+                let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
+                    self.quantized_filename.as_ref().unwrap(),
+                    device,
+                )?;
+                let model = QModel::new(&config, vb)?;
+                Model::Quantized(model)
+            }
+            false => {
+                let vb = from_mmaped_safetensors(
+                    paths.get_weight_filenames(),
+                    dtype.unwrap_or(default_dtype),
+                    device,
+                    false,
+                )?;
 
-        let model = Model::new(&config, vb)?;
+                let model = NormalModel::new(&config, vb)?;
+                Model::Normal(model)
+            }
+        };
 
         let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
@@ -214,7 +246,10 @@ impl Pipeline for MistralPipeline {
             // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
             (Tensor::cat(&seqs_tensors, 0).unwrap(), seqlen_offsets)
         };
-        let result = self.model.forward(&input_ids, &seqlen_offsets);
+        let result = match self.model {
+            Model::Normal(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
+            Model::Quantized(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
+        };
         match result {
             Ok(v) => v,
             Err(e) => {
@@ -230,13 +265,19 @@ impl Pipeline for MistralPipeline {
         Ok(encoding.get_ids().to_vec())
     }
     fn device(&self) -> &Device {
-        &self.model.device
+        match self.model {
+            Model::Normal(ref model) => &model.device,
+            Model::Quantized(ref model) => &model.device,
+        }
     }
     fn num_hidden_layers(&self) -> usize {
-        self.model.cache.lock().len()
+        self.cache().lock().len()
     }
-    fn cache(&self) -> &crate::models::Cache {
-        &self.model.cache
+    fn cache(&self) -> &Cache {
+        match self.model {
+            Model::Normal(ref model) => &model.cache,
+            Model::Quantized(ref model) => &model.cache,
+        }
     }
     fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs> {
         let logits = logits
