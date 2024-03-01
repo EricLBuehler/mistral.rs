@@ -32,14 +32,14 @@ pub use scheduler::SchedulerMethod;
 
 pub struct MistralRs {
     sender: Sender<Request>,
-    log: bool,
+    log: Option<String>,
 }
 
 impl MistralRs {
     pub fn new(
         pipeline: Box<Mutex<dyn Pipeline>>,
         method: SchedulerMethod,
-        log: bool,
+        log: Option<String>,
     ) -> Arc<Self> {
         let (tx, rx) = channel();
 
@@ -58,11 +58,11 @@ impl MistralRs {
     }
 
     pub fn maybe_log_request(this: Arc<Self>, repr: String) {
-        if this.log {
+        if let Some(file) = &this.log {
             let mut f = OpenOptions::new()
                 .append(true)
                 .create(true) // Optionally create the file if it doesn't already exist
-                .open("output.log")
+                .open(file)
                 .expect("Unable to open file");
             let time = chrono::offset::Local::now();
             f.write_all(format!("Request at {time}: {repr}\n\n").as_bytes())
@@ -71,11 +71,11 @@ impl MistralRs {
     }
 
     pub fn maybe_log_response(this: Arc<Self>, resp: &ChatCompletionResponse) {
-        if this.log {
+        if let Some(file) = &this.log {
             let mut f = OpenOptions::new()
                 .append(true)
                 .create(true) // Optionally create the file if it doesn't already exist
-                .open("output.log")
+                .open(file)
                 .expect("Unable to open file");
             let time = chrono::offset::Local::now();
             let repr = serde_json::to_string(resp).unwrap();

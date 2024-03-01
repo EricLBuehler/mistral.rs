@@ -67,8 +67,8 @@ struct Args {
     port: String,
 
     /// Log all responses and requests to output.log
-    #[clap(long, short, action)]
-    log: bool,
+    #[clap(long, short)]
+    log: Option<String>,
 
     /// Model
     #[clap(subcommand)]
