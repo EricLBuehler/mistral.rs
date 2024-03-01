@@ -1,13 +1,14 @@
-use super::{Conversation, Loader, ModelPaths, Pipeline, SimpleModelPaths, TokenSource};
+use super::{Conversation, Loader, ModelKind, ModelPaths, Pipeline, SimpleModelPaths, TokenSource};
 use crate::models::Cache;
 use crate::{deref_mut_refcell, deref_refcell};
 use crate::{
     models::mistral::{Config, Model as NormalModel},
-    models::qmistral::Model as QModel,
+    models::quantized_llama::ModelWeights as QModelWeights,
     sequence::Sequence,
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
 };
 use anyhow::Result;
+use candle_core::quantized::gguf_file;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Activation;
 use candle_sampling::logits_processor::Logprobs;
@@ -22,7 +23,7 @@ use tokenizers::Tokenizer;
 
 enum Model {
     Normal(NormalModel),
-    Quantized(QModel),
+    Quantized(QModelWeights),
 }
 
 struct MistralConversation {}
@@ -80,6 +81,7 @@ pub struct MistralLoader {
     config: MistralSpecificConfig,
     quantized_model_id: Option<String>,
     quantized_filename: Option<String>,
+    kind: ModelKind,
 }
 
 #[derive(Clone, Copy)]
@@ -115,12 +117,14 @@ impl MistralLoader {
         config: MistralSpecificConfig,
         quantized_model_id: Option<String>,
         quantized_filename: Option<String>,
+        kind: ModelKind,
     ) -> Self {
         Self {
             model_id,
             config,
             quantized_model_id,
             quantized_filename,
+            kind,
         }
     }
 }
@@ -179,7 +183,6 @@ impl Loader for MistralLoader {
             tokenizer_filename,
             config_filename,
             filenames,
-            quantized: self.quantized_filename.is_some(),
         }))
     }
 
@@ -214,23 +217,16 @@ impl Loader for MistralLoader {
             DType::F32
         };
 
-        let model = match paths.is_quantized() {
-            true => {
-                let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
-                    paths
-                        .get_weight_filenames()
-                        .first()
-                        .unwrap()
-                        .clone()
-                        .into_os_string()
-                        .into_string()
-                        .unwrap(),
-                    device,
-                )?;
-                let model = QModel::new(&config, vb)?;
+        let model = match self.kind {
+            ModelKind::QuantizedGGUF => {
+                let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
+                let model = gguf_file::Content::read(&mut file)
+                    .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
+                let model = QModelWeights::from_gguf(model, &mut file, device)?;
                 Model::Quantized(model)
             }
-            false => {
+            ModelKind::QuantizedGGML => unreachable!(),
+            ModelKind::Normal => {
                 let vb = from_mmaped_safetensors(
                     paths.get_weight_filenames(),
                     dtype.unwrap_or(default_dtype),

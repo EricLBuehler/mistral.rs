@@ -21,7 +21,9 @@ mod scheduler;
 mod sequence;
 mod utils;
 
-pub use pipeline::{Conversation, Loader, MistralLoader, MistralSpecificConfig, TokenSource};
+pub use pipeline::{
+    Conversation, Loader, MistralLoader, MistralSpecificConfig, ModelKind, TokenSource,
+};
 pub use request::Request;
 pub use response::ChatCompletionResponse;
 pub use response::Response;

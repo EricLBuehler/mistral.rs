@@ -10,13 +10,54 @@ use axum::{
     Router,
 };
 use candle_core::Device;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use mistralrs_core::{
-    Conversation, Loader, MistralLoader, MistralRs, MistralSpecificConfig, Request, Response,
-    SamplingParams, SchedulerMethod, StopTokens as InternalStopTokens, TokenSource,
+    Conversation, Loader, MistralLoader, MistralRs, MistralSpecificConfig, ModelKind, Request,
+    Response, SamplingParams, SchedulerMethod, StopTokens as InternalStopTokens, TokenSource,
 };
 use openai::{ChatCompletionRequest, StopTokens};
 mod openai;
+
+#[derive(Debug, Subcommand)]
+pub enum ModelSelected {
+    /// Select the mistral instruct model.
+    Mistral {
+        /// Model ID to load from
+        #[arg(short, long, default_value = "mistralai/Mistral-7B-Instruct-v0.1")]
+        model_id: String,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
+    },
+
+    /// Select the quantized mistral instruct model with gguf.
+    MistralGGUF {
+        /// Model ID to load the tokenizer from
+        #[arg(short, long, default_value = "mistralai/Mistral-7B-Instruct-v0.1")]
+        tok_model_id: String,
+
+        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        #[arg(
+            short = 'm',
+            long,
+            default_value = "TheBloke/Mistral-7B-Instruct-v0.1-GGUF"
+        )]
+        quantized_model_id: Option<String>,
+
+        /// Quantized filename, only applicable if `quantized` is set.
+        #[arg(
+            short = 'f',
+            long,
+            default_value = "mistral-7b-instruct-v0.1.Q4_K_M.gguf"
+        )]
+        quantized_filename: Option<String>,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
+    },
+}
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -29,21 +70,13 @@ struct Args {
     #[clap(long, short, action)]
     log: bool,
 
-    /// Model ID to load the
-    #[arg(short, long, default_value = "mistralai/Mistral-7B-Instruct-v0.1")]
-    model_id: String,
+    /// Model
+    #[clap(subcommand)]
+    model: ModelSelected,
 
-    /// Enable quantized.
-    #[clap(long, short, action)]
-    quantized: bool,
-
-    /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-    #[arg(short, long, default_value = "TheBloke/Mistral-7B-Instruct-v0.1-GGUF")]
-    quantized_model_id: Option<String>,
-
-    /// Quantized filename, only applicable if `quantized` is set.
-    #[arg(short, long, default_value = "mistral-7b-instruct-v0.1.Q4_K_M.gguf")]
-    quantized_filename: Option<String>,
+    /// Maximum running sequences at any time
+    #[arg(long, default_value_t = 2)]
+    max_seqs: usize,
 }
 
 async fn chatcompletions(
@@ -113,29 +146,37 @@ fn get_router(state: (Arc<MistralRs>, Arc<dyn Conversation + Send + Sync>)) -> R
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    let loader = MistralLoader::new(
-        args.model_id,
-        MistralSpecificConfig {
-            use_flash_attn: false,
-            repeat_last_n: 64,
-        },
-        if args.quantized {
-            Some(
-                args.quantized_model_id
-                    .expect("Quantized model ID must be set if quantized is."),
-            )
-        } else {
-            None
-        },
-        if args.quantized {
-            Some(
-                args.quantized_filename
-                    .expect("Quantized filename must be set if quantized is."),
-            )
-        } else {
-            None
-        },
-    );
+    let loader: Box<dyn Loader> = match args.model {
+        ModelSelected::Mistral {
+            model_id,
+            repeat_last_n,
+        } => Box::new(MistralLoader::new(
+            model_id,
+            MistralSpecificConfig {
+                use_flash_attn: false,
+                repeat_last_n,
+            },
+            None,
+            None,
+            ModelKind::Normal,
+        )),
+        ModelSelected::MistralGGUF {
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+        } => Box::new(MistralLoader::new(
+            tok_model_id,
+            MistralSpecificConfig {
+                use_flash_attn: false,
+                repeat_last_n,
+            },
+            quantized_model_id,
+            quantized_filename,
+            ModelKind::QuantizedGGUF,
+        )),
+    };
+
     let (pipeline, conv) = loader.load_model(
         None,
         TokenSource::CacheToken,
@@ -144,7 +185,7 @@ async fn main() -> Result<()> {
     )?;
     let mistralrs = MistralRs::new(
         pipeline,
-        SchedulerMethod::Fixed(2.try_into().unwrap()),
+        SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
         args.log,
     );
 
