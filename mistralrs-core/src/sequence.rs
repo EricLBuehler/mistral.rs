@@ -110,7 +110,7 @@ impl Sequence {
     }
 
     pub fn add_token(&mut self, tok: Logprobs) {
-        self.tokens.push(tok.token as u32);
+        self.tokens.push(tok.token);
         self.logprobs.push(tok);
     }
 

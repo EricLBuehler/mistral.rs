@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::collections::HashMap;
 use std::iter::zip;
 
@@ -8,7 +10,7 @@ use candle_nn::{Embedding, Module};
 
 use super::Cache;
 
-pub const MAX_SEQ_LEN: usize = 4096;
+pub const MAX_SEQ_LEN: u32 = 4096;
 
 #[derive(Debug, Clone)]
 struct RmsNorm {
@@ -297,9 +299,9 @@ fn precomput_freqs_cis(
         .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))
         .collect();
     let theta = Tensor::new(theta.as_slice(), device)?;
-    let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, device)?
+    let idx_theta = Tensor::arange(0, MAX_SEQ_LEN, device)?
         .to_dtype(DType::F32)?
-        .reshape((MAX_SEQ_LEN, 1))?
+        .reshape((MAX_SEQ_LEN as usize, 1))?
         .matmul(&theta.reshape((1, theta.elem_count()))?)?;
     let cos = idx_theta.cos()?;
     let sin = idx_theta.sin()?;

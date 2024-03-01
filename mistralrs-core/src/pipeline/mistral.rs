@@ -373,7 +373,7 @@ impl Pipeline for MistralPipeline {
     fn get_max_seq_len(&self) -> usize {
         match &self.model {
             Model::Normal(model) => model.max_seq_len,
-            Model::Quantized(_) => quantized_llama::MAX_SEQ_LEN,
+            Model::Quantized(_) => quantized_llama::MAX_SEQ_LEN as usize,
         }
     }
 }

@@ -1,3 +1,5 @@
+#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::{
     fs::OpenOptions,
     io::Write,
