@@ -5,7 +5,7 @@ openai.api_key = "EMPTY"
 openai.base_url = "http://localhost:1234/v1/"
 
 messages = []
-prompt = input("Enter system prompt >>>")
+prompt = input("Enter system prompt >>> ")
 messages.append({"role":"system", "content":prompt})
 
 while True:
