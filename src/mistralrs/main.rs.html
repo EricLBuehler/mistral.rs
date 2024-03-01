@@ -142,21 +142,38 @@
 <a href="#141" id="141">141</a>
 <a href="#142" id="142">142</a>
 <a href="#143" id="143">143</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{mpsc::channel, Arc};
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+    collections::HashMap,
+    sync::{mpsc::channel, Arc},
+};
 
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{Json, State},
-    routing::get,
+    routing::post,
     Router,
 };
 <span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>mistralrs_core::{
-    Loader, MistralLoader, MistralRs, MistralSpecificConfig, Request, Response, SamplingParams,
-    SchedulerMethod, StopTokens <span class="kw">as </span>InternalStopTokens, TokenSource,
+    Conversation, Loader, MistralLoader, MistralRs, MistralSpecificConfig, Request, Response,
+    SamplingParams, SchedulerMethod, StopTokens <span class="kw">as </span>InternalStopTokens, TokenSource,
 };
-<span class="kw">use </span>openai::{ChatCompletionRequest, Message, StopTokens};
+<span class="kw">use </span>openai::{ChatCompletionRequest, StopTokens};
 <span class="kw">mod </span>openai;
 
 <span class="attr">#[derive(Parser)]
@@ -187,38 +204,47 @@
     </span>quantized_filename: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
-<span class="kw">fn </span>get_prompt(_messages: Vec&lt;Message&gt;) -&gt; String {
-    <span class="macro">todo!</span>()
-}
-
-<span class="kw">async fn </span>root(
-    State(state): State&lt;Arc&lt;MistralRs&gt;&gt;,
-    Json(request): Json&lt;ChatCompletionRequest&gt;,
+<span class="kw">async fn </span>chatcompletions(
+    State((state, conv)): State&lt;(Arc&lt;MistralRs&gt;, Arc&lt;<span class="kw">dyn </span>Conversation + Send + Sync&gt;)&gt;,
+    Json(oairequest): Json&lt;ChatCompletionRequest&gt;,
 ) -&gt; String {
     <span class="kw">let </span>(tx, rx) = channel();
-    <span class="kw">let </span>stop_toks = <span class="kw">match </span>request.stop_seqs {
+    <span class="kw">let </span>repr = serde_json::to_string(<span class="kw-2">&amp;</span>oairequest).unwrap();
+    <span class="kw">let </span>stop_toks = <span class="kw">match </span>oairequest.stop_seqs {
         <span class="prelude-val">Some</span>(StopTokens::Multi(m)) =&gt; <span class="prelude-val">Some</span>(InternalStopTokens::Seqs(m)),
         <span class="prelude-val">Some</span>(StopTokens::Single(s)) =&gt; <span class="prelude-val">Some</span>(InternalStopTokens::Seqs(<span class="macro">vec!</span>[s])),
         <span class="prelude-val">Some</span>(StopTokens::MultiId(m)) =&gt; <span class="prelude-val">Some</span>(InternalStopTokens::Ids(m)),
         <span class="prelude-val">Some</span>(StopTokens::SingleId(s)) =&gt; <span class="prelude-val">Some</span>(InternalStopTokens::Ids(<span class="macro">vec!</span>[s])),
         <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
     };
+    <span class="kw">let </span><span class="kw-2">mut </span>messages = Vec::new();
+    <span class="kw">for </span>message <span class="kw">in </span>oairequest.messages {
+        <span class="kw">let </span><span class="kw-2">mut </span>message_map = HashMap::new();
+        message_map.insert(<span class="string">"role"</span>.to_string(), message.role);
+        message_map.insert(<span class="string">"content"</span>.to_string(), message.content);
+        messages.push(message_map);
+    }
+    <span class="kw">let </span>prompt = <span class="kw">match </span>conv.get_prompt(messages) {
+        <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span>e,
+        <span class="prelude-val">Ok</span>(p) =&gt; p,
+    };
     <span class="kw">let </span>request = Request {
-        prompt: get_prompt(request.messages),
+        prompt,
         sampling_params: SamplingParams {
-            temperature: request.temperature,
-            top_k: request.top_k,
-            top_p: request.top_p,
-            top_n_logprobs: request.top_logprobs.unwrap_or(<span class="number">1</span>),
-            repeat_penalty: request.repetition_penalty,
-            presence_penalty: request.presence_penalty,
-            max_len: request.max_tokens,
+            temperature: oairequest.temperature,
+            top_k: oairequest.top_k,
+            top_p: oairequest.top_p,
+            top_n_logprobs: oairequest.top_logprobs.unwrap_or(<span class="number">1</span>),
+            repeat_penalty: oairequest.repetition_penalty,
+            presence_penalty: oairequest.presence_penalty,
+            max_len: oairequest.max_tokens,
             stop_toks,
         },
         response: tx,
+        return_logprobs: oairequest.logprobs,
     };
 
-    MistralRs::maybe_log_request(state.clone(), <span class="kw-2">&amp;</span>request);
+    MistralRs::maybe_log_request(state.clone(), repr);
     <span class="kw">let </span>sender = state.get_sender();
     sender.send(request).unwrap();
     <span class="kw">let </span>response = rx.recv().unwrap();
@@ -228,15 +254,17 @@
             <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>e);
             e.to_string()
         }
-        Response::Done((reason, out)) =&gt; {
-            MistralRs::maybe_log_response(state, (reason, <span class="kw-2">&amp;</span>out));
-            out
+        Response::Done(response) =&gt; {
+            MistralRs::maybe_log_response(state, <span class="kw-2">&amp;</span>response);
+            serde_json::to_string(<span class="kw-2">&amp;</span>response).unwrap()
         }
     }
 }
 
-<span class="kw">fn </span>get_router(state: Arc&lt;MistralRs&gt;) -&gt; Router {
-    Router::new().route(<span class="string">"/"</span>, get(root)).with_state(state)
+<span class="kw">fn </span>get_router(state: (Arc&lt;MistralRs&gt;, Arc&lt;<span class="kw">dyn </span>Conversation + Send + Sync&gt;)) -&gt; Router {
+    Router::new()
+        .route(<span class="string">"/v1/chat/completions"</span>, post(chatcompletions))
+        .with_state(state)
 }
 
 <span class="attr">#[tokio::main]
@@ -266,7 +294,7 @@
             <span class="prelude-val">None
         </span>},
     );
-    <span class="kw">let </span>pipeline = loader.load_model(
+    <span class="kw">let </span>(pipeline, conv) = loader.load_model(
         <span class="prelude-val">None</span>,
         TokenSource::CacheToken,
         <span class="prelude-val">None</span>,
@@ -278,7 +306,7 @@
         args.log,
     );
 
-    <span class="kw">let </span>app = get_router(mistralrs);
+    <span class="kw">let </span>app = get_router((mistralrs, conv));
 
     <span class="kw">let </span>listener = tokio::net::TcpListener::bind(<span class="macro">format!</span>(<span class="string">"127.0.0.1:{}"</span>, args.port)).<span class="kw">await</span><span class="question-mark">?</span>;
     axum::serve(listener, app).<span class="kw">await</span><span class="question-mark">?</span>;

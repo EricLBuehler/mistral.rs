@@ -52,16 +52,16 @@
 <a href="#51" id="51">51</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
-<span class="kw">use </span>serde::Deserialize;
+<span class="kw">use </span>serde::{Deserialize, Serialize};
 
-<span class="attr">#[derive(Debug, Clone, Deserialize)]
+<span class="attr">#[derive(Debug, Clone, Deserialize, Serialize)]
 </span><span class="kw">pub struct </span>Message {
     <span class="kw">pub </span>content: String,
     <span class="kw">pub </span>role: String,
     <span class="kw">pub </span>name: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
-<span class="attr">#[derive(Debug, Clone, Deserialize)]
+<span class="attr">#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 </span><span class="kw">pub enum </span>StopTokens {
     Multi(Vec&lt;String&gt;),
@@ -78,7 +78,7 @@
     <span class="number">1
 </span>}
 
-<span class="attr">#[derive(Debug, Clone, Deserialize)]
+<span class="attr">#[derive(Debug, Clone, Deserialize, Serialize)]
 </span><span class="kw">pub struct </span>ChatCompletionRequest {
     <span class="kw">pub </span>messages: Vec&lt;Message&gt;,
     <span class="kw">pub </span>model: String,

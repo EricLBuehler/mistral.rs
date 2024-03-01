@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["get_prompt","get_router","main","root"],"mod":["openai"],"struct":["Args"]};
+window.SIDEBAR_ITEMS = {"fn":["chatcompletions","get_router","main"],"mod":["openai"],"struct":["Args"]};

@@ -125,9 +125,35 @@
 <a href="#124" id="124">124</a>
 <a href="#125" id="125">125</a>
 <a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{cell::Cell, sync::mpsc::Sender};
 
-<span class="kw">use </span>candle_sampling::logits_processor::LogitsProcessor;
+<span class="kw">use </span>candle_sampling::logits_processor::{LogitsProcessor, Logprobs};
 
 <span class="kw">use crate</span>::{models::Cache, response::Response};
 
@@ -149,8 +175,10 @@
 
 <span class="kw">pub struct </span>Sequence {
     tokens: Vec&lt;u32&gt;,
+    logprobs: Vec&lt;Logprobs&gt;,
     prompt_len: usize,
     id: usize,
+    timestamp: u64,
     state: Cell&lt;SequenceState&gt;,
     gen_idx: usize,
     cache: Cache,
@@ -158,23 +186,29 @@
     logits_processor: LogitsProcessor,
     stop_tokens: Vec&lt;u32&gt;,
     max_len: usize,
+    return_logprobs: bool,
 }
 
 <span class="kw">impl </span>Sequence {
-    <span class="kw">pub fn </span>new_waiting(
+    <span class="attr">#[allow(clippy::too_many_arguments)]
+    </span><span class="kw">pub fn </span>new_waiting(
         tokens: Vec&lt;u32&gt;,
         id: usize,
+        timestamp: u64,
         layers: usize,
         responder: Sender&lt;Response&gt;,
         logits_processor: LogitsProcessor,
         stop_tokens: Vec&lt;u32&gt;,
         max_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+        return_logprobs: bool,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>prompt_len = tokens.len();
         <span class="self">Self </span>{
             tokens,
+            logprobs: Vec::new(),
             prompt_len,
             id,
+            timestamp,
             state: Cell::new(SequenceState::Waiting),
             gen_idx: <span class="number">0</span>,
             cache: Cache::new(layers),
@@ -182,6 +216,7 @@
             logits_processor,
             stop_tokens,
             max_len: max_len.unwrap_or(<span class="number">64</span>),
+            return_logprobs,
         }
     }
 
@@ -226,8 +261,9 @@
         <span class="kw-2">&amp;mut </span><span class="self">self</span>.logits_processor
     }
 
-    <span class="kw">pub fn </span>add_token(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tok: u32) {
-        <span class="self">self</span>.tokens.push(tok);
+    <span class="kw">pub fn </span>add_token(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tok: Logprobs) {
+        <span class="self">self</span>.tokens.push(tok.token <span class="kw">as </span>u32);
+        <span class="self">self</span>.logprobs.push(tok);
     }
 
     <span class="kw">pub fn </span>responder(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Sender&lt;Response&gt; {
@@ -249,6 +285,22 @@
         } <span class="kw">else </span>{
             <span class="prelude-val">None
         </span>}
+    }
+
+    <span class="kw">pub fn </span>logprobs(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[Logprobs] {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.logprobs
+    }
+
+    <span class="kw">pub fn </span>return_logprobs(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="self">self</span>.return_logprobs
+    }
+
+    <span class="kw">pub fn </span>prompt_tokens(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="self">self</span>.prompt_len
+    }
+
+    <span class="kw">pub fn </span>timestamp(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
+        <span class="self">self</span>.timestamp
     }
 }
 </code></pre></div></section></main></body></html>

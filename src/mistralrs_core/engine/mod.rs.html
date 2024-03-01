@@ -245,12 +245,71 @@
 <a href="#244" id="244">244</a>
 <a href="#245" id="245">245</a>
 <a href="#246" id="246">246</a>
+<a href="#247" id="247">247</a>
+<a href="#248" id="248">248</a>
+<a href="#249" id="249">249</a>
+<a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
+<a href="#253" id="253">253</a>
+<a href="#254" id="254">254</a>
+<a href="#255" id="255">255</a>
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a>
+<a href="#260" id="260">260</a>
+<a href="#261" id="261">261</a>
+<a href="#262" id="262">262</a>
+<a href="#263" id="263">263</a>
+<a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
+<a href="#269" id="269">269</a>
+<a href="#270" id="270">270</a>
+<a href="#271" id="271">271</a>
+<a href="#272" id="272">272</a>
+<a href="#273" id="273">273</a>
+<a href="#274" id="274">274</a>
+<a href="#275" id="275">275</a>
+<a href="#276" id="276">276</a>
+<a href="#277" id="277">277</a>
+<a href="#278" id="278">278</a>
+<a href="#279" id="279">279</a>
+<a href="#280" id="280">280</a>
+<a href="#281" id="281">281</a>
+<a href="#282" id="282">282</a>
+<a href="#283" id="283">283</a>
+<a href="#284" id="284">284</a>
+<a href="#285" id="285">285</a>
+<a href="#286" id="286">286</a>
+<a href="#287" id="287">287</a>
+<a href="#288" id="288">288</a>
+<a href="#289" id="289">289</a>
+<a href="#290" id="290">290</a>
+<a href="#291" id="291">291</a>
+<a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
     iter::zip,
     rc::Rc,
     sync::{mpsc::Receiver, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 <span class="kw">use </span>candle_core::Tensor;
@@ -261,9 +320,12 @@
     handle_seq_error_stateaware,
     pipeline::Pipeline,
     request::Request,
-    response::Response,
+    response::{
+        ChatCompletionResponse, ChatCompletionUsage, Choice, Logprobs, Response, ResponseLogprob,
+        ResponseMessage,
+    },
     scheduler::{Scheduler, SchedulerMethod},
-    sequence::{Sequence, SequenceState},
+    sequence::{Sequence, SequenceState, StopReason},
     StopTokens,
 };
 
@@ -330,21 +392,70 @@
         <span class="kw">for </span>(logits_per_seq, seq) <span class="kw">in </span>zip(logits_seq, seqs.iter()) {
             <span class="kw">let </span>sampled = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).sample(logits_per_seq, seq.clone());
             <span class="kw">let </span>next_token = <span class="macro">handle_seq_error_stateaware!</span>(sampled, seq);
-            <span class="kw">let </span>next_token = next_token.token <span class="kw">as </span>u32;
+            <span class="kw">let </span>next_token_id = next_token.token <span class="kw">as </span>u32;
             <span class="macro">deref_mut_refcell!</span>(seq).add_token(next_token);
-            <span class="kw">let </span>is_done = <span class="macro">deref_refcell!</span>(seq).is_done(next_token, eos_tok);
+            <span class="kw">let </span>is_done = <span class="macro">deref_refcell!</span>(seq).is_done(next_token_id, eos_tok);
             <span class="kw">if let </span><span class="prelude-val">Some</span>(reason) = is_done {
                 <span class="macro">deref_mut_refcell!</span>(seq).set_state(SequenceState::Done(reason));
+
+                <span class="kw">let </span>tokenizer = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenizer().clone();
+                <span class="kw">let </span><span class="kw-2">mut </span>logprobs = Vec::new();
+                <span class="kw">for </span>logprob <span class="kw">in </span><span class="macro">deref_refcell!</span>(seq).logprobs() {
+                    <span class="kw">let </span>resp_logprob = ResponseLogprob {
+                        token: <span class="macro">handle_seq_error!</span>(
+                            tokenizer.decode(<span class="kw-2">&amp;</span>[logprob.token <span class="kw">as </span>u32], <span class="bool-val">false</span>),
+                            <span class="macro">deref_refcell!</span>(seq).responder()
+                        ),
+                        bytes: logprob.bytes.clone().into_bytes(),
+                        logprob: logprob.logprob,
+                        top_logprobs: logprob.top_logprobs.clone(),
+                    };
+                    logprobs.push(resp_logprob);
+                }
+
                 <span class="kw">let </span>res = <span class="macro">handle_seq_error!</span>(
                     <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
                         .tokenizer()
                         .decode(<span class="macro">deref_refcell!</span>(seq).get_toks(), <span class="bool-val">false</span>),
                     <span class="macro">deref_refcell!</span>(seq).responder()
                 );
+
+                <span class="kw">let </span>choice = Choice {
+                    stopreason: <span class="kw">match </span>reason {
+                        StopReason::Eos =&gt; <span class="string">"stop"</span>.to_string(),
+                        StopReason::Length(<span class="kw">_</span>) =&gt; <span class="string">"length"</span>.to_string(),
+                        StopReason::StopTok(<span class="kw">_</span>) =&gt; <span class="string">"stop"</span>.to_string(),
+                    },
+                    index: <span class="number">0</span>,
+                    message: ResponseMessage {
+                        content: res,
+                        role: <span class="string">"assistant"</span>.to_string(),
+                    },
+                    logprobs: <span class="kw">if </span><span class="macro">deref_refcell!</span>(seq).return_logprobs() {
+                        <span class="prelude-val">Some</span>(Logprobs {
+                            content: <span class="prelude-val">Some</span>(logprobs),
+                        })
+                    } <span class="kw">else </span>{
+                        <span class="prelude-val">None
+                    </span>},
+                };
+
                 <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                 </span><span class="macro">deref_refcell!</span>(seq)
                     .responder()
-                    .send(Response::Done((reason, res)))
+                    .send(Response::Done(ChatCompletionResponse {
+                        id: <span class="macro">deref_refcell!</span>(seq).id().to_string(),
+                        choices: <span class="macro">vec!</span>[choice],
+                        created: <span class="macro">deref_refcell!</span>(seq).timestamp(),
+                        model: <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).name(),
+                        system_fingerprint: <span class="string">"local"</span>.to_string(),
+                        object: <span class="string">"chat.completion"</span>.to_string(),
+                        usage: ChatCompletionUsage {
+                            completion_tokens: <span class="macro">deref_refcell!</span>(seq).logprobs().len(),
+                            prompt_tokens: <span class="macro">deref_refcell!</span>(seq).prompt_tokens(),
+                            total_tokens: <span class="macro">deref_refcell!</span>(seq).len(),
+                        },
+                    }))
                     .unwrap();
             }
         }
@@ -471,6 +582,10 @@
         <span class="kw">let </span>seq = Sequence::new_waiting(
             prompt,
             <span class="self">self</span>.id,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect(<span class="string">"Time travel has occured!"</span>)
+                .as_secs(),
             num_hidden_layers,
             request.response.clone(),
             LogitsProcessor::new(
@@ -484,6 +599,7 @@
             ),
             stop_toks,
             request.sampling_params.max_len,
+            request.return_logprobs,
         );
         <span class="self">self</span>.id += <span class="number">1</span>;
 

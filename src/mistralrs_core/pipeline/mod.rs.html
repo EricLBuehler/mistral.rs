@@ -83,10 +83,35 @@
 <a href="#82" id="82">82</a>
 <a href="#83" id="83">83</a>
 <a href="#84" id="84">84</a>
+<a href="#85" id="85">85</a>
+<a href="#86" id="86">86</a>
+<a href="#87" id="87">87</a>
+<a href="#88" id="88">88</a>
+<a href="#89" id="89">89</a>
+<a href="#90" id="90">90</a>
+<a href="#91" id="91">91</a>
+<a href="#92" id="92">92</a>
+<a href="#93" id="93">93</a>
+<a href="#94" id="94">94</a>
+<a href="#95" id="95">95</a>
+<a href="#96" id="96">96</a>
+<a href="#97" id="97">97</a>
+<a href="#98" id="98">98</a>
+<a href="#99" id="99">99</a>
+<a href="#100" id="100">100</a>
+<a href="#101" id="101">101</a>
+<a href="#102" id="102">102</a>
+<a href="#103" id="103">103</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>mistral;
 <span class="kw">use </span>candle_sampling::logits_processor::Logprobs;
 <span class="kw">pub use </span>mistral::{MistralLoader, MistralSpecificConfig};
-<span class="kw">use </span>std::{cell::RefCell, path::PathBuf, rc::Rc, sync::Mutex};
+<span class="kw">use </span>std::{
+    cell::RefCell,
+    collections::HashMap,
+    path::PathBuf,
+    rc::Rc,
+    sync::{Arc, Mutex},
+};
 <span class="kw">use </span>tokenizers::Tokenizer;
 
 <span class="kw">use </span>anyhow::Result;
@@ -129,6 +154,10 @@
     }
 }
 
+<span class="kw">pub trait </span>Conversation {
+    <span class="kw">fn </span>get_prompt(<span class="kw-2">&amp;</span><span class="self">self</span>, messages: Vec&lt;HashMap&lt;String, String&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;String, String&gt;;
+}
+
 <span class="kw">pub trait </span>Loader {
     <span class="kw">fn </span>download_model(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -136,22 +165,30 @@
         token_source: TokenSource,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelPaths&gt;&gt;;
 
-    <span class="kw">fn </span>_setup_model(
+    <span class="attr">#[allow(clippy::type_complexity)]
+    </span><span class="kw">fn </span>_setup_model(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         paths: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelPaths,
         dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
         device: <span class="kw-2">&amp;</span>Device,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;&gt;;
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;(
+        Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
+        Arc&lt;<span class="kw">dyn </span>Conversation + Send + Sync&gt;,
+    )&gt;;
 
     <span class="doccomment">/// If `revision` is None, then it defaults to `main`.
     /// If `dtype` is None, then it defaults to the model default (usually F32). TODO(EricLBuehler): refine
+    </span><span class="attr">#[allow(clippy::type_complexity)]
     </span><span class="kw">fn </span>load_model(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
         token_source: TokenSource,
         dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
         device: <span class="kw-2">&amp;</span>Device,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;(
+        Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
+        Arc&lt;<span class="kw">dyn </span>Conversation + Send + Sync&gt;,
+    )&gt; {
         <span class="kw">let </span>paths = <span class="self">self</span>.download_model(revision, token_source)<span class="question-mark">?</span>;
         <span class="self">self</span>._setup_model(<span class="kw-2">&amp;*</span>paths, dtype, device)
     }
@@ -166,5 +203,6 @@
     <span class="kw">fn </span>sample(<span class="kw-2">&amp;mut </span><span class="self">self</span>, logits: Tensor, seq: Rc&lt;RefCell&lt;Sequence&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt;;
     <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Tokenizer;
     <span class="kw">fn </span>eos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u32;
+    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str;
 }
 </code></pre></div></section></main></body></html>

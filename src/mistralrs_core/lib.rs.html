@@ -83,8 +83,6 @@
 <a href="#82" id="82">82</a>
 <a href="#83" id="83">83</a>
 <a href="#84" id="84">84</a>
-<a href="#85" id="85">85</a>
-<a href="#86" id="86">86</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fs::OpenOptions,
     io::Write,
@@ -108,12 +106,12 @@
 <span class="kw">mod </span>sequence;
 <span class="kw">mod </span>utils;
 
-<span class="kw">pub use </span>pipeline::{Loader, MistralLoader, MistralSpecificConfig, TokenSource};
+<span class="kw">pub use </span>pipeline::{Conversation, Loader, MistralLoader, MistralSpecificConfig, TokenSource};
 <span class="kw">pub use </span>request::Request;
+<span class="kw">pub use </span>response::ChatCompletionResponse;
 <span class="kw">pub use </span>response::Response;
 <span class="kw">pub use </span>sampling::{SamplingParams, StopTokens};
 <span class="kw">pub use </span>scheduler::SchedulerMethod;
-<span class="kw">use </span>sequence::StopReason;
 
 <span class="kw">pub struct </span>MistralRs {
     sender: Sender&lt;Request&gt;,
@@ -142,7 +140,7 @@
         <span class="self">self</span>.sender.clone()
     }
 
-    <span class="kw">pub fn </span>maybe_log_request(this: Arc&lt;<span class="self">Self</span>&gt;, request: <span class="kw-2">&amp;</span>Request) {
+    <span class="kw">pub fn </span>maybe_log_request(this: Arc&lt;<span class="self">Self</span>&gt;, repr: String) {
         <span class="kw">if </span>this.log {
             <span class="kw">let </span><span class="kw-2">mut </span>f = OpenOptions::new()
                 .append(<span class="bool-val">true</span>)
@@ -150,12 +148,12 @@
                 </span>.open(<span class="string">"output.log"</span>)
                 .expect(<span class="string">"Unable to open file"</span>);
             <span class="kw">let </span>time = chrono::offset::Local::now();
-            f.write_all(<span class="macro">format!</span>(<span class="string">"Request at {time}: {request:?}\n\n"</span>).as_bytes())
+            f.write_all(<span class="macro">format!</span>(<span class="string">"Request at {time}: {repr}\n\n"</span>).as_bytes())
                 .expect(<span class="string">"Unable to write data"</span>);
         }
     }
 
-    <span class="kw">pub fn </span>maybe_log_response(this: Arc&lt;<span class="self">Self</span>&gt;, (reason, out): (StopReason, <span class="kw-2">&amp;</span>str)) {
+    <span class="kw">pub fn </span>maybe_log_response(this: Arc&lt;<span class="self">Self</span>&gt;, resp: <span class="kw-2">&amp;</span>ChatCompletionResponse) {
         <span class="kw">if </span>this.log {
             <span class="kw">let </span><span class="kw-2">mut </span>f = OpenOptions::new()
                 .append(<span class="bool-val">true</span>)
@@ -163,11 +161,9 @@
                 </span>.open(<span class="string">"output.log"</span>)
                 .expect(<span class="string">"Unable to open file"</span>);
             <span class="kw">let </span>time = chrono::offset::Local::now();
-            f.write_all(
-                <span class="macro">format!</span>(<span class="string">"Response at {time}: Response {{reason: {reason:?}, text: `{out}`}}\n\n"</span>)
-                    .as_bytes(),
-            )
-            .expect(<span class="string">"Unable to write data"</span>);
+            <span class="kw">let </span>repr = serde_json::to_string(resp).unwrap();
+            f.write_all(<span class="macro">format!</span>(<span class="string">"Response at {time}: {repr}\n\n"</span>).as_bytes())
+                .expect(<span class="string">"Unable to write data"</span>);
         }
     }
 }
