@@ -18,10 +18,6 @@ pub enum StopTokens {
     SingleId(u32),
 }
 
-fn default_0f64() -> f64 {
-    0.0
-}
-
 fn default_false() -> bool {
     false
 }
@@ -42,14 +38,14 @@ pub struct ChatCompletionRequest {
     #[serde(rename = "n")]
     #[serde(default = "default_1usize")]
     pub n_choices: usize,
-    #[serde(default = "default_0f64")]
-    pub presence_penalty: f64,
+    pub presence_penalty: Option<f32>,
+    #[serde(rename = "frequency_penalty")]
+    pub repetition_penalty: Option<f32>,
     #[serde(rename = "stop")]
     pub stop_seqs: Option<StopTokens>, // TODO(EricLBuehler): We only support single tokens.
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
 
     // mistral.rs additional
-    pub repeat_penalty: Option<f32>,
     pub top_k: Option<usize>,
 }

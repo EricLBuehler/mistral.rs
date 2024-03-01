@@ -233,6 +233,7 @@ impl Engine {
                 request.sampling_params.top_n_logprobs,
                 tokenizer,
                 request.sampling_params.repeat_penalty,
+                request.sampling_params.presence_penalty,
             ),
             stop_toks,
             request.sampling_params.max_len,
