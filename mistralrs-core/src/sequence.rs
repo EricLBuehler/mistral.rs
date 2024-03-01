@@ -1,8 +1,9 @@
 use std::{cell::Cell, sync::mpsc::Sender};
 
+use candle_core::Tensor;
 use candle_sampling::logits_processor::{LogitsProcessor, Logprobs};
 
-use crate::{models::Cache, response::Response};
+use crate::response::Response;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum StopReason {
@@ -29,7 +30,7 @@ pub struct Sequence {
     timestamp: u64,
     state: Cell<SequenceState>,
     gen_idx: usize,
-    cache: Cache,
+    cache: Vec<Option<(Tensor, Tensor)>>,
     responder: Sender<Response>,
     logits_processor: LogitsProcessor,
     stop_tokens: Vec<u32>,
@@ -59,7 +60,7 @@ impl Sequence {
             timestamp,
             state: Cell::new(SequenceState::Waiting),
             gen_idx: 0,
-            cache: Cache::new(layers),
+            cache: vec![None; layers],
             responder,
             logits_processor,
             stop_tokens,
@@ -101,8 +102,8 @@ impl Sequence {
         &mut self.gen_idx
     }
 
-    pub fn cache(&self) -> &Cache {
-        &self.cache
+    pub fn cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
+        &mut self.cache
     }
 
     pub fn logits_processor(&mut self) -> &mut LogitsProcessor {

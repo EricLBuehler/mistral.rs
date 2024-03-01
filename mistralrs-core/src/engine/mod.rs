@@ -170,9 +170,9 @@ impl Engine {
             let mut k_vec = Vec::new();
             let mut v_vec = Vec::new();
             for seq in seqs.iter() {
-                let seq = deref_refcell!(seq);
-                let cache = seq.cache().lock();
-                let cache = cache.get(layer).unwrap();
+                let mut seq = deref_mut_refcell!(seq);
+                let seq_cache = &*seq.cache();
+                let cache = seq_cache.get(layer).unwrap();
                 // Note(EricLBuehler): Unwrap reasoning: We are handling completions seqs so unwrap is OK.
                 let cache = cache.as_ref().unwrap();
                 k_vec.push(cache.0.clone());
@@ -220,8 +220,8 @@ impl Engine {
             debug_assert_eq!(v_caches.len(), seqs.len());
 
             for (seq_i, seq) in seqs.iter().enumerate() {
-                let seq = deref_refcell!(seq);
-                let mut seq_cache = seq.cache().lock();
+                let mut seq = deref_mut_refcell!(seq);
+                let seq_cache = seq.cache();
                 let seq_cache = seq_cache.get_mut(layer).unwrap();
                 *seq_cache = Some((
                     k_caches.get(seq_i).unwrap().clone(),
