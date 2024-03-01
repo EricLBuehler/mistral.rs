@@ -10,9 +10,10 @@ use candle_core::Device;
 use clap::Parser;
 use mistralrs_core::{
     Loader, MistralLoader, MistralRs, MistralSpecificConfig, Request, Response, SamplingParams,
-    SchedulerMethod, TokenSource,
+    SchedulerMethod, StopTokens as InternalStopTokens, TokenSource,
 };
-use serde::Deserialize;
+use openai::{ChatCompletionRequest, Message, StopTokens};
+mod openai;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -25,7 +26,7 @@ struct Args {
     #[clap(long, short, action)]
     log: bool,
 
-    /// Model ID to load the 
+    /// Model ID to load the
     #[arg(short, long, default_value = "mistralai/Mistral-7B-Instruct-v0.1")]
     model_id: String,
 
@@ -42,19 +43,36 @@ struct Args {
     quantized_filename: Option<String>,
 }
 
-#[derive(Clone, Deserialize)]
-struct RawRequest {
-    pub prompt: String,
-    pub sampling_params: SamplingParams,
+fn get_prompt(_messages: Vec<Message>) -> String {
+    todo!()
 }
 
-async fn root(State(state): State<Arc<MistralRs>>, Json(request): Json<RawRequest>) -> String {
+async fn root(
+    State(state): State<Arc<MistralRs>>,
+    Json(request): Json<ChatCompletionRequest>,
+) -> String {
     let (tx, rx) = channel();
+    let stop_toks = match request.stop_seqs {
+        Some(StopTokens::Multi(m)) => Some(InternalStopTokens::Seqs(m)),
+        Some(StopTokens::Single(s)) => Some(InternalStopTokens::Seqs(vec![s])),
+        Some(StopTokens::MutliId(m)) => Some(InternalStopTokens::Ids(m)),
+        Some(StopTokens::SingleId(s)) => Some(InternalStopTokens::Ids(vec![s])),
+        None => None,
+    };
     let request = Request {
-        prompt: request.prompt,
-        sampling_params: request.sampling_params,
+        prompt: get_prompt(request.messages),
+        sampling_params: SamplingParams {
+            temperature: request.temperature,
+            top_k: request.top_k,
+            top_p: request.top_p,
+            top_n_logprobs: request.top_logprobs.unwrap_or(1),
+            repeat_penalty: request.repeat_penalty,
+            max_len: request.max_tokens,
+            stop_toks,
+        },
         response: tx,
     };
+
     MistralRs::maybe_log_request(state.clone(), &request);
     let sender = state.get_sender();
     sender.send(request).unwrap();

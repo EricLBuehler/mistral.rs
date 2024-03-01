@@ -24,7 +24,7 @@ mod utils;
 pub use pipeline::{Loader, MistralLoader, MistralSpecificConfig, TokenSource};
 pub use request::Request;
 pub use response::Response;
-pub use sampling::SamplingParams;
+pub use sampling::{SamplingParams, StopTokens};
 pub use scheduler::SchedulerMethod;
 use sequence::StopReason;
 

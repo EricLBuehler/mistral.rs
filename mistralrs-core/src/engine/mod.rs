@@ -17,6 +17,7 @@ use crate::{
     response::Response,
     scheduler::{Scheduler, SchedulerMethod},
     sequence::{Sequence, SequenceState},
+    StopTokens,
 };
 
 const SEED: u64 = 0;
@@ -196,6 +197,30 @@ impl Engine {
         };
         let num_hidden_layers = get_mut_arcmutex!(self.pipeline).num_hidden_layers();
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
+
+        let stop_toks = match request.sampling_params.stop_toks {
+            None => vec![],
+            Some(StopTokens::Ids(ref i)) => i.clone(),
+            Some(StopTokens::Seqs(ref s)) => {
+                let mut stop_toks = Vec::new();
+                let encoded = tokenizer.encode(s.clone(), false);
+                let toks = handle_seq_error!(encoded, request.response)
+                    .get_ids()
+                    .to_vec();
+                if toks.len() > 1 {
+                    // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
+                    request
+                        .response
+                        .send(Response::Error(
+                            format!("Stop sequence '{s:?}' encodes to mutliple tokens when it should only encode to 1.").into(),
+                        ))
+                        .unwrap();
+                }
+                stop_toks.push(toks[0]);
+                stop_toks
+            }
+        };
+
         let seq = Sequence::new_waiting(
             prompt,
             self.id,
@@ -209,11 +234,7 @@ impl Engine {
                 tokenizer,
                 request.sampling_params.repeat_penalty,
             ),
-            request
-                .sampling_params
-                .stop_toks
-                .clone()
-                .unwrap_or_default(),
+            stop_toks,
             request.sampling_params.max_len,
         );
         self.id += 1;
