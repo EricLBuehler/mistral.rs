@@ -198,7 +198,7 @@
     <span class="kw">let </span>stop_toks = <span class="kw">match </span>request.stop_seqs {
         <span class="prelude-val">Some</span>(StopTokens::Multi(m)) =&gt; <span class="prelude-val">Some</span>(InternalStopTokens::Seqs(m)),
         <span class="prelude-val">Some</span>(StopTokens::Single(s)) =&gt; <span class="prelude-val">Some</span>(InternalStopTokens::Seqs(<span class="macro">vec!</span>[s])),
-        <span class="prelude-val">Some</span>(StopTokens::MutliId(m)) =&gt; <span class="prelude-val">Some</span>(InternalStopTokens::Ids(m)),
+        <span class="prelude-val">Some</span>(StopTokens::MultiId(m)) =&gt; <span class="prelude-val">Some</span>(InternalStopTokens::Ids(m)),
         <span class="prelude-val">Some</span>(StopTokens::SingleId(s)) =&gt; <span class="prelude-val">Some</span>(InternalStopTokens::Ids(<span class="macro">vec!</span>[s])),
         <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
     };
