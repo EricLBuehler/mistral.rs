@@ -17,5 +17,5 @@ cd mistral.rs
 mkdir ~/.cache/huggingface
 touch ~/.cache/huggingface/token
 echo <HF_TOKEN_HERE> > ~/.cache/huggingface/token
-cargo run --release --features cuda -- --port 1234 --log output.log mistral-gguf
+cargo run --release --features cuda -- --port 1234 --log output.log mistral-gguf -f mistral-7b-instruct-v0.1.Q2_K.gguf
 ```
