@@ -217,7 +217,7 @@ impl Loader for MistralLoader {
             DType::F32
         };
 
-        println!("Loading model...");
+        println!("Loading model on {device:?}...");
         let model = match self.kind {
             ModelKind::QuantizedGGUF => {
                 let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
