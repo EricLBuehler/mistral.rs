@@ -325,6 +325,7 @@ pub struct Model {
     dtype: DType,
     pub device: Device,
     pub cache: Cache,
+    pub max_seq_len: usize,
 }
 
 impl Model {
@@ -350,6 +351,7 @@ impl Model {
             device: vb.device().clone(),
             dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers),
+            max_seq_len: cfg.max_position_embeddings,
         })
     }
 

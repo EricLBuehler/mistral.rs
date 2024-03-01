@@ -101,4 +101,5 @@ pub trait Pipeline: Send + Sync {
     fn tokenizer(&self) -> Tokenizer;
     fn eos_tok(&self) -> u32;
     fn name(&self) -> &'static str;
+    fn get_max_seq_len(&self) -> usize;
 }

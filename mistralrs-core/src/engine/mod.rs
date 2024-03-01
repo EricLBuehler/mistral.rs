@@ -32,6 +32,7 @@ pub struct Engine {
     requests: VecDeque<Request>,
     scheduler: Scheduler<VecDeque<Rc<RefCell<Sequence>>>>,
     id: usize,
+    truncate_sequence: bool,
 }
 
 impl Engine {
@@ -39,6 +40,7 @@ impl Engine {
         rx: Receiver<Request>,
         pipeline: Box<Mutex<dyn Pipeline>>,
         method: SchedulerMethod,
+        truncate_sequence: bool,
     ) -> Self {
         Self {
             rx,
@@ -46,6 +48,7 @@ impl Engine {
             requests: VecDeque::new(),
             scheduler: Scheduler::new(method),
             id: 0,
+            truncate_sequence,
         }
     }
 
@@ -89,7 +92,11 @@ impl Engine {
             let next_token = handle_seq_error_stateaware!(sampled, seq);
             let next_token_id = next_token.token as u32;
             deref_mut_refcell!(seq).add_token(next_token);
-            let is_done = deref_refcell!(seq).is_done(next_token_id, eos_tok);
+            let is_done = deref_refcell!(seq).is_done(
+                next_token_id,
+                eos_tok,
+                get_mut_arcmutex!(self.pipeline).get_max_seq_len(),
+            );
             if let Some(reason) = is_done {
                 deref_mut_refcell!(seq).set_state(SequenceState::Done(reason));
 
@@ -118,7 +125,7 @@ impl Engine {
                 let choice = Choice {
                     stopreason: match reason {
                         StopReason::Eos => "stop".to_string(),
-                        StopReason::Length(_) => "length".to_string(),
+                        StopReason::Length(_) | StopReason::ModelLength(_) => "length".to_string(),
                         StopReason::StopTok(_) => "stop".to_string(),
                     },
                     index: 0,
@@ -225,10 +232,33 @@ impl Engine {
     }
 
     fn add_request(&mut self, request: Request) {
-        let prompt = handle_seq_error!(
+        let mut prompt = handle_seq_error!(
             get_mut_arcmutex!(self.pipeline).tokenize_prompt(&request.prompt),
             request.response
         );
+        if prompt.len() > get_mut_arcmutex!(self.pipeline).get_max_seq_len()
+            && !self.truncate_sequence
+        {
+            // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
+            request
+                .response
+                .send(Response::Error(
+                    format!("Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?", get_mut_arcmutex!(self.pipeline).get_max_seq_len()).into(),
+                ))
+                .unwrap();
+            return;
+        } else {
+            let prompt_len = prompt.len();
+            let max_len = get_mut_arcmutex!(self.pipeline).get_max_seq_len();
+            let currently_over = max_len - prompt_len;
+            let sampling_max = if let Some(sampling_max) = request.sampling_params.max_len {
+                sampling_max
+            } else {
+                10
+            };
+            prompt = prompt[(currently_over + sampling_max)..].to_vec();
+        }
+
         let sampling_method = match (
             request.sampling_params.top_k,
             request.sampling_params.top_p,

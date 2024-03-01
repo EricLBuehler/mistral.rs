@@ -70,6 +70,12 @@ struct Args {
     #[clap(long, short)]
     log: Option<String>,
 
+    /// If a sequence is larger than the maximum model length, truncate the number
+    /// of tokens such that the sequence will fit at most the maximum length.
+    /// If `max_tokens` is not specified in the request, space for 10 tokens will be reserved instead.
+    #[clap(long, short, action)]
+    truncate_sequence: bool,
+
     /// Model
     #[clap(subcommand)]
     model: ModelSelected,
@@ -187,6 +193,7 @@ async fn main() -> Result<()> {
         pipeline,
         SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
         args.log,
+        args.truncate_sequence,
     );
 
     let app = get_router((mistralrs, conv));

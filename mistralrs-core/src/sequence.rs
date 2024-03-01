@@ -9,6 +9,7 @@ pub enum StopReason {
     Eos,
     StopTok(u32),
     Length(usize),
+    ModelLength(usize),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -32,7 +33,7 @@ pub struct Sequence {
     responder: Sender<Response>,
     logits_processor: LogitsProcessor,
     stop_tokens: Vec<u32>,
-    max_len: usize,
+    max_len: Option<usize>,
     return_logprobs: bool,
 }
 
@@ -62,7 +63,7 @@ impl Sequence {
             responder,
             logits_processor,
             stop_tokens,
-            max_len: max_len.unwrap_or(64),
+            max_len,
             return_logprobs,
         }
     }
@@ -121,14 +122,18 @@ impl Sequence {
         self.state.set(state);
     }
 
-    pub fn is_done(&self, tok: u32, eos_tok: u32) -> Option<StopReason> {
+    pub fn is_done(&self, tok: u32, eos_tok: u32, max_model_len: usize) -> Option<StopReason> {
         if tok == eos_tok {
             Some(StopReason::Eos)
         } else if self.stop_tokens.contains(&tok) {
             Some(StopReason::StopTok(tok))
-        } else if self.tokens.len().saturating_sub(self.prompt_len) == self.max_len {
+        } else if self.max_len.is_some()
+            && self.tokens.len().saturating_sub(self.prompt_len) == self.max_len.unwrap()
+        {
             // add_token was already called
-            Some(StopReason::Length(self.max_len))
+            Some(StopReason::Length(self.max_len.unwrap()))
+        } else if self.tokens.len().saturating_sub(self.prompt_len) == max_model_len {
+            Some(StopReason::ModelLength(max_model_len))
         } else {
             None
         }

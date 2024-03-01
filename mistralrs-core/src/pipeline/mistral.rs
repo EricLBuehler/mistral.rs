@@ -1,5 +1,5 @@
 use super::{Conversation, Loader, ModelKind, ModelPaths, Pipeline, SimpleModelPaths, TokenSource};
-use crate::models::Cache;
+use crate::models::{quantized_llama, Cache};
 use crate::{deref_mut_refcell, deref_refcell};
 use crate::{
     models::mistral::{Config, Model as NormalModel},
@@ -369,5 +369,11 @@ impl Pipeline for MistralPipeline {
     }
     fn name(&self) -> &'static str {
         "mistral"
+    }
+    fn get_max_seq_len(&self) -> usize {
+        match &self.model {
+            Model::Normal(model) => model.max_seq_len,
+            Model::Quantized(_) => quantized_llama::MAX_SEQ_LEN,
+        }
     }
 }

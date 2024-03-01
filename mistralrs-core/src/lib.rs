@@ -40,13 +40,14 @@ impl MistralRs {
         pipeline: Box<Mutex<dyn Pipeline>>,
         method: SchedulerMethod,
         log: Option<String>,
+        truncate_sequence: bool,
     ) -> Arc<Self> {
         let (tx, rx) = channel();
 
         let this = Arc::new(Self { sender: tx, log });
 
         thread::spawn(move || {
-            let mut engine = Engine::new(rx, pipeline, method);
+            let mut engine = Engine::new(rx, pipeline, method, truncate_sequence);
             engine.run();
         });
 
