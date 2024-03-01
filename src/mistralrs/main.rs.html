@@ -197,10 +197,6 @@
 <a href="#196" id="196">196</a>
 <a href="#197" id="197">197</a>
 <a href="#198" id="198">198</a>
-<a href="#199" id="199">199</a>
-<a href="#200" id="200">200</a>
-<a href="#201" id="201">201</a>
-<a href="#202" id="202">202</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     sync::{mpsc::channel, Arc},
@@ -272,10 +268,6 @@
     <span class="doccomment">/// Log all responses and requests to output.log
     </span><span class="attr">#[clap(long, short, action)]
     </span>log: bool,
-
-    <span class="doccomment">/// Load on the CUDA device
-    </span><span class="attr">#[clap(long, short, action)]
-    </span>cuda: bool,
 
     <span class="doccomment">/// Model
     </span><span class="attr">#[clap(subcommand)]
@@ -384,12 +376,12 @@
         )),
     };
 
-    <span class="kw">let </span>device = <span class="kw">if </span>args.cuda {
-        Device::new_cuda(<span class="number">0</span>)<span class="question-mark">?
-    </span>} <span class="kw">else </span>{
-        Device::Cpu
-    };
-    <span class="kw">let </span>(pipeline, conv) = loader.load_model(<span class="prelude-val">None</span>, TokenSource::CacheToken, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>;
+    <span class="kw">let </span>(pipeline, conv) = loader.load_model(
+        <span class="prelude-val">None</span>,
+        TokenSource::CacheToken,
+        <span class="prelude-val">None</span>,
+        <span class="kw-2">&amp;</span>Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?</span>,
+    )<span class="question-mark">?</span>;
     <span class="kw">let </span>mistralrs = MistralRs::new(
         pipeline,
         SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
