@@ -142,7 +142,7 @@ impl Loader for MistralLoader {
             tokenizer_filename,
             config_filename,
             filenames,
-            quantized: self.quantized_filename.is_none(),
+            quantized: self.quantized_filename.is_some(),
         }))
     }
 
