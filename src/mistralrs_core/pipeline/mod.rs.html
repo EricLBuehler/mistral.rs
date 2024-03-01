@@ -78,6 +78,11 @@
 <a href="#77" id="77">77</a>
 <a href="#78" id="78">78</a>
 <a href="#79" id="79">79</a>
+<a href="#80" id="80">80</a>
+<a href="#81" id="81">81</a>
+<a href="#82" id="82">82</a>
+<a href="#83" id="83">83</a>
+<a href="#84" id="84">84</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>mistral;
 <span class="kw">use </span>candle_sampling::logits_processor::Logprobs;
 <span class="kw">pub use </span>mistral::{MistralLoader, MistralSpecificConfig};
@@ -93,6 +98,7 @@
     <span class="kw">fn </span>get_weight_filenames(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[PathBuf];
     <span class="kw">fn </span>get_config_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf;
     <span class="kw">fn </span>get_tokenizer_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf;
+    <span class="kw">fn </span>is_quantized(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
 }
 
 <span class="kw">pub enum </span>TokenSource {
@@ -105,6 +111,7 @@
     tokenizer_filename: P,
     config_filename: P,
     filenames: Vec&lt;P&gt;,
+    quantized: bool,
 }
 
 <span class="kw">impl </span>ModelPaths <span class="kw">for </span>SimpleModelPaths&lt;PathBuf&gt; {
@@ -116,6 +123,9 @@
     }
     <span class="kw">fn </span>get_weight_filenames(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[PathBuf] {
         <span class="kw-2">&amp;</span><span class="self">self</span>.filenames
+    }
+    <span class="kw">fn </span>is_quantized(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="self">self</span>.quantized
     }
 }
 

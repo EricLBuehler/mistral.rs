@@ -93,6 +93,16 @@
 <a href="#92" id="92">92</a>
 <a href="#93" id="93">93</a>
 <a href="#94" id="94">94</a>
+<a href="#95" id="95">95</a>
+<a href="#96" id="96">96</a>
+<a href="#97" id="97">97</a>
+<a href="#98" id="98">98</a>
+<a href="#99" id="99">99</a>
+<a href="#100" id="100">100</a>
+<a href="#101" id="101">101</a>
+<a href="#102" id="102">102</a>
+<a href="#103" id="103">103</a>
+<a href="#104" id="104">104</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{mpsc::channel, Arc};
 
 <span class="kw">use </span>anyhow::Result;
@@ -159,7 +169,16 @@
 </span><span class="kw">async fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
     <span class="kw">let </span>args = Args::parse();
 
-    <span class="kw">let </span>model_id = <span class="string">"mistralai/Mistral-7B-Instruct-v0.1"</span>;
+    <span class="comment">/*let model_id = "mistralai/Mistral-7B-Instruct-v0.1";
+    let loader = MistralLoader::new(
+        model_id.to_string(),
+        MistralSpecificConfig {
+            use_flash_attn: false,
+            repeat_last_n: 64,
+        },
+        Some(DType::F32),
+    );*/
+    </span><span class="kw">let </span>model_id = <span class="string">"TheBloke/Mistral-7B-Instruct-v0.1-GGUF"</span>;
     <span class="kw">let </span>loader = MistralLoader::new(
         model_id.to_string(),
         MistralSpecificConfig {
@@ -167,6 +186,7 @@
             repeat_last_n: <span class="number">64</span>,
         },
         <span class="prelude-val">Some</span>(DType::F32),
+        <span class="prelude-val">Some</span>(<span class="string">"mistral-7b-instruct-v0.1.Q2_K.gguf"</span>.to_string()),
     );
     <span class="kw">let </span>pipeline = loader.load_model(
         <span class="prelude-val">None</span>,
