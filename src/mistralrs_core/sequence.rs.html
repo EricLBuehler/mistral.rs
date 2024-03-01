@@ -151,6 +151,11 @@
 <a href="#150" id="150">150</a>
 <a href="#151" id="151">151</a>
 <a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{cell::Cell, sync::mpsc::Sender};
 
 <span class="kw">use </span>candle_sampling::logits_processor::{LogitsProcessor, Logprobs};
@@ -162,6 +167,7 @@
     Eos,
     StopTok(u32),
     Length(usize),
+    ModelLength(usize),
 }
 
 <span class="attr">#[derive(Clone, Copy, PartialEq)]
@@ -185,7 +191,7 @@
     responder: Sender&lt;Response&gt;,
     logits_processor: LogitsProcessor,
     stop_tokens: Vec&lt;u32&gt;,
-    max_len: usize,
+    max_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     return_logprobs: bool,
 }
 
@@ -215,7 +221,7 @@
             responder,
             logits_processor,
             stop_tokens,
-            max_len: max_len.unwrap_or(<span class="number">64</span>),
+            max_len,
             return_logprobs,
         }
     }
@@ -262,7 +268,7 @@
     }
 
     <span class="kw">pub fn </span>add_token(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tok: Logprobs) {
-        <span class="self">self</span>.tokens.push(tok.token <span class="kw">as </span>u32);
+        <span class="self">self</span>.tokens.push(tok.token);
         <span class="self">self</span>.logprobs.push(tok);
     }
 
@@ -274,14 +280,18 @@
         <span class="self">self</span>.state.set(state);
     }
 
-    <span class="kw">pub fn </span>is_done(<span class="kw-2">&amp;</span><span class="self">self</span>, tok: u32, eos_tok: u32) -&gt; <span class="prelude-ty">Option</span>&lt;StopReason&gt; {
+    <span class="kw">pub fn </span>is_done(<span class="kw-2">&amp;</span><span class="self">self</span>, tok: u32, eos_tok: u32, max_model_len: usize) -&gt; <span class="prelude-ty">Option</span>&lt;StopReason&gt; {
         <span class="kw">if </span>tok == eos_tok {
             <span class="prelude-val">Some</span>(StopReason::Eos)
         } <span class="kw">else if </span><span class="self">self</span>.stop_tokens.contains(<span class="kw-2">&amp;</span>tok) {
             <span class="prelude-val">Some</span>(StopReason::StopTok(tok))
-        } <span class="kw">else if </span><span class="self">self</span>.tokens.len().saturating_sub(<span class="self">self</span>.prompt_len) == <span class="self">self</span>.max_len {
+        } <span class="kw">else if </span><span class="self">self</span>.max_len.is_some()
+            &amp;&amp; <span class="self">self</span>.tokens.len().saturating_sub(<span class="self">self</span>.prompt_len) == <span class="self">self</span>.max_len.unwrap()
+        {
             <span class="comment">// add_token was already called
-            </span><span class="prelude-val">Some</span>(StopReason::Length(<span class="self">self</span>.max_len))
+            </span><span class="prelude-val">Some</span>(StopReason::Length(<span class="self">self</span>.max_len.unwrap()))
+        } <span class="kw">else if </span><span class="self">self</span>.tokens.len().saturating_sub(<span class="self">self</span>.prompt_len) == max_model_len {
+            <span class="prelude-val">Some</span>(StopReason::ModelLength(max_model_len))
         } <span class="kw">else </span>{
             <span class="prelude-val">None
         </span>}

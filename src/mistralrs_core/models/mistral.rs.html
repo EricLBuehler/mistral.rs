@@ -428,7 +428,13 @@
 <a href="#427" id="427">427</a>
 <a href="#428" id="428">428</a>
 <a href="#429" id="429">429</a>
-</pre></div><pre class="rust"><code><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
+<a href="#430" id="430">430</a>
+<a href="#431" id="431">431</a>
+<a href="#432" id="432">432</a>
+<a href="#433" id="433">433</a>
+</pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
+</span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
 </span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{Activation, VarBuilder};
 <span class="kw">use </span>candle_transformers::models::with_tracing::{linear_no_bias, Linear};
@@ -755,6 +761,7 @@
     dtype: DType,
     <span class="kw">pub </span>device: Device,
     <span class="kw">pub </span>cache: Cache,
+    <span class="kw">pub </span>max_seq_len: usize,
 }
 
 <span class="kw">impl </span>Model {
@@ -780,6 +787,7 @@
             device: vb.device().clone(),
             dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers),
+            max_seq_len: cfg.max_position_embeddings,
         })
     }
 

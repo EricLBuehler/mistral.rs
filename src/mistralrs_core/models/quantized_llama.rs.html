@@ -529,7 +529,11 @@
 <a href="#528" id="528">528</a>
 <a href="#529" id="529">529</a>
 <a href="#530" id="530">530</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+</pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
+</span><span class="kw">use </span>std::collections::HashMap;
 <span class="kw">use </span>std::iter::zip;
 
 <span class="kw">use </span>candle_core::quantized::QTensor;
@@ -539,7 +543,7 @@
 
 <span class="kw">use </span><span class="kw">super</span>::Cache;
 
-<span class="kw">pub const </span>MAX_SEQ_LEN: usize = <span class="number">4096</span>;
+<span class="kw">pub const </span>MAX_SEQ_LEN: u32 = <span class="number">4096</span>;
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">struct </span>RmsNorm {
@@ -828,9 +832,9 @@
         .map(|i| <span class="number">1f32 </span>/ freq_base.powf(i <span class="kw">as </span>f32 / head_dim <span class="kw">as </span>f32))
         .collect();
     <span class="kw">let </span>theta = Tensor::new(theta.as_slice(), device)<span class="question-mark">?</span>;
-    <span class="kw">let </span>idx_theta = Tensor::arange(<span class="number">0</span>, MAX_SEQ_LEN <span class="kw">as </span>u32, device)<span class="question-mark">?
+    <span class="kw">let </span>idx_theta = Tensor::arange(<span class="number">0</span>, MAX_SEQ_LEN, device)<span class="question-mark">?
         </span>.to_dtype(DType::F32)<span class="question-mark">?
-        </span>.reshape((MAX_SEQ_LEN, <span class="number">1</span>))<span class="question-mark">?
+        </span>.reshape((MAX_SEQ_LEN <span class="kw">as </span>usize, <span class="number">1</span>))<span class="question-mark">?
         </span>.matmul(<span class="kw-2">&amp;</span>theta.reshape((<span class="number">1</span>, theta.elem_count()))<span class="question-mark">?</span>)<span class="question-mark">?</span>;
     <span class="kw">let </span>cos = idx_theta.cos()<span class="question-mark">?</span>;
     <span class="kw">let </span>sin = idx_theta.sin()<span class="question-mark">?</span>;

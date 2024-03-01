@@ -197,6 +197,13 @@
 <a href="#196" id="196">196</a>
 <a href="#197" id="197">197</a>
 <a href="#198" id="198">198</a>
+<a href="#199" id="199">199</a>
+<a href="#200" id="200">200</a>
+<a href="#201" id="201">201</a>
+<a href="#202" id="202">202</a>
+<a href="#203" id="203">203</a>
+<a href="#204" id="204">204</a>
+<a href="#205" id="205">205</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     sync::{mpsc::channel, Arc},
@@ -268,6 +275,12 @@
     <span class="doccomment">/// Log all responses and requests to this file
     </span><span class="attr">#[clap(long, short)]
     </span>log: <span class="prelude-ty">Option</span>&lt;String&gt;,
+
+    <span class="doccomment">/// If a sequence is larger than the maximum model length, truncate the number
+    /// of tokens such that the sequence will fit at most the maximum length.
+    /// If `max_tokens` is not specified in the request, space for 10 tokens will be reserved instead.
+    </span><span class="attr">#[clap(long, short, action)]
+    </span>truncate_sequence: bool,
 
     <span class="doccomment">/// Model
     </span><span class="attr">#[clap(subcommand)]
@@ -386,6 +399,7 @@
         pipeline,
         SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
         args.log,
+        args.truncate_sequence,
     );
 
     <span class="kw">let </span>app = get_router((mistralrs, conv));

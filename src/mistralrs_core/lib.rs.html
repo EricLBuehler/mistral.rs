@@ -85,7 +85,12 @@
 <a href="#84" id="84">84</a>
 <a href="#85" id="85">85</a>
 <a href="#86" id="86">86</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#87" id="87">87</a>
+<a href="#88" id="88">88</a>
+<a href="#89" id="89">89</a>
+</pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
+</span><span class="kw">use </span>std::{
     fs::OpenOptions,
     io::Write,
     sync::{
@@ -127,13 +132,14 @@
         pipeline: Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
         method: SchedulerMethod,
         log: <span class="prelude-ty">Option</span>&lt;String&gt;,
+        truncate_sequence: bool,
     ) -&gt; Arc&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>(tx, rx) = channel();
 
         <span class="kw">let </span>this = Arc::new(<span class="self">Self </span>{ sender: tx, log });
 
         thread::spawn(<span class="kw">move </span>|| {
-            <span class="kw">let </span><span class="kw-2">mut </span>engine = Engine::new(rx, pipeline, method);
+            <span class="kw">let </span><span class="kw-2">mut </span>engine = Engine::new(rx, pipeline, method, truncate_sequence);
             engine.run();
         });
 

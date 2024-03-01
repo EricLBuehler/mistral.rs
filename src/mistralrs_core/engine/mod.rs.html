@@ -303,6 +303,36 @@
 <a href="#302" id="302">302</a>
 <a href="#303" id="303">303</a>
 <a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
+<a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -337,6 +367,7 @@
     requests: VecDeque&lt;Request&gt;,
     scheduler: Scheduler&lt;VecDeque&lt;Rc&lt;RefCell&lt;Sequence&gt;&gt;&gt;&gt;,
     id: usize,
+    truncate_sequence: bool,
 }
 
 <span class="kw">impl </span>Engine {
@@ -344,6 +375,7 @@
         rx: Receiver&lt;Request&gt;,
         pipeline: Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
         method: SchedulerMethod,
+        truncate_sequence: bool,
     ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             rx,
@@ -351,6 +383,7 @@
             requests: VecDeque::new(),
             scheduler: Scheduler::new(method),
             id: <span class="number">0</span>,
+            truncate_sequence,
         }
     }
 
@@ -392,9 +425,13 @@
         <span class="kw">for </span>(logits_per_seq, seq) <span class="kw">in </span>zip(logits_seq, seqs.iter()) {
             <span class="kw">let </span>sampled = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).sample(logits_per_seq, seq.clone());
             <span class="kw">let </span>next_token = <span class="macro">handle_seq_error_stateaware!</span>(sampled, seq);
-            <span class="kw">let </span>next_token_id = next_token.token <span class="kw">as </span>u32;
+            <span class="kw">let </span>next_token_id = next_token.token;
             <span class="macro">deref_mut_refcell!</span>(seq).add_token(next_token);
-            <span class="kw">let </span>is_done = <span class="macro">deref_refcell!</span>(seq).is_done(next_token_id, eos_tok);
+            <span class="kw">let </span>is_done = <span class="macro">deref_refcell!</span>(seq).is_done(
+                next_token_id,
+                eos_tok,
+                <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_max_seq_len(),
+            );
             <span class="kw">if let </span><span class="prelude-val">Some</span>(reason) = is_done {
                 <span class="macro">deref_mut_refcell!</span>(seq).set_state(SequenceState::Done(reason));
 
@@ -403,7 +440,7 @@
                 <span class="kw">for </span>logprob <span class="kw">in </span><span class="macro">deref_refcell!</span>(seq).logprobs() {
                     <span class="kw">let </span>resp_logprob = ResponseLogprob {
                         token: <span class="macro">handle_seq_error!</span>(
-                            tokenizer.decode(<span class="kw-2">&amp;</span>[logprob.token <span class="kw">as </span>u32], <span class="bool-val">false</span>),
+                            tokenizer.decode(<span class="kw-2">&amp;</span>[logprob.token], <span class="bool-val">false</span>),
                             <span class="macro">deref_refcell!</span>(seq).responder()
                         ),
                         bytes: logprob.bytes.clone().into_bytes(),
@@ -423,7 +460,7 @@
                 <span class="kw">let </span>choice = Choice {
                     stopreason: <span class="kw">match </span>reason {
                         StopReason::Eos =&gt; <span class="string">"stop"</span>.to_string(),
-                        StopReason::Length(<span class="kw">_</span>) =&gt; <span class="string">"length"</span>.to_string(),
+                        StopReason::Length(<span class="kw">_</span>) | StopReason::ModelLength(<span class="kw">_</span>) =&gt; <span class="string">"length"</span>.to_string(),
                         StopReason::StopTok(<span class="kw">_</span>) =&gt; <span class="string">"stop"</span>.to_string(),
                     },
                     index: <span class="number">0</span>,
@@ -530,10 +567,33 @@
     }
 
     <span class="kw">fn </span>add_request(<span class="kw-2">&amp;mut </span><span class="self">self</span>, request: Request) {
-        <span class="kw">let </span>prompt = <span class="macro">handle_seq_error!</span>(
+        <span class="kw">let </span><span class="kw-2">mut </span>prompt = <span class="macro">handle_seq_error!</span>(
             <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenize_prompt(<span class="kw-2">&amp;</span>request.prompt),
             request.response
         );
+        <span class="kw">if </span>prompt.len() &gt; <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_max_seq_len()
+            &amp;&amp; !<span class="self">self</span>.truncate_sequence
+        {
+            <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
+            </span>request
+                .response
+                .send(Response::Error(
+                    <span class="macro">format!</span>(<span class="string">"Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?"</span>, <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_max_seq_len()).into(),
+                ))
+                .unwrap();
+            <span class="kw">return</span>;
+        } <span class="kw">else </span>{
+            <span class="kw">let </span>prompt_len = prompt.len();
+            <span class="kw">let </span>max_len = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_max_seq_len();
+            <span class="kw">let </span>currently_over = max_len - prompt_len;
+            <span class="kw">let </span>sampling_max = <span class="kw">if let </span><span class="prelude-val">Some</span>(sampling_max) = request.sampling_params.max_len {
+                sampling_max
+            } <span class="kw">else </span>{
+                <span class="number">10
+            </span>};
+            prompt = prompt[(currently_over + sampling_max)..].to_vec();
+        }
+
         <span class="kw">let </span>sampling_method = <span class="kw">match </span>(
             request.sampling_params.top_k,
             request.sampling_params.top_p,

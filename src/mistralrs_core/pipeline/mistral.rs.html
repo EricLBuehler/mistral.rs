@@ -372,8 +372,14 @@
 <a href="#371" id="371">371</a>
 <a href="#372" id="372">372</a>
 <a href="#373" id="373">373</a>
+<a href="#374" id="374">374</a>
+<a href="#375" id="375">375</a>
+<a href="#376" id="376">376</a>
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{Conversation, Loader, ModelKind, ModelPaths, Pipeline, SimpleModelPaths, TokenSource};
-<span class="kw">use </span><span class="kw">crate</span>::models::Cache;
+<span class="kw">use </span><span class="kw">crate</span>::models::{quantized_llama, Cache};
 <span class="kw">use crate</span>::{deref_mut_refcell, deref_refcell};
 <span class="kw">use crate</span>::{
     models::mistral::{Config, Model <span class="kw">as </span>NormalModel},
@@ -744,5 +750,11 @@
     <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
         <span class="string">"mistral"
     </span>}
+    <span class="kw">fn </span>get_max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.model {
+            Model::Normal(model) =&gt; model.max_seq_len,
+            Model::Quantized(<span class="kw">_</span>) =&gt; quantized_llama::MAX_SEQ_LEN <span class="kw">as </span>usize,
+        }
+    }
 }
 </code></pre></div></section></main></body></html>
