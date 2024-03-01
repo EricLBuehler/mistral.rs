@@ -1,14 +1,11 @@
-use super::{Loader, ModelPaths, Pipeline, SimpleModelPaths, TokenSource};
+use super::{Conversation, Loader, ModelPaths, Pipeline, SimpleModelPaths, TokenSource};
 use crate::models::Cache;
 use crate::{deref_mut_refcell, deref_refcell};
 use crate::{
     models::mistral::{Config, Model as NormalModel},
     models::qmistral::Model as QModel,
     sequence::Sequence,
-    utils::{
-        dtype::get_dtype_from_torch_dtype, tokens::get_token,
-        varbuilder_utils::from_mmaped_safetensors,
-    },
+    utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
 };
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -17,6 +14,8 @@ use candle_sampling::logits_processor::Logprobs;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use serde::Deserialize;
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::{iter::repeat, rc::Rc, sync::Mutex};
 use thiserror::Error;
 use tokenizers::Tokenizer;
@@ -24,6 +23,50 @@ use tokenizers::Tokenizer;
 enum Model {
     Normal(NormalModel),
     Quantized(QModel),
+}
+
+struct MistralConversation {}
+
+impl Conversation for MistralConversation {
+    fn get_prompt(&self, messages: Vec<HashMap<String, String>>) -> Result<String, String> {
+        let bos_token = "<s>".to_string();
+        let eos_token = "</s>".to_string();
+        let (loop_messages, system_message) = if messages[0]["role"] == "system" {
+            (&messages[1..], Some(messages[0]["content"].clone()))
+        } else {
+            (&messages[..], None)
+        };
+        let mut content = "".to_string();
+        for (i, message) in loop_messages.iter().enumerate() {
+            if (message["role"] == "user") != (i % 2 == 0) {
+                return Err(
+                    "Conversation roles must alternate user/assistant/user/assistant/..."
+                        .to_string(),
+                );
+            }
+            content = if i == 0 && system_message.is_some() {
+                content
+                    + &format!(
+                        "<<SYS>>\n{}\n<</SYS>>\n\n{}",
+                        system_message.as_ref().unwrap(),
+                        message["content"]
+                    )
+            } else {
+                content + &message["content"]
+            };
+
+            content = if message["role"] == "user" {
+                bos_token.clone() + "[INST]" + content.trim() + "[/INST]"
+            } else if message["role"] == "system" {
+                format!("<<SYS>>\n{}\n<</SYS>>\n\n", content.trim())
+            } else if message["role"] == "assistant" {
+                format!(" {} {}", content.trim(), eos_token)
+            } else {
+                unreachable!();
+            };
+        }
+        Ok(content)
+    }
 }
 
 pub struct MistralPipeline {
@@ -58,7 +101,6 @@ pub struct BasicConfig {
     rms_norm_eps: f64,
     rope_theta: f64,
     sliding_window: usize,
-    torch_dtype: Option<String>,
 }
 
 #[derive(Error, Debug)]
@@ -146,7 +188,10 @@ impl Loader for MistralLoader {
         paths: &dyn ModelPaths,
         dtype: Option<DType>,
         device: &Device,
-    ) -> Result<Box<Mutex<dyn Pipeline>>> {
+    ) -> Result<(
+        Box<Mutex<dyn Pipeline>>,
+        Arc<dyn Conversation + Send + Sync>,
+    )> {
         let basic_config: BasicConfig =
             serde_json::from_slice(&std::fs::read(paths.get_config_filename())?)?;
         let config = Config {
@@ -163,15 +208,10 @@ impl Loader for MistralLoader {
             sliding_window: basic_config.sliding_window,
             use_flash_attn: self.config.use_flash_attn,
         };
-        let default_dtype = match basic_config.torch_dtype {
-            Some(value) => get_dtype_from_torch_dtype(value)?,
-            None => {
-                if device.is_cuda() {
-                    DType::BF16
-                } else {
-                    DType::F32
-                }
-            }
+        let default_dtype = if device.is_cuda() {
+            DType::BF16
+        } else {
+            DType::F32
         };
 
         let model = match paths.is_quantized() {
@@ -206,11 +246,14 @@ impl Loader for MistralLoader {
         let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
 
-        Ok(Box::new(Mutex::new(MistralPipeline {
-            model,
-            tokenizer,
-            config: self.config,
-        })))
+        Ok((
+            Box::new(Mutex::new(MistralPipeline {
+                model,
+                tokenizer,
+                config: self.config,
+            })),
+            Arc::new(MistralConversation {}),
+        ))
     }
 }
 

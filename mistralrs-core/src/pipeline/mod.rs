@@ -1,7 +1,13 @@
 mod mistral;
 use candle_sampling::logits_processor::Logprobs;
 pub use mistral::{MistralLoader, MistralSpecificConfig};
-use std::{cell::RefCell, path::PathBuf, rc::Rc, sync::Mutex};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    path::PathBuf,
+    rc::Rc,
+    sync::{Arc, Mutex},
+};
 use tokenizers::Tokenizer;
 
 use anyhow::Result;
@@ -44,6 +50,10 @@ impl ModelPaths for SimpleModelPaths<PathBuf> {
     }
 }
 
+pub trait Conversation {
+    fn get_prompt(&self, messages: Vec<HashMap<String, String>>) -> Result<String, String>;
+}
+
 pub trait Loader {
     fn download_model(
         &self,
@@ -51,22 +61,30 @@ pub trait Loader {
         token_source: TokenSource,
     ) -> Result<Box<dyn ModelPaths>>;
 
+    #[allow(clippy::type_complexity)]
     fn _setup_model(
         &self,
         paths: &dyn ModelPaths,
         dtype: Option<DType>,
         device: &Device,
-    ) -> Result<Box<Mutex<dyn Pipeline>>>;
+    ) -> Result<(
+        Box<Mutex<dyn Pipeline>>,
+        Arc<dyn Conversation + Send + Sync>,
+    )>;
 
     /// If `revision` is None, then it defaults to `main`.
     /// If `dtype` is None, then it defaults to the model default (usually F32). TODO(EricLBuehler): refine
+    #[allow(clippy::type_complexity)]
     fn load_model(
         &self,
         revision: Option<String>,
         token_source: TokenSource,
         dtype: Option<DType>,
         device: &Device,
-    ) -> Result<Box<Mutex<dyn Pipeline>>> {
+    ) -> Result<(
+        Box<Mutex<dyn Pipeline>>,
+        Arc<dyn Conversation + Send + Sync>,
+    )> {
         let paths = self.download_model(revision, token_source)?;
         self._setup_model(&*paths, dtype, device)
     }

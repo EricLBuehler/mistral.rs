@@ -1,18 +1,21 @@
-use std::sync::{mpsc::channel, Arc};
+use std::{
+    collections::HashMap,
+    sync::{mpsc::channel, Arc},
+};
 
 use anyhow::Result;
 use axum::{
     extract::{Json, State},
-    routing::get,
+    routing::post,
     Router,
 };
 use candle_core::Device;
 use clap::Parser;
 use mistralrs_core::{
-    Loader, MistralLoader, MistralRs, MistralSpecificConfig, Request, Response, SamplingParams,
-    SchedulerMethod, StopTokens as InternalStopTokens, TokenSource,
+    Conversation, Loader, MistralLoader, MistralRs, MistralSpecificConfig, Request, Response,
+    SamplingParams, SchedulerMethod, StopTokens as InternalStopTokens, TokenSource,
 };
-use openai::{ChatCompletionRequest, Message, StopTokens};
+use openai::{ChatCompletionRequest, StopTokens};
 mod openai;
 
 #[derive(Parser)]
@@ -43,12 +46,8 @@ struct Args {
     quantized_filename: Option<String>,
 }
 
-fn get_prompt(_messages: Vec<Message>) -> String {
-    todo!()
-}
-
-async fn root(
-    State(state): State<Arc<MistralRs>>,
+async fn chatcompletions(
+    State((state, conv)): State<(Arc<MistralRs>, Arc<dyn Conversation + Send + Sync>)>,
     Json(oairequest): Json<ChatCompletionRequest>,
 ) -> String {
     let (tx, rx) = channel();
@@ -60,8 +59,19 @@ async fn root(
         Some(StopTokens::SingleId(s)) => Some(InternalStopTokens::Ids(vec![s])),
         None => None,
     };
+    let mut messages = Vec::new();
+    for message in oairequest.messages {
+        let mut message_map = HashMap::new();
+        message_map.insert("role".to_string(), message.role);
+        message_map.insert("content".to_string(), message.content);
+        messages.push(message_map);
+    }
+    let prompt = match conv.get_prompt(messages) {
+        Err(e) => return e,
+        Ok(p) => p,
+    };
     let request = Request {
-        prompt: get_prompt(oairequest.messages),
+        prompt,
         sampling_params: SamplingParams {
             temperature: oairequest.temperature,
             top_k: oairequest.top_k,
@@ -93,8 +103,10 @@ async fn root(
     }
 }
 
-fn get_router(state: Arc<MistralRs>) -> Router {
-    Router::new().route("/", get(root)).with_state(state)
+fn get_router(state: (Arc<MistralRs>, Arc<dyn Conversation + Send + Sync>)) -> Router {
+    Router::new()
+        .route("/v1/chat/completions", post(chatcompletions))
+        .with_state(state)
 }
 
 #[tokio::main]
@@ -124,7 +136,7 @@ async fn main() -> Result<()> {
             None
         },
     );
-    let pipeline = loader.load_model(
+    let (pipeline, conv) = loader.load_model(
         None,
         TokenSource::CacheToken,
         None,
@@ -136,7 +148,7 @@ async fn main() -> Result<()> {
         args.log,
     );
 
-    let app = get_router(mistralrs);
+    let app = get_router((mistralrs, conv));
 
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", args.port)).await?;
     axum::serve(listener, app).await?;
