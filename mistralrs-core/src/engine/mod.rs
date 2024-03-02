@@ -287,7 +287,6 @@ impl Engine {
             get_mut_arcmutex!(self.pipeline).tokenize_prompt(&request.prompt),
             request.response
         );
-        println!("seq len of {}", prompt.len());
         if prompt.len() > get_mut_arcmutex!(self.pipeline).get_max_seq_len() {
             if !self.truncate_sequence {
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
