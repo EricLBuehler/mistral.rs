@@ -123,8 +123,8 @@ impl XLoraClassifier {
         }
 
         let mut scalings = logits.reshape((
-            logits.dims()[0],
-            logits.dims()[1],
+            hidden_states.dims()[0],
+            hidden_states.dims()[1],
             self.model_layers,
             self.n_classes,
         ))?;
