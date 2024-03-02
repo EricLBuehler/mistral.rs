@@ -78,6 +78,14 @@ impl Engine {
                 }
                 self.sample_seqs(&scheduled.prompt, logits);
                 self.clone_out_cache(&scheduled.prompt);
+                let pipeline = get_mut_arcmutex!(self.pipeline);
+                let cache = pipeline.cache().lock();
+                let cache = cache.get(0).unwrap();
+                let k_cache = cache.as_ref().unwrap().0.clone();
+                let v_cache = cache.as_ref().unwrap().1.clone();
+    
+                let k_caches = k_cache.chunk(scheduled.prompt.len(), 0).unwrap();
+                println!("Cloning out {:?}", k_caches.get(0).unwrap().clone());
             }
         }
     }
@@ -253,7 +261,6 @@ impl Engine {
                 let mut seq = deref_mut_refcell!(seq);
                 let seq_cache = seq.cache();
                 let seq_cache = seq_cache.get_mut(layer).unwrap();
-                println!("Cloning out {:?}", k_caches.get(seq_i).unwrap().clone());
                 *seq_cache = Some((
                     k_caches.get(seq_i).unwrap().clone(),
                     v_caches.get(seq_i).unwrap().clone(),
