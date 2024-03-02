@@ -31,10 +31,15 @@ enum Model {
     XLoraNormal(XLoraModel),
 }
 
-struct MistralConversation {}
+struct MistralConversation;
+struct ZephyrConversation;
 
 impl Conversation for MistralConversation {
-    fn get_prompt(&self, messages: Vec<HashMap<String, String>>) -> Result<String, String> {
+    fn get_prompt(
+        &self,
+        messages: Vec<HashMap<String, String>>,
+        _add_generation_prompt: bool,
+    ) -> Result<String, String> {
         let bos_token = "<s>".to_string();
         let eos_token = "</s>".to_string();
         let (loop_messages, system_message) = if messages[0]["role"] == "system" {
@@ -70,6 +75,30 @@ impl Conversation for MistralConversation {
             } else {
                 unreachable!();
             };
+        }
+        Ok(content)
+    }
+}
+
+impl Conversation for ZephyrConversation {
+    fn get_prompt(
+        &self,
+        messages: Vec<HashMap<String, String>>,
+        add_generation_prompt: bool,
+    ) -> Result<String, String> {
+        let eos_token = "</s>".to_string();
+        let mut content = "".to_string();
+        for message in messages {
+            if message["role"] == "user" {
+                content += &format!("<|user|>\n{}{}", message["content"], eos_token);
+            } else if message["role"] == "system" {
+                content += &format!("<|system|>\n{}{}", message["content"], eos_token);
+            } else if message["role"] == "assistant" {
+                content += &format!("<|assistant|>\n{}{}", message["content"], eos_token);
+            }
+        }
+        if add_generation_prompt {
+            content += &format!("<|assistant|>");
         }
         Ok(content)
     }
@@ -400,7 +429,11 @@ impl Loader for MistralLoader {
                 tokenizer,
                 config: self.config,
             })),
-            Arc::new(MistralConversation {}),
+            if self.model_id.contains("zephyr") {
+                Arc::new(ZephyrConversation)
+            } else {
+                Arc::new(MistralConversation)
+            },
         ))
     }
 }

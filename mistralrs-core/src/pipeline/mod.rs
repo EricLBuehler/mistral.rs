@@ -40,7 +40,11 @@ pub enum ModelKind {
 }
 
 pub trait Conversation {
-    fn get_prompt(&self, messages: Vec<HashMap<String, String>>) -> Result<String, String>;
+    fn get_prompt(
+        &self,
+        messages: Vec<HashMap<String, String>>,
+        add_generation_prompt: bool,
+    ) -> Result<String, String>;
 }
 
 pub trait Loader {
