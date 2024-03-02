@@ -367,7 +367,7 @@ impl ModelWeights {
             span,
             span_output,
             device: ct.device.clone(),
-            cache: Cache::new(ct.hparams.n_layer as usize),
+            cache: Cache::new(ct.hparams.n_layer as usize, false),
         })
     }
 
@@ -486,7 +486,7 @@ impl ModelWeights {
             span,
             span_output,
             device: device.clone(),
-            cache: Cache::new(block_count),
+            cache: Cache::new(block_count, false),
         })
     }
 

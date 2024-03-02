@@ -531,4 +531,10 @@ impl Pipeline for MistralPipeline {
             Model::XLoraNormal(model) => model.max_seq_len,
         }
     }
+    fn is_xlora(&self) -> bool {
+        match &self.model {
+            Model::Normal(_) | Model::Quantized(_) => false,
+            Model::XLoraNormal(_) => true,
+        }
+    }
 }

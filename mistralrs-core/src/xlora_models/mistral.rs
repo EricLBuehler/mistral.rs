@@ -417,7 +417,7 @@ impl XLoraModel {
             sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
             dtype: vb.dtype(),
-            cache: Cache::new(cfg.num_hidden_layers),
+            cache: Cache::new(cfg.num_hidden_layers, true),
             max_seq_len: cfg.max_position_embeddings,
             xlora_classifier: XLoraClassifier::new(xlora_config, count, lora_config.len(), vb)?,
         })
@@ -473,6 +473,7 @@ impl XLoraModel {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         scalings: Tensor,
+        is_scaling_pass: bool,
     ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
         if seqlen_offsets.len() > b_size {
@@ -488,7 +489,11 @@ impl XLoraModel {
             Some(mask)
         };
         let mut xs = self.embed_tokens.forward(input_ids)?;
-        let mut cache = self.cache.lock();
+        let mut cache = if is_scaling_pass {
+            self.cache.xlora_lock()
+        } else {
+            self.cache.lock()
+        };
         for (i, layer) in self.layers.iter_mut().enumerate() {
             xs = layer.forward(
                 &xs,
@@ -508,8 +513,10 @@ impl XLoraModel {
         let dummy_scalings =
             self.xlora_classifier
                 .get_dummy_scalings(b_size, seq_len, input_ids.device())?;
-        let hidden_states = self.inner_forward(input_ids, seqlen_offsets, dummy_scalings)?;
+        // Using X-LoRA cache here
+        let hidden_states = self.inner_forward(input_ids, seqlen_offsets, dummy_scalings, true)?;
         let scalings = self.xlora_classifier.forward(hidden_states)?;
-        self.inner_forward(input_ids, seqlen_offsets, scalings)
+        // Using normal cache here
+        self.inner_forward(input_ids, seqlen_offsets, scalings, false)
     }
 }

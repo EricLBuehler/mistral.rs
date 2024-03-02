@@ -91,4 +91,5 @@ pub trait Pipeline: Send + Sync {
     fn eos_tok(&self) -> u32;
     fn name(&self) -> &'static str;
     fn get_max_seq_len(&self) -> usize;
+    fn is_xlora(&self) -> bool;
 }
