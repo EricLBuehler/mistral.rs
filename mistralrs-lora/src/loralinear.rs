@@ -52,7 +52,7 @@ impl LoraLinear {
                 init::DEFAULT_KAIMING_NORMAL,
             )?;
             let b_pp = b_vb.pp(name);
-            assert!(a_pp.contains_tensor("weight"));
+            assert!(b_pp.contains_tensor("weight"));
             let b = b_pp.pp(name).get_with_hints(
                 (linear_config.out_features, cfg.rank),
                 "weight",
