@@ -19,7 +19,8 @@ while True:
     resp = completion.choices[0].message.content
     out = resp.split("[/INST]")[-1].strip()
     if out.endswith("</s>"):
-        print(out[:-4])
+        out = out[:-4]
+        print(out)
     else:
         print(out+"...")
-    messages.append({"role":"assistant", "content":resp})
+    messages.append({"role":"assistant", "content":out})
