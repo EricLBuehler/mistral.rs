@@ -96,6 +96,7 @@ impl Conversation for ZephyrConversation {
             } else if message["role"] == "assistant" {
                 content += &format!("<|assistant|>\n{}{}", message["content"], eos_token);
             }
+            content += "\n";
         }
         if add_generation_prompt {
             content += &format!("<|assistant|>");
