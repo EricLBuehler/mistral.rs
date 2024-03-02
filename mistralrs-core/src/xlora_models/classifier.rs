@@ -1,4 +1,4 @@
-use candle_core::{Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{linear, ops::softmax_last_dim, Linear, Module, VarBuilder};
 
 use super::config::XLoraConfig;
@@ -136,11 +136,18 @@ impl XLoraClassifier {
         Ok(scalings)
     }
 
-    pub fn get_dummy_scalings(&self, bs: usize, seq_len: usize, device: &Device) -> Result<Tensor> {
+    pub fn get_dummy_scalings(
+        &self,
+        bs: usize,
+        seq_len: usize,
+        device: &Device,
+        dtype: DType,
+    ) -> Result<Tensor> {
         Tensor::full(
             self.scaling_pass_value,
             (bs, seq_len, self.model_layers, self.n_classes),
             device,
-        )
+        )?
+        .to_dtype(dtype)
     }
 }
