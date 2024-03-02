@@ -508,6 +508,7 @@ impl XLoraModel {
 
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
+        println!("{:?}", input_ids);
         let dummy_scalings = self.xlora_classifier.get_dummy_scalings(
             b_size,
             seq_len,
