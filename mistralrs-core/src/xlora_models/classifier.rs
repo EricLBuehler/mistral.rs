@@ -107,8 +107,6 @@ impl XLoraClassifier {
     }
 
     pub fn forward(&self, mut hidden_states: Tensor) -> Result<Tensor> {
-        let bs = hidden_states.dims()[0];
-        let seq_len = hidden_states.dims()[1];
         for layer in &self.inner {
             hidden_states = layer.forward(&hidden_states)?;
         }
@@ -125,8 +123,8 @@ impl XLoraClassifier {
         }
 
         let mut scalings = logits.reshape((
-            bs,
-            seq_len,
+            logits.dims()[0],
+            logits.dims()[1],
             self.model_layers,
             self.n_classes,
         ))?;

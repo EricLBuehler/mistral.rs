@@ -503,7 +503,7 @@ impl XLoraModel {
                 scalings.clone(),
             )?
         }
-        xs.narrow(1, seq_len - 1, 1)?.apply(&self.norm)
+        Ok(xs)
     }
 
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
@@ -522,6 +522,8 @@ impl XLoraModel {
         dbg!(&scalings);
         // Using normal cache here
         self.inner_forward(input_ids, seqlen_offsets, scalings, false)?
+            .narrow(1, seq_len - 1, 1)?
+            .apply(&self.norm)?
             .apply(&self.lm_head)
     }
 }
