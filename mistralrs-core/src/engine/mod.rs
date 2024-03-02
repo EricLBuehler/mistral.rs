@@ -253,7 +253,7 @@ impl Engine {
                 let mut seq = deref_mut_refcell!(seq);
                 let seq_cache = seq.cache();
                 let seq_cache = seq_cache.get_mut(layer).unwrap();
-                println!("Cloning out {seq_cache:?}");
+                println!("Cloning out {:?}", k_caches.get(seq_i).unwrap().clone());
                 *seq_cache = Some((
                     k_caches.get(seq_i).unwrap().clone(),
                     v_caches.get(seq_i).unwrap().clone(),
