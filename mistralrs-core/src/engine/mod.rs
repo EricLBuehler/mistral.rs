@@ -66,13 +66,6 @@ impl Engine {
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
                 self.sample_seqs(&scheduled.completion, logits);
                 self.clone_out_cache(&scheduled.completion);
-                let pipeline = get_mut_arcmutex!(self.pipeline);
-                let cache = pipeline.cache().lock();
-                let cache = cache.get(0).unwrap();
-                let k_cache = cache.as_ref().unwrap().0.clone();
-                
-                let k_caches = k_cache.chunk(scheduled.prompt.len(), 0).unwrap();
-                println!("Cloning out {:?}", k_caches.get(0).unwrap().clone());
             }
 
             if scheduled.prompt.len() > 0 {
@@ -85,13 +78,6 @@ impl Engine {
                 }
                 self.sample_seqs(&scheduled.prompt, logits);
                 self.clone_out_cache(&scheduled.prompt);
-                let pipeline = get_mut_arcmutex!(self.pipeline);
-                let cache = pipeline.cache().lock();
-                let cache = cache.get(0).unwrap();
-                let k_cache = cache.as_ref().unwrap().0.clone();
-                
-                let k_caches = k_cache.chunk(scheduled.prompt.len(), 0).unwrap();
-                println!("Cloning out {:?}", k_caches.get(0).unwrap().clone());
             }
         }
     }
@@ -301,6 +287,7 @@ impl Engine {
             get_mut_arcmutex!(self.pipeline).tokenize_prompt(&request.prompt),
             request.response
         );
+        println!("seq len of {}", prompt.len());
         if prompt.len() > get_mut_arcmutex!(self.pipeline).get_max_seq_len() {
             if !self.truncate_sequence {
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
