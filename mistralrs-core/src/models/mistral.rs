@@ -418,6 +418,7 @@ impl Model {
         };
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let mut cache = self.cache.lock();
+        println!("{:?}", cache.get(0).as_ref().unwrap().as_ref().unwrap().0.shape());
         for (i, layer) in self.layers.iter_mut().enumerate() {
             xs = layer.forward(
                 &xs,

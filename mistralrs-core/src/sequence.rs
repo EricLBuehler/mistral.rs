@@ -171,9 +171,3 @@ impl Sequence {
         self.timestamp
     }
 }
-
-impl Drop for Sequence {
-    fn drop(&mut self) {
-        println!("Dropping sequence");
-    }
-}
