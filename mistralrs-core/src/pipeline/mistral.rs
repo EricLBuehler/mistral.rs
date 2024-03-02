@@ -388,7 +388,6 @@ impl Loader for MistralLoader {
                 )?;
                 Model::XLoraNormal(model)
             }
-            ModelKind::XLoraQuantizedGGUF => todo!(),
         };
         println!("Model loaded.");
 

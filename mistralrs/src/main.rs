@@ -72,37 +72,6 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
     },
-
-    /// Select the quantized mistral instruct model with gguf, with X-LoRA.
-    XLoraMistralGGUF {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "mistralai/Mistral-7B-Instruct-v0.1")]
-        tok_model_id: String,
-
-        /// Model ID to load Xlora from
-        #[arg(short, long, default_value = "lamm-mit/x-lora")]
-        xlora_model_id: String,
-
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        #[arg(
-            short = 'm',
-            long,
-            default_value = "TheBloke/Mistral-7B-Instruct-v0.1-GGUF"
-        )]
-        quantized_model_id: Option<String>,
-
-        /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(
-            short = 'f',
-            long,
-            default_value = "mistral-7b-instruct-v0.1.Q4_K_M.gguf"
-        )]
-        quantized_filename: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-    },
 }
 
 #[derive(Parser)]
@@ -243,23 +212,6 @@ async fn main() -> Result<()> {
             None,
             Some(xlora_model_id),
             ModelKind::XLoraNormal,
-        )),
-        ModelSelected::XLoraMistralGGUF {
-            tok_model_id,
-            xlora_model_id,
-            quantized_model_id,
-            quantized_filename,
-            repeat_last_n,
-        } => Box::new(MistralLoader::new(
-            tok_model_id,
-            MistralSpecificConfig {
-                use_flash_attn: false,
-                repeat_last_n,
-            },
-            quantized_model_id,
-            quantized_filename,
-            Some(xlora_model_id),
-            ModelKind::QuantizedGGUF,
         )),
     };
 
