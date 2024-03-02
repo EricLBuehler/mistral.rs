@@ -22,6 +22,7 @@ mod sampling;
 mod scheduler;
 mod sequence;
 mod utils;
+mod xlora_models;
 
 pub use pipeline::{
     Conversation, Loader, MistralLoader, MistralSpecificConfig, ModelKind, TokenSource,

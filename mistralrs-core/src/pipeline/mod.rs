@@ -1,6 +1,7 @@
 mod mistral;
 use candle_sampling::logits_processor::Logprobs;
 pub use mistral::{MistralLoader, MistralSpecificConfig};
+use mistralrs_lora::LoraConfig;
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -19,6 +20,10 @@ pub trait ModelPaths {
     fn get_weight_filenames(&self) -> &[PathBuf];
     fn get_config_filename(&self) -> &PathBuf;
     fn get_tokenizer_filename(&self) -> &PathBuf;
+    fn get_adapter_filenames(&self) -> &Option<HashMap<String, PathBuf>>;
+    fn get_adapter_configs(&self) -> &Option<HashMap<String, LoraConfig>>;
+    fn get_classifier_path(&self) -> &Option<PathBuf>;
+    fn get_classifier_config(&self) -> &Option<PathBuf>;
 }
 
 pub enum TokenSource {
@@ -27,26 +32,10 @@ pub enum TokenSource {
     CacheToken,
 }
 
-pub struct SimpleModelPaths<P> {
-    tokenizer_filename: P,
-    config_filename: P,
-    filenames: Vec<P>,
-}
-
-impl ModelPaths for SimpleModelPaths<PathBuf> {
-    fn get_config_filename(&self) -> &PathBuf {
-        &self.config_filename
-    }
-    fn get_tokenizer_filename(&self) -> &PathBuf {
-        &self.tokenizer_filename
-    }
-    fn get_weight_filenames(&self) -> &[PathBuf] {
-        &self.filenames
-    }
-}
-
 pub enum ModelKind {
     Normal,
+    XLoraNormal,
+    XLoraQuantizedGGUF,
     QuantizedGGUF,
     QuantizedGGML,
 }
