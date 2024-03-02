@@ -3,7 +3,7 @@
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Activation, Linear, VarBuilder};
-use mistralrs_lora::{get_maybe_topk_scalings, linear_no_bias, LinearLayerLike, LoraConfig};
+use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig};
 use std::{collections::HashMap, iter::zip, sync::Arc};
 
 use crate::models::{mistral::Config, Cache};
@@ -104,14 +104,31 @@ impl MLP {
         cfg: &Config,
         vb: VarBuilder,
         lora_config: &HashMap<String, LoraConfig>,
+        count: &mut usize,
     ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let intermediate_sz = cfg.intermediate_size;
-        let gate_proj =
-            linear_no_bias(hidden_sz, intermediate_sz, vb.pp("gate_proj"), lora_config)?;
-        let up_proj = linear_no_bias(hidden_sz, intermediate_sz, vb.pp("up_proj"), lora_config)?;
-        let down_proj =
-            linear_no_bias(intermediate_sz, hidden_sz, vb.pp("down_proj"), lora_config)?;
+        let gate_proj = linear_no_bias(
+            hidden_sz,
+            intermediate_sz,
+            vb.pp("gate_proj"),
+            lora_config,
+            count,
+        )?;
+        let up_proj = linear_no_bias(
+            hidden_sz,
+            intermediate_sz,
+            vb.pp("up_proj"),
+            lora_config,
+            count,
+        )?;
+        let down_proj = linear_no_bias(
+            intermediate_sz,
+            hidden_sz,
+            vb.pp("down_proj"),
+            lora_config,
+            count,
+        )?;
         Ok(Self {
             gate_proj,
             up_proj,
@@ -166,6 +183,7 @@ impl Attention {
         cfg: &Config,
         vb: VarBuilder,
         lora_config: &HashMap<String, LoraConfig>,
+        count: &mut usize,
     ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
@@ -177,24 +195,28 @@ impl Attention {
             num_heads * head_dim,
             vb.pp("q_proj"),
             lora_config,
+            count,
         )?;
         let k_proj = linear_no_bias(
             hidden_sz,
             num_kv_heads * head_dim,
             vb.pp("k_proj"),
             lora_config,
+            count,
         )?;
         let v_proj = linear_no_bias(
             hidden_sz,
             num_kv_heads * head_dim,
             vb.pp("v_proj"),
             lora_config,
+            count,
         )?;
         let o_proj = linear_no_bias(
             num_heads * head_dim,
             hidden_sz,
             vb.pp("o_proj"),
             lora_config,
+            count,
         )?;
         Ok(Self {
             q_proj,
@@ -303,9 +325,10 @@ impl DecoderLayer {
         cfg: &Config,
         vb: VarBuilder,
         lora_config: &HashMap<String, LoraConfig>,
+        count: &mut usize,
     ) -> Result<Self> {
-        let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"), lora_config)?;
-        let mlp = MLP::new(cfg, vb.pp("mlp"), lora_config)?;
+        let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"), lora_config, count)?;
+        let mlp = MLP::new(cfg, vb.pp("mlp"), lora_config, count)?;
         let input_layernorm =
             RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let post_attention_layernorm = RmsNorm::new(
@@ -373,9 +396,15 @@ impl XLoraModel {
         let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb_m.device())?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
+        let mut count = 0;
         for layer_idx in 0..cfg.num_hidden_layers {
-            let layer =
-                DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx), &lora_config)?;
+            let layer = DecoderLayer::new(
+                rotary_emb.clone(),
+                cfg,
+                vb_l.pp(layer_idx),
+                lora_config,
+                &mut count,
+            )?;
             layers.push(layer)
         }
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
@@ -390,12 +419,7 @@ impl XLoraModel {
             dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers),
             max_seq_len: cfg.max_position_embeddings,
-            xlora_classifier: XLoraClassifier::new(
-                xlora_config,
-                cfg.num_hidden_layers,
-                lora_config.len(),
-                vb.pp("internal_xlora_classifier"),
-            )?,
+            xlora_classifier: XLoraClassifier::new(xlora_config, count, lora_config.len(), vb)?,
         })
     }
 
@@ -466,13 +490,12 @@ impl XLoraModel {
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            let scalings_layer = get_maybe_topk_scalings(&scalings, i)?;
             xs = layer.forward(
                 &xs,
                 attention_mask.as_ref(),
                 seqlen_offsets,
                 cache.get_mut(i).unwrap(),
-                scalings_layer,
+                scalings.clone(),
             )?
         }
         xs.narrow(1, seq_len - 1, 1)?
@@ -480,7 +503,7 @@ impl XLoraModel {
             .apply(&self.lm_head)
     }
 
-    fn forward(&mut self, input_ids: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
         let dummy_scalings =
             self.xlora_classifier

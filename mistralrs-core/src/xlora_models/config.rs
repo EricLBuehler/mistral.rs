@@ -1,6 +1,3 @@
-use std::collections::HashMap;
-
-use candle_core::Device;
 use serde::Deserialize;
 
 fn true_default() -> bool {

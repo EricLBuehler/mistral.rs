@@ -17,7 +17,7 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::LoraConfig;
 use serde::Deserialize;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -246,8 +246,8 @@ impl Loader for MistralLoader {
                     .map(|x| x.rfilename.clone())
                     .filter(|x| x.contains("xlora_config.json"))
                     .collect::<Vec<_>>()[0];
-                let classifier_path = api.get(&xlora_classifier)?;
-                let config_path = api.get(&xlora_config)?;
+                let classifier_path = api.get(xlora_classifier)?;
+                let config_path = api.get(xlora_config)?;
 
                 let adapter_files = api
                     .info()?
@@ -256,7 +256,7 @@ impl Loader for MistralLoader {
                     .map(|x| x.rfilename.clone())
                     .filter(|x| x.contains("/adapter_"))
                     .map(|x| {
-                        let mut split = x.split("/");
+                        let mut split = x.split('/');
                         let pos = split.clone().count() - 2;
                         let name = split.nth(pos).unwrap().to_string();
                         (x, name)
@@ -347,11 +347,8 @@ impl Loader for MistralLoader {
             ModelKind::QuantizedGGML => unreachable!(),
             ModelKind::Normal => {
                 let vb = from_mmaped_safetensors(
-                    paths
-                        .get_weight_filenames()
-                        .iter()
-                        .cloned()
-                        .collect::<Vec<_>>(),
+                    paths.get_weight_filenames().to_vec(),
+                    Vec::new(),
                     dtype.unwrap_or(default_dtype),
                     device,
                     false,
@@ -363,11 +360,16 @@ impl Loader for MistralLoader {
             ModelKind::XLoraNormal => {
                 let mut safetensors_paths = paths.get_weight_filenames().iter().collect::<Vec<_>>();
                 safetensors_paths.push(paths.get_classifier_path().as_ref().unwrap());
-                safetensors_paths.extend(paths.get_adapter_filenames().as_ref().unwrap().values());
-                println!("{:?}", safetensors_paths);
                 let vb = from_mmaped_safetensors(
                     safetensors_paths
                         .iter()
+                        .map(|x| (*x).to_owned())
+                        .collect::<Vec<_>>(),
+                    paths
+                        .get_adapter_filenames()
+                        .as_ref()
+                        .unwrap()
+                        .values()
                         .map(|x| (*x).to_owned())
                         .collect::<Vec<_>>(),
                     dtype.unwrap_or(default_dtype),
@@ -458,7 +460,7 @@ impl Pipeline for MistralPipeline {
         let result = match self.model {
             Model::Normal(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
             Model::Quantized(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
-            Model::XLoraNormal(_) => todo!(),
+            Model::XLoraNormal(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
         };
         match result {
             Ok(v) => v,
@@ -478,7 +480,7 @@ impl Pipeline for MistralPipeline {
         match self.model {
             Model::Normal(ref model) => &model.device,
             Model::Quantized(ref model) => &model.device,
-            Model::XLoraNormal(_) => todo!(),
+            Model::XLoraNormal(ref model) => &model.device,
         }
     }
     fn num_hidden_layers(&self) -> usize {
@@ -488,7 +490,7 @@ impl Pipeline for MistralPipeline {
         match self.model {
             Model::Normal(ref model) => &model.cache,
             Model::Quantized(ref model) => &model.cache,
-            Model::XLoraNormal(_) => todo!(),
+            Model::XLoraNormal(ref model) => &model.cache,
         }
     }
     fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs> {
@@ -526,7 +528,7 @@ impl Pipeline for MistralPipeline {
         match &self.model {
             Model::Normal(model) => model.max_seq_len,
             Model::Quantized(_) => quantized_llama::MAX_SEQ_LEN as usize,
-            Model::XLoraNormal(_) => todo!(),
+            Model::XLoraNormal(model) => model.max_seq_len,
         }
     }
 }

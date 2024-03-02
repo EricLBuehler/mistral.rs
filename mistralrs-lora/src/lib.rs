@@ -72,14 +72,15 @@ pub fn linear(
     d2: usize,
     vb: VarBuilder,
     lora_config: &HashMap<String, LoraConfig>,
+    count: &mut usize,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
     let prefix = vb.prefix();
-    let module = prefix.split(".").last().unwrap();
+    let module = prefix.split('.').last().unwrap();
 
     let linear_config = LoraLinearConfig::new(d1, d2);
     let inner = candle_nn::linear(d1, d2, vb.clone())?;
 
-    let target_moduels = &lora_config.values().nth(0).unwrap().target_modules;
+    let target_moduels = &lora_config.values().next().unwrap().target_modules;
     for cfg in lora_config.values() {
         if &cfg.target_modules != target_moduels {
             candle_core::bail!("Expected all target modules to be the same.");
@@ -89,7 +90,8 @@ pub fn linear(
         return Ok(Arc::new(inner));
     }
 
-    let lorainner = LoraLinear::new(&inner, &linear_config, &lora_config, &vb)?;
+    let lorainner = LoraLinear::new(&inner, &linear_config, lora_config, &vb, *count)?;
+    *count += 1;
     Ok(Arc::new(lorainner))
 }
 
@@ -98,14 +100,15 @@ pub fn linear_no_bias(
     d2: usize,
     vb: VarBuilder,
     lora_config: &HashMap<String, LoraConfig>,
+    count: &mut usize,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
     let prefix = vb.prefix();
-    let module = prefix.split(".").last().unwrap();
+    let module = prefix.split('.').last().unwrap();
 
     let linear_config = LoraLinearConfig::new(d1, d2);
     let inner = candle_nn::linear_no_bias(d1, d2, vb.clone())?;
 
-    let target_moduels = &lora_config.values().nth(0).unwrap().target_modules;
+    let target_moduels = &lora_config.values().next().unwrap().target_modules;
     for cfg in lora_config.values() {
         if &cfg.target_modules != target_moduels {
             candle_core::bail!("Expected all target modules to be the same.");
@@ -114,11 +117,11 @@ pub fn linear_no_bias(
     if !target_moduels.contains(module) {
         return Ok(Arc::new(inner));
     }
-
-    let lorainner = LoraLinear::new(&inner, &linear_config, &lora_config, &vb)?;
+    let lorainner = LoraLinear::new(&inner, &linear_config, lora_config, &vb, *count)?;
+    *count += 1;
     Ok(Arc::new(lorainner))
 }
 
-pub fn get_maybe_topk_scalings(scalings: &Tensor, layer_number: usize) -> Result<Tensor> {
-    scalings.i((.., .., layer_number, ..))
+fn get_maybe_topk_scalings(scalings: Tensor, layer: usize) -> Result<Tensor> {
+    scalings.i((.., .., layer, ..))
 }

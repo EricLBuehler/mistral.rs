@@ -1,4 +1,4 @@
-use candle_core::{Device, Result, Tensor, D};
+use candle_core::{Device, Result, Tensor};
 use candle_nn::{linear, ops::softmax_last_dim, Linear, Module, VarBuilder};
 
 use super::config::XLoraConfig;
@@ -34,11 +34,13 @@ impl XLoraClassifier {
     ) -> Result<Self> {
         let (last, inner) = if config.xlora_depth == 1 {
             if config.layerwise_scalings {
+                assert!(vb.contains_tensor("last.weight"));
                 (
-                    linear(config.hidden_size, n_classes * n_layers, vb.pp("last"))?,
+                    linear(config.hidden_size, n_classes * n_layers, vb.pp("last")).unwrap(),
                     vec![],
                 )
             } else {
+                assert!(vb.contains_tensor("last.weight"));
                 (
                     linear(config.hidden_size, n_classes, vb.pp("last"))?,
                     vec![],
@@ -46,11 +48,13 @@ impl XLoraClassifier {
             }
         } else if config.xlora_depth == 2 {
             let mut inner = Vec::new();
+            assert!(vb.contains_tensor("inner.0.weight"));
             inner.push(linear(
                 config.hidden_size,
                 config.xlora_size,
                 vb.pp("inner.0"),
             )?);
+            assert!(vb.contains_tensor("last.weight"));
             if config.layerwise_scalings {
                 (
                     linear(config.xlora_size, n_classes * n_layers, vb.pp("last"))?,
@@ -61,18 +65,21 @@ impl XLoraClassifier {
             }
         } else {
             let mut inner = Vec::new();
+            assert!(vb.contains_tensor("inner.0.weight"));
             inner.push(linear(
                 config.hidden_size,
                 config.xlora_size,
                 vb.pp("inner.0"),
             )?);
-            for i in 0..config.xlora_depth - 2 {
+            for i in 1..=config.xlora_depth - 2 {
+                assert!(vb.contains_tensor(&format!("inner.{i}.weight")));
                 inner.push(linear(
                     config.xlora_size,
                     config.xlora_size,
                     vb.pp(&format!("inner.{i}")),
                 )?)
             }
+            assert!(vb.contains_tensor("last.weight"));
             if config.layerwise_scalings {
                 (
                     linear(config.xlora_size, n_classes * n_layers, vb.pp("last"))?,
