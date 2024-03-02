@@ -508,16 +508,18 @@ impl XLoraModel {
 
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
-        println!("{:?}", input_ids);
+        dbg!(input_ids);
         let dummy_scalings = self.xlora_classifier.get_dummy_scalings(
             b_size,
             seq_len,
             input_ids.device(),
             self.dtype,
         )?;
+        dbg!(&dummy_scalings);
         // Using X-LoRA cache here
         let hidden_states = self.inner_forward(input_ids, seqlen_offsets, dummy_scalings, true)?;
         let scalings = self.xlora_classifier.forward(hidden_states)?;
+        dbg!(&scalings);
         // Using normal cache here
         self.inner_forward(input_ids, seqlen_offsets, scalings, false)?
             .apply(&self.lm_head)
