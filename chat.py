@@ -17,7 +17,10 @@ while True:
         max_tokens=256,
     )
     resp = completion.choices[0].message.content
-    out = resp.split("[/INST]")[-1].strip()
+    if "<|assistant|>" in resp:
+        out = resp.split("<|assistant|>")[-1].strip()
+    else:
+        out = resp.split("[/INST]")[-1].strip()
     if out.endswith("</s>"):
         out = out[:-4]
         print(out)
