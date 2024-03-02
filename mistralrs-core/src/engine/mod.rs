@@ -66,6 +66,13 @@ impl Engine {
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
                 self.sample_seqs(&scheduled.completion, logits);
                 self.clone_out_cache(&scheduled.completion);
+                let pipeline = get_mut_arcmutex!(self.pipeline);
+                let cache = pipeline.cache().lock();
+                let cache = cache.get(0).unwrap();
+                let k_cache = cache.as_ref().unwrap().0.clone();
+                
+                let k_caches = k_cache.chunk(scheduled.prompt.len(), 0).unwrap();
+                println!("Cloning out {:?}", k_caches.get(0).unwrap().clone());
             }
 
             if scheduled.prompt.len() > 0 {
@@ -82,8 +89,7 @@ impl Engine {
                 let cache = pipeline.cache().lock();
                 let cache = cache.get(0).unwrap();
                 let k_cache = cache.as_ref().unwrap().0.clone();
-                let v_cache = cache.as_ref().unwrap().1.clone();
-    
+                
                 let k_caches = k_cache.chunk(scheduled.prompt.len(), 0).unwrap();
                 println!("Cloning out {:?}", k_caches.get(0).unwrap().clone());
             }
