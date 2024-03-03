@@ -503,6 +503,7 @@ impl XLoraModel {
             Some(mask)
         };
         dbg!(&attention_mask);
+        dbg!(&cache);
         let mut xs = self.embed_tokens.forward(input_ids)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = layer.forward(
