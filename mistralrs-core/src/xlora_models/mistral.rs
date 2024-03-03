@@ -483,8 +483,20 @@ impl XLoraModel {
         }
 
         let mut cache = if is_scaling_pass {
+            let mut new_cache = Vec::new();
+            for _ in 0..self.cache.xlora_lock().len() {
+                new_cache.push(None);
+            }
+            
+            *self.cache.xlora_lock() = new_cache.clone();
             self.cache.xlora_lock()
         } else {
+            let mut new_cache = Vec::new();
+            for _ in 0..self.cache.lock().len() {
+                new_cache.push(None);
+            }
+            
+            *self.cache.lock() = new_cache.clone();
             self.cache.lock()
         };
         let past_key_values_length =
