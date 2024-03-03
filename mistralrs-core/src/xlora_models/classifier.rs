@@ -118,7 +118,6 @@ impl XLoraClassifier {
         for layer in &self.inner {
             hidden_states = layer.forward(&hidden_states)?;
         }
-        dbg!(&hidden_states);
         let mut logits = self.last.forward(&hidden_states)?;
 
         if !self.config.layerwise_scalings {
@@ -137,12 +136,12 @@ impl XLoraClassifier {
             self.model_layers,
             self.n_classes,
         ))?;
-        println!("global scalings {scalings:?}");
+        //println!("global scalings {scalings:?}");
 
         if let Some(ref softmax) = self.softmax {
             scalings = softmax.forward(&scalings)?;
         }
-        println!(
+        /*println!(
             "{} {} {} {} {} {} {} {} {}",
             scalings
                 .i((0, 0, 60, 0))?
@@ -180,7 +179,7 @@ impl XLoraClassifier {
                 .i((0, 0, 60, 8))?
                 .to_scalar::<half::bf16>()
                 .unwrap()
-        );
+        );*/
 
         Ok(scalings)
     }
@@ -192,7 +191,6 @@ impl XLoraClassifier {
         device: &Device,
         dtype: DType,
     ) -> Result<Tensor> {
-        dbg!(self.scaling_pass_value);
         Tensor::full(
             self.scaling_pass_value,
             (bs, seq_len, self.model_layers, self.n_classes),
