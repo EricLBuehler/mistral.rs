@@ -87,6 +87,7 @@ pub fn linear(
     lora_config: &Vec<(String, LoraConfig)>,
     count: &mut usize,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
+    return Ok(Arc::new(candle_nn::linear(d1, d2, vb)?));
     let prefix = vb.prefix();
     let module = prefix.split('.').last().unwrap();
 
@@ -98,7 +99,7 @@ pub fn linear(
         if &cfg.target_modules != target_modules {
             candle_core::bail!("Expected all target modules to be the same.");
         }
-    }return Ok(Arc::new(inner));
+    }
     if !target_modules.contains(module) {
         return Ok(Arc::new(inner));
     }
@@ -115,6 +116,7 @@ pub fn linear_no_bias(
     lora_config: &Vec<(String, LoraConfig)>,
     count: &mut usize,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
+    return Ok(Arc::new(candle_nn::linear_no_bias(d1, d2, vb)?));
     let prefix = vb.prefix();
     let module = prefix.split('.').last().unwrap();
 
@@ -126,7 +128,7 @@ pub fn linear_no_bias(
         if &cfg.target_modules != target_modules {
             candle_core::bail!("Expected all target modules to be the same.");
         }
-    }return Ok(Arc::new(inner));
+    }
     if !target_modules.contains(module) {
         return Ok(Arc::new(inner));
     }
