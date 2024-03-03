@@ -22,7 +22,7 @@ pub struct LoraConfig {
 fn apply_scalings_to_x(x: Tensor, scalings_layer: &Tensor, adapter: usize, layer: usize) -> Result<Tensor> {
     let scalings = scalings_layer.i((.., .., adapter))?.unsqueeze(D::Minus1)?;
     if adapter == 8 &&layer==60 {
-        println!("applied scalings 8: {:?}",scalings.to_vec3().unwrap());
+        println!("applied scalings 8: {:?}",scalings.to_vec3::<half::bf16>().unwrap());
     }
     x.broadcast_mul(&scalings)
 }
