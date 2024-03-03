@@ -491,12 +491,6 @@ impl XLoraModel {
             *self.cache.xlora_lock() = new_cache.clone();
             self.cache.xlora_lock()
         } else {
-            /*let mut new_cache = Vec::new();
-            for _ in 0..self.cache.lock().len() {
-                new_cache.push(None);
-            }
-
-            *self.cache.lock() = new_cache.clone();*/
             self.cache.lock()
         };
         let past_key_values_length =
@@ -535,9 +529,12 @@ impl XLoraModel {
             self.dtype,
         )?;
         // Using X-LoRA cache here
+        println!("SCALINGS PASS");
         let hidden_states = self.inner_forward(input_ids, seqlen_offsets, dummy_scalings, true)?;
+        println!("SCALINGS PASS DONE");
         let scalings = self.xlora_classifier.forward(hidden_states)?;
         // Using normal cache here
+        println!("FWD PASS DONE");
         self.inner_forward(input_ids_full, seqlen_offsets, scalings, false)?
             .apply(&self.lm_head)?
             .narrow(1, seq_len - 1, 1)
