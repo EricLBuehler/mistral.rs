@@ -31,12 +31,12 @@ fn apply_scalings_to_x(
             "applied scalings 8: {:?}",
             scalings.to_vec3::<half::bf16>().unwrap()
         );
+        let before = &x.to_vec3::<half::bf16>().unwrap()[0][0];
+        dbg!(before[0]);
     }
-    let before = &x.to_vec3::<half::bf16>().unwrap()[0][0];
-    dbg!(before[0]);
     let res = x.broadcast_mul(&scalings)?;
-    let after = &x.to_vec3::<half::bf16>().unwrap()[0][0];
-    dbg!(after[0]);
+    if adapter == 8 && layer == 60 {let after = &x.to_vec3::<half::bf16>().unwrap()[0][0];
+    dbg!(after[0]);}
     Ok(res)
 }
 
