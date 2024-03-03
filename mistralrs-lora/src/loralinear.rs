@@ -115,6 +115,7 @@ impl LinearLayerLike for LoraLinear {
             } else {
                 input.clone()
             };
+    
             let input_mod = apply_scalings_to_x(input_new.clone(), &scalings, i)?;
             result = (result
                 + adapter_b
