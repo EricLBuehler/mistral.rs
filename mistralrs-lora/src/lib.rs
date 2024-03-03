@@ -19,9 +19,11 @@ pub struct LoraConfig {
     target_modules: HashSet<String>,
 }
 
-fn apply_scalings_to_x(x: Tensor, scalings_layer: &Tensor, adapter: usize) -> Result<Tensor> {
+fn apply_scalings_to_x(x: Tensor, scalings_layer: &Tensor, adapter: usize, layer: usize) -> Result<Tensor> {
     let scalings = scalings_layer.i((.., .., adapter))?.unsqueeze(D::Minus1)?;
-    //println!("applied scalings {scalings:?}");
+    if adapter == 8 &&layer==60 {
+        println!("applied scalings 8: {scalings:?}");
+    }
     x.broadcast_mul(&scalings)
 }
 
