@@ -299,6 +299,7 @@ impl Attention {
 
             dbg!(&attention_mask);
             dbg!(&attn_weights);
+            dbg!(kv_cache);
             println!();
             let attn_weights = match attention_mask {
                 None => attn_weights,
