@@ -10,7 +10,7 @@ struct TemperatureScaledSoftmax {
 
 impl Module for TemperatureScaledSoftmax {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        softmax_last_dim(&(xs / self.temp)?)
+        softmax_last_dim(xs)//&(xs / self.temp)?)
     }
 }
 
@@ -89,12 +89,6 @@ impl XLoraClassifier {
                 (linear(config.xlora_size, n_classes, vb.pp("last"))?, inner)
             }
         };
-        println!("{:?}", last.weight().dtype());
-        println!("{:?}", last.weight().to_vec2::<half::bf16>().unwrap()[0][0]);
-        println!("{:?}", last.weight().to_vec2::<half::bf16>().unwrap()[0][1]);
-        println!("{:?}", last.bias().unwrap().dtype());
-        println!("{:?}", last.bias().unwrap().to_vec1::<half::bf16>().unwrap()[0]);
-        println!("{:?}", last.bias().unwrap().to_vec1::<half::bf16>().unwrap()[1]);
         Ok(Self {
             last,
             inner,
