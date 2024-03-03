@@ -124,7 +124,7 @@ async fn chatcompletions(
         message_map.insert("content".to_string(), message.content);
         messages.push(message_map);
     }
-    let prompt = match conv.get_prompt(messages, true) {
+    let prompt = match conv.get_prompt(messages, false){ //{true) { todo
         Err(e) => return e,
         Ok(p) => p,
     };
