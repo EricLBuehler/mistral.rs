@@ -152,6 +152,7 @@ pub struct MistralLoader {
     quantized_filename: Option<String>,
     xlora_model_id: Option<String>,
     kind: ModelKind,
+    xlora_order: Option<Vec<String>>,
 }
 
 #[derive(Clone, Copy)]
@@ -189,6 +190,7 @@ impl MistralLoader {
         quantized_filename: Option<String>,
         xlora_model_id: Option<String>,
         kind: ModelKind,
+        xlora_order: Option<Vec<String>>,
     ) -> Self {
         Self {
             model_id,
@@ -197,6 +199,7 @@ impl MistralLoader {
             quantized_filename,
             xlora_model_id,
             kind,
+            xlora_order,
         }
     }
 }
@@ -302,10 +305,11 @@ impl Loader for MistralLoader {
                 }
                 let mut adapters_configs = Vec::new();
                 let mut adapters_safetensors = HashMap::new();
-                for (name, paths) in adapters_paths {
+                for name in self.xlora_order.as_ref().unwrap() {
+                    let paths = adapters_paths.get(name).unwrap();
                     for path in paths {
                         if path.extension().unwrap() == "safetensors" {
-                            adapters_safetensors.insert(name.clone(), path);
+                            adapters_safetensors.insert(name.clone(), path.to_owned());
                         } else {
                             let conf = fs::read_to_string(path)?;
                             let lora_config: LoraConfig = serde_json::from_str(&conf)?;

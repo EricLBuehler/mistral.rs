@@ -71,6 +71,10 @@ pub enum ModelSelected {
         /// Control the application of repeat penalty for the last n tokens
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
+
+        /// Comma delimited list of adapter names, in the order that it was trained.
+        #[arg(short, long)]
+        order: String,
     },
 }
 
@@ -182,6 +186,7 @@ async fn main() -> Result<()> {
             None,
             None,
             ModelKind::Normal,
+            None,
         )),
         ModelSelected::MistralGGUF {
             tok_model_id,
@@ -198,11 +203,13 @@ async fn main() -> Result<()> {
             quantized_filename,
             None,
             ModelKind::QuantizedGGUF,
+            None,
         )),
         ModelSelected::XLoraMistral {
             model_id,
             xlora_model_id,
             repeat_last_n,
+            order,
         } => Box::new(MistralLoader::new(
             model_id,
             MistralSpecificConfig {
@@ -213,6 +220,7 @@ async fn main() -> Result<()> {
             None,
             Some(xlora_model_id),
             ModelKind::XLoraNormal,
+            Some(order.split(',').map(|x|x.trim()).filter(|x|x.is_empty()).map(|x|x.to_string()).collect::<Vec<_>>()),
         )),
     };
 
