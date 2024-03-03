@@ -483,6 +483,12 @@ impl XLoraModel {
         }
 
         let mut cache = if is_scaling_pass {
+            let mut new_cache = Vec::new();
+            for _ in 0..32 {
+                new_cache.push(None);
+            }
+            
+            *self.cache.xlora_lock() = new_cache.clone();
             self.cache.xlora_lock()
         } else {
             self.cache.lock()
