@@ -96,6 +96,7 @@ impl LinearLayerLike for LoraLinear {
     }
     fn lora_forward(&self, input: &Tensor, scalings: Tensor) -> Result<Tensor> {
         let scalings = get_maybe_topk_scalings(scalings, self.layer_n)?;
+        println!("Lora {} called, scalings={scalings:?}", self.layer_n);
 
         //No fan_in_fan_out so no weight.transpose(0,1)
         let mut result = self.old.forward(input)?;
