@@ -502,6 +502,7 @@ impl XLoraModel {
                 self.prepare_decoder_attention_mask(b_size, seq_len, past_key_values_length)?;
             Some(mask)
         };
+        dbg!(mask);
         let mut xs = self.embed_tokens.forward(input_ids)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = layer.forward(
@@ -535,6 +536,7 @@ impl XLoraModel {
         let scalings = self.xlora_classifier.forward(hidden_states)?;
         // Using normal cache here
         println!("FWD PASS DONE");
+        dbg!(input_ids_full);
         self.inner_forward(input_ids_full, seqlen_offsets, scalings, false)?
             .apply(&self.lm_head)?
             .narrow(1, seq_len - 1, 1)
