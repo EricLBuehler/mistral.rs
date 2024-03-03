@@ -545,14 +545,18 @@ impl XLoraModel {
         // Using X-LoRA cache here
         /*let hidden_states = self.inner_forward(&input_ids_full.clone(), seqlen_offsets, dummy_scalings, true)?;
         let scalings = self.xlora_classifier.forward(hidden_states)?;*/
+        let mut new_cache = Vec::new();
+        for _ in 0..self.cache.xlora_lock().len() {
+            new_cache.push(None);
+        }
+
+        *self.cache.xlora_lock() = new_cache.clone();
         let scalings = dummy_scalings;
-        dbg!(self.cache.lock().to_vec());
         // Using normal cache here
         let o = self
             .inner_forward(input_ids, seqlen_offsets, scalings, false)?
             .apply(&self.lm_head)?
             .narrow(1, seq_len - 1, 1)?;
-        dbg!(self.cache.lock().to_vec());
         Ok(o)
     }
 }
