@@ -257,10 +257,6 @@ impl Attention {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
             let attn_weights = (query_states.matmul(&key_states.transpose(2, 3)?)? * scale)?;
 
-            dbg!(&attention_mask);
-            dbg!(&attn_weights);
-            dbg!(kv_cache);
-            println!();
             let attn_weights = match attention_mask {
                 None => attn_weights,
                 Some(mask) => attn_weights.broadcast_add(mask)?,
