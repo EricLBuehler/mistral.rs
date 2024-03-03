@@ -533,7 +533,7 @@ impl XLoraModel {
         println!("done scaling pass\n");
         let scalings = self.xlora_classifier.forward(hidden_states)?;
         // Using normal cache here
-        println!("starting scaling pass");
+        println!("starting normal pass");
         self.inner_forward(input_ids, seqlen_offsets, scalings, false)?
             .apply(&self.lm_head)?
             .narrow(1, seq_len - 1, 1)
