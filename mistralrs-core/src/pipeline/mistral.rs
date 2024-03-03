@@ -99,7 +99,7 @@ impl Conversation for ZephyrConversation {
             content += "\n";
         }
         if add_generation_prompt {
-            content += "<|assistant|>";
+            content += "<|assistant|>\n";
         }
         Ok(content)
     }
