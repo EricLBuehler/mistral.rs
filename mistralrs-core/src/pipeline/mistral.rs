@@ -490,8 +490,8 @@ fn get_completion_input(
 impl Pipeline for MistralPipeline {
     fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor {
         let (input_ids, input_ids_full, seqlen_offsets) = if self.is_xlora() {
-            let (input_ids, seqlen_offsets) = get_prompt_input(&input_toks, self.device());
-            let (input_ids_full, _) = get_completion_input(&input_toks, self.device());
+            let (input_ids_full, seqlen_offsets) = get_prompt_input(&input_toks, self.device());
+            let (input_ids, _) = get_completion_input(&input_toks, self.device());
             (input_ids, Some(input_ids_full), seqlen_offsets)
         } else if is_prompt {
             let (input_ids, seqlen_offsets) = get_prompt_input(&input_toks, self.device());
