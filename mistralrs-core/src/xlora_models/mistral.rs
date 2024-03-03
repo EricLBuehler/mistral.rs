@@ -81,8 +81,8 @@ impl RotaryEmbedding {
             let sin = self.sin.narrow(0, *seqlen_offset, seq_len)?;
             let cos = cos.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
             let sin = sin.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
-            let q_embed = (q_b.broadcast_mul(&cos)? + rotate_half(&q_b)?.broadcast_mul(&sin)).unwrap();
-            let k_embed = (k_b.broadcast_mul(&cos)? + rotate_half(&k_b)?.broadcast_mul(&sin)).unwrap();
+            let q_embed = (q_b.broadcast_mul(&cos)? + rotate_half(&q_b)?.broadcast_mul(&sin))?;
+            let k_embed = (k_b.broadcast_mul(&cos)? + rotate_half(&k_b)?.broadcast_mul(&sin))?;
             q_embeds.push(q_embed);
             k_embeds.push(k_embed);
         }

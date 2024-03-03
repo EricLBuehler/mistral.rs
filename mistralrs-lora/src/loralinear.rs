@@ -121,7 +121,7 @@ impl LinearLayerLike for LoraLinear {
             result = (result
                 + adapter_b
                     .forward(&adapter_a.forward(&input_new)?)?
-                    .mul(*adapter_scale)?)?;
+                    .mul(*adapter_scale)?).unwrap();
         }
         Ok(result)
     }
