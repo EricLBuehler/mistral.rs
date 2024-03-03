@@ -26,7 +26,7 @@ pub struct LoraConfig {
 fn apply_scalings_to_x(x: Tensor, scalings_layer: &Tensor, adapter: usize) -> Result<Tensor> {
     let scalings = scalings_layer.i((.., .., adapter))?.unsqueeze(D::Minus1)?;
     println!("applied scalings {scalings:?}");
-    x.broadcast_matmul(&scalings)
+    x.broadcast_mul(&scalings)
 }
 
 impl LoraConfig {
