@@ -4,7 +4,7 @@
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Activation, Linear, VarBuilder};
 use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig};
-use std::{collections::HashMap, iter::zip, sync::Arc};
+use std::{iter::zip, sync::Arc};
 
 use crate::models::{mistral::Config, Cache};
 
@@ -518,8 +518,7 @@ impl XLoraModel {
                 scalings.clone(),
             )?
         }
-        Ok(xs
-            .apply(&self.norm)?)
+        xs.apply(&self.norm)
     }
 
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {

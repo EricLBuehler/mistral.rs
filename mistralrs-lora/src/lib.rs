@@ -1,8 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    fmt::Debug,
-    sync::Arc,
-};
+use std::{collections::HashSet, fmt::Debug, sync::Arc};
 
 use candle_core::{IndexOp, Result, Shape, Tensor, D};
 use candle_nn::{Linear, Module, VarBuilder};
