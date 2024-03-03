@@ -445,7 +445,7 @@ impl Loader for MistralLoader {
 
 impl Pipeline for MistralPipeline {
     fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor {
-        let (input_ids, seqlen_offsets) = if is_prompt || self.is_xlora() {
+        let (input_ids, seqlen_offsets) = if is_prompt {//|| self.is_xlora() {
             // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
             let max_len = input_toks
                 .iter()
