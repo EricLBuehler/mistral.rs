@@ -132,7 +132,7 @@ impl XLoraClassifier {
         
 
         if let Some(ref softmax) = self.softmax {
-            scalings = softmax.forward(&scalings)?;
+            //scalings = softmax.forward(&scalings)?;
         }
 
         Ok(scalings)
