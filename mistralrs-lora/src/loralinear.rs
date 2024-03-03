@@ -49,6 +49,7 @@ impl LoraLinear {
         let a_vb = vb.pp("lora_A".to_string());
         let b_vb = vb.pp("lora_B".to_string());
         for (name, cfg) in config.iter() {
+            println!("{name:?}");
             let a_pp = a_vb.pp(name);
             assert!(a_pp.contains_tensor("weight"));
             let a = a_pp.get_with_hints(
