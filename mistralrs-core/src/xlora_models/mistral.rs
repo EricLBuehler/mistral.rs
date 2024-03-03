@@ -552,6 +552,7 @@ impl XLoraModel {
             .inner_forward(input_ids, seqlen_offsets, scalings, false)?
             .apply(&self.lm_head)?
             .narrow(1, seq_len - 1, 1)?;
+        dbg!(self.cache.lock().to_vec());
         Ok(o)
     }
 }
