@@ -276,8 +276,6 @@ impl Attention {
         let (key_states, value_states) = match &*kv_cache {
             None => (key_states, value_states),
             Some((prev_k, prev_v)) => {
-                dbg!(&prev_k);
-                dbg!(&key_states);
                 let key_states = Tensor::cat(&[prev_k, &key_states], 2)?;
                 let value_states = Tensor::cat(&[prev_v, &value_states], 2)?;
                 (key_states, value_states)
@@ -298,8 +296,6 @@ impl Attention {
         } else {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
             let attn_weights = (query_states.matmul(&key_states.transpose(2, 3)?)? * scale)?;
-            dbg!(attention_mask);
-            dbg!(&attn_weights);
             let attn_weights = match attention_mask {
                 None => attn_weights,
                 Some(mask) => attn_weights.broadcast_add(mask)?,
@@ -505,8 +501,6 @@ impl XLoraModel {
                 self.prepare_decoder_attention_mask(b_size, seq_len, past_key_values_length)?;
             Some(mask)
         };
-        dbg!(&attention_mask);
-        dbg!(&cache);
         let mut xs = self.embed_tokens.forward(input_ids)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = layer.forward(
@@ -534,13 +528,12 @@ impl XLoraModel {
             self.dtype,
         )?;
         // Using X-LoRA cache here
-        println!("SCALINGS PASS");
+        println!("starting scaling pass");
         let hidden_states = self.inner_forward(input_ids_full, seqlen_offsets, dummy_scalings, true)?;
-        println!("SCALINGS PASS DONE");
+        println!("done scaling pass\n");
         let scalings = self.xlora_classifier.forward(hidden_states)?;
         // Using normal cache here
-        println!("FWD PASS DONE");
-        dbg!(input_ids_full);
+        println!("starting scaling pass");
         self.inner_forward(input_ids, seqlen_offsets, scalings, false)?
             .apply(&self.lm_head)?
             .narrow(1, seq_len - 1, 1)
