@@ -32,7 +32,6 @@ impl XLoraClassifier {
         n_classes: usize,
         vb: VarBuilder,
     ) -> Result<Self> {
-        println!("{config:?}");
         let (last, inner) = if config.xlora_depth == 1 {
             if config.layerwise_scalings {
                 assert!(vb.contains_tensor("last.weight"));
@@ -136,51 +135,10 @@ impl XLoraClassifier {
             self.model_layers,
             self.n_classes,
         ))?;
-        //println!("global scalings {scalings:?}");
 
         if let Some(ref softmax) = self.softmax {
             scalings = softmax.forward(&scalings)?;
         }
-        /*println!(
-            "{} {} {} {} {} {} {} {} {}",
-            scalings
-                .i((0, 0, 60, 0))?
-                .to_scalar::<half::bf16>()
-                .unwrap(),
-            scalings
-                .i((0, 0, 60, 1))?
-                .to_scalar::<half::bf16>()
-                .unwrap(),
-            scalings
-                .i((0, 0, 60, 2))?
-                .to_scalar::<half::bf16>()
-                .unwrap(),
-            scalings
-                .i((0, 0, 60, 3))?
-                .to_scalar::<half::bf16>()
-                .unwrap(),
-            scalings
-                .i((0, 0, 60, 4))?
-                .to_scalar::<half::bf16>()
-                .unwrap(),
-            scalings
-                .i((0, 0, 60, 5))?
-                .to_scalar::<half::bf16>()
-                .unwrap(),
-            scalings
-                .i((0, 0, 60, 6))?
-                .to_scalar::<half::bf16>()
-                .unwrap(),
-            scalings
-                .i((0, 0, 60, 7))?
-                .to_scalar::<half::bf16>()
-                .unwrap(),
-            scalings
-                .i((0, 0, 60, 8))?
-                .to_scalar::<half::bf16>()
-                .unwrap()
-        );*/
-
         Ok(scalings)
     }
 
