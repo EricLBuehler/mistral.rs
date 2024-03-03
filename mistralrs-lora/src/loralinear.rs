@@ -100,6 +100,7 @@ impl LinearLayerLike for LoraLinear {
 
         //No fan_in_fan_out so no weight.transpose(0,1)
         let mut result = self.old.forward(input)?;
+        dbg!(&result);
         for (i, (adapter_a, (adapter_b, (adapter_scale, adapter_dropout)))) in zip(
             &self.a_adapters,
             zip(
