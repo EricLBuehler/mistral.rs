@@ -89,6 +89,8 @@ impl XLoraClassifier {
                 (linear(config.xlora_size, n_classes, vb.pp("last"))?, inner)
             }
         };
+        println!("{:?}", last.weight().dtype());
+        //println!("{:?}", last.weight().to_vec2::<())
         Ok(Self {
             last,
             inner,
