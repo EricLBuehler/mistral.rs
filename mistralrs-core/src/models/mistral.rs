@@ -431,7 +431,7 @@ impl Model {
             .apply(&self.lm_head)*/
         xs
             .apply(&self.norm)?
-            .apply(&self.lm_head)?
-            .narrow(1, seq_len - 1, 1)
+            .narrow(1, seq_len - 1, 1)?
+            .apply(&self.lm_head)
     }
 }
