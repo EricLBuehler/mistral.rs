@@ -360,7 +360,7 @@ impl DecoderLayer {
             kv_cache,
             scalings.clone(),
         )?;
-        let xs = (xs + residual)?;
+        let xs = (xs + residual).unwrap();
         let residual = &xs;
         let xs = xs.apply(&self.post_attention_layernorm)?;
         let xs = self.mlp.forward(&xs, scalings)?;
