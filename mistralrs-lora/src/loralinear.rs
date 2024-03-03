@@ -112,7 +112,7 @@ impl LinearLayerLike for LoraLinear {
         {
             let mut input_new = input.to_dtype(adapter_a.weight().dtype())?;
             input_new = if let Some(ref dropout) = adapter_dropout {
-                dropout.forward(&input_new, false)?
+                dropout.forward(&input_new, true)?
             } else {
                 input.clone()
             };
