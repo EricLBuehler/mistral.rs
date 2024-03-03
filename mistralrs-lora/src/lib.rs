@@ -32,7 +32,12 @@ fn apply_scalings_to_x(
             scalings.to_vec3::<half::bf16>().unwrap()
         );
     }
-    x.broadcast_mul(&scalings)
+    let before = &x.to_vec3::<half::bf16>().unwrap()[0][0];
+    dbg!(before);
+    let res = x.broadcast_mul(&scalings)?;
+    let after = &x.to_vec3::<half::bf16>().unwrap()[0][0];
+    dbg!(after);
+    Ok(res)
 }
 
 impl LoraConfig {

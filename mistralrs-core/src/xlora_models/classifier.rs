@@ -1,4 +1,4 @@
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{linear, ops::softmax_last_dim, Linear, Module, VarBuilder};
 
 use super::config::XLoraConfig;
