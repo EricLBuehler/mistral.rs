@@ -32,6 +32,7 @@ impl XLoraClassifier {
         n_classes: usize,
         vb: VarBuilder,
     ) -> Result<Self> {
+        println!("{config:?}");
         let (last, inner) = if config.xlora_depth == 1 {
             if config.layerwise_scalings {
                 assert!(vb.contains_tensor("last.weight"));
