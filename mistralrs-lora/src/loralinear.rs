@@ -98,7 +98,7 @@ impl LinearLayerLike for LoraLinear {
         let scalings = get_maybe_topk_scalings(scalings, self.layer_n)?;
         //No fan_in_fan_out so no weight.transpose(0,1)
         let mut result = self.old.forward(input)?;
-        for (i, (adapter_a, (adapter_b, (adapter_scale, adapter_dropout)))) in zip(
+        /*for (i, (adapter_a, (adapter_b, (adapter_scale, adapter_dropout)))) in zip(
             &self.a_adapters,
             zip(
                 &self.b_adapters,
@@ -120,7 +120,7 @@ impl LinearLayerLike for LoraLinear {
                 .forward(&adapter_a.forward(&input_new)?)?
                 .mul(*adapter_scale)?;
             result = (result + res)?;
-        }
+        }*/
         Ok(result)
     }
 }
