@@ -502,7 +502,7 @@ impl XLoraModel {
                 self.prepare_decoder_attention_mask(b_size, seq_len, past_key_values_length)?;
             Some(mask)
         };
-        dbg!(&mask);
+        dbg!(&attention_mask);
         let mut xs = self.embed_tokens.forward(input_ids)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = layer.forward(
