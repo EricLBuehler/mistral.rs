@@ -487,7 +487,7 @@ impl XLoraModel {
             for _ in 0..self.cache.xlora_lock().len() {
                 new_cache.push(None);
             }
-            
+
             *self.cache.xlora_lock() = new_cache.clone();
             self.cache.xlora_lock()
         } else {
@@ -495,7 +495,7 @@ impl XLoraModel {
             for _ in 0..self.cache.lock().len() {
                 new_cache.push(None);
             }
-            
+
             *self.cache.lock() = new_cache.clone();
             self.cache.lock()
         };

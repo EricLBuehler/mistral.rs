@@ -36,12 +36,14 @@ impl XLoraClassifier {
         let (last, inner) = if config.xlora_depth == 1 {
             if config.layerwise_scalings {
                 assert!(vb.contains_tensor("last.weight"));
+                assert!(vb.contains_tensor("last.bias"));
                 (
                     linear(config.hidden_size, n_classes * n_layers, vb.pp("last")).unwrap(),
                     vec![],
                 )
             } else {
                 assert!(vb.contains_tensor("last.weight"));
+                assert!(vb.contains_tensor("last.bias"));
                 (
                     linear(config.hidden_size, n_classes, vb.pp("last"))?,
                     vec![],
@@ -50,12 +52,14 @@ impl XLoraClassifier {
         } else if config.xlora_depth == 2 {
             let mut inner = Vec::new();
             assert!(vb.contains_tensor("inner.0.weight"));
+            assert!(vb.contains_tensor("inner.0.bias"));
             inner.push(linear(
                 config.hidden_size,
                 config.xlora_size,
                 vb.pp("inner.0"),
             )?);
             assert!(vb.contains_tensor("last.weight"));
+            assert!(vb.contains_tensor("last.bias"));
             if config.layerwise_scalings {
                 (
                     linear(config.xlora_size, n_classes * n_layers, vb.pp("last"))?,
@@ -67,6 +71,7 @@ impl XLoraClassifier {
         } else {
             let mut inner = Vec::new();
             assert!(vb.contains_tensor("inner.0.weight"));
+            assert!(vb.contains_tensor("inner.0.bias"));
             inner.push(linear(
                 config.hidden_size,
                 config.xlora_size,
@@ -74,6 +79,7 @@ impl XLoraClassifier {
             )?);
             for i in 1..=config.xlora_depth - 2 {
                 assert!(vb.contains_tensor(&format!("inner.{i}.weight")));
+                assert!(vb.contains_tensor(&format!("inner.{i}.bias")));
                 inner.push(linear(
                     config.xlora_size,
                     config.xlora_size,
@@ -81,6 +87,7 @@ impl XLoraClassifier {
                 )?)
             }
             assert!(vb.contains_tensor("last.weight"));
+            assert!(vb.contains_tensor("last.bias"));
             if config.layerwise_scalings {
                 (
                     linear(config.xlora_size, n_classes * n_layers, vb.pp("last"))?,
@@ -131,12 +138,22 @@ impl XLoraClassifier {
             self.n_classes,
         ))?;
         println!("global scalings {scalings:?}");
-        
 
         if let Some(ref softmax) = self.softmax {
             scalings = softmax.forward(&scalings)?;
         }
-        println!("{} {} {} {} {} {} {} {} {}",scalings.i((0,0,0,0))?,scalings.i((0,0,0,1))?,scalings.i((0,0,0,2))?,scalings.i((0,0,0,3))?,scalings.i((0,0,0,4))?,scalings.i((0,0,0,5))?,scalings.i((0,0,0,6))?,scalings.i((0,0,0,7))?,scalings.i((0,0,0,8))?);
+        println!(
+            "{} {} {} {} {} {} {} {} {}",
+            scalings.i((0, 0, 0, 0))?,
+            scalings.i((0, 0, 0, 1))?,
+            scalings.i((0, 0, 0, 2))?,
+            scalings.i((0, 0, 0, 3))?,
+            scalings.i((0, 0, 0, 4))?,
+            scalings.i((0, 0, 0, 5))?,
+            scalings.i((0, 0, 0, 6))?,
+            scalings.i((0, 0, 0, 7))?,
+            scalings.i((0, 0, 0, 8))?
+        );
 
         Ok(scalings)
     }
