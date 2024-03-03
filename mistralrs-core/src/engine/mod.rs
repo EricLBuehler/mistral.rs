@@ -231,7 +231,10 @@ impl Engine {
         for _ in 0..get_mut_arcmutex!(self.pipeline).num_hidden_layers() {
             new_cache.push(None);
         }
-        *get_mut_arcmutex!(self.pipeline).cache().lock() = new_cache;
+        *get_mut_arcmutex!(self.pipeline).cache().lock() = new_cache.clone();
+        if get_mut_arcmutex!(self.pipeline).cache().is_xlora() {
+            *get_mut_arcmutex!(self.pipeline).cache().xlora_lock() = new_cache;
+        }
     }
 
     /// Clone the cache FROM the model cache TO the sequences. Used for prompt, completion seqs.

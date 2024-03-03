@@ -36,4 +36,8 @@ impl Cache {
     pub(crate) fn xlora_lock(&self) -> MutexGuard<'_, LayerCaches> {
         get_mut_arcmutex!(self.xlora_cache.as_ref().unwrap())
     }
+
+    pub(crate) fn is_xlora(&self) -> bool {
+        self.xlora_cache.is_some()
+    }
 }
