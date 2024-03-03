@@ -110,7 +110,7 @@ pub struct MistralModelPaths<P> {
     config_filename: P,
     filenames: Vec<P>,
     xlora_adapter_filenames: Option<HashMap<String, P>>,
-    xlora_adapter_configs: Option<HashMap<String, LoraConfig>>,
+    xlora_adapter_configs: Option<Vec<(String, LoraConfig)>>,
     classifier_path: Option<P>,
     classifier_config: Option<P>,
 }
@@ -128,7 +128,7 @@ impl ModelPaths for MistralModelPaths<PathBuf> {
     fn get_adapter_filenames(&self) -> &Option<HashMap<String, PathBuf>> {
         &self.xlora_adapter_filenames
     }
-    fn get_adapter_configs(&self) -> &Option<HashMap<String, LoraConfig>> {
+    fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>> {
         &self.xlora_adapter_configs
     }
     fn get_classifier_config(&self) -> &Option<PathBuf> {
@@ -300,7 +300,7 @@ impl Loader for MistralLoader {
                         adapters_paths.insert(name, vec![api.get(&file)?]);
                     }
                 }
-                let mut adapters_configs = HashMap::new();
+                let mut adapters_configs = Vec::new();
                 let mut adapters_safetensors = HashMap::new();
                 for (name, paths) in adapters_paths {
                     for path in paths {
@@ -309,7 +309,7 @@ impl Loader for MistralLoader {
                         } else {
                             let conf = fs::read_to_string(path)?;
                             let lora_config: LoraConfig = serde_json::from_str(&conf)?;
-                            adapters_configs.insert(name.clone(), lora_config);
+                            adapters_configs.push((name.clone(), lora_config));
                         }
                     }
                 }

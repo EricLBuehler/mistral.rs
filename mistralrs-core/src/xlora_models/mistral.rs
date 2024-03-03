@@ -103,7 +103,7 @@ impl MLP {
     fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &HashMap<String, LoraConfig>,
+        lora_config: &Vec<(String, LoraConfig)>,
         count: &mut usize,
     ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
@@ -182,7 +182,7 @@ impl Attention {
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &HashMap<String, LoraConfig>,
+        lora_config: &Vec<(String, LoraConfig)>,
         count: &mut usize,
     ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
@@ -324,7 +324,7 @@ impl DecoderLayer {
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &HashMap<String, LoraConfig>,
+        lora_config: &Vec<(String, LoraConfig)>,
         count: &mut usize,
     ) -> Result<Self> {
         let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"), lora_config, count)?;
@@ -387,7 +387,7 @@ impl XLoraModel {
     pub fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &HashMap<String, LoraConfig>,
+        lora_config: &Vec<(String, LoraConfig)>,
         xlora_config: XLoraConfig,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");

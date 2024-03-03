@@ -72,7 +72,7 @@ pub fn linear(
     d1: usize,
     d2: usize,
     vb: VarBuilder,
-    lora_config: &HashMap<String, LoraConfig>,
+    lora_config: &Vec<(String, LoraConfig)>,
     count: &mut usize,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
     let prefix = vb.prefix();
@@ -81,8 +81,8 @@ pub fn linear(
     let linear_config = LoraLinearConfig::new(d1, d2);
     let inner = candle_nn::linear(d1, d2, vb.clone())?;
 
-    let target_modules = &lora_config.values().next().unwrap().target_modules;
-    for cfg in lora_config.values() {
+    let target_modules = &lora_config[0].1.target_modules;
+    for (_, cfg) in lora_config {
         if &cfg.target_modules != target_modules {
             candle_core::bail!("Expected all target modules to be the same.");
         }
@@ -100,7 +100,7 @@ pub fn linear_no_bias(
     d1: usize,
     d2: usize,
     vb: VarBuilder,
-    lora_config: &HashMap<String, LoraConfig>,
+    lora_config: &Vec<(String, LoraConfig)>,
     count: &mut usize,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
     let prefix = vb.prefix();
@@ -109,8 +109,8 @@ pub fn linear_no_bias(
     let linear_config = LoraLinearConfig::new(d1, d2);
     let inner = candle_nn::linear_no_bias(d1, d2, vb.clone())?;
 
-    let target_modules = &lora_config.values().next().unwrap().target_modules;
-    for cfg in lora_config.values() {
+    let target_modules = &lora_config[0].1.target_modules;
+    for (_, cfg) in lora_config {
         if &cfg.target_modules != target_modules {
             candle_core::bail!("Expected all target modules to be the same.");
         }

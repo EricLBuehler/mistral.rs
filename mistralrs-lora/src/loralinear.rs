@@ -38,7 +38,7 @@ impl LoraLinear {
     pub fn new(
         old: &dyn LinearLayerLike,
         linear_config: &LoraLinearConfig,
-        config: &HashMap<String, LoraConfig>,
+        config: &Vec<(String, LoraConfig)>,
         vb: &VarBuilder,
         layer_n: usize,
     ) -> Result<Self> {
