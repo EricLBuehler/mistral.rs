@@ -404,7 +404,7 @@ impl Loader for MistralLoader {
                         .as_ref()
                         .unwrap()
                         .iter()
-                        .map(|(_,x)| (*x).to_owned())
+                        .map(|(_, x)| (*x).to_owned())
                         .collect::<Vec<_>>(),
                     dtype.unwrap_or(default_dtype),
                     device,
@@ -443,61 +443,68 @@ impl Loader for MistralLoader {
     }
 }
 
+fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>], device: &Device) -> (Tensor, Vec<usize>) {
+    // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
+    let max_len = input_toks
+        .iter()
+        .map(|seq| deref_refcell!(seq).len())
+        .max()
+        .unwrap();
+    let padding_tok = 0;
+    // Pad each sequence by the padding token to the max len.
+    let mut seqs_tensors = Vec::new();
+    let mut seqlen_offsets = Vec::new();
+    for seq in input_toks.iter() {
+        let mut ctxt = deref_refcell!(seq).get_toks().to_vec();
+        seqlen_offsets.push(0);
+        *deref_mut_refcell!(seq).gen_idx() += 1;
+
+        ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
+
+        // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
+        seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
+    }
+    // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
+    (Tensor::cat(&seqs_tensors, 0).unwrap(), seqlen_offsets)
+}
+
+fn get_completion_input(
+    input_toks: &[Rc<RefCell<Sequence>>],
+    device: &Device,
+) -> (Tensor, Vec<usize>) {
+    // Pad each sequence by the padding token to the max len.
+    let mut seqs_tensors = Vec::new();
+    let mut seqlen_offsets = Vec::new();
+    for seq in input_toks.iter() {
+        let start_pos = deref_refcell!(seq).get_toks().len().saturating_sub(1);
+        let ctxt = deref_refcell!(seq).get_toks()[start_pos..].to_vec();
+        seqlen_offsets.push(start_pos);
+        *deref_mut_refcell!(seq).gen_idx() += 1;
+
+        // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
+        seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
+    }
+    // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
+    (Tensor::cat(&seqs_tensors, 0).unwrap(), seqlen_offsets)
+}
 impl Pipeline for MistralPipeline {
     fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor {
-        let (input_ids, seqlen_offsets) = if is_prompt {//|| self.is_xlora() {
-            // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
-            let max_len = input_toks
-                .iter()
-                .map(|seq| deref_refcell!(seq).len())
-                .max()
-                .unwrap();
-            let padding_tok = 0;
-            // Pad each sequence by the padding token to the max len.
-            let mut seqs_tensors = Vec::new();
-            let mut seqlen_offsets = Vec::new();
-            for seq in input_toks.iter() {
-                let mut ctxt = deref_refcell!(seq).get_toks().to_vec();
-                seqlen_offsets.push(0);
-                *deref_mut_refcell!(seq).gen_idx() += 1;
-
-                ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
-
-                // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
-                seqs_tensors.push(
-                    Tensor::new(ctxt, self.device())
-                        .unwrap()
-                        .unsqueeze(0)
-                        .unwrap(),
-                );
-            }
-            // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
-            (Tensor::cat(&seqs_tensors, 0).unwrap(), seqlen_offsets)
+        let (input_ids, input_ids_full, seqlen_offsets) = if is_prompt || self.is_xlora() {
+            let (input_ids, seqlen_offsets) = get_prompt_input(&input_toks, self.device());
+            let (input_ids_full, _) = get_completion_input(&input_toks, self.device());
+            (input_ids, Some(input_ids_full), seqlen_offsets)
         } else {
-            // Pad each sequence by the padding token to the max len.
-            let mut seqs_tensors = Vec::new();
-            let mut seqlen_offsets = Vec::new();
-            for seq in input_toks.iter() {
-                let start_pos = deref_refcell!(seq).get_toks().len().saturating_sub(1);
-                let ctxt = deref_refcell!(seq).get_toks()[start_pos..].to_vec();
-                seqlen_offsets.push(start_pos);
-                *deref_mut_refcell!(seq).gen_idx() += 1;
-
-                // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
-                seqs_tensors.push(
-                    Tensor::new(ctxt, self.device())
-                        .unwrap()
-                        .unsqueeze(0)
-                        .unwrap(),
-                );
-            }
-            // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
-            (Tensor::cat(&seqs_tensors, 0).unwrap(), seqlen_offsets)
+            let (input_ids, seqlen_offsets) = get_completion_input(&input_toks, self.device());
+            (input_ids, None, seqlen_offsets)
         };
         let result = match self.model {
             Model::Normal(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
             Model::Quantized(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
-            Model::XLoraNormal(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
+            Model::XLoraNormal(ref mut model) => model.forward(
+                &input_ids,
+                input_ids_full.as_ref().unwrap(),
+                &seqlen_offsets,
+            ),
         };
         match result {
             Ok(v) => v,

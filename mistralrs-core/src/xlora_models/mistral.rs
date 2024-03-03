@@ -483,12 +483,12 @@ impl XLoraModel {
         }
 
         let mut cache = if is_scaling_pass {
-            /*let mut new_cache = Vec::new();
+            let mut new_cache = Vec::new();
             for _ in 0..self.cache.xlora_lock().len() {
                 new_cache.push(None);
             }
 
-            *self.cache.xlora_lock() = new_cache.clone();*/
+            *self.cache.xlora_lock() = new_cache.clone();
             self.cache.xlora_lock()
         } else {
             /*let mut new_cache = Vec::new();
@@ -521,7 +521,12 @@ impl XLoraModel {
         xs.apply(&self.norm)
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
+    pub fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        input_ids_full: &Tensor,
+        seqlen_offsets: &[usize],
+    ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
         let dummy_scalings = self.xlora_classifier.get_dummy_scalings(
             b_size,
@@ -533,7 +538,7 @@ impl XLoraModel {
         let hidden_states = self.inner_forward(input_ids, seqlen_offsets, dummy_scalings, true)?;
         let scalings = self.xlora_classifier.forward(hidden_states)?;
         // Using normal cache here
-        self.inner_forward(input_ids, seqlen_offsets, scalings, false)?
+        self.inner_forward(input_ids_full, seqlen_offsets, scalings, false)?
             .apply(&self.lm_head)?
             .narrow(1, seq_len - 1, 1)
     }

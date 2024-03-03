@@ -144,15 +144,42 @@ impl XLoraClassifier {
         }
         println!(
             "{} {} {} {} {} {} {} {} {}",
-            scalings.i((0, 0, 60, 0))?.to_scalar::<half::bf16>().unwrap(),
-            scalings.i((0, 0, 60, 1))?.to_scalar::<half::bf16>().unwrap(),
-            scalings.i((0, 0, 60, 2))?.to_scalar::<half::bf16>().unwrap(),
-            scalings.i((0, 0, 60, 3))?.to_scalar::<half::bf16>().unwrap(),
-            scalings.i((0, 0, 60, 4))?.to_scalar::<half::bf16>().unwrap(),
-            scalings.i((0, 0, 60, 5))?.to_scalar::<half::bf16>().unwrap(),
-            scalings.i((0, 0, 60, 6))?.to_scalar::<half::bf16>().unwrap(),
-            scalings.i((0, 0, 60, 7))?.to_scalar::<half::bf16>().unwrap(),
-            scalings.i((0, 0, 60, 8))?.to_scalar::<half::bf16>().unwrap()
+            scalings
+                .i((0, 0, 60, 0))?
+                .to_scalar::<half::bf16>()
+                .unwrap(),
+            scalings
+                .i((0, 0, 60, 1))?
+                .to_scalar::<half::bf16>()
+                .unwrap(),
+            scalings
+                .i((0, 0, 60, 2))?
+                .to_scalar::<half::bf16>()
+                .unwrap(),
+            scalings
+                .i((0, 0, 60, 3))?
+                .to_scalar::<half::bf16>()
+                .unwrap(),
+            scalings
+                .i((0, 0, 60, 4))?
+                .to_scalar::<half::bf16>()
+                .unwrap(),
+            scalings
+                .i((0, 0, 60, 5))?
+                .to_scalar::<half::bf16>()
+                .unwrap(),
+            scalings
+                .i((0, 0, 60, 6))?
+                .to_scalar::<half::bf16>()
+                .unwrap(),
+            scalings
+                .i((0, 0, 60, 7))?
+                .to_scalar::<half::bf16>()
+                .unwrap(),
+            scalings
+                .i((0, 0, 60, 8))?
+                .to_scalar::<half::bf16>()
+                .unwrap()
         );
 
         Ok(scalings)
