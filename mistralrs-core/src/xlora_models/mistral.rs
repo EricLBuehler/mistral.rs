@@ -456,9 +456,11 @@ impl XLoraModel {
             .to_dtype(self.dtype)
     }
 
-    fn calculate_past_kv_len(&mut self, seq_len: usize) -> Result<usize> {
-        let cache = self.cache.lock();
-        let kv_cache_1 = cache.first().unwrap();
+    fn calculate_past_kv_len(
+        &self,
+        seq_len: usize,
+        kv_cache_1: &Option<(Tensor, Tensor)>,
+    ) -> Result<usize> {
         if kv_cache_1.is_none() {
             return Ok(0);
         }
@@ -484,7 +486,13 @@ impl XLoraModel {
             candle_core::bail!("Expected seqlen offsets have length equal to batch size.")
         }
 
-        let past_key_values_length = self.calculate_past_kv_len(seq_len)?;
+        let mut cache = if is_scaling_pass {
+            self.cache.xlora_lock()
+        } else {
+            self.cache.lock()
+        };
+        let past_key_values_length =
+            self.calculate_past_kv_len(seq_len, cache.first().as_ref().unwrap())?;
         let attention_mask = if seq_len <= 1 {
             None
         } else {
@@ -493,11 +501,6 @@ impl XLoraModel {
             Some(mask)
         };
         let mut xs = self.embed_tokens.forward(input_ids)?;
-        let mut cache = if is_scaling_pass {
-            self.cache.xlora_lock()
-        } else {
-            self.cache.lock()
-        };
         for (i, layer) in self.layers.iter_mut().enumerate() {
             xs = layer.forward(
                 &xs,
