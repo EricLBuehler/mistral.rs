@@ -14,7 +14,6 @@ homepage.workspace = true
 [dependencies]
 candle-core.workspace = true
 candle-nn.workspace = true
-half = "2.4.0"
 serde.workspace = true
 serde_json.workspace = true
 
