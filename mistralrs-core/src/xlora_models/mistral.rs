@@ -521,6 +521,16 @@ impl XLoraModel {
         seqlen_offsets: &[usize],
     ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
+        let scalings = self.xlora_classifier.get_dummy_scalings(
+            b_size,
+            seq_len,
+            input_ids.device(),
+            self.dtype,
+        )?;
+        self.inner_forward(input_ids, seqlen_offsets, scalings, false)?
+            .apply(&self.lm_head)?
+            .narrow(1, seq_len - 1, 1)
+        /*let (b_size, seq_len) = input_ids.dims2()?;
         let dummy_scalings = self.xlora_classifier.get_dummy_scalings(
             b_size,
             seq_len,
@@ -539,6 +549,6 @@ impl XLoraModel {
         )?;
         self.inner_forward(input_ids_full, seqlen_offsets, scalings, true)?
             .apply(&self.lm_head)?
-            .narrow(1, seq_len - 1, 1)
+            .narrow(1, seq_len - 1, 1)*/
     }
 }
