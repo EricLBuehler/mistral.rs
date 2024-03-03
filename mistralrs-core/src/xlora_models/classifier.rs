@@ -90,7 +90,8 @@ impl XLoraClassifier {
             }
         };
         println!("{:?}", last.weight().dtype());
-        println!("{:?}", last.weight().to_vec2::<half::bf16>().unwrap());
+        println!("{:?}", last.weight().to_vec2::<half::bf16>().unwrap()[0][0]);
+        println!("{:?}", last.weight().to_vec2::<half::bf16>().unwrap()[0][1]);
         Ok(Self {
             last,
             inner,
