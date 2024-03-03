@@ -35,7 +35,7 @@ fn apply_scalings_to_x(
         dbg!(before[0]);
     }
     let res = x.broadcast_mul(&scalings)?;
-    if adapter == 8 && layer == 60 {let after = &x.to_vec3::<half::bf16>().unwrap()[0][0];
+    if adapter == 8 && layer == 60 {let after = &res.to_vec3::<half::bf16>().unwrap()[0][0];
     dbg!(after[0]);}
     Ok(res)
 }
