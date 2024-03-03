@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use candle_core::{IndexOp, Result, Shape, Tensor, D};
+use candle_core::{DType, IndexOp, Result, Shape, Tensor, D};
 use candle_nn::{Linear, Module, VarBuilder};
 use loralinear::{LoraLinear, LoraLinearConfig};
 use serde::Deserialize;
@@ -25,7 +25,7 @@ pub struct LoraConfig {
 
 fn apply_scalings_to_x(x: Tensor, scalings_layer: &Tensor, adapter: usize) -> Result<Tensor> {
     let scalings = scalings_layer.i((.., .., adapter))?.unsqueeze(D::Minus1)?;
-    println!("{:?}", scalings.to_vec3::<f32>().unwrap());
+    println!("{:?}", scalings.to_vec3::<half::bf16>().unwrap());
     x.broadcast_mul(&scalings)
 }
 
