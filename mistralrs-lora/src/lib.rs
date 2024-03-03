@@ -98,7 +98,7 @@ pub fn linear(
         if &cfg.target_modules != target_modules {
             candle_core::bail!("Expected all target modules to be the same.");
         }
-    }
+    }return Ok(Arc::new(inner));
     if !target_modules.contains(module) {
         return Ok(Arc::new(inner));
     }
@@ -126,7 +126,7 @@ pub fn linear_no_bias(
         if &cfg.target_modules != target_modules {
             candle_core::bail!("Expected all target modules to be the same.");
         }
-    }
+    }return Ok(Arc::new(inner));
     if !target_modules.contains(module) {
         return Ok(Arc::new(inner));
     }
