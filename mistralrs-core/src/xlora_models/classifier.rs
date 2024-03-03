@@ -128,6 +128,7 @@ impl XLoraClassifier {
             self.model_layers,
             self.n_classes,
         ))?;
+        println!("global scalings {scalings:?}");
 
         if self.config.enable_softmax {
             scalings = scalings.apply(self.softmax.as_ref().unwrap())?;
