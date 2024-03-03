@@ -474,14 +474,14 @@ impl XLoraModel {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         scalings: Tensor,
-        is_scaling_pass: bool,
+        is_full_pass: bool,
     ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
         if seqlen_offsets.len() > b_size {
             candle_core::bail!("Expected seqlen offsets have length equal to batch size.")
         }
 
-        let mut cache = if is_scaling_pass {
+        let mut cache = if is_full_pass {
             let mut new_cache = Vec::new();
             for _ in 0..self.cache.xlora_lock().len() {
                 new_cache.push(None);
@@ -521,16 +521,6 @@ impl XLoraModel {
         seqlen_offsets: &[usize],
     ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
-        let scalings = self.xlora_classifier.get_dummy_scalings(
-            b_size,
-            seq_len,
-            input_ids.device(),
-            self.dtype,
-        )?;
-        self.inner_forward(input_ids, seqlen_offsets, scalings, false)?
-            .apply(&self.lm_head)?
-            .narrow(1, seq_len - 1, 1)
-        /*let (b_size, seq_len) = input_ids.dims2()?;
         let dummy_scalings = self.xlora_classifier.get_dummy_scalings(
             b_size,
             seq_len,
@@ -538,7 +528,7 @@ impl XLoraModel {
             self.dtype,
         )?;
         // Using X-LoRA cache here
-        let hidden_states = self.inner_forward(input_ids, seqlen_offsets, dummy_scalings, false)?;
+        let hidden_states = self.inner_forward(&input_ids_full.clone(), seqlen_offsets, dummy_scalings, true)?;
         let scalings = self.xlora_classifier.forward(hidden_states)?;
         // Using normal cache here
         let scalings = self.xlora_classifier.get_dummy_scalings(
@@ -549,6 +539,6 @@ impl XLoraModel {
         )?;
         self.inner_forward(input_ids_full, seqlen_offsets, scalings, true)?
             .apply(&self.lm_head)?
-            .narrow(1, seq_len - 1, 1)*/
+            .narrow(1, seq_len - 1, 1)
     }
 }
