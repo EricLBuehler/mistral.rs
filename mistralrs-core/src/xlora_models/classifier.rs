@@ -10,7 +10,7 @@ struct TemperatureScaledSoftmax {
 
 impl Module for TemperatureScaledSoftmax {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        softmax_last_dim(xs)//&(xs / self.temp)?)
+        softmax_last_dim(&(xs / self.temp)?)
     }
 }
 
@@ -144,6 +144,7 @@ impl XLoraClassifier {
         device: &Device,
         dtype: DType,
     ) -> Result<Tensor> {
+        dbg!(self.scaling_pass_value);
         Tensor::full(
             self.scaling_pass_value,
             (bs, seq_len, self.model_layers, self.n_classes),
