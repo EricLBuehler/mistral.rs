@@ -426,8 +426,8 @@ impl Model {
                 cache.get_mut(i).unwrap(),
             )?
         }
-        xs.narrow(1, seq_len - 1, 1)?
-            .apply(&self.norm)?
-            .apply(&self.lm_head)
+        xs.apply(&self.norm)?
+            .apply(&self.lm_head)?
+            .narrow(1, seq_len - 1, 1)
     }
 }

@@ -534,7 +534,7 @@ impl XLoraModel {
         let o = self.inner_forward(input_ids_full, seqlen_offsets, scalings, true)?
             .apply(&self.lm_head)?
             .narrow(1, seq_len - 1, 1)?;*/
-    
+
         let (b_size, seq_len) = input_ids.dims2()?;
         let dummy_scalings = self.xlora_classifier.get_dummy_scalings(
             b_size,
@@ -547,7 +547,8 @@ impl XLoraModel {
         let scalings = self.xlora_classifier.forward(hidden_states)?;*/
         let scalings = dummy_scalings;
         // Using normal cache here
-        let o = self.inner_forward(input_ids, seqlen_offsets, scalings, false)?
+        let o = self
+            .inner_forward(input_ids, seqlen_offsets, scalings, false)?
             .apply(&self.lm_head)?
             .narrow(1, seq_len - 1, 1)?;
         Ok(o)
