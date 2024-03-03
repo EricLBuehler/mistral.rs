@@ -326,6 +326,7 @@ impl Loader for MistralLoader {
             } else {
                 (None, None, None, None)
             };
+        println!("{adapters_configs:?}");
 
         Ok(Box::new(MistralModelPaths {
             tokenizer_filename,
