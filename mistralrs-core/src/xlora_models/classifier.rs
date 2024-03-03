@@ -144,15 +144,15 @@ impl XLoraClassifier {
         }
         println!(
             "{} {} {} {} {} {} {} {} {}",
-            scalings.i((0, 0, 0, 0))?,
-            scalings.i((0, 0, 0, 1))?,
-            scalings.i((0, 0, 0, 2))?,
-            scalings.i((0, 0, 0, 3))?,
-            scalings.i((0, 0, 0, 4))?,
-            scalings.i((0, 0, 0, 5))?,
-            scalings.i((0, 0, 0, 6))?,
-            scalings.i((0, 0, 0, 7))?,
-            scalings.i((0, 0, 0, 8))?
+            scalings.i((0, 0, 60, 0))?,
+            scalings.i((0, 0, 60, 1))?,
+            scalings.i((0, 0, 60, 2))?,
+            scalings.i((0, 0, 60, 3))?,
+            scalings.i((0, 0, 60, 4))?,
+            scalings.i((0, 0, 60, 5))?,
+            scalings.i((0, 0, 60, 6))?,
+            scalings.i((0, 0, 60, 7))?,
+            scalings.i((0, 0, 60, 8))?
         );
 
         Ok(scalings)
