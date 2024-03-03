@@ -246,7 +246,7 @@ impl Attention {
     }
 
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -345,7 +345,7 @@ impl DecoderLayer {
     }
 
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -471,7 +471,7 @@ impl XLoraModel {
     }
 
     fn inner_forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         scalings: Tensor,
@@ -483,20 +483,20 @@ impl XLoraModel {
         }
 
         let mut cache = if is_scaling_pass {
-            let mut new_cache = Vec::new();
+            /*let mut new_cache = Vec::new();
             for _ in 0..self.cache.xlora_lock().len() {
                 new_cache.push(None);
             }
 
-            *self.cache.xlora_lock() = new_cache.clone();
+            *self.cache.xlora_lock() = new_cache.clone();*/
             self.cache.xlora_lock()
         } else {
-            let mut new_cache = Vec::new();
+            /*let mut new_cache = Vec::new();
             for _ in 0..self.cache.lock().len() {
                 new_cache.push(None);
             }
 
-            *self.cache.lock() = new_cache.clone();
+            *self.cache.lock() = new_cache.clone();*/
             self.cache.lock()
         };
         let past_key_values_length =
@@ -509,7 +509,7 @@ impl XLoraModel {
             Some(mask)
         };
         let mut xs = self.embed_tokens.forward(input_ids)?;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             xs = layer.forward(
                 &xs,
                 attention_mask.as_ref(),
