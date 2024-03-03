@@ -529,13 +529,13 @@ impl XLoraModel {
         )?;
         // Using X-LoRA cache here
         println!("SCALINGS PASS");
-        let hidden_states = self.inner_forward(input_ids_full, seqlen_offsets, dummy_scalings, true)?;
+        let hidden_states = self.inner_forward(input_ids_full, seqlen_offsets, dummy_scalings, false)?;
         println!("SCALINGS PASS DONE");
         let scalings = self.xlora_classifier.forward(hidden_states)?;
         // Using normal cache here
         println!("FWD PASS START");
         dbg!(&input_ids);
-        self.inner_forward(input_ids, seqlen_offsets, scalings, false)?
+        self.inner_forward(input_ids, seqlen_offsets, scalings, true)?
             .apply(&self.lm_head)?
             .narrow(1, seq_len - 1, 1)
     }
