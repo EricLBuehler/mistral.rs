@@ -116,7 +116,7 @@ impl LinearLayerLike for LoraLinear {
                 input.clone()
             };
     
-            let input_mod = apply_scalings_to_x(input_new.clone(), &scalings, i)?;
+            let input_mod = Tensor::zeros_like(&input_new)?;// apply_scalings_to_x(input_new.clone(), &scalings, i)?;
             result = (result
                 + adapter_b
                     .forward(&adapter_a.forward(&input_mod)?)?
