@@ -110,16 +110,17 @@ impl LinearLayerLike for LoraLinear {
         .enumerate()
         {
             let mut input_new = input.to_dtype(adapter_a.weight().dtype())?;
+            input_new = apply_scalings_to_x(input_new.clone(), &scalings, i)?;
+
             input_new = if let Some(ref dropout) = adapter_dropout {
                 dropout.forward(&input_new, true)?
             } else {
                 input.clone()
             };
 
-            let input_mod = apply_scalings_to_x(input_new.clone(), &scalings, i)?;
             result = (result
                 + adapter_b
-                    .forward(&adapter_a.forward(&input_mod)?)?
+                    .forward(&adapter_a.forward(&input_new)?)?
                     .mul(*adapter_scale)?)?;
         }
         Ok(result)
