@@ -220,7 +220,7 @@ async fn main() -> Result<()> {
             None,
             Some(xlora_model_id),
             ModelKind::XLoraNormal,
-            Some(order.split(',').map(|x|x.trim()).filter(|x|x.is_empty()).map(|x|x.to_string()).collect::<Vec<_>>()),
+            Some(order.split(',').map(|x|x.trim()).filter(|x|!x.is_empty()).map(|x|x.to_string()).collect::<Vec<_>>()),
         )),
     };
 

@@ -306,7 +306,6 @@ impl Loader for MistralLoader {
                 let mut adapters_configs = Vec::new();
                 let mut adapters_safetensors = HashMap::new();
                 for name in self.xlora_order.as_ref().unwrap() {
-                    println!("{name:?}");
                     let paths = adapters_paths.get(name).unwrap();
                     for path in paths {
                         if path.extension().unwrap() == "safetensors" {
