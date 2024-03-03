@@ -109,7 +109,7 @@ pub struct MistralModelPaths<P> {
     tokenizer_filename: P,
     config_filename: P,
     filenames: Vec<P>,
-    xlora_adapter_filenames: Option<HashMap<String, P>>,
+    xlora_adapter_filenames: Option<Vec<(String, P)>>,
     xlora_adapter_configs: Option<Vec<(String, LoraConfig)>>,
     classifier_path: Option<P>,
     classifier_config: Option<P>,
@@ -125,7 +125,7 @@ impl ModelPaths for MistralModelPaths<PathBuf> {
     fn get_weight_filenames(&self) -> &[PathBuf] {
         &self.filenames
     }
-    fn get_adapter_filenames(&self) -> &Option<HashMap<String, PathBuf>> {
+    fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>> {
         &self.xlora_adapter_filenames
     }
     fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>> {
@@ -304,12 +304,12 @@ impl Loader for MistralLoader {
                     }
                 }
                 let mut adapters_configs = Vec::new();
-                let mut adapters_safetensors = HashMap::new();
+                let mut adapters_safetensors = Vec::new();
                 for name in self.xlora_order.as_ref().unwrap() {
                     let paths = adapters_paths.get(name).unwrap();
                     for path in paths {
                         if path.extension().unwrap() == "safetensors" {
-                            adapters_safetensors.insert(name.clone(), path.to_owned());
+                            adapters_safetensors.push((name.clone(), path.to_owned()));
                         } else {
                             let conf = fs::read_to_string(path)?;
                             let lora_config: LoraConfig = serde_json::from_str(&conf)?;
@@ -403,8 +403,8 @@ impl Loader for MistralLoader {
                         .get_adapter_filenames()
                         .as_ref()
                         .unwrap()
-                        .values()
-                        .map(|x| (*x).to_owned())
+                        .iter()
+                        .map(|(_,x)| (*x).to_owned())
                         .collect::<Vec<_>>(),
                     dtype.unwrap_or(default_dtype),
                     device,
