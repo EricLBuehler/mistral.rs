@@ -113,13 +113,13 @@ impl LinearLayerLike for LoraLinear {
             input_new = if let Some(ref dropout) = adapter_dropout {
                 dropout.forward(&input_new, true)?
             } else {
-                input.clone()
+                input_new.clone()
             };
 
-            result = (result
-                + adapter_b
-                    .forward(&adapter_a.forward(&input_new)?)?
-                    .mul(*adapter_scale)?).unwrap();
+            let res = adapter_b
+                .forward(&adapter_a.forward(&input_new)?)?
+                .mul(*adapter_scale)?;
+            result = (result + res)?;
         }
         Ok(result)
     }

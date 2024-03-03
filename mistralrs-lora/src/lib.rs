@@ -26,7 +26,7 @@ fn apply_scalings_to_x(
     layer: usize,
 ) -> Result<Tensor> {
     let scalings = scalings_layer.i((.., .., adapter))?.unsqueeze(D::Minus1)?;
-    if  layer == 60 {
+    if layer == 60 {
         dbg!(&scalings);
         println!(
             "applied scalings {adapter}: {:?}",
