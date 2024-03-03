@@ -395,7 +395,7 @@ impl XLoraModel {
         let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb_m.device())?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        let mut count = 0;
+        let mut count = 160;// 0; todo
         for layer_idx in 0..cfg.num_hidden_layers {
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
@@ -418,7 +418,7 @@ impl XLoraModel {
             dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, true),
             max_seq_len: cfg.max_position_embeddings,
-            xlora_classifier: XLoraClassifier::new(xlora_config, 160/*count*/, lora_config.len(), vb)?,
+            xlora_classifier: XLoraClassifier::new(xlora_config, count, lora_config.len(), vb)?,
         })
     }
 
@@ -546,6 +546,7 @@ impl XLoraModel {
         /*let hidden_states = self.inner_forward(&input_ids_full.clone(), seqlen_offsets, dummy_scalings, true)?;
         let scalings = self.xlora_classifier.forward(hidden_states)?;*/
         let scalings = dummy_scalings;
+        dbg!(self.cache.lock().to_vec());
         // Using normal cache here
         let o = self
             .inner_forward(input_ids, seqlen_offsets, scalings, false)?
