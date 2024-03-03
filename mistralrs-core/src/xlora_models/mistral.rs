@@ -297,6 +297,9 @@ impl Attention {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
             let attn_weights = (query_states.matmul(&key_states.transpose(2, 3)?)? * scale)?;
 
+            dbg!(&attention_mask);
+            dbg!(&attn_weights);
+            println!();
             let attn_weights = match attention_mask {
                 None => attn_weights,
                 Some(mask) => attn_weights.broadcast_add(mask)?,
@@ -517,7 +520,6 @@ impl XLoraModel {
         // Using X-LoRA cache here
         let hidden_states = self.inner_forward(input_ids, seqlen_offsets, dummy_scalings, true)?;
         let scalings = self.xlora_classifier.forward(hidden_states)?;
-        dbg!(&scalings);
         // Using normal cache here
         self.inner_forward(input_ids, seqlen_offsets, scalings, false)?
             .narrow(1, seq_len - 1, 1)?
