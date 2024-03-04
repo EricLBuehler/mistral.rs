@@ -23,21 +23,9 @@ fn apply_scalings_to_x(
     x: Tensor,
     scalings_layer: &Tensor,
     adapter: usize,
-    layer: usize,
 ) -> Result<Tensor> {
     let scalings = scalings_layer.i((.., .., adapter))?.unsqueeze(D::Minus1)?;
-    if layer == 60 {
-        dbg!(&scalings);
-        println!(
-            "applied scalings {adapter}: {:?}",
-            scalings.to_vec3::<half::bf16>().unwrap()
-        );
-        //let before = &x.to_vec3::<half::bf16>().unwrap()[0][0];
-        //dbg!(before[0]);
-    }
     let res = x.broadcast_mul(&scalings)?;
-    //if adapter == 8 && layer == 60 {let after = &res.to_vec3::<half::bf16>().unwrap()[0][0];
-    //dbg!(after[0]);}
     Ok(res)
 }
 

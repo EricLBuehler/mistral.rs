@@ -542,6 +542,7 @@ impl XLoraModel {
         )?;
         let scalings = self.xlora_classifier.forward(hidden_states)?;
 
+        dbg!(input_ids);
         // Using normal cache here
         let o = self
             .inner_forward(input_ids, seqlen_offsets, scalings, false)?
