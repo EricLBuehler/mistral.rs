@@ -524,6 +524,7 @@ impl XLoraModel {
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
+        seqlen_offsets_full: &[usize],
     ) -> Result<Tensor> {
         /*let (b_size, seq_len) = input_ids.dims2()?;
         let dummy_scalings = self.xlora_classifier.get_dummy_scalings(

@@ -489,19 +489,19 @@ fn get_completion_input(
 }
 impl Pipeline for MistralPipeline {
     fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor {
-        let (input_ids, input_ids_full, seqlen_offsets) = if self.is_xlora() && !is_prompt {
-            let (input_ids_full, seqlen_offsets) = get_prompt_input(&input_toks, self.device());
-            let (input_ids, _) = get_completion_input(&input_toks, self.device());
-            (input_ids, Some(input_ids_full), seqlen_offsets)
+        let (input_ids, input_ids_full, seqlen_offsets, seqlen_offsets_full) = if self.is_xlora() && !is_prompt {
+            let (input_ids_full, seqlen_offsets_full) = get_prompt_input(&input_toks, self.device());
+            let (input_ids, seqlen_offsets) = get_completion_input(&input_toks, self.device());
+            (input_ids, Some(input_ids_full), seqlen_offsets, Some(seqlen_offsets_full))
         } else if self.is_xlora() && is_prompt {
             let (input_ids_full, seqlen_offsets) = get_prompt_input(&input_toks, self.device());
-            (input_ids_full.clone(), Some(input_ids_full), seqlen_offsets)
+            (input_ids_full.clone(), Some(input_ids_full), seqlen_offsets.clone(), Some(seqlen_offsets))
         } else if is_prompt {
             let (input_ids, seqlen_offsets) = get_prompt_input(&input_toks, self.device());
-            (input_ids, None, seqlen_offsets)
+            (input_ids, None, seqlen_offsets, None)
         } else {
             let (input_ids, seqlen_offsets) = get_completion_input(&input_toks, self.device());
-            (input_ids, None, seqlen_offsets)
+            (input_ids, None, seqlen_offsets, None)
         };
         let result = match self.model {
             Model::Normal(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
@@ -510,6 +510,7 @@ impl Pipeline for MistralPipeline {
                 &input_ids,
                 input_ids_full.as_ref().unwrap(),
                 &seqlen_offsets,
+                seqlen_offsets_full.as_ref().unwrap(),
             ),
         };
         match result {
