@@ -2,7 +2,7 @@
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{Activation, Linear, VarBuilder};
+use candle_nn::{Activation, VarBuilder};
 use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig};
 use std::{iter::zip, sync::Arc};
 
@@ -90,7 +90,7 @@ impl RotaryEmbedding {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
     gate_proj: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -136,6 +136,7 @@ impl MLP {
             act_fn: cfg.hidden_act,
         })
     }
+
     fn forward(&self, xs: &Tensor, scalings: Tensor) -> Result<Tensor> {
         let lhs = self
             .gate_proj
@@ -162,7 +163,7 @@ fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Ten
     unimplemented!("compile with '--features flash-attn'")
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Attention {
     q_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     k_proj: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -296,6 +297,7 @@ impl Attention {
         } else {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
             let attn_weights = (query_states.matmul(&key_states.transpose(2, 3)?)? * scale)?;
+
             let attn_weights = match attention_mask {
                 None => attn_weights,
                 Some(mask) => attn_weights.broadcast_add(mask)?,
@@ -303,14 +305,16 @@ impl Attention {
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
             attn_weights.matmul(&value_states)?
         };
-        let out = attn_output
-            .transpose(1, 2)?
-            .reshape((b_sz, q_len, self.hidden_size))?;
-        self.o_proj.lora_forward(&out, scalings)
+        self.o_proj.lora_forward(
+            &attn_output
+                .transpose(1, 2)?
+                .reshape((b_sz, q_len, self.hidden_size))?,
+            scalings,
+        )
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct DecoderLayer {
     self_attn: Attention,
     mlp: MLP,
@@ -362,8 +366,9 @@ impl DecoderLayer {
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
-        let xs = xs.apply(&self.post_attention_layernorm)?;
-        let xs = self.mlp.forward(&xs, scalings)?;
+        let xs = self
+            .mlp
+            .forward(&xs.apply(&self.post_attention_layernorm)?, scalings)?;
         residual + xs
     }
 }
@@ -373,7 +378,7 @@ pub struct XLoraModel {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: Linear,
+    lm_head: candle_nn::Linear,
     sliding_window: usize,
     dtype: DType,
     pub device: Device,
@@ -395,7 +400,7 @@ impl XLoraModel {
         let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb_m.device())?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        let mut count = 160;// 0; todo
+        let mut count = 0;
         for layer_idx in 0..cfg.num_hidden_layers {
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
@@ -547,7 +552,10 @@ impl XLoraModel {
         let scalings = self.xlora_classifier.forward(hidden_states)?;*/
         let mut new_cache = Vec::new();
         for _ in 0..self.cache.xlora_lock().len() {
-            new_cache.push(Some((Tensor::new(&[0i64], &self.device)?, Tensor::new(&[0i64], &self.device)?)));
+            new_cache.push(Some((
+                Tensor::new(&[0i64], &self.device)?,
+                Tensor::new(&[0i64], &self.device)?,
+            )));
         }
 
         *self.cache.xlora_lock() = new_cache.clone();
