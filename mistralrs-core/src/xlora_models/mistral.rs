@@ -400,7 +400,7 @@ impl XLoraModel {
         let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb_m.device())?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        let mut count = 0;
+        let mut count = 160;//0; todo
         for layer_idx in 0..cfg.num_hidden_layers {
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
