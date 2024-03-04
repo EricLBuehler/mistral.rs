@@ -551,7 +551,7 @@ impl XLoraModel {
         //let hidden_states = self.inner_forward(input_ids, seqlen_offsets, dummy_scalings, false)?;
         let hidden_states =
             self.inner_forward(input_ids_full, seqlen_offsets_full, dummy_scalings, true)?;
-        hidden_states.write_npy("rust.npy")?;
+        hidden_states.to_dtype(DType::F32)?.write_npy("rust.npy")?;
         panic!();
 
         let mut new_cache = Vec::new();
