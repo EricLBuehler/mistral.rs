@@ -553,7 +553,8 @@ impl XLoraModel {
             )));
         }
         *self.cache.xlora_lock() = new_cache.clone();
-        
+        *self.cache.lock() = new_cache.clone();
+
         Ok(o)
     }
 }
