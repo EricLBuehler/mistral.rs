@@ -71,7 +71,7 @@ pub fn linear(
     lora_config: &Vec<(String, LoraConfig)>,
     count: &mut usize,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
-    let prefix = vb.prefix();
+    /*let prefix = vb.prefix();
     let module = prefix.split('.').last().unwrap();
 
     let target_modules = &lora_config[0].1.target_modules;
@@ -81,7 +81,7 @@ pub fn linear(
     if target_modules.contains(module) {
         *count += 1;
     }
-    return Ok(Arc::new(inner));
+    return Ok(Arc::new(inner));*/
     
 
     let prefix = vb.prefix();
@@ -112,7 +112,7 @@ pub fn linear_no_bias(
     lora_config: &Vec<(String, LoraConfig)>,
     count: &mut usize,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
-    let prefix = vb.prefix();
+    /*let prefix = vb.prefix();
     let module = prefix.split('.').last().unwrap();
 
     let target_modules = &lora_config[0].1.target_modules;
@@ -122,7 +122,7 @@ pub fn linear_no_bias(
     if target_modules.contains(module) {
         *count += 1;
     }
-    return Ok(Arc::new(inner));
+    return Ok(Arc::new(inner));*/
 
 
     let prefix = vb.prefix();
