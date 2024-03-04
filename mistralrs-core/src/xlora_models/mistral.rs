@@ -536,7 +536,13 @@ impl XLoraModel {
             self.dtype,
         )?;
         // Using X-LoRA cache here
-        let hidden_states = self.inner_forward(input_ids, seqlen_offsets, dummy_scalings, false)?;
+        //let hidden_states = self.inner_forward(input_ids, seqlen_offsets, dummy_scalings, false)?;
+        let hidden_states = self.inner_forward(input_ids_full, seqlen_offsets_full, dummy_scalings, true)?;
+        let mut new_cache = Vec::new();
+        for _ in 0..self.cache.xlora_lock().len() {
+            new_cache.push(Some((Tensor::zeros((1,), DType::BF16, &Device::Cpu)?,Tensor::zeros((1,), DType::BF16, &Device::Cpu)?)));
+        }
+        *self.cache.lock() = new_cache.clone();
 
         let scalings = self.xlora_classifier.forward(hidden_states)?;
 
