@@ -192,7 +192,7 @@ impl Engine {
                 },
             )));
         }
-        if get_mut_arcmutex!(self.pipeline).is_xlora() {
+        /*if get_mut_arcmutex!(self.pipeline).is_xlora() {
             let mut new_cache = Vec::new();
             for layer in 0..get_mut_arcmutex!(self.pipeline).num_hidden_layers() {
                 let mut k_vec = Vec::new();
@@ -221,7 +221,7 @@ impl Engine {
                 )));
             }
             *get_mut_arcmutex!(self.pipeline).cache().xlora_lock() = new_cache;
-        }
+        }*/
         *get_mut_arcmutex!(self.pipeline).cache().lock() = new_cache;
     }
 
@@ -261,7 +261,7 @@ impl Engine {
                     v_caches.get(seq_i).unwrap().clone(),
                 ));
             }
-            if pipeline.is_xlora() {
+            /*if pipeline.is_xlora() {
                 let cache = pipeline.cache().xlora_lock();
                 let cache = cache.get(layer).unwrap();
                 let k_cache = cache.as_ref().unwrap().0.clone();
@@ -281,7 +281,7 @@ impl Engine {
                         v_caches.get(seq_i).unwrap().clone(),
                     ));
                 }
-            }
+            }*/
         }
     }
 
