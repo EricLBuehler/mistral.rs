@@ -527,7 +527,7 @@ impl XLoraModel {
         seqlen_offsets: &[usize],
         seqlen_offsets_full: &[usize],
     ) -> Result<Tensor> {
-        let (b_size, seq_len) = input_ids.dims2()?;
+        /*let (b_size, seq_len) = input_ids.dims2()?;
         let (_, seq_len_full) = input_ids_full.dims2()?;
         let dummy_scalings = self.xlora_classifier.get_dummy_scalings(
             b_size,
@@ -553,34 +553,27 @@ impl XLoraModel {
             .apply(&self.lm_head)?
             .narrow(1, seq_len_full - 1, 1)?;
         return Ok(o);
+        */
 
         let (b_size, seq_len) = input_ids.dims2()?;
+        let (_, seq_len_full) = input_ids_full.dims2()?;
+
         let dummy_scalings = self.xlora_classifier.get_dummy_scalings(
             b_size,
-            seq_len,
+            seq_len_full,
             input_ids.device(),
             self.dtype,
         )?;
         // Using X-LoRA cache here
-        //let hidden_states = self.inner_forward(input_ids, seqlen_offsets, dummy_scalings, false)?;
-
-        let hidden_states = self.inner_forward(
-            &input_ids_full.clone(),
-            seqlen_offsets_full,
-            dummy_scalings.clone(),
-            true,
-        )?;
+        let hidden_states = self.inner_forward(input_ids, seqlen_offsets, dummy_scalings, false)?;
 
         let scalings = self.xlora_classifier.forward(hidden_states)?;
 
         // Using no cache here
-        /*let o=self.inner_forward(input_ids_full, seqlen_offsets_full, scalings, true)?
-        .apply(&self.lm_head)?
-        .narrow(1, seq_len - 1, 1)?;*/
         let o = self
-            .inner_forward(input_ids_full, seqlen_offsets_full, dummy_scalings, true)?
+            .inner_forward(input_ids_full, seqlen_offsets_full, scalings, true)?
             .apply(&self.lm_head)?
-            .narrow(1, seq_len - 1, 1)?;
+            .narrow(1, seq_len_full - 1, 1)?;
 
         let mut new_cache = Vec::new();
         for _ in 0..self.cache.xlora_lock().len() {
@@ -590,7 +583,7 @@ impl XLoraModel {
             )));
         }
         *self.cache.xlora_lock() = new_cache.clone();
-        *self.cache.lock() = new_cache.clone();
+        //*self.cache.lock() = new_cache.clone();
 
         Ok(o)
     }
