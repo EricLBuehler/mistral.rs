@@ -274,7 +274,6 @@ impl Attention {
             self.rotary_emb
                 .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offsets)?;
 
-        dbg!(&kv_cache);
         let (key_states, value_states) = match &*kv_cache {
             None => (key_states, value_states),
             Some((prev_k, prev_v)) => {
