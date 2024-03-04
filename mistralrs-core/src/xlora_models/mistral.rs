@@ -533,15 +533,7 @@ impl XLoraModel {
             input_ids.device(),
             self.dtype,
         )?;
-        
-        let mut new_cache = Vec::new();
-        for _ in 0..self.cache.xlora_lock().len() {
-            new_cache.push(Some((
-                Tensor::new(&[0i64], &self.device)?,
-                Tensor::new(&[0i64], &self.device)?,
-            )));
-        }
-        *self.cache.xlora_lock() = new_cache.clone();
+      
         let scalings = dummy_scalings;
         dbg!(input_ids_full);
         dbg!(seqlen_offsets_full);
@@ -550,6 +542,14 @@ impl XLoraModel {
             .inner_forward(input_ids_full, seqlen_offsets_full, scalings, true)?
             .apply(&self.lm_head)?
             .narrow(1, seq_len - 1, 1)?;
+        
+        let mut new_cache = Vec::new();
+        for _ in 0..self.cache.xlora_lock().len() {
+            new_cache.push(Some((
+                Tensor::new(&[0i64], &self.device)?,
+                Tensor::new(&[0i64], &self.device)?,
+            )));
+        }
         *self.cache.lock() = new_cache.clone();
         return Ok(o);
 
