@@ -547,7 +547,7 @@ impl XLoraModel {
         let scalings = dummy_scalings;
         // Using normal cache here
         let o = self
-            .inner_forward(input_ids_full, seqlen_offsets, scalings, true)?
+            .inner_forward(input_ids_full, seqlen_offsets_full, scalings, true)?
             .apply(&self.lm_head)?
             .narrow(1, seq_len - 1, 1)?;
         let mut new_cache = Vec::new();
