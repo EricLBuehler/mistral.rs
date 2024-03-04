@@ -274,6 +274,7 @@ impl Attention {
             self.rotary_emb
                 .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offsets)?;
 
+        dbg!(&kv_cache);
         let (key_states, value_states) = match &*kv_cache {
             None => (key_states, value_states),
             Some((prev_k, prev_v)) => {
@@ -546,6 +547,7 @@ impl XLoraModel {
         *self.cache.lock() = new_cache.clone();
         let scalings = dummy_scalings;
         // Using normal cache here
+        dbg!(input_ids_full);
         let o = self
             .inner_forward(input_ids_full, seqlen_offsets_full, scalings, true)?
             .apply(&self.lm_head)?
