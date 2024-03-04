@@ -531,7 +531,7 @@ impl XLoraModel {
 
         let dummy_scalings = self.xlora_classifier.get_dummy_scalings(
             b_size,
-            seq_len,
+            seq_len_full,
             input_ids.device(),
             self.dtype,
         )?;
