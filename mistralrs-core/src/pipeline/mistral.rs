@@ -457,7 +457,6 @@ fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>], device: &Device) -> (T
     for seq in input_toks.iter() {
         let mut ctxt = deref_refcell!(seq).get_toks().to_vec();
         seqlen_offsets.push(0);
-        *deref_mut_refcell!(seq).gen_idx() += 1;
 
         ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
 
@@ -479,7 +478,6 @@ fn get_completion_input(
         let start_pos = deref_refcell!(seq).get_toks().len().saturating_sub(1);
         let ctxt = deref_refcell!(seq).get_toks()[start_pos..].to_vec();
         seqlen_offsets.push(start_pos);
-        *deref_mut_refcell!(seq).gen_idx() += 1;
 
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());

@@ -29,7 +29,6 @@ pub struct Sequence {
     id: usize,
     timestamp: u64,
     state: Cell<SequenceState>,
-    gen_idx: usize,
     cache: Vec<Option<(Tensor, Tensor)>>,
     xlora_cache: Option<Vec<Option<(Tensor, Tensor)>>>,
     responder: Sender<Response>,
@@ -61,7 +60,6 @@ impl Sequence {
             id,
             timestamp,
             state: Cell::new(SequenceState::Waiting),
-            gen_idx: 0,
             cache: vec![None; layers],
             xlora_cache: if is_xlora {
                 Some(vec![None; layers])
@@ -103,10 +101,6 @@ impl Sequence {
 
     pub fn get_toks(&self) -> &[u32] {
         &self.tokens
-    }
-
-    pub fn gen_idx(&mut self) -> &mut usize {
-        &mut self.gen_idx
     }
 
     pub fn cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
