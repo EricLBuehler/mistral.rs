@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fs::File,
     sync::{mpsc::channel, Arc},
 };
 
@@ -72,7 +73,7 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
 
-        /// Comma delimited list of adapter names, in the order that it was trained.
+        /// Ordering JSON file
         #[arg(short, long)]
         order: String,
     },
@@ -220,14 +221,7 @@ async fn main() -> Result<()> {
             None,
             Some(xlora_model_id),
             ModelKind::XLoraNormal,
-            Some(
-                order
-                    .split(',')
-                    .map(|x| x.trim())
-                    .filter(|x| !x.is_empty())
-                    .map(|x| x.to_string())
-                    .collect::<Vec<_>>(),
-            ),
+            Some(serde_json::from_reader(File::open(order)?)?),
         )),
     };
 

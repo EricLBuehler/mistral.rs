@@ -1,6 +1,10 @@
 import torch
-x=torch.randn(1,1,3)
-s=torch.full((1,9,1), 2)
-print(x)
-print(s)
-print(x*s)
+
+class A(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.a = torch.nn.Linear(2,3)
+        self.b = torch.nn.Linear(2,3)
+
+a=A()
+print(list(a.named_parameters()))

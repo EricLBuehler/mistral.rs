@@ -14,7 +14,7 @@ use candle_core::{DType, Device, Tensor};
 use candle_nn::Activation;
 use candle_sampling::logits_processor::Logprobs;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use mistralrs_lora::LoraConfig;
+use mistralrs_lora::{LoraConfig, Ordering};
 use serde::Deserialize;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -113,6 +113,7 @@ pub struct MistralModelPaths<P> {
     xlora_adapter_configs: Option<Vec<(String, LoraConfig)>>,
     classifier_path: Option<P>,
     classifier_config: Option<P>,
+    xlora_ordering: Option<Ordering>,
 }
 
 impl ModelPaths for MistralModelPaths<PathBuf> {
@@ -137,6 +138,9 @@ impl ModelPaths for MistralModelPaths<PathBuf> {
     fn get_classifier_path(&self) -> &Option<PathBuf> {
         &self.classifier_path
     }
+    fn get_ordering(&self) -> &Option<Ordering> {
+        &self.xlora_ordering
+    }
 }
 
 pub struct MistralPipeline {
@@ -152,7 +156,7 @@ pub struct MistralLoader {
     quantized_filename: Option<String>,
     xlora_model_id: Option<String>,
     kind: ModelKind,
-    xlora_order: Option<Vec<String>>,
+    xlora_order: Option<Ordering>,
 }
 
 #[derive(Clone, Copy)]
@@ -190,7 +194,7 @@ impl MistralLoader {
         quantized_filename: Option<String>,
         xlora_model_id: Option<String>,
         kind: ModelKind,
-        xlora_order: Option<Vec<String>>,
+        xlora_order: Option<Ordering>,
     ) -> Self {
         Self {
             model_id,
@@ -254,7 +258,7 @@ impl Loader for MistralLoader {
             }
         };
 
-        let (adapters_configs, adapters_safetensors, classifier_path, classifier_config) =
+        let (adapters_configs, adapters_safetensors, classifier_path, classifier_config, ordering) =
             if let Some(ref xlora_id) = self.xlora_model_id {
                 let api = ApiBuilder::new()
                     .with_progress(true)
@@ -305,7 +309,7 @@ impl Loader for MistralLoader {
                 }
                 let mut adapters_configs = Vec::new();
                 let mut adapters_safetensors = Vec::new();
-                for name in self.xlora_order.as_ref().unwrap() {
+                for name in &self.xlora_order.as_ref().unwrap().adapters {
                     let paths = adapters_paths.get(name).unwrap();
                     for path in paths {
                         if path.extension().unwrap() == "safetensors" {
@@ -322,9 +326,10 @@ impl Loader for MistralLoader {
                     Some(adapters_safetensors),
                     Some(classifier_path),
                     Some(config_path),
+                    self.xlora_order.clone(),
                 )
             } else {
-                (None, None, None, None)
+                (None, None, None, None, None)
             };
 
         Ok(Box::new(MistralModelPaths {
@@ -335,6 +340,7 @@ impl Loader for MistralLoader {
             xlora_adapter_filenames: adapters_safetensors,
             classifier_path,
             classifier_config,
+            xlora_ordering: ordering,
         }))
     }
 
@@ -419,6 +425,7 @@ impl Loader for MistralLoader {
                     vb,
                     paths.get_adapter_configs().as_ref().unwrap(),
                     xlora_config,
+                    paths.get_ordering().as_ref().unwrap().clone(),
                 )?;
                 Model::XLoraNormal(model)
             }

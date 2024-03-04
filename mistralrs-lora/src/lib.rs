@@ -8,6 +8,15 @@ use serde::Deserialize;
 mod frozenlinear;
 mod loralinear;
 
+use std::collections::HashMap;
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Ordering {
+    #[serde(rename = "order")]
+    pub adapters: Vec<String>,
+    pub layers: HashMap<String, usize>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct LoraConfig {
     #[serde(rename = "r")]
@@ -29,7 +38,7 @@ fn apply_scalings_to_x(
     if layer == 0 && adapter == 8 {
         dbg!(&scalings);
         dbg!(&x);
-        println!("{:.2?}",&scalings.to_vec3::<half::bf16>().unwrap());
+        println!("{:.2?}", &scalings.to_vec3::<half::bf16>().unwrap());
     }
     let res = x.broadcast_mul(&scalings)?;
     Ok(res)
@@ -80,6 +89,7 @@ pub fn linear(
     vb: VarBuilder,
     lora_config: &Vec<(String, LoraConfig)>,
     count: &mut usize,
+    ord: &Ordering,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
     let prefix = vb.prefix();
     let module = prefix.split('.').last().unwrap();
@@ -96,8 +106,10 @@ pub fn linear(
     if !target_modules.contains(module) {
         return Ok(Arc::new(inner));
     }
+    let name = prefix.split("lora_A").last().unwrap();
+    let layer = ord.layers.get(name).unwrap();
 
-    let lorainner = LoraLinear::new(&inner, &linear_config, lora_config, &vb, *count)?;
+    let lorainner = LoraLinear::new(&inner, &linear_config, lora_config, &vb, *layer)?;
     *count += 1;
     Ok(Arc::new(lorainner))
 }
@@ -108,6 +120,7 @@ pub fn linear_no_bias(
     vb: VarBuilder,
     lora_config: &Vec<(String, LoraConfig)>,
     count: &mut usize,
+    ord: &Ordering,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
     let prefix = vb.prefix();
     let module = prefix.split('.').last().unwrap();
@@ -124,7 +137,10 @@ pub fn linear_no_bias(
     if !target_modules.contains(module) {
         return Ok(Arc::new(inner));
     }
-    let lorainner = LoraLinear::new(&inner, &linear_config, lora_config, &vb, *count)?;
+    let name = prefix.split("lora_A").last().unwrap();
+    let layer = ord.layers.get(name).unwrap();
+
+    let lorainner = LoraLinear::new(&inner, &linear_config, lora_config, &vb, *layer)?;
     *count += 1;
     Ok(Arc::new(lorainner))
 }

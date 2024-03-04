@@ -3,7 +3,7 @@
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
-use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig};
+use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 use std::{iter::zip, sync::Arc};
 
 use crate::models::{mistral::Config, Cache};
@@ -105,6 +105,7 @@ impl MLP {
         vb: VarBuilder,
         lora_config: &Vec<(String, LoraConfig)>,
         count: &mut usize,
+        ord: &Ordering,
     ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let intermediate_sz = cfg.intermediate_size;
@@ -114,6 +115,7 @@ impl MLP {
             vb.pp("gate_proj"),
             lora_config,
             count,
+            ord,
         )?;
         let up_proj = linear_no_bias(
             hidden_sz,
@@ -121,6 +123,7 @@ impl MLP {
             vb.pp("up_proj"),
             lora_config,
             count,
+            ord,
         )?;
         let down_proj = linear_no_bias(
             intermediate_sz,
@@ -128,6 +131,7 @@ impl MLP {
             vb.pp("down_proj"),
             lora_config,
             count,
+            ord,
         )?;
         Ok(Self {
             gate_proj,
@@ -185,6 +189,7 @@ impl Attention {
         vb: VarBuilder,
         lora_config: &Vec<(String, LoraConfig)>,
         count: &mut usize,
+        ord: &Ordering,
     ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
@@ -197,6 +202,7 @@ impl Attention {
             vb.pp("q_proj"),
             lora_config,
             count,
+            ord,
         )?;
         let k_proj = linear_no_bias(
             hidden_sz,
@@ -204,6 +210,7 @@ impl Attention {
             vb.pp("k_proj"),
             lora_config,
             count,
+            ord,
         )?;
         let v_proj = linear_no_bias(
             hidden_sz,
@@ -211,6 +218,7 @@ impl Attention {
             vb.pp("v_proj"),
             lora_config,
             count,
+            ord,
         )?;
         let o_proj = linear_no_bias(
             num_heads * head_dim,
@@ -218,6 +226,7 @@ impl Attention {
             vb.pp("o_proj"),
             lora_config,
             count,
+            ord,
         )?;
         Ok(Self {
             q_proj,
@@ -329,9 +338,11 @@ impl DecoderLayer {
         vb: VarBuilder,
         lora_config: &Vec<(String, LoraConfig)>,
         count: &mut usize,
+        ord: &Ordering,
     ) -> Result<Self> {
-        let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"), lora_config, count)?;
-        let mlp = MLP::new(cfg, vb.pp("mlp"), lora_config, count)?;
+        let self_attn =
+            Attention::new(rotary_emb, cfg, vb.pp("self_attn"), lora_config, count, ord)?;
+        let mlp = MLP::new(cfg, vb.pp("mlp"), lora_config, count, ord)?;
         let input_layernorm =
             RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let post_attention_layernorm = RmsNorm::new(
@@ -393,6 +404,7 @@ impl XLoraModel {
         vb: VarBuilder,
         lora_config: &Vec<(String, LoraConfig)>,
         xlora_config: XLoraConfig,
+        xlora_ordering: Ordering,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
@@ -408,6 +420,7 @@ impl XLoraModel {
                 vb_l.pp(layer_idx),
                 lora_config,
                 &mut count,
+                &xlora_ordering,
             )?;
             layers.push(layer)
         }

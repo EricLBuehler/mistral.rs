@@ -1,7 +1,7 @@
 mod mistral;
 use candle_sampling::logits_processor::Logprobs;
 pub use mistral::{MistralLoader, MistralSpecificConfig};
-use mistralrs_lora::LoraConfig;
+use mistralrs_lora::{LoraConfig, Ordering};
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -24,6 +24,7 @@ pub trait ModelPaths {
     fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>>;
     fn get_classifier_path(&self) -> &Option<PathBuf>;
     fn get_classifier_config(&self) -> &Option<PathBuf>;
+    fn get_ordering(&self) -> &Option<Ordering>;
 }
 
 pub enum TokenSource {
