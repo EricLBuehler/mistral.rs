@@ -29,7 +29,7 @@ fn apply_scalings_to_x(
     if layer == 60 && adapter == 8 {
         dbg!(&scalings);
         dbg!(&x);
-        println!("{:?}",&scalings.to_vec3::<half::bf16>().unwrap());
+        println!("{:.2?}",&scalings.to_vec3::<half::bf16>().unwrap());
     }
     let res = x.broadcast_mul(&scalings)?;
     Ok(res)
