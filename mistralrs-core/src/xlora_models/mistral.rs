@@ -536,12 +536,15 @@ impl XLoraModel {
         // Using X-LoRA cache here
         //let hidden_states = self.inner_forward(input_ids, seqlen_offsets, dummy_scalings, false)?;
 
-        let hidden_states = self.inner_forward(&input_ids_full.clone(), seqlen_offsets_full, dummy_scalings, true)?;
+        let hidden_states = self.inner_forward(&input_ids_full.clone(), seqlen_offsets_full, dummy_scalings.clone(), true)?;
 
         let scalings = self.xlora_classifier.forward(hidden_states)?;
 
         // Using no cache here
-        let o=self.inner_forward(input_ids_full, seqlen_offsets_full, scalings, true)?
+        /*let o=self.inner_forward(input_ids_full, seqlen_offsets_full, scalings, true)?
+            .apply(&self.lm_head)?
+            .narrow(1, seq_len - 1, 1)?;*/
+        let o=self.inner_forward(input_ids_full, seqlen_offsets_full, dummy_scalings, true)?
             .apply(&self.lm_head)?
             .narrow(1, seq_len - 1, 1)?;
 
