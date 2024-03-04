@@ -544,6 +544,7 @@ impl XLoraModel {
             )));
         }
         *self.cache.lock() = new_cache.clone();
+        *self.cache.xlora_lock() = new_cache.clone();
 
         let scalings = dummy_scalings;
         // Using normal cache here
