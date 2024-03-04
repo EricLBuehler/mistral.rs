@@ -571,27 +571,27 @@
             <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenize_prompt(<span class="kw-2">&amp;</span>request.prompt),
             request.response
         );
-        <span class="kw">if </span>prompt.len() &gt; <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_max_seq_len()
-            &amp;&amp; !<span class="self">self</span>.truncate_sequence
-        {
-            <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-            </span>request
-                .response
-                .send(Response::Error(
-                    <span class="macro">format!</span>(<span class="string">"Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?"</span>, <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_max_seq_len()).into(),
-                ))
-                .unwrap();
-            <span class="kw">return</span>;
-        } <span class="kw">else </span>{
-            <span class="kw">let </span>prompt_len = prompt.len();
-            <span class="kw">let </span>max_len = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_max_seq_len();
-            <span class="kw">let </span>currently_over = max_len - prompt_len;
-            <span class="kw">let </span>sampling_max = <span class="kw">if let </span><span class="prelude-val">Some</span>(sampling_max) = request.sampling_params.max_len {
-                sampling_max
+        <span class="kw">if </span>prompt.len() &gt; <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_max_seq_len() {
+            <span class="kw">if </span>!<span class="self">self</span>.truncate_sequence {
+                <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
+                </span>request
+                    .response
+                    .send(Response::Error(
+                        <span class="macro">format!</span>(<span class="string">"Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?"</span>, <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_max_seq_len()).into(),
+                    ))
+                    .unwrap();
+                <span class="kw">return</span>;
             } <span class="kw">else </span>{
-                <span class="number">10
-            </span>};
-            prompt = prompt[(currently_over + sampling_max)..].to_vec();
+                <span class="kw">let </span>prompt_len = prompt.len();
+                <span class="kw">let </span>max_len = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_max_seq_len();
+                <span class="kw">let </span>currently_over = prompt_len - max_len;
+                <span class="kw">let </span>sampling_max = <span class="kw">if let </span><span class="prelude-val">Some</span>(sampling_max) = request.sampling_params.max_len {
+                    sampling_max
+                } <span class="kw">else </span>{
+                    <span class="number">10
+                </span>};
+                prompt = prompt[(currently_over + sampling_max)..].to_vec();
+            }
         }
 
         <span class="kw">let </span>sampling_method = <span class="kw">match </span>(
