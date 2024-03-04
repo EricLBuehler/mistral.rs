@@ -539,7 +539,7 @@ impl XLoraModel {
         dbg!(seqlen_offsets_full);
         // Using normal cache here
         let o = self
-            .inner_forward(input_ids, seqlen_offsets, scalings, true)?
+            .inner_forward(input_ids, seqlen_offsets, scalings, false)?
             .apply(&self.lm_head)?
             .narrow(1, seq_len - 1, 1)?;
         
