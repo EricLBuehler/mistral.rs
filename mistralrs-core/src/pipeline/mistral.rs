@@ -491,7 +491,6 @@ impl Pipeline for MistralPipeline {
             if self.is_xlora() && !is_prompt {
                 let (input_ids_full, seqlen_offsets_full) =
                     get_prompt_input(&input_toks, self.device());
-                dbg!(&seqlen_offsets_full);
                 let (input_ids, seqlen_offsets) = get_completion_input(&input_toks, self.device());
                 (
                     input_ids,
