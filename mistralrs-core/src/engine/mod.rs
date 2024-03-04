@@ -236,27 +236,27 @@ impl Engine {
             get_mut_arcmutex!(self.pipeline).tokenize_prompt(&request.prompt),
             request.response
         );
-        if prompt.len() > get_mut_arcmutex!(self.pipeline).get_max_seq_len()
-            && !self.truncate_sequence
-        {
-            // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-            request
-                .response
-                .send(Response::Error(
-                    format!("Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?", get_mut_arcmutex!(self.pipeline).get_max_seq_len()).into(),
-                ))
-                .unwrap();
-            return;
-        } else {
-            let prompt_len = prompt.len();
-            let max_len = get_mut_arcmutex!(self.pipeline).get_max_seq_len();
-            let currently_over = max_len - prompt_len;
-            let sampling_max = if let Some(sampling_max) = request.sampling_params.max_len {
-                sampling_max
+        if prompt.len() > get_mut_arcmutex!(self.pipeline).get_max_seq_len() {
+            if !self.truncate_sequence {
+                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
+                request
+                    .response
+                    .send(Response::Error(
+                        format!("Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?", get_mut_arcmutex!(self.pipeline).get_max_seq_len()).into(),
+                    ))
+                    .unwrap();
+                return;
             } else {
-                10
-            };
-            prompt = prompt[(currently_over + sampling_max)..].to_vec();
+                let prompt_len = prompt.len();
+                let max_len = get_mut_arcmutex!(self.pipeline).get_max_seq_len();
+                let currently_over = prompt_len - max_len;
+                let sampling_max = if let Some(sampling_max) = request.sampling_params.max_len {
+                    sampling_max
+                } else {
+                    10
+                };
+                prompt = prompt[(currently_over + sampling_max)..].to_vec();
+            }
         }
 
         let sampling_method = match (
