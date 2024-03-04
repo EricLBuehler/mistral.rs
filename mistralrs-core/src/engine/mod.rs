@@ -318,19 +318,30 @@ impl Engine {
             request.sampling_params.top_p,
             request.sampling_params.temperature,
         ) {
-            (Some(topk), None, _) => SamplingMethod::TopK(topk),
-            (None, Some(topp), _) => SamplingMethod::TopP(topp),
-            (None, None, Some(_)) | (Some(_), Some(_), Some(_)) | (Some(_), Some(_), None) => {
+            (Some(topk), None, Some(_)) => SamplingMethod::TopK(topk),
+            (None, Some(topp), Some(_)) => SamplingMethod::TopP(topp),
+            (Some(topk), Some(topp), Some(_)) => SamplingMethod::TopKP((topk, topp)),
+            (None, None, None) => SamplingMethod::Multinomial,
+            (Some(_), Some(_), None) | (None, Some(_), None) | (Some(_), None, None) => {
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                 request
                     .response
                     .send(Response::Error(
-                        "Please specify either topk or topp, or neither if temperature is not specified.".into(),
+                        "If topp or topk are specified and temperature is not specified then argmax sampling will be used. Consider using a temperature of 1.".into(),
                     ))
                     .unwrap();
                 return;
             }
-            (None, None, None) => SamplingMethod::Multinomial,
+            (None, None, Some(_)) => {
+                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
+                request
+                    .response
+                    .send(Response::Error(
+                        "If topp and topk are not specified but temperature is set then argmax sampling will be used.".into(),
+                    ))
+                    .unwrap();
+                return;
+            }
         };
         let num_hidden_layers = get_mut_arcmutex!(self.pipeline).num_hidden_layers();
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
