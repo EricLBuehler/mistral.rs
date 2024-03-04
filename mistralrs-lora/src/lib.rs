@@ -138,8 +138,8 @@ pub fn linear_no_bias(
         return Ok(Arc::new(inner));
     }
     let name = prefix.split("lora_A").last().unwrap();
-    println!("{name}");
     let layer = ord.layers.get(name).unwrap();
+    println!("{layer}");
 
     let lorainner = LoraLinear::new(&inner, &linear_config, lora_config, &vb, *layer)?;
     *count += 1;
