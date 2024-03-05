@@ -252,6 +252,31 @@
 <a href="#251" id="251">251</a>
 <a href="#252" id="252">252</a>
 <a href="#253" id="253">253</a>
+<a href="#254" id="254">254</a>
+<a href="#255" id="255">255</a>
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a>
+<a href="#260" id="260">260</a>
+<a href="#261" id="261">261</a>
+<a href="#262" id="262">262</a>
+<a href="#263" id="263">263</a>
+<a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
+<a href="#269" id="269">269</a>
+<a href="#270" id="270">270</a>
+<a href="#271" id="271">271</a>
+<a href="#272" id="272">272</a>
+<a href="#273" id="273">273</a>
+<a href="#274" id="274">274</a>
+<a href="#275" id="275">275</a>
+<a href="#276" id="276">276</a>
+<a href="#277" id="277">277</a>
+<a href="#278" id="278">278</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fs::File,
@@ -267,8 +292,9 @@
 <span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::{Parser, Subcommand};
 <span class="kw">use </span>mistralrs_core::{
-    Conversation, Loader, MistralLoader, MistralRs, MistralSpecificConfig, ModelKind, Request,
-    Response, SamplingParams, SchedulerMethod, StopTokens <span class="kw">as </span>InternalStopTokens, TokenSource,
+    Conversation, GemmaLoader, GemmaSpecificConfig, Loader, MistralLoader, MistralRs,
+    MistralSpecificConfig, ModelKind, Request, Response, SamplingParams, SchedulerMethod,
+    StopTokens <span class="kw">as </span>InternalStopTokens, TokenSource,
 };
 <span class="kw">use </span>openai::{ChatCompletionRequest, StopTokens};
 <span class="kw">mod </span>openai;
@@ -330,6 +356,17 @@
         <span class="doccomment">/// Ordering JSON file
         </span><span class="attr">#[arg(short, long)]
         </span>order: String,
+    },
+
+    <span class="doccomment">/// Select the gemma instruct model.
+    </span>Gemma {
+        <span class="doccomment">/// Model ID to load from
+        </span><span class="attr">#[arg(short, long, default_value = <span class="string">"google/gemma-7b-it"</span>)]
+        </span>model_id: String,
+
+        <span class="doccomment">/// Control the application of repeat penalty for the last n tokens
+        </span><span class="attr">#[arg(long, default_value_t = <span class="number">64</span>)]
+        </span>repeat_last_n: usize,
     },
 }
 
@@ -481,6 +518,19 @@
             <span class="prelude-val">Some</span>(xlora_model_id),
             ModelKind::XLoraNormal,
             <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order)<span class="question-mark">?</span>)<span class="question-mark">?</span>),
+            args.no_xlora_kv_cache,
+        )),
+        ModelSelected::Gemma {
+            model_id,
+            repeat_last_n,
+        } =&gt; Box::new(GemmaLoader::new(
+            model_id,
+            GemmaSpecificConfig { repeat_last_n },
+            <span class="prelude-val">None</span>,
+            <span class="prelude-val">None</span>,
+            <span class="prelude-val">None</span>,
+            ModelKind::Normal,
+            <span class="prelude-val">None</span>,
             args.no_xlora_kv_cache,
         )),
     };

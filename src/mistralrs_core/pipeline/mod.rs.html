@@ -99,13 +99,62 @@
 <a href="#98" id="98">98</a>
 <a href="#99" id="99">99</a>
 <a href="#100" id="100">100</a>
-</pre></div><pre class="rust"><code><span class="kw">mod </span>mistral;
+<a href="#101" id="101">101</a>
+<a href="#102" id="102">102</a>
+<a href="#103" id="103">103</a>
+<a href="#104" id="104">104</a>
+<a href="#105" id="105">105</a>
+<a href="#106" id="106">106</a>
+<a href="#107" id="107">107</a>
+<a href="#108" id="108">108</a>
+<a href="#109" id="109">109</a>
+<a href="#110" id="110">110</a>
+<a href="#111" id="111">111</a>
+<a href="#112" id="112">112</a>
+<a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+<a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+</pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
+<span class="kw">mod </span>mistral;
 <span class="kw">use </span>candle_sampling::logits_processor::Logprobs;
+<span class="kw">pub use </span>gemma::{GemmaLoader, GemmaSpecificConfig};
 <span class="kw">pub use </span>mistral::{MistralLoader, MistralSpecificConfig};
 <span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
 <span class="kw">use </span>std::{
     cell::RefCell,
     collections::HashMap,
+    iter::repeat,
     path::PathBuf,
     rc::Rc,
     sync::{Arc, Mutex},
@@ -115,7 +164,7 @@
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
 
-<span class="kw">use crate</span>::{models::Cache, sequence::Sequence};
+<span class="kw">use crate</span>::{deref_refcell, models::Cache, sequence::Sequence};
 
 <span class="kw">pub trait </span>ModelPaths {
     <span class="kw">fn </span>get_weight_filenames(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[PathBuf];
@@ -198,5 +247,48 @@
     <span class="kw">fn </span>get_max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
     <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
     <span class="kw">fn </span>has_no_xlora_kv_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
+}
+
+<span class="kw">fn </span>get_prompt_input(input_toks: <span class="kw-2">&amp;</span>[Rc&lt;RefCell&lt;Sequence&gt;&gt;], device: <span class="kw-2">&amp;</span>Device) -&gt; (Tensor, Vec&lt;usize&gt;) {
+    <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
+    </span><span class="kw">let </span>max_len = input_toks
+        .iter()
+        .map(|seq| <span class="macro">deref_refcell!</span>(seq).len())
+        .max()
+        .unwrap();
+    <span class="kw">let </span>padding_tok = <span class="number">0</span>;
+    <span class="comment">// Pad each sequence by the padding token to the max len.
+    </span><span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
+    <span class="kw">let </span><span class="kw-2">mut </span>seqlen_offsets = Vec::new();
+    <span class="kw">for </span>seq <span class="kw">in </span>input_toks.iter() {
+        <span class="kw">let </span><span class="kw-2">mut </span>ctxt = <span class="macro">deref_refcell!</span>(seq).get_toks().to_vec();
+        seqlen_offsets.push(<span class="number">0</span>);
+
+        ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
+
+        <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
+        </span>seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
+    }
+    <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
+    </span>(Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap(), seqlen_offsets)
+}
+
+<span class="kw">fn </span>get_completion_input(
+    input_toks: <span class="kw-2">&amp;</span>[Rc&lt;RefCell&lt;Sequence&gt;&gt;],
+    device: <span class="kw-2">&amp;</span>Device,
+) -&gt; (Tensor, Vec&lt;usize&gt;) {
+    <span class="comment">// Pad each sequence by the padding token to the max len.
+    </span><span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
+    <span class="kw">let </span><span class="kw-2">mut </span>seqlen_offsets = Vec::new();
+    <span class="kw">for </span>seq <span class="kw">in </span>input_toks.iter() {
+        <span class="kw">let </span>start_pos = <span class="macro">deref_refcell!</span>(seq).get_toks().len().saturating_sub(<span class="number">1</span>);
+        <span class="kw">let </span>ctxt = <span class="macro">deref_refcell!</span>(seq).get_toks()[start_pos..].to_vec();
+        seqlen_offsets.push(start_pos);
+
+        <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
+        </span>seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
+    }
+    <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
+    </span>(Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap(), seqlen_offsets)
 }
 </code></pre></div></section></main></body></html>
