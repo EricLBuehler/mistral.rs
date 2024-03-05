@@ -4,7 +4,7 @@
 Mistral.rs is a LLM serving platform written in pure, safe Rust. Please see docs [here](https://ericlbuehler.github.io/mistral.rs/mistralrs_core/).
 
 ## Features
-- **OpenAI** compatible API server.
+- **OpenAI compatible API** server.
 - **Fast** performance with per-sequence and catch-up KV cache management technique.
 - **Arbitrary derivative and GGUF models** allowing specification of any weight file.
 - **First X-LoRA inference platform** with first class support.
