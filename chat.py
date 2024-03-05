@@ -30,6 +30,9 @@ while True:
     if out.endswith("</s>"):
         out = out[:-4]
         print(out)
+    elif out.endswith("<eos>"):
+        out = out[:-5]
+        print(out)
     else:
         print(out + "...")
     messages.append({"role": "assistant", "content": out})
