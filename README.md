@@ -6,7 +6,6 @@ Mistral.rs is a LLM inference platform written in pure, safe Rust.
 ## Upcoming features
 - Models:
   - Llama 7B
-  - Gemma
 - Python bindings
 
 ## Description
