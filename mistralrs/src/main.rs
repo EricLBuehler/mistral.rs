@@ -133,7 +133,6 @@ async fn chatcompletions(
         Err(e) => return e,
         Ok(p) => p,
     };
-    println!("Prompt {prompt:?}");
     let request = Request {
         prompt,
         sampling_params: SamplingParams {
