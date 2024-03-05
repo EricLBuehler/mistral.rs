@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "mistralrs",
+    "mistralrs-server",
     "mistralrs-core",
     "mistralrs-lora",
 ]
