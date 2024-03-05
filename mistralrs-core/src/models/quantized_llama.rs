@@ -309,7 +309,7 @@ fn precomput_freqs_cis(
 }
 
 impl ModelWeights {
-    pub fn _from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
+    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
         let (cos, sin) = precomput_freqs_cis(head_dim, 10000., &ct.device)?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;

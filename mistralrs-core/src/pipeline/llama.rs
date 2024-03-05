@@ -6,10 +6,12 @@ use crate::models::{quantized_llama, Cache};
 use crate::{deref_mut_refcell, deref_refcell};
 use crate::{
     models::llama::{Llama as NormalModel, LlamaConfig},
+    models::quantized_llama::ModelWeights as QModelWeights,
     sequence::Sequence,
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
 };
 use anyhow::Result;
+use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Tensor};
 use candle_sampling::logits_processor::Logprobs;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -25,6 +27,7 @@ use tokenizers::Tokenizer;
 
 enum Model {
     Normal(NormalModel),
+    Quantized(QModelWeights),
 }
 
 struct LlamaConversation;
@@ -127,6 +130,7 @@ pub struct LlamaLoader {
 pub struct LlamaSpecificConfig {
     pub repeat_last_n: usize,
     pub use_flash_attn: bool,
+    pub gqa: usize,
 }
 
 #[derive(Error, Debug)]
@@ -315,8 +319,20 @@ impl Loader for LlamaLoader {
 
         println!("Loading model on {device:?}...");
         let model = match self.kind {
-            ModelKind::QuantizedGGUF => unreachable!(),
-            ModelKind::QuantizedGGML => unreachable!(),
+            ModelKind::QuantizedGGUF => {
+                let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
+                let model = gguf_file::Content::read(&mut file)
+                    .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
+                let model = QModelWeights::from_gguf(model, &mut file, device)?;
+                Model::Quantized(model)
+            }
+            ModelKind::QuantizedGGML => {
+                let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
+                let model = ggml_file::Content::read(&mut file, device)
+                    .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
+                let model = QModelWeights::from_ggml(model, self.config.gqa)?;
+                Model::Quantized(model)
+            }
             ModelKind::Normal => {
                 let vb = from_mmaped_safetensors(
                     paths.get_weight_filenames().to_vec(),
@@ -331,6 +347,7 @@ impl Loader for LlamaLoader {
                     &basic_config.into_config(self.config.use_flash_attn),
                     default_dtype,
                     device,
+                    self.no_xlora_kv_cache,
                 )?;
                 Model::Normal(model)
             }
@@ -383,6 +400,7 @@ impl Pipeline for LlamaPipeline {
             };
         let result = match self.model {
             Model::Normal(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
+            Model::Quantized(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
         };
         match result {
             Ok(v) => v,
@@ -401,6 +419,7 @@ impl Pipeline for LlamaPipeline {
     fn device(&self) -> &Device {
         match self.model {
             Model::Normal(ref model) => &model.device,
+            Model::Quantized(ref model) => &model.device,
         }
     }
     fn num_hidden_layers(&self) -> usize {
@@ -409,6 +428,7 @@ impl Pipeline for LlamaPipeline {
     fn cache(&self) -> &Cache {
         match self.model {
             Model::Normal(ref model) => &model.kv_cache,
+            Model::Quantized(ref model) => &model.cache,
         }
     }
     fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs> {
@@ -437,19 +457,19 @@ impl Pipeline for LlamaPipeline {
             .get_vocab(true)
             .get("</s>")
             .copied()
-            .expect("Unable to extract `<eos>` EOS token.")
+            .expect("Unable to extract `</s>` EOS token.")
     }
     fn name(&self) -> &'static str {
         "llama"
     }
     fn get_max_seq_len(&self) -> usize {
         match &self.model {
-            Model::Normal(_) => quantized_llama::MAX_SEQ_LEN as usize,
+            Model::Normal(_) | Model::Quantized(_) => quantized_llama::MAX_SEQ_LEN as usize,
         }
     }
     fn is_xlora(&self) -> bool {
         match &self.model {
-            Model::Normal(_) => false,
+            Model::Normal(_) | Model::Quantized(_) => false,
         }
     }
     fn has_no_xlora_kv_cache(&self) -> bool {

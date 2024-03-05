@@ -403,7 +403,13 @@ impl Llama {
         logits.to_dtype(DType::F32)
     }
 
-    pub fn load(vb: VarBuilder, cfg: &Config, dtype: DType, device: &Device) -> Result<Self> {
+    pub fn load(
+        vb: VarBuilder,
+        cfg: &Config,
+        dtype: DType,
+        device: &Device,
+        no_xlora_kv_cache: bool,
+    ) -> Result<Self> {
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         let ln_f = RmsNorm::load(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
@@ -416,7 +422,7 @@ impl Llama {
             blocks,
             ln_f,
             lm_head,
-            cache: Cache::new(true, dtype, cfg, device)?,
+            cache: Cache::new(!no_xlora_kv_cache, dtype, cfg, device)?,
             kv_cache: super::Cache::new(cfg.num_hidden_layers, false),
             device: device.clone(),
         })

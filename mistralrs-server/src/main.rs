@@ -22,7 +22,7 @@ mod openai;
 
 #[derive(Debug, Subcommand)]
 pub enum ModelSelected {
-    /// Select the mistral instruct model.
+    /// Select the mistral model.
     Mistral {
         /// Model ID to load from
         #[arg(short, long, default_value = "mistralai/Mistral-7B-Instruct-v0.1")]
@@ -33,7 +33,7 @@ pub enum ModelSelected {
         repeat_last_n: usize,
     },
 
-    /// Select the quantized mistral instruct model with gguf.
+    /// Select the quantized mistral model with gguf.
     MistralGGUF {
         /// Model ID to load the tokenizer from
         #[arg(short, long, default_value = "mistralai/Mistral-7B-Instruct-v0.1")]
@@ -60,7 +60,7 @@ pub enum ModelSelected {
         repeat_last_n: usize,
     },
 
-    /// Select the mistral instruct model, with X-LoRA.
+    /// Select the mistral model, with X-LoRA.
     XLoraMistral {
         /// Model ID to load from
         #[arg(short, long, default_value = "HuggingFaceH4/zephyr-7b-beta")]
@@ -112,12 +112,58 @@ pub enum ModelSelected {
     /// Select the llama model.
     Llama {
         /// Model ID to load from
-        #[arg(short, long, default_value = "meta-llama/Llama-2-7b-chat-hf")]
+        #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
         model_id: String,
 
         /// Control the application of repeat penalty for the last n tokens
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
+    },
+
+    /// Select the quantized llama model with gguf.
+    LlamaGGUF {
+        /// Model ID to load the tokenizer from
+        #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
+        tok_model_id: String,
+
+        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        #[arg(short = 'm', long, default_value = "TheBloke/Llama-2-13B-chat-GGUF")]
+        quantized_model_id: Option<String>,
+
+        /// Quantized filename, only applicable if `quantized` is set.
+        #[arg(short = 'f', long, default_value = "llama-2-13b-chat.Q4_K_M.gguf")]
+        quantized_filename: Option<String>,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
+    },
+
+    /// Select the quantized llama model with gguf.
+    LlamaGGML {
+        /// Model ID to load the tokenizer from
+        #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
+        tok_model_id: String,
+
+        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        #[arg(short = 'm', long, default_value = "TheBloke/Llama-2-13B-chat-GGML")]
+        quantized_model_id: Option<String>,
+
+        /// Quantized filename, only applicable if `quantized` is set.
+        #[arg(
+            short = 'f',
+            long,
+            default_value = "llama-2-13b-chat.ggmlv3.q4_K_M.bin            "
+        )]
+        quantized_filename: Option<String>,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
+
+        /// GQA
+        #[arg(long, default_value_t = 1)]
+        gqa: usize,
     },
 }
 
@@ -146,7 +192,7 @@ struct Args {
     #[arg(long, default_value_t = 2)]
     max_seqs: usize,
 
-    /// Use no KV cache for X-LoRA, only applicable for X-LoRA models.
+    /// Use no KV cache for X-LoRA, only applicable for X-LoRA models and the Llama Normal model.
     #[arg(long, default_value_t = false)]
     no_xlora_kv_cache: bool,
 }
@@ -307,9 +353,49 @@ async fn main() -> Result<()> {
             LlamaSpecificConfig {
                 repeat_last_n,
                 use_flash_attn: false,
+                gqa: 0,
             },
             None,
             None,
+            None,
+            ModelKind::Normal,
+            None,
+            args.no_xlora_kv_cache,
+        )),
+        ModelSelected::LlamaGGUF {
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+        } => Box::new(LlamaLoader::new(
+            tok_model_id,
+            LlamaSpecificConfig {
+                repeat_last_n,
+                use_flash_attn: false,
+                gqa: 0,
+            },
+            quantized_model_id,
+            quantized_filename,
+            None,
+            ModelKind::Normal,
+            None,
+            args.no_xlora_kv_cache,
+        )),
+        ModelSelected::LlamaGGML {
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+            gqa,
+        } => Box::new(LlamaLoader::new(
+            tok_model_id,
+            LlamaSpecificConfig {
+                repeat_last_n,
+                use_flash_attn: false,
+                gqa,
+            },
+            quantized_model_id,
+            quantized_filename,
             None,
             ModelKind::Normal,
             None,
