@@ -1,5 +1,5 @@
 [package]
-name = "mistralrs"
+name = "mistralrs-server"
 readme = "README.md"
 authors = ["Eric Buehler"]
 version.workspace = true
