@@ -4,8 +4,6 @@
 Mistral.rs is a LLM inference platform written in pure, safe Rust.
 
 ## Upcoming features
-- Models:
-  - Llama X-LoRA
 - Python bindings
 - Rust library
 
@@ -29,6 +27,7 @@ Mistral.rs is a LLM inference platform written in pure, safe Rust.
   - Normal
   - GGUF
   - GGML
+  - X-LoRA
 
 ## Usage
 ## Build
