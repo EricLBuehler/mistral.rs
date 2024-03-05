@@ -118,7 +118,7 @@ impl LinearLayerLike for LoraLinear {
 
             let res = adapter_b
                 .forward(&adapter_a.forward(&input_new)?)?
-                .mul(*adapter_scale)?;
+                .mul(*adapter_scale)?*100.;
             result = (result + res)?;
         }
         Ok(result)
