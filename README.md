@@ -60,7 +60,7 @@ The Huggingface token should be provided in `~/.cache/huggingface/token`.
 
     If Rust is installed and the Huggingface token is set, then one may build mistral.rs by executing the build command.
     `cargo build --release`.
-The build process will output a binary `misralrs` at `./target/release/mistralrs`.
+The build process will output a binary `misralrs-server` at `./target/release/mistralrs-server`.
 ## Building for GPU, Metal or enabling other features
 Rust uses a feature flag system during build to implement compile-time build options. As such, the following is a list of features
 which may be specified using the `--features` command.
@@ -75,14 +75,14 @@ The X-LoRA ordering JSON file contains 2 parts. The first is the order of the ad
 
 To start a server serving Mistral on `localhost:1234`, 
 ```bash
-./mistralrs --port 1234 --log output.log mistral
+./mistralrs-server --port 1234 --log output.log mistral
 ```
 
-Mistral.rs uses subcommands to control the model type. Please run `./mistralrs --help` to see the subcommands.
+Mistral.rs uses subcommands to control the model type. Please run `./mistralrs-server --help` to see the subcommands.
 
 To start an X-LoRA server with the default weights, run the following after modifying or copying the ordering file as described [here](README.md#preparing-the-x-lora-ordering-file).
 
-`./mistralrs --port 1234 x-lora-mistral -o ordering.json`
+`./mistralrs-server --port 1234 x-lora-mistral -o ordering.json`
 
 ## Benchmarks
 For the prompt "Tell me about the Rust type system in depth." and a maximum length of 256.
