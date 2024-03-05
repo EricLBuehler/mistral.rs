@@ -975,9 +975,9 @@
     <span class="kw">fn </span>eos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u32 {
         <span class="self">self</span>.tokenizer
             .get_vocab(<span class="bool-val">true</span>)
-            .get(<span class="string">"&lt;/s&gt;"</span>)
+            .get(<span class="string">"&lt;eos&gt;"</span>)
             .copied()
-            .expect(<span class="string">"Unable to extract `&lt;/s&gt;` EOS token."</span>)
+            .expect(<span class="string">"Unable to extract `&lt;eos&gt;` EOS token."</span>)
     }
     <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
         <span class="string">"gemma"
