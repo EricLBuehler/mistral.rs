@@ -165,16 +165,17 @@ impl XLoraClassifier {
                 0..scalings.dims()[2],
                 self.n_classes - 1..self.n_classes,
             ],
-            &Tensor::ones(
+            &Tensor::full(
+                100.,
                 (
                     scalings.dims()[0],
                     scalings.dims()[1],
                     scalings.dims()[2],
                     1,
                 ),
-                scalings.dtype(),
                 scalings.device(),
-            )?,
+            )?.to_dtype(
+                scalings.dtype())?,
         )?;
         println!("{:?}", scalings.i((0,0,0,..))?);
 
