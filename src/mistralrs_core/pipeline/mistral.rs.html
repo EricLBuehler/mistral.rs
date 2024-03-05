@@ -583,7 +583,7 @@
     TokenSource,
 };
 <span class="kw">use </span><span class="kw">crate</span>::models::{quantized_llama, Cache};
-<span class="kw">use </span><span class="kw">crate</span>::xlora_models::{XLoraConfig, XLoraModel};
+<span class="kw">use </span><span class="kw">crate</span>::xlora_models::{XLoraConfig, XLoraMistral};
 <span class="kw">use crate</span>::{deref_mut_refcell, deref_refcell};
 <span class="kw">use crate</span>::{
     models::mistral::{Config, Model <span class="kw">as </span>NormalModel},
@@ -611,7 +611,7 @@
 <span class="kw">enum </span>Model {
     Normal(NormalModel),
     Quantized(QModelWeights),
-    XLoraNormal(XLoraModel),
+    XLoraNormal(XLoraMistral),
 }
 
 <span class="kw">struct </span>MistralConversation;
@@ -1008,7 +1008,7 @@
                 <span class="kw">let </span>conf = fs::read_to_string(paths.get_classifier_config().as_ref().unwrap())<span class="question-mark">?</span>;
                 <span class="kw">let </span>xlora_config: XLoraConfig = serde_json::from_str(<span class="kw-2">&amp;</span>conf)<span class="question-mark">?</span>;
 
-                <span class="kw">let </span>model = XLoraModel::new(
+                <span class="kw">let </span>model = XLoraMistral::new(
                     <span class="kw-2">&amp;</span>config,
                     vb,
                     paths.get_adapter_configs().as_ref().unwrap(),

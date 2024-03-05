@@ -277,6 +277,40 @@
 <a href="#276" id="276">276</a>
 <a href="#277" id="277">277</a>
 <a href="#278" id="278">278</a>
+<a href="#279" id="279">279</a>
+<a href="#280" id="280">280</a>
+<a href="#281" id="281">281</a>
+<a href="#282" id="282">282</a>
+<a href="#283" id="283">283</a>
+<a href="#284" id="284">284</a>
+<a href="#285" id="285">285</a>
+<a href="#286" id="286">286</a>
+<a href="#287" id="287">287</a>
+<a href="#288" id="288">288</a>
+<a href="#289" id="289">289</a>
+<a href="#290" id="290">290</a>
+<a href="#291" id="291">291</a>
+<a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
+<a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fs::File,
@@ -358,7 +392,7 @@
         </span>order: String,
     },
 
-    <span class="doccomment">/// Select the gemma instruct model.
+    <span class="doccomment">/// Select the gemma model.
     </span>Gemma {
         <span class="doccomment">/// Model ID to load from
         </span><span class="attr">#[arg(short, long, default_value = <span class="string">"google/gemma-7b-it"</span>)]
@@ -367,6 +401,25 @@
         <span class="doccomment">/// Control the application of repeat penalty for the last n tokens
         </span><span class="attr">#[arg(long, default_value_t = <span class="number">64</span>)]
         </span>repeat_last_n: usize,
+    },
+
+    <span class="doccomment">/// Select the gemma model, with X-LoRA.
+    </span>XLoraGemma {
+        <span class="doccomment">/// Model ID to load from
+        </span><span class="attr">#[arg(short, long)]
+        </span>model_id: String,
+
+        <span class="doccomment">/// Model ID to load Xlora from
+        </span><span class="attr">#[arg(short, long)]
+        </span>xlora_model_id: String,
+
+        <span class="doccomment">/// Control the application of repeat penalty for the last n tokens
+        </span><span class="attr">#[arg(long, default_value_t = <span class="number">64</span>)]
+        </span>repeat_last_n: usize,
+
+        <span class="doccomment">/// Ordering JSON file
+        </span><span class="attr">#[arg(short, long)]
+        </span>order: String,
     },
 }
 
@@ -531,6 +584,21 @@
             <span class="prelude-val">None</span>,
             ModelKind::Normal,
             <span class="prelude-val">None</span>,
+            args.no_xlora_kv_cache,
+        )),
+        ModelSelected::XLoraGemma {
+            model_id,
+            xlora_model_id,
+            repeat_last_n,
+            order,
+        } =&gt; Box::new(GemmaLoader::new(
+            model_id,
+            GemmaSpecificConfig { repeat_last_n },
+            <span class="prelude-val">None</span>,
+            <span class="prelude-val">None</span>,
+            <span class="prelude-val">Some</span>(xlora_model_id),
+            ModelKind::Normal,
+            <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order)<span class="question-mark">?</span>)<span class="question-mark">?</span>),
             args.no_xlora_kv_cache,
         )),
     };

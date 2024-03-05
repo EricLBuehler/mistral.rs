@@ -498,11 +498,56 @@
 <a href="#497" id="497">497</a>
 <a href="#498" id="498">498</a>
 <a href="#499" id="499">499</a>
+<a href="#500" id="500">500</a>
+<a href="#501" id="501">501</a>
+<a href="#502" id="502">502</a>
+<a href="#503" id="503">503</a>
+<a href="#504" id="504">504</a>
+<a href="#505" id="505">505</a>
+<a href="#506" id="506">506</a>
+<a href="#507" id="507">507</a>
+<a href="#508" id="508">508</a>
+<a href="#509" id="509">509</a>
+<a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a>
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
+<a href="#519" id="519">519</a>
+<a href="#520" id="520">520</a>
+<a href="#521" id="521">521</a>
+<a href="#522" id="522">522</a>
+<a href="#523" id="523">523</a>
+<a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     get_completion_input, get_prompt_input, Conversation, Loader, ModelKind, ModelPaths, Pipeline,
     TokenSource,
 };
 <span class="kw">use </span><span class="kw">crate</span>::models::{quantized_llama, Cache};
+<span class="kw">use </span><span class="kw">crate</span>::xlora_models::{XLoraConfig, XLoraGemma};
 <span class="kw">use crate</span>::{deref_mut_refcell, deref_refcell};
 <span class="kw">use crate</span>::{
     models::gemma::{Config, Model <span class="kw">as </span>NormalModel},
@@ -528,6 +573,7 @@
 
 <span class="kw">enum </span>Model {
     Normal(NormalModel),
+    XLoraNormal(XLoraGemma),
     Quantized(QModelWeights),
 }
 
@@ -871,7 +917,38 @@
                 <span class="kw">let </span>model = NormalModel::new(<span class="kw-2">&amp;</span>config, vb)<span class="question-mark">?</span>;
                 Model::Normal(model)
             }
-            ModelKind::XLoraNormal =&gt; <span class="macro">unreachable!</span>(),
+            ModelKind::XLoraNormal =&gt; {
+                <span class="kw">let </span><span class="kw-2">mut </span>safetensors_paths = paths.get_weight_filenames().iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+                safetensors_paths.push(paths.get_classifier_path().as_ref().unwrap());
+                <span class="kw">let </span>vb = from_mmaped_safetensors(
+                    safetensors_paths
+                        .iter()
+                        .map(|x| (<span class="kw-2">*</span>x).to_owned())
+                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+                    paths
+                        .get_adapter_filenames()
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .map(|(<span class="kw">_</span>, x)| (<span class="kw-2">*</span>x).to_owned())
+                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+                    dtype.unwrap_or(default_dtype),
+                    device,
+                    <span class="bool-val">false</span>,
+                )<span class="question-mark">?</span>;
+
+                <span class="kw">let </span>conf = fs::read_to_string(paths.get_classifier_config().as_ref().unwrap())<span class="question-mark">?</span>;
+                <span class="kw">let </span>xlora_config: XLoraConfig = serde_json::from_str(<span class="kw-2">&amp;</span>conf)<span class="question-mark">?</span>;
+
+                <span class="kw">let </span>model = XLoraGemma::new(
+                    <span class="kw-2">&amp;</span>config,
+                    vb,
+                    paths.get_adapter_configs().as_ref().unwrap(),
+                    xlora_config,
+                    paths.get_ordering().as_ref().unwrap().clone(),
+                )<span class="question-mark">?</span>;
+                Model::XLoraNormal(model)
+            }
         };
         <span class="macro">println!</span>(<span class="string">"Model loaded."</span>);
 
@@ -892,7 +969,7 @@
 
 <span class="kw">impl </span>Pipeline <span class="kw">for </span>GemmaPipeline {
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;mut </span><span class="self">self</span>, input_toks: Box&lt;[Rc&lt;RefCell&lt;Sequence&gt;&gt;]&gt;, is_prompt: bool) -&gt; Tensor {
-        <span class="kw">let </span>(input_ids, _input_ids_full, seqlen_offsets, _seqlen_offsets_full) =
+        <span class="kw">let </span>(input_ids, input_ids_full, seqlen_offsets, seqlen_offsets_full) =
             <span class="kw">if </span><span class="self">self</span>.is_xlora() &amp;&amp; !is_prompt {
                 <span class="kw">let </span>(input_ids_full, seqlen_offsets_full) =
                     get_prompt_input(<span class="kw-2">&amp;</span>input_toks, <span class="self">self</span>.device());
@@ -921,6 +998,13 @@
         <span class="kw">let </span>result = <span class="kw">match </span><span class="self">self</span>.model {
             Model::Normal(<span class="kw-2">ref mut </span>model) =&gt; model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets),
             Model::Quantized(<span class="kw-2">ref mut </span>model) =&gt; model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets),
+            Model::XLoraNormal(<span class="kw-2">ref mut </span>model) =&gt; model.forward(
+                <span class="kw-2">&amp;</span>input_ids,
+                input_ids_full.as_ref().unwrap(),
+                <span class="kw-2">&amp;</span>seqlen_offsets,
+                seqlen_offsets_full.as_ref().unwrap(),
+                <span class="self">self</span>.no_xlora_kv_cache,
+            ),
         };
         <span class="kw">match </span>result {
             <span class="prelude-val">Ok</span>(v) =&gt; v,
@@ -940,6 +1024,7 @@
         <span class="kw">match </span><span class="self">self</span>.model {
             Model::Normal(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.device,
             Model::Quantized(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.device,
+            Model::XLoraNormal(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.device,
         }
     }
     <span class="kw">fn </span>num_hidden_layers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
@@ -949,6 +1034,7 @@
         <span class="kw">match </span><span class="self">self</span>.model {
             Model::Normal(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
             Model::Quantized(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
+            Model::XLoraNormal(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
         }
     }
     <span class="kw">fn </span>sample(<span class="kw-2">&amp;mut </span><span class="self">self</span>, logits: Tensor, seq: Rc&lt;RefCell&lt;Sequence&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
@@ -986,11 +1072,13 @@
         <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.model {
             Model::Normal(model) =&gt; model.max_seq_len,
             Model::Quantized(<span class="kw">_</span>) =&gt; quantized_llama::MAX_SEQ_LEN <span class="kw">as </span>usize,
+            Model::XLoraNormal(model) =&gt; model.max_seq_len,
         }
     }
     <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.model {
             Model::Normal(<span class="kw">_</span>) | Model::Quantized(<span class="kw">_</span>) =&gt; <span class="bool-val">false</span>,
+            Model::XLoraNormal(<span class="kw">_</span>) =&gt; <span class="bool-val">true</span>,
         }
     }
     <span class="kw">fn </span>has_no_xlora_kv_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {

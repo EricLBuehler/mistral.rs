@@ -149,6 +149,22 @@
 <a href="#148" id="148">148</a>
 <a href="#149" id="149">149</a>
 <a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a>
+<a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
+<a href="#166" id="166">166</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashSet, fmt::Debug, sync::Arc};
 
 <span class="kw">use </span>candle_core::{IndexOp, <span class="prelude-ty">Result</span>, Shape, Tensor, D};
@@ -298,5 +314,21 @@
 
 <span class="kw">fn </span>get_maybe_topk_scalings(scalings: Tensor, layer: usize) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
     scalings.i((.., .., layer, ..))
+}
+
+<span class="kw">pub fn </span>linear_b(
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+    vb: <span class="kw">crate</span>::VarBuilder,
+    lora_config: <span class="kw-2">&amp;</span>Vec&lt;(String, LoraConfig)&gt;,
+    count: <span class="kw-2">&amp;mut </span>usize,
+    ord: <span class="kw-2">&amp;</span>Ordering,
+) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;&gt; {
+    <span class="kw">if </span>bias {
+        linear(in_dim, out_dim, vb, lora_config, count, ord)
+    } <span class="kw">else </span>{
+        linear_no_bias(in_dim, out_dim, vb, lora_config, count, ord)
+    }
 }
 </code></pre></div></section></main></body></html>
