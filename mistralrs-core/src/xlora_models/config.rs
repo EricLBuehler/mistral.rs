@@ -29,7 +29,9 @@ fn default_0f64() -> f64 {
 #[derive(Debug, Deserialize)]
 pub struct XLoraConfig {
     pub hidden_size: usize,
-    pub adapters: HashMap<String, String>,
+    // Not used
+    #[serde(rename = "adapters")]
+    pub _adapters: Option<HashMap<String, String>>,
     #[serde(default = "false_default")]
     pub layerwise_scalings: bool,
     #[serde(default = "false_default")]
@@ -46,7 +48,7 @@ pub struct XLoraConfig {
     pub softmax_temperature: f64,
     #[serde(default = "default_0f64")]
     pub scaling_pass_value: f64,
-    #[serde(default = "false_default")]
+    #[serde(default = "false_default", rename = "use_trainable_adapters")]
     pub _use_trainable_adapters: bool,
     #[serde(default = "true_default")]
     pub use_bias: bool,
