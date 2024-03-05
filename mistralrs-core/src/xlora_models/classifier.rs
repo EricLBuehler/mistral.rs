@@ -139,47 +139,6 @@ impl XLoraClassifier {
             scalings = softmax.forward(&scalings)?;
         }
 
-
-        let scalings = scalings.slice_assign(
-            &[
-                0..scalings.dims()[0],
-                0..scalings.dims()[1],
-                0..scalings.dims()[2],
-                0..self.n_classes-1,
-            ],
-            &Tensor::zeros(
-                (
-                    scalings.dims()[0],
-                    scalings.dims()[1],
-                    scalings.dims()[2],
-                    self.n_classes - 1,
-                ),
-                scalings.dtype(),
-                scalings.device(),
-            )?,
-        )?;
-        let scalings = scalings.slice_assign(
-            &[
-                0..scalings.dims()[0],
-                0..scalings.dims()[1],
-                0..scalings.dims()[2],
-                self.n_classes - 1..self.n_classes,
-            ],
-            &Tensor::full(
-                100.,
-                (
-                    scalings.dims()[0],
-                    scalings.dims()[1],
-                    scalings.dims()[2],
-                    1,
-                ),
-                scalings.device(),
-            )?.to_dtype(
-                scalings.dtype())?,
-        )?;
-        println!("SCALINGS ARE {:?}", scalings.i((0,0,0,..))?);
-        dbg!(scalings.mean_all()?);
-
         Ok(scalings)
     }
 

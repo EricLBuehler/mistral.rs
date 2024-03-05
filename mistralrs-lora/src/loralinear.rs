@@ -58,11 +58,8 @@ impl LoraLinear {
             )?;
             let b_pp = b_vb.pp(name);
             assert!(b_pp.contains_tensor("weight"));
-            let b = b_pp.get_with_hints(
-                (linear_config.out_features, cfg.rank),
-                "weight",
-                init::ZERO,
-            )?;
+            let b =
+                b_pp.get_with_hints((linear_config.out_features, cfg.rank), "weight", init::ZERO)?;
             a_adapters.push(Linear::new(a, None));
             b_adapters.push(Linear::new(b, None));
             scale_adapters.push(if cfg.rank > 0 {
@@ -108,23 +105,17 @@ impl LinearLayerLike for LoraLinear {
         .enumerate()
         {
             let mut input_new = input.to_dtype(adapter_a.weight().dtype())?;
-            dbg!(input_new.mean_all()?);
             input_new = apply_scalings_to_x(input_new.clone(), &scalings, i, self.layer_n)?;
 
-            dbg!(input_new.mean_all()?);
             input_new = if let Some(ref dropout) = adapter_dropout {
                 dropout.forward(&input_new, true)?
             } else {
                 input_new.clone()
             };
-            dbg!(adapter_b.weight().mean_all()?);
-            dbg!(adapter_a.weight().mean_all()?);
-            dbg!(input_new.mean_all()?);
 
             let res = adapter_b
                 .forward(&adapter_a.forward(&input_new)?)?
                 .mul(*adapter_scale)?;
-            println!("{}", res.mean_all()?);
             result = (result + res)?;
         }
         Ok(result)
