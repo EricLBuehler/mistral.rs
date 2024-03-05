@@ -493,6 +493,7 @@ impl XLoraModel {
         seqlen_offsets: &[usize],
         scalings: Tensor,
         is_full_pass: bool,
+        no_xlora_kv_cache: bool,
     ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
         if seqlen_offsets.len() > b_size {
@@ -500,12 +501,14 @@ impl XLoraModel {
         }
 
         let mut cache = if is_full_pass {
-            /*let mut new_cache = Vec::new();
-            for _ in 0..self.cache.xlora_lock().len() {
-                new_cache.push(None);
-            }
+            if no_xlora_kv_cache {
+                let mut new_cache = Vec::new();
+                for _ in 0..self.cache.xlora_lock().len() {
+                    new_cache.push(None);
+                }
 
-            *self.cache.xlora_lock() = new_cache.clone();*/
+                *self.cache.xlora_lock() = new_cache.clone();
+            }
             self.cache.xlora_lock()
         } else {
             self.cache.lock()
@@ -538,6 +541,7 @@ impl XLoraModel {
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
         seqlen_offsets_full: &[usize],
+        no_xlora_kv_cache: bool,
     ) -> Result<Tensor> {
         let (b_size, seq_len_full) = input_ids_full.dims2()?;
         let (_, seq_len) = input_ids.dims2()?;
@@ -549,31 +553,52 @@ impl XLoraModel {
             self.dtype,
         )?;
         // Using X-LoRA cache here
-        let hidden_states = self.inner_forward(input_ids, seqlen_offsets, dummy_scalings, false)?;
-        /*let hidden_states =
-            self.inner_forward(input_ids_full, seqlen_offsets_full, dummy_scalings, true)?;
+        let hidden_states = if no_xlora_kv_cache {
+            let res = self.inner_forward(
+                input_ids_full,
+                seqlen_offsets_full,
+                dummy_scalings,
+                true,
+                no_xlora_kv_cache,
+            )?;
 
-        let mut new_cache = Vec::new();
-        for _ in 0..self.cache.xlora_lock().len() {
-            new_cache.push(Some((
-                Tensor::zeros((1,), DType::BF16, &Device::Cpu)?,
-                Tensor::zeros((1,), DType::BF16, &Device::Cpu)?,
-            )));
-        }
-        *self.cache.lock() = new_cache.clone();*/
+            let mut new_cache = Vec::new();
+            for _ in 0..self.cache.xlora_lock().len() {
+                new_cache.push(Some((
+                    Tensor::zeros((1,), DType::U8, &Device::Cpu)?,
+                    Tensor::zeros((1,), DType::U8, &Device::Cpu)?,
+                )));
+            }
+            *self.cache.lock() = new_cache.clone();
+
+            res
+        } else {
+            self.inner_forward(
+                input_ids,
+                seqlen_offsets,
+                dummy_scalings,
+                false,
+                no_xlora_kv_cache,
+            )?
+        };
 
         let scalings = self.xlora_classifier.forward(hidden_states)?;
 
-        // Using no cache here
-        /*let o = self
-        .inner_forward(input_ids_full, seqlen_offsets_full, scalings, true)?
-        .apply(&self.lm_head)?
-        .narrow(1, seq_len_full - 1, 1)?;*/
-        let o = self
-            .inner_forward(input_ids, seqlen_offsets, scalings, true)?
+        if no_xlora_kv_cache {
+            self.inner_forward(
+                input_ids_full,
+                seqlen_offsets_full,
+                scalings,
+                true,
+                no_xlora_kv_cache,
+            )?
             .apply(&self.lm_head)?
-            .narrow(1, seq_len - 1, 1)?;
-
-        Ok(o)
+            .narrow(1, seq_len_full - 1, 1)
+        } else {
+            // is_full_pass=true is ok because no_xlora_kv_cache=false
+            self.inner_forward(input_ids, seqlen_offsets, scalings, true, no_xlora_kv_cache)?
+                .apply(&self.lm_head)?
+                .narrow(1, seq_len - 1, 1)
+        }
     }
 }

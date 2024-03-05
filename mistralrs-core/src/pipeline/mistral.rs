@@ -147,6 +147,7 @@ pub struct MistralPipeline {
     model: Model,
     tokenizer: Tokenizer,
     config: MistralSpecificConfig,
+    no_xlora_kv_cache: bool,
 }
 
 pub struct MistralLoader {
@@ -157,6 +158,7 @@ pub struct MistralLoader {
     xlora_model_id: Option<String>,
     kind: ModelKind,
     xlora_order: Option<Ordering>,
+    no_xlora_kv_cache: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -195,6 +197,7 @@ impl MistralLoader {
         xlora_model_id: Option<String>,
         kind: ModelKind,
         xlora_order: Option<Ordering>,
+        no_xlora_kv_cache: bool,
     ) -> Self {
         Self {
             model_id,
@@ -204,6 +207,7 @@ impl MistralLoader {
             xlora_model_id,
             kind,
             xlora_order,
+            no_xlora_kv_cache,
         }
     }
 }
@@ -440,6 +444,7 @@ impl Loader for MistralLoader {
                 model,
                 tokenizer,
                 config: self.config,
+                no_xlora_kv_cache: self.no_xlora_kv_cache,
             })),
             if self.model_id.contains("zephyr") {
                 Arc::new(ZephyrConversation)
@@ -528,6 +533,7 @@ impl Pipeline for MistralPipeline {
                 input_ids_full.as_ref().unwrap(),
                 &seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap(),
+                self.no_xlora_kv_cache,
             ),
         };
         match result {
@@ -604,5 +610,8 @@ impl Pipeline for MistralPipeline {
             Model::Normal(_) | Model::Quantized(_) => false,
             Model::XLoraNormal(_) => true,
         }
+    }
+    fn has_no_xlora_kv_cache(&self) -> bool {
+        self.no_xlora_kv_cache
     }
 }

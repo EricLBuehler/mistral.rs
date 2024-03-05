@@ -96,4 +96,5 @@ pub trait Pipeline: Send + Sync {
     fn name(&self) -> &'static str;
     fn get_max_seq_len(&self) -> usize;
     fn is_xlora(&self) -> bool;
+    fn has_no_xlora_kv_cache(&self) -> bool;
 }

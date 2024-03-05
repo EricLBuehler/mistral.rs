@@ -103,6 +103,10 @@ struct Args {
     /// Maximum running sequences at any time
     #[arg(long, default_value_t = 2)]
     max_seqs: usize,
+
+    /// Use no KV cache for X-LoRA, only applicable for X-LoRA models.
+    #[arg(long, default_value_t = false)]
+    no_xlora_kv_cache: bool,
 }
 
 async fn chatcompletions(
@@ -188,6 +192,7 @@ async fn main() -> Result<()> {
             None,
             ModelKind::Normal,
             None,
+            args.no_xlora_kv_cache,
         )),
         ModelSelected::MistralGGUF {
             tok_model_id,
@@ -205,6 +210,7 @@ async fn main() -> Result<()> {
             None,
             ModelKind::QuantizedGGUF,
             None,
+            args.no_xlora_kv_cache,
         )),
         ModelSelected::XLoraMistral {
             model_id,
@@ -222,6 +228,7 @@ async fn main() -> Result<()> {
             Some(xlora_model_id),
             ModelKind::XLoraNormal,
             Some(serde_json::from_reader(File::open(order)?)?),
+            args.no_xlora_kv_cache,
         )),
     };
 
