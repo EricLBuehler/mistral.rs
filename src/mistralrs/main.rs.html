@@ -316,7 +316,7 @@
     <span class="doccomment">/// Select the mistral instruct model, with X-LoRA.
     </span>XLoraMistral {
         <span class="doccomment">/// Model ID to load from
-        </span><span class="attr">#[arg(short, long, default_value = <span class="string">"mistralai/Mistral-7B-Instruct-v0.1"</span>)]
+        </span><span class="attr">#[arg(short, long, default_value = <span class="string">"HuggingFaceH4/zephyr-7b-beta"</span>)]
         </span>model_id: String,
 
         <span class="doccomment">/// Model ID to load Xlora from
@@ -485,12 +485,12 @@
         )),
     };
 
-    <span class="kw">let </span>(pipeline, conv) = loader.load_model(
-        <span class="prelude-val">None</span>,
-        TokenSource::CacheToken,
-        <span class="prelude-val">None</span>,
-        <span class="kw-2">&amp;</span>Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?</span>,
-    )<span class="question-mark">?</span>;
+    <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
+    </span><span class="kw">let </span>device = Device::new_metal(<span class="number">0</span>)<span class="question-mark">?</span>;
+    <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
+    </span><span class="kw">let </span>device = Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?</span>;
+
+    <span class="kw">let </span>(pipeline, conv) = loader.load_model(<span class="prelude-val">None</span>, TokenSource::CacheToken, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>;
     <span class="kw">let </span>mistralrs = MistralRs::new(
         pipeline,
         SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
