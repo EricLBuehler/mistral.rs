@@ -108,8 +108,10 @@ impl LinearLayerLike for LoraLinear {
         .enumerate()
         {
             let mut input_new = input.to_dtype(adapter_a.weight().dtype())?;
+            dbg!(input_new.mean_all()?);
             input_new = apply_scalings_to_x(input_new.clone(), &scalings, i, self.layer_n)?;
 
+            dbg!(input_new.mean_all()?);
             input_new = if let Some(ref dropout) = adapter_dropout {
                 dropout.forward(&input_new, true)?
             } else {
