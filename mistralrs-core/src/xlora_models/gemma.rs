@@ -497,7 +497,7 @@ impl XLoraModel {
             candle_core::bail!("Expected seqlen offsets have length equal to batch size.")
         }
 
-        let cache = if is_full_pass {
+        let mut cache = if is_full_pass {
             if no_xlora_kv_cache {
                 let mut new_cache = Vec::new();
                 for _ in 0..self.cache.xlora_lock().len() {
@@ -521,7 +521,6 @@ impl XLoraModel {
         };
         let xs = self.embed_tokens.forward(input_ids)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
-        let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
             xs = layer.forward(
                 &xs,
