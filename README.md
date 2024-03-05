@@ -69,3 +69,12 @@ Mistral.rs uses subcommands to control the model type. Please run `./mistralrs -
 To start an X-LoRA server with the default weights, run the following after modifying or copying the ordering file as described [here](README.md#preparing-the-x-lora-ordering-file).
 
 `./mistralrs --port 1234 x-lora-mistral -o ordering.json`
+
+## Benchmarks
+For the prompt "Tell me about the Rust type system in depth." and a maximum length of 256.
+
+**A6000** Mistral + CUDA + Flash Attention
+- 30.44 tok/s
+
+**A6000** Mistral GGUF + CUDA
+- 39.3 tok/s
