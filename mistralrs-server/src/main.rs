@@ -214,6 +214,10 @@ struct Args {
     /// Use no KV cache for X-LoRA, only applicable for X-LoRA models and the Llama Normal model.
     #[arg(long, default_value_t = false)]
     no_xlora_kv_cache: bool,
+
+    /// Enable flash attention, only applicable if compiled with `--features flash-attn`
+    #[arg(short, long, default_value_t = false)]
+    use_flash_attn: bool,
 }
 
 async fn chatcompletions(
@@ -283,6 +287,11 @@ fn get_router(state: (Arc<MistralRs>, Arc<dyn Conversation + Send + Sync>)) -> R
 async fn main() -> Result<()> {
     let args = Args::parse();
 
+    #[cfg(not(feature = "flash-attn"))]
+    let use_flash_attn = false;
+    #[cfg(feature = "flash-attn")]
+    let use_flash_attn = args.use_flash_attn;
+
     let loader: Box<dyn Loader> = match args.model {
         ModelSelected::Mistral {
             model_id,
@@ -290,7 +299,7 @@ async fn main() -> Result<()> {
         } => Box::new(MistralLoader::new(
             model_id,
             MistralSpecificConfig {
-                use_flash_attn: false,
+                use_flash_attn,
                 repeat_last_n,
             },
             None,
@@ -308,7 +317,7 @@ async fn main() -> Result<()> {
         } => Box::new(MistralLoader::new(
             tok_model_id,
             MistralSpecificConfig {
-                use_flash_attn: false,
+                use_flash_attn,
                 repeat_last_n,
             },
             quantized_model_id,
@@ -326,7 +335,7 @@ async fn main() -> Result<()> {
         } => Box::new(MistralLoader::new(
             model_id,
             MistralSpecificConfig {
-                use_flash_attn: false,
+                use_flash_attn,
                 repeat_last_n,
             },
             None,
@@ -371,7 +380,7 @@ async fn main() -> Result<()> {
             model_id,
             LlamaSpecificConfig {
                 repeat_last_n,
-                use_flash_attn: false,
+                use_flash_attn,
                 gqa: 0,
             },
             None,
@@ -390,7 +399,7 @@ async fn main() -> Result<()> {
             tok_model_id,
             LlamaSpecificConfig {
                 repeat_last_n,
-                use_flash_attn: false,
+                use_flash_attn,
                 gqa: 0,
             },
             quantized_model_id,
@@ -410,7 +419,7 @@ async fn main() -> Result<()> {
             tok_model_id,
             LlamaSpecificConfig {
                 repeat_last_n,
-                use_flash_attn: false,
+                use_flash_attn,
                 gqa,
             },
             quantized_model_id,
@@ -429,7 +438,7 @@ async fn main() -> Result<()> {
             model_id,
             LlamaSpecificConfig {
                 repeat_last_n,
-                use_flash_attn: false,
+                use_flash_attn,
                 gqa: 0,
             },
             None,
