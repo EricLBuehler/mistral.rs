@@ -1,11 +1,10 @@
 # mistral.rs
-[![Documentation](https://github.com/EricLBuehler/mistral.rs/actions/workflows/docs.yml/badge.svg)](https://ericlbuehler.github.io/mistral.rs/mistralrs_core/)
+[![Documentation](https://github.com/EricLBuehler/mistral.rs/actions/workflows/docs.yml/badge.svg)](https://ericlbuehler.github.io/mistral.rs/mistralrs/)
 
 Mistral.rs is a LLM inference platform written in pure, safe Rust.
 
 ## Upcoming features
 - Python bindings
-- Rust library
 
 ## Description
 - Lightweight OpenAI API compatible HTTP server.
@@ -28,6 +27,12 @@ Mistral.rs is a LLM inference platform written in pure, safe Rust.
   - GGUF
   - GGML
   - X-LoRA
+
+**Library API**
+- Rust multithreaded API for easy integration into any application: [docs](https://ericlbuehler.github.io/mistral.rs/mistralrs/). To use, add `mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }` to the Cargo.toml.
+
+**HTTP Server**
+Mistral.rs provides an OpenAI API compatible API server. It is accessible through the command line when one builds mistral.rs.
 
 ## Usage
 ## Build
