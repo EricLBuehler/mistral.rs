@@ -153,7 +153,7 @@ pub enum ModelSelected {
         #[arg(
             short = 'f',
             long,
-            default_value = "llama-2-13b-chat.ggmlv3.q4_K_M.bin            "
+            default_value = "llama-2-13b-chat.ggmlv3.q4_K_M.bin"
         )]
         quantized_filename: Option<String>,
 
