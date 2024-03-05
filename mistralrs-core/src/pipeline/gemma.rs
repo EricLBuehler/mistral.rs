@@ -3,10 +3,9 @@ use super::{
     TokenSource,
 };
 use crate::models::{quantized_llama, Cache};
-use crate::xlora_models::{XLoraConfig, XLoraModel};
 use crate::{deref_mut_refcell, deref_refcell};
 use crate::{
-    models::mistral::{Config, Model as NormalModel},
+    models::gemma::{Config, Model as NormalModel},
     models::quantized_llama::ModelWeights as QModelWeights,
     sequence::Sequence,
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
@@ -14,7 +13,6 @@ use crate::{
 use anyhow::Result;
 use candle_core::quantized::gguf_file;
 use candle_core::{DType, Device, Tensor};
-use candle_nn::Activation;
 use candle_sampling::logits_processor::Logprobs;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
@@ -31,13 +29,11 @@ use tokenizers::Tokenizer;
 enum Model {
     Normal(NormalModel),
     Quantized(QModelWeights),
-    XLoraNormal(XLoraModel),
 }
 
-struct MistralConversation;
-struct ZephyrConversation;
+struct GemmaConversation;
 
-impl Conversation for MistralConversation {
+impl Conversation for GemmaConversation {
     fn get_prompt(
         &self,
         messages: Vec<HashMap<String, String>>,
@@ -83,32 +79,7 @@ impl Conversation for MistralConversation {
     }
 }
 
-impl Conversation for ZephyrConversation {
-    fn get_prompt(
-        &self,
-        messages: Vec<HashMap<String, String>>,
-        add_generation_prompt: bool,
-    ) -> Result<String, String> {
-        let eos_token = "</s>".to_string();
-        let mut content = "".to_string();
-        for message in messages {
-            if message["role"] == "user" {
-                content += &format!("<|user|>\n{}{}", message["content"], eos_token);
-            } else if message["role"] == "system" {
-                content += &format!("<|system|>\n{}{}", message["content"], eos_token);
-            } else if message["role"] == "assistant" {
-                content += &format!("<|assistant|>\n{}{}", message["content"], eos_token);
-            }
-            content += "\n";
-        }
-        if add_generation_prompt {
-            content += "<|assistant|>\n";
-        }
-        Ok(content)
-    }
-}
-
-pub struct MistralModelPaths<P> {
+pub struct GemmaModelPaths<P> {
     tokenizer_filename: P,
     config_filename: P,
     filenames: Vec<P>,
@@ -119,7 +90,7 @@ pub struct MistralModelPaths<P> {
     xlora_ordering: Option<Ordering>,
 }
 
-impl ModelPaths for MistralModelPaths<PathBuf> {
+impl ModelPaths for GemmaModelPaths<PathBuf> {
     fn get_config_filename(&self) -> &PathBuf {
         &self.config_filename
     }
@@ -146,16 +117,16 @@ impl ModelPaths for MistralModelPaths<PathBuf> {
     }
 }
 
-pub struct MistralPipeline {
+pub struct GemmaPipeline {
     model: Model,
     tokenizer: Tokenizer,
-    config: MistralSpecificConfig,
+    config: GemmaSpecificConfig,
     no_xlora_kv_cache: bool,
 }
 
-pub struct MistralLoader {
+pub struct GemmaLoader {
     model_id: String,
-    config: MistralSpecificConfig,
+    config: GemmaSpecificConfig,
     quantized_model_id: Option<String>,
     quantized_filename: Option<String>,
     xlora_model_id: Option<String>,
@@ -165,24 +136,30 @@ pub struct MistralLoader {
 }
 
 #[derive(Clone, Copy)]
-pub struct MistralSpecificConfig {
-    pub use_flash_attn: bool,
+pub struct GemmaSpecificConfig {
     pub repeat_last_n: usize,
+}
+
+fn default_max_position_embeddings() -> usize {
+    4096
 }
 
 #[derive(Deserialize)]
 pub struct BasicConfig {
-    vocab_size: usize,
-    hidden_size: usize,
-    intermediate_size: usize,
-    num_hidden_layers: usize,
-    num_attention_heads: usize,
-    num_key_value_heads: usize,
-    hidden_act: Activation,
-    max_position_embeddings: usize,
-    rms_norm_eps: f64,
-    rope_theta: f64,
-    sliding_window: usize,
+    pub attention_bias: bool,
+    pub head_dim: usize,
+    pub hidden_act: candle_nn::Activation,
+    pub hidden_size: usize,
+    pub intermediate_size: usize,
+    pub num_attention_heads: usize,
+    pub num_hidden_layers: usize,
+    pub num_key_value_heads: usize,
+    pub rms_norm_eps: f64,
+    pub rope_theta: f64,
+    pub vocab_size: usize,
+
+    #[serde(default = "default_max_position_embeddings")]
+    pub max_position_embeddings: usize,
 }
 
 #[derive(Error, Debug)]
@@ -191,11 +168,11 @@ enum TokenizerError {
     Error(String),
 }
 
-impl MistralLoader {
+impl GemmaLoader {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         model_id: String,
-        config: MistralSpecificConfig,
+        config: GemmaSpecificConfig,
         quantized_model_id: Option<String>,
         quantized_filename: Option<String>,
         xlora_model_id: Option<String>,
@@ -216,7 +193,7 @@ impl MistralLoader {
     }
 }
 
-impl Loader for MistralLoader {
+impl Loader for GemmaLoader {
     fn download_model(
         &self,
         revision: Option<String>,
@@ -340,7 +317,7 @@ impl Loader for MistralLoader {
                 (None, None, None, None, None)
             };
 
-        Ok(Box::new(MistralModelPaths {
+        Ok(Box::new(GemmaModelPaths {
             tokenizer_filename,
             config_filename,
             filenames,
@@ -374,8 +351,8 @@ impl Loader for MistralLoader {
             max_position_embeddings: basic_config.max_position_embeddings,
             rms_norm_eps: basic_config.rms_norm_eps,
             rope_theta: basic_config.rope_theta,
-            sliding_window: basic_config.sliding_window,
-            use_flash_attn: self.config.use_flash_attn,
+            attention_bias: basic_config.attention_bias,
+            head_dim: basic_config.head_dim,
         };
         let default_dtype = if device.is_cuda() {
             DType::BF16
@@ -405,38 +382,7 @@ impl Loader for MistralLoader {
                 let model = NormalModel::new(&config, vb)?;
                 Model::Normal(model)
             }
-            ModelKind::XLoraNormal => {
-                let mut safetensors_paths = paths.get_weight_filenames().iter().collect::<Vec<_>>();
-                safetensors_paths.push(paths.get_classifier_path().as_ref().unwrap());
-                let vb = from_mmaped_safetensors(
-                    safetensors_paths
-                        .iter()
-                        .map(|x| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    paths
-                        .get_adapter_filenames()
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(|(_, x)| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    dtype.unwrap_or(default_dtype),
-                    device,
-                    false,
-                )?;
-
-                let conf = fs::read_to_string(paths.get_classifier_config().as_ref().unwrap())?;
-                let xlora_config: XLoraConfig = serde_json::from_str(&conf)?;
-
-                let model = XLoraModel::new(
-                    &config,
-                    vb,
-                    paths.get_adapter_configs().as_ref().unwrap(),
-                    xlora_config,
-                    paths.get_ordering().as_ref().unwrap().clone(),
-                )?;
-                Model::XLoraNormal(model)
-            }
+            ModelKind::XLoraNormal => unreachable!(),
         };
         println!("Model loaded.");
 
@@ -444,24 +390,20 @@ impl Loader for MistralLoader {
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
 
         Ok((
-            Box::new(Mutex::new(MistralPipeline {
+            Box::new(Mutex::new(GemmaPipeline {
                 model,
                 tokenizer,
                 config: self.config,
                 no_xlora_kv_cache: self.no_xlora_kv_cache,
             })),
-            if self.model_id.contains("zephyr") {
-                Arc::new(ZephyrConversation)
-            } else {
-                Arc::new(MistralConversation)
-            },
+            Arc::new(GemmaConversation),
         ))
     }
 }
 
-impl Pipeline for MistralPipeline {
+impl Pipeline for GemmaPipeline {
     fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor {
-        let (input_ids, input_ids_full, seqlen_offsets, seqlen_offsets_full) =
+        let (input_ids, _input_ids_full, seqlen_offsets, _seqlen_offsets_full) =
             if self.is_xlora() && !is_prompt {
                 let (input_ids_full, seqlen_offsets_full) =
                     get_prompt_input(&input_toks, self.device());
@@ -490,13 +432,6 @@ impl Pipeline for MistralPipeline {
         let result = match self.model {
             Model::Normal(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
             Model::Quantized(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
-            Model::XLoraNormal(ref mut model) => model.forward(
-                &input_ids,
-                input_ids_full.as_ref().unwrap(),
-                &seqlen_offsets,
-                seqlen_offsets_full.as_ref().unwrap(),
-                self.no_xlora_kv_cache,
-            ),
         };
         match result {
             Ok(v) => v,
@@ -516,7 +451,6 @@ impl Pipeline for MistralPipeline {
         match self.model {
             Model::Normal(ref model) => &model.device,
             Model::Quantized(ref model) => &model.device,
-            Model::XLoraNormal(ref model) => &model.device,
         }
     }
     fn num_hidden_layers(&self) -> usize {
@@ -526,7 +460,6 @@ impl Pipeline for MistralPipeline {
         match self.model {
             Model::Normal(ref model) => &model.cache,
             Model::Quantized(ref model) => &model.cache,
-            Model::XLoraNormal(ref model) => &model.cache,
         }
     }
     fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs> {
@@ -558,19 +491,17 @@ impl Pipeline for MistralPipeline {
             .expect("Unable to extract `</s>` EOS token.")
     }
     fn name(&self) -> &'static str {
-        "mistral"
+        "gemma"
     }
     fn get_max_seq_len(&self) -> usize {
         match &self.model {
             Model::Normal(model) => model.max_seq_len,
             Model::Quantized(_) => quantized_llama::MAX_SEQ_LEN as usize,
-            Model::XLoraNormal(model) => model.max_seq_len,
         }
     }
     fn is_xlora(&self) -> bool {
         match &self.model {
             Model::Normal(_) | Model::Quantized(_) => false,
-            Model::XLoraNormal(_) => true,
         }
     }
     fn has_no_xlora_kv_cache(&self) -> bool {

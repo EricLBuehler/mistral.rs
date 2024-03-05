@@ -18,15 +18,18 @@ Mistral.rs is a LLM inference platform written in pure, safe Rust.
 
 **Supported models:**
 - Mistral 7B
+  - Normal
   - GGUF
   - X-LoRA
-
+- Gemma
+  - Normal
 
 ## Usage
 ## Build
 To build mistral.rs, one should ensure they have Rust installed by following [this](https://rustup.rs/) link.
 The Huggingface token should be provided in `~/.cache/huggingface/token`. 
 - Using a script
+
     For an easy quickstart, the script below will 
     download an setup Rust and then build mistral.rs to run on the CPU.
     ```bash
@@ -44,6 +47,7 @@ The Huggingface token should be provided in `~/.cache/huggingface/token`.
     cargo build --release
     ```
 - Manual build
+
     If Rust is installed and the Huggingface token is set, then one may build mistral.rs by executing the build command.
     `cargo build --release`.
 The build process will output a binary `misralrs` at `./target/release/mistralrs`.

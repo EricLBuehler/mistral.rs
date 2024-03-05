@@ -25,7 +25,8 @@ mod utils;
 mod xlora_models;
 
 pub use pipeline::{
-    Conversation, Loader, MistralLoader, MistralSpecificConfig, ModelKind, TokenSource,
+    Conversation, GemmaLoader, GemmaSpecificConfig, Loader, MistralLoader, MistralSpecificConfig,
+    ModelKind, TokenSource,
 };
 pub use request::Request;
 pub use response::ChatCompletionResponse;

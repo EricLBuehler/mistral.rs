@@ -1,10 +1,13 @@
+mod gemma;
 mod mistral;
 use candle_sampling::logits_processor::Logprobs;
+pub use gemma::{GemmaLoader, GemmaSpecificConfig};
 pub use mistral::{MistralLoader, MistralSpecificConfig};
 use mistralrs_lora::{LoraConfig, Ordering};
 use std::{
     cell::RefCell,
     collections::HashMap,
+    iter::repeat,
     path::PathBuf,
     rc::Rc,
     sync::{Arc, Mutex},
@@ -14,7 +17,7 @@ use tokenizers::Tokenizer;
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 
-use crate::{models::Cache, sequence::Sequence};
+use crate::{deref_refcell, models::Cache, sequence::Sequence};
 
 pub trait ModelPaths {
     fn get_weight_filenames(&self) -> &[PathBuf];
@@ -97,4 +100,47 @@ pub trait Pipeline: Send + Sync {
     fn get_max_seq_len(&self) -> usize;
     fn is_xlora(&self) -> bool;
     fn has_no_xlora_kv_cache(&self) -> bool;
+}
+
+fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>], device: &Device) -> (Tensor, Vec<usize>) {
+    // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
+    let max_len = input_toks
+        .iter()
+        .map(|seq| deref_refcell!(seq).len())
+        .max()
+        .unwrap();
+    let padding_tok = 0;
+    // Pad each sequence by the padding token to the max len.
+    let mut seqs_tensors = Vec::new();
+    let mut seqlen_offsets = Vec::new();
+    for seq in input_toks.iter() {
+        let mut ctxt = deref_refcell!(seq).get_toks().to_vec();
+        seqlen_offsets.push(0);
+
+        ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
+
+        // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
+        seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
+    }
+    // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
+    (Tensor::cat(&seqs_tensors, 0).unwrap(), seqlen_offsets)
+}
+
+fn get_completion_input(
+    input_toks: &[Rc<RefCell<Sequence>>],
+    device: &Device,
+) -> (Tensor, Vec<usize>) {
+    // Pad each sequence by the padding token to the max len.
+    let mut seqs_tensors = Vec::new();
+    let mut seqlen_offsets = Vec::new();
+    for seq in input_toks.iter() {
+        let start_pos = deref_refcell!(seq).get_toks().len().saturating_sub(1);
+        let ctxt = deref_refcell!(seq).get_toks()[start_pos..].to_vec();
+        seqlen_offsets.push(start_pos);
+
+        // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
+        seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
+    }
+    // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
+    (Tensor::cat(&seqs_tensors, 0).unwrap(), seqlen_offsets)
 }

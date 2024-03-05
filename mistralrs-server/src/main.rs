@@ -13,8 +13,9 @@ use axum::{
 use candle_core::Device;
 use clap::{Parser, Subcommand};
 use mistralrs_core::{
-    Conversation, Loader, MistralLoader, MistralRs, MistralSpecificConfig, ModelKind, Request,
-    Response, SamplingParams, SchedulerMethod, StopTokens as InternalStopTokens, TokenSource,
+    Conversation, GemmaLoader, GemmaSpecificConfig, Loader, MistralLoader, MistralRs,
+    MistralSpecificConfig, ModelKind, Request, Response, SamplingParams, SchedulerMethod,
+    StopTokens as InternalStopTokens, TokenSource,
 };
 use openai::{ChatCompletionRequest, StopTokens};
 mod openai;
@@ -76,6 +77,17 @@ pub enum ModelSelected {
         /// Ordering JSON file
         #[arg(short, long)]
         order: String,
+    },
+
+    /// Select the gemma instruct model.
+    Gemma {
+        /// Model ID to load from
+        #[arg(short, long, default_value = "google/gemma-7b-it")]
+        model_id: String,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
     },
 }
 
@@ -227,6 +239,19 @@ async fn main() -> Result<()> {
             Some(xlora_model_id),
             ModelKind::XLoraNormal,
             Some(serde_json::from_reader(File::open(order)?)?),
+            args.no_xlora_kv_cache,
+        )),
+        ModelSelected::Gemma {
+            model_id,
+            repeat_last_n,
+        } => Box::new(GemmaLoader::new(
+            model_id,
+            GemmaSpecificConfig { repeat_last_n },
+            None,
+            None,
+            None,
+            ModelKind::Normal,
+            None,
             args.no_xlora_kv_cache,
         )),
     };
