@@ -423,6 +423,12 @@
 <a href="#422" id="422">422</a>
 <a href="#423" id="423">423</a>
 <a href="#424" id="424">424</a>
+<a href="#425" id="425">425</a>
+<a href="#426" id="426">426</a>
+<a href="#427" id="427">427</a>
+<a href="#428" id="428">428</a>
+<a href="#429" id="429">429</a>
+<a href="#430" id="430">430</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -828,7 +834,13 @@
         logits.to_dtype(DType::F32)
     }
 
-    <span class="kw">pub fn </span>load(vb: VarBuilder, cfg: <span class="kw-2">&amp;</span>Config, dtype: DType, device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">pub fn </span>load(
+        vb: VarBuilder,
+        cfg: <span class="kw-2">&amp;</span>Config,
+        dtype: DType,
+        device: <span class="kw-2">&amp;</span>Device,
+        no_xlora_kv_cache: bool,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp(<span class="string">"model.embed_tokens"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp(<span class="string">"lm_head"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>ln_f = RmsNorm::load(cfg.hidden_size, cfg.rms_norm_eps, vb.pp(<span class="string">"model.norm"</span>))<span class="question-mark">?</span>;
@@ -841,7 +853,7 @@
             blocks,
             ln_f,
             lm_head,
-            cache: Cache::new(<span class="bool-val">true</span>, dtype, cfg, device)<span class="question-mark">?</span>,
+            cache: Cache::new(!no_xlora_kv_cache, dtype, cfg, device)<span class="question-mark">?</span>,
             kv_cache: <span class="kw">super</span>::Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
             device: device.clone(),
         })

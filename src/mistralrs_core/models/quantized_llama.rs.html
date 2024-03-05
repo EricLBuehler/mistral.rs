@@ -842,7 +842,7 @@
 }
 
 <span class="kw">impl </span>ModelWeights {
-    <span class="kw">pub fn </span>_from_ggml(<span class="kw-2">mut </span>ct: ggml_file::Content, gqa: usize) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">pub fn </span>from_ggml(<span class="kw-2">mut </span>ct: ggml_file::Content, gqa: usize) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>head_dim = (ct.hparams.n_embd / ct.hparams.n_head) <span class="kw">as </span>usize;
         <span class="kw">let </span>(cos, sin) = precomput_freqs_cis(head_dim, <span class="number">10000.</span>, <span class="kw-2">&amp;</span>ct.device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = ct.remove(<span class="string">"tok_embeddings.weight"</span>)<span class="question-mark">?</span>;
