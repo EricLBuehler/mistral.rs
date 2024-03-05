@@ -602,7 +602,6 @@
 <a href="#601" id="601">601</a>
 <a href="#602" id="602">602</a>
 <a href="#603" id="603">603</a>
-<a href="#604" id="604">604</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{iter::zip, sync::Arc};
@@ -1102,7 +1101,7 @@
             <span class="macro">candle_core::bail!</span>(<span class="string">"Expected seqlen offsets have length equal to batch size."</span>)
         }
 
-        <span class="kw">let </span>cache = <span class="kw">if </span>is_full_pass {
+        <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="kw">if </span>is_full_pass {
             <span class="kw">if </span>no_xlora_kv_cache {
                 <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
                 <span class="kw">for _ in </span><span class="number">0</span>..<span class="self">self</span>.cache.xlora_lock().len() {
@@ -1126,7 +1125,6 @@
         };
         <span class="kw">let </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>xs = (xs * (<span class="self">self</span>.hidden_size <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
             xs = layer.forward(
                 <span class="kw-2">&amp;</span>xs,
