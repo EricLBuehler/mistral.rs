@@ -26,10 +26,18 @@ echo <HF_TOKEN_HERE> > ~/.cache/huggingface/token
 cargo build --release --features cuda
 ```
 
+It will output a binary called `mistralrs` to `./target/release/mistralrs`.
+
 To start a server serving Mistral on `localhost:1234`, 
 ```bash
 ./target/release/mistralrs --port 1234 --log output.log mistral
 ```
+
+Mistral.rs uses subcommands for organization. For example, to start a normal Mistral server one may use `./target/release/mistralrs  --port 1234 mistral` but to start a GGUF mistral server one may use `./target/release/mistralrs --port 1234 gguf-mistral`. For help with the global program, one should pass `--help` before the model subcommand, but for help with the subcommand the flag should be passed after.
+
+To start an X-LoRA server with the default weights, run the following after modifying or copying the ordering file as descibed [here](README.md#x-lora-ordering-file).
+
+`./target/release/mistralrs --port 1234 x-lora-mistral -m HuggingFaceH4/zephyr-7b-beta -o ordering.json`
 
 ## X-LoRA Ordering File
 The X-LoRA ordering JSON file contains 2 parts. The first is the order of the adapters. In the template, this is an empty array but should be filled in with strings. The second part is the layer ordering. This has been generated and should not be manipulated as it controls the application of scalings.
