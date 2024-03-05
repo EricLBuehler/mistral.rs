@@ -1,1 +1,1 @@
-window.ALL_CRATES = ["mistralrs","mistralrs_core","mistralrs_lora"];
+window.ALL_CRATES = ["mistralrs_core","mistralrs_lora","mistralrs_server"];
