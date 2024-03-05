@@ -435,7 +435,7 @@ impl Pipeline for LlamaPipeline {
     fn eos_tok(&self) -> u32 {
         self.tokenizer
             .get_vocab(true)
-            .get("<eos>")
+            .get("</s>")
             .copied()
             .expect("Unable to extract `<eos>` EOS token.")
     }
