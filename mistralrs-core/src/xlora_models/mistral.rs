@@ -500,12 +500,12 @@ impl XLoraModel {
         }
 
         let mut cache = if is_full_pass {
-            let mut new_cache = Vec::new();
+            /*let mut new_cache = Vec::new();
             for _ in 0..self.cache.xlora_lock().len() {
                 new_cache.push(None);
             }
 
-            *self.cache.xlora_lock() = new_cache.clone();
+            *self.cache.xlora_lock() = new_cache.clone();*/
             self.cache.xlora_lock()
         } else {
             self.cache.lock()
@@ -565,10 +565,14 @@ impl XLoraModel {
         let scalings = self.xlora_classifier.forward(hidden_states)?;
 
         // Using no cache here
-        let o = self
+        /*let o = self
             .inner_forward(input_ids_full, seqlen_offsets_full, scalings, true)?
             .apply(&self.lm_head)?
-            .narrow(1, seq_len_full - 1, 1)?;
+            .narrow(1, seq_len_full - 1, 1)?;*/
+        let o = self
+            .inner_forward(input_ids, seqlen_offsets, scalings, true)?
+            .apply(&self.lm_head)?
+            .narrow(1, seq_len - 1, 1)?;
 
         Ok(o)
     }
