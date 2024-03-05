@@ -35,7 +35,7 @@ To start a server serving Mistral on `localhost:1234`,
 
 Mistral.rs uses subcommands for organization. For example, to start a normal Mistral server one may use `./target/release/mistralrs  --port 1234 mistral` but to start a GGUF mistral server one may use `./target/release/mistralrs --port 1234 gguf-mistral`. For help with the global program, one should pass `--help` before the model subcommand, but for help with the subcommand the flag should be passed after.
 
-To start an X-LoRA server with the default weights, run the following after modifying or copying the ordering file as descibed [here](README.md#x-lora-ordering-file).
+To start an X-LoRA server with the default weights, run the following after modifying or copying the ordering file as described [here](README.md#x-lora-ordering-file).
 
 `./target/release/mistralrs --port 1234 x-lora-mistral -m HuggingFaceH4/zephyr-7b-beta -o ordering.json`
 
