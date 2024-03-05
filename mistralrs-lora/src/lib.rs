@@ -36,7 +36,7 @@ fn apply_scalings_to_x(
 ) -> Result<Tensor> {
     let scalings = scalings_layer.i((.., .., adapter))?.unsqueeze(D::Minus1)?;
     dbg!(scalings.mean_all()?);
-    dbg!(scalings.shape()?);
+    dbg!(scalings.shape());
     dbg!(x.mean_all()?);
     if layer == 0 && adapter == 8 {
         dbg!(&scalings);
