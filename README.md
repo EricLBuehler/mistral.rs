@@ -19,3 +19,6 @@ touch ~/.cache/huggingface/token
 echo <HF_TOKEN_HERE> > ~/.cache/huggingface/token
 cargo run --release --features cuda -- --port 1234 --log output.log mistral-gguf -f mistral-7b-instruct-v0.1.Q2_K.gguf
 ```
+
+## X-LoRA Ordering File
+The X-LoRA ordering JSON file contains 2 parts. The first is the order of the adapters. In the template, this is an empty array but should be filled in with strings. The second part is the layer ordering. This has been generated and should not be manipulated as it controls the application of scalings.
