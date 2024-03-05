@@ -163,7 +163,7 @@ impl XLoraClassifier {
                 0..scalings.dims()[0],
                 0..scalings.dims()[1],
                 0..scalings.dims()[2],
-                self.n_classes - 2..self.n_classes-1,
+                self.n_classes - 1..self.n_classes,
             ],
             &Tensor::ones(
                 (
