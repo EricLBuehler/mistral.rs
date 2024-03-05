@@ -13,9 +13,9 @@ use axum::{
 use candle_core::Device;
 use clap::{Parser, Subcommand};
 use mistralrs_core::{
-    Conversation, GemmaLoader, GemmaSpecificConfig, Loader, MistralLoader, MistralRs,
-    MistralSpecificConfig, ModelKind, Request, Response, SamplingParams, SchedulerMethod,
-    StopTokens as InternalStopTokens, TokenSource,
+    Conversation, GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader,
+    MistralLoader, MistralRs, MistralSpecificConfig, ModelKind, Request, Response, SamplingParams,
+    SchedulerMethod, StopTokens as InternalStopTokens, TokenSource,
 };
 use openai::{ChatCompletionRequest, StopTokens};
 mod openai;
@@ -107,6 +107,17 @@ pub enum ModelSelected {
         /// Ordering JSON file
         #[arg(short, long)]
         order: String,
+    },
+
+    /// Select the llama model.
+    Llama {
+        /// Model ID to load from
+        #[arg(short, long, default_value = "meta-llama/Llama-2-7b-hf")]
+        model_id: String,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
     },
 }
 
@@ -286,6 +297,22 @@ async fn main() -> Result<()> {
             Some(xlora_model_id),
             ModelKind::Normal,
             Some(serde_json::from_reader(File::open(order)?)?),
+            args.no_xlora_kv_cache,
+        )),
+        ModelSelected::Llama {
+            model_id,
+            repeat_last_n,
+        } => Box::new(LlamaLoader::new(
+            model_id,
+            LlamaSpecificConfig {
+                repeat_last_n,
+                use_flash_attn: false,
+            },
+            None,
+            None,
+            None,
+            ModelKind::Normal,
+            None,
             args.no_xlora_kv_cache,
         )),
     };

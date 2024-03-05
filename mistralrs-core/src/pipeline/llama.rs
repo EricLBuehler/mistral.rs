@@ -2,11 +2,10 @@ use super::{
     get_completion_input, get_prompt_input, Conversation, Loader, ModelKind, ModelPaths, Pipeline,
     TokenSource,
 };
-use crate::models::Cache;
-use crate::xlora_models::{XLoraConfig, XLoraGemma};
+use crate::models::{quantized_llama, Cache};
 use crate::{deref_mut_refcell, deref_refcell};
 use crate::{
-    models::gemma::{Config, Model as NormalModel},
+    models::llama::{Llama as NormalModel, LlamaConfig},
     sequence::Sequence,
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
 };
@@ -15,7 +14,6 @@ use candle_core::{DType, Device, Tensor};
 use candle_sampling::logits_processor::Logprobs;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
-use serde::Deserialize;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
@@ -27,12 +25,11 @@ use tokenizers::Tokenizer;
 
 enum Model {
     Normal(NormalModel),
-    XLoraNormal(XLoraGemma),
 }
 
-struct GemmaConversation;
+struct LlamaConversation;
 
-impl Conversation for GemmaConversation {
+impl Conversation for LlamaConversation {
     fn get_prompt(
         &self,
         messages: Vec<HashMap<String, String>>,
@@ -40,7 +37,7 @@ impl Conversation for GemmaConversation {
     ) -> Result<String, String> {
         let bos_token = "<bos>".to_string();
         if messages[0]["role"] == "system" {
-            return Err("System role not supported for Gemma.".to_string());
+            return Err("System role not supported for Llama.".to_string());
         };
         let mut content = bos_token;
         for (i, message) in messages.iter().enumerate() {
@@ -67,7 +64,7 @@ impl Conversation for GemmaConversation {
     }
 }
 
-pub struct GemmaModelPaths<P> {
+pub struct LlamaModelPaths<P> {
     tokenizer_filename: P,
     config_filename: P,
     filenames: Vec<P>,
@@ -78,7 +75,7 @@ pub struct GemmaModelPaths<P> {
     xlora_ordering: Option<Ordering>,
 }
 
-impl ModelPaths for GemmaModelPaths<PathBuf> {
+impl ModelPaths for LlamaModelPaths<PathBuf> {
     fn get_config_filename(&self) -> &PathBuf {
         &self.config_filename
     }
@@ -105,16 +102,16 @@ impl ModelPaths for GemmaModelPaths<PathBuf> {
     }
 }
 
-pub struct GemmaPipeline {
+pub struct LlamaPipeline {
     model: Model,
     tokenizer: Tokenizer,
-    config: GemmaSpecificConfig,
+    config: LlamaSpecificConfig,
     no_xlora_kv_cache: bool,
 }
 
-pub struct GemmaLoader {
+pub struct LlamaLoader {
     model_id: String,
-    config: GemmaSpecificConfig,
+    config: LlamaSpecificConfig,
     quantized_model_id: Option<String>,
     quantized_filename: Option<String>,
     xlora_model_id: Option<String>,
@@ -124,30 +121,9 @@ pub struct GemmaLoader {
 }
 
 #[derive(Clone, Copy)]
-pub struct GemmaSpecificConfig {
+pub struct LlamaSpecificConfig {
     pub repeat_last_n: usize,
-}
-
-fn default_max_position_embeddings() -> usize {
-    4096
-}
-
-#[derive(Deserialize)]
-pub struct BasicConfig {
-    pub attention_bias: bool,
-    pub head_dim: usize,
-    pub hidden_act: candle_nn::Activation,
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub num_attention_heads: usize,
-    pub num_hidden_layers: usize,
-    pub num_key_value_heads: usize,
-    pub rms_norm_eps: f64,
-    pub rope_theta: f64,
-    pub vocab_size: usize,
-
-    #[serde(default = "default_max_position_embeddings")]
-    pub max_position_embeddings: usize,
+    pub use_flash_attn: bool,
 }
 
 #[derive(Error, Debug)]
@@ -156,11 +132,11 @@ enum TokenizerError {
     Error(String),
 }
 
-impl GemmaLoader {
+impl LlamaLoader {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         model_id: String,
-        config: GemmaSpecificConfig,
+        config: LlamaSpecificConfig,
         quantized_model_id: Option<String>,
         quantized_filename: Option<String>,
         xlora_model_id: Option<String>,
@@ -181,7 +157,7 @@ impl GemmaLoader {
     }
 }
 
-impl Loader for GemmaLoader {
+impl Loader for LlamaLoader {
     fn download_model(
         &self,
         revision: Option<String>,
@@ -305,7 +281,7 @@ impl Loader for GemmaLoader {
                 (None, None, None, None, None)
             };
 
-        Ok(Box::new(GemmaModelPaths {
+        Ok(Box::new(LlamaModelPaths {
             tokenizer_filename,
             config_filename,
             filenames,
@@ -326,22 +302,8 @@ impl Loader for GemmaLoader {
         Box<Mutex<dyn Pipeline>>,
         Arc<dyn Conversation + Send + Sync>,
     )> {
-        let basic_config: BasicConfig =
+        let basic_config: LlamaConfig =
             serde_json::from_slice(&std::fs::read(paths.get_config_filename())?)?;
-        let config = Config {
-            vocab_size: basic_config.vocab_size,
-            hidden_size: basic_config.hidden_size,
-            intermediate_size: basic_config.intermediate_size,
-            num_hidden_layers: basic_config.num_hidden_layers,
-            num_attention_heads: basic_config.num_attention_heads,
-            num_key_value_heads: basic_config.num_key_value_heads,
-            hidden_act: basic_config.hidden_act,
-            max_position_embeddings: basic_config.max_position_embeddings,
-            rms_norm_eps: basic_config.rms_norm_eps,
-            rope_theta: basic_config.rope_theta,
-            attention_bias: basic_config.attention_bias,
-            head_dim: basic_config.head_dim,
-        };
         let default_dtype = if device.is_cuda() {
             DType::BF16
         } else {
@@ -361,41 +323,15 @@ impl Loader for GemmaLoader {
                     false,
                 )?;
 
-                let model = NormalModel::new(&config, vb)?;
+                let model = NormalModel::load(
+                    vb,
+                    &basic_config.into_config(self.config.use_flash_attn),
+                    default_dtype,
+                    device,
+                )?;
                 Model::Normal(model)
             }
-            ModelKind::XLoraNormal => {
-                let mut safetensors_paths = paths.get_weight_filenames().iter().collect::<Vec<_>>();
-                safetensors_paths.push(paths.get_classifier_path().as_ref().unwrap());
-                let vb = from_mmaped_safetensors(
-                    safetensors_paths
-                        .iter()
-                        .map(|x| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    paths
-                        .get_adapter_filenames()
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(|(_, x)| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    dtype.unwrap_or(default_dtype),
-                    device,
-                    false,
-                )?;
-
-                let conf = fs::read_to_string(paths.get_classifier_config().as_ref().unwrap())?;
-                let xlora_config: XLoraConfig = serde_json::from_str(&conf)?;
-
-                let model = XLoraGemma::new(
-                    &config,
-                    vb,
-                    paths.get_adapter_configs().as_ref().unwrap(),
-                    xlora_config,
-                    paths.get_ordering().as_ref().unwrap().clone(),
-                )?;
-                Model::XLoraNormal(model)
-            }
+            ModelKind::XLoraNormal => unreachable!(),
         };
         println!("Model loaded.");
 
@@ -403,20 +339,20 @@ impl Loader for GemmaLoader {
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
 
         Ok((
-            Box::new(Mutex::new(GemmaPipeline {
+            Box::new(Mutex::new(LlamaPipeline {
                 model,
                 tokenizer,
                 config: self.config,
                 no_xlora_kv_cache: self.no_xlora_kv_cache,
             })),
-            Arc::new(GemmaConversation),
+            Arc::new(LlamaConversation),
         ))
     }
 }
 
-impl Pipeline for GemmaPipeline {
+impl Pipeline for LlamaPipeline {
     fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor {
-        let (input_ids, input_ids_full, seqlen_offsets, seqlen_offsets_full) =
+        let (input_ids, _input_ids_full, seqlen_offsets, _seqlen_offsets_full) =
             if self.is_xlora() && !is_prompt {
                 let (input_ids_full, seqlen_offsets_full) =
                     get_prompt_input(&input_toks, self.device());
@@ -444,13 +380,6 @@ impl Pipeline for GemmaPipeline {
             };
         let result = match self.model {
             Model::Normal(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
-            Model::XLoraNormal(ref mut model) => model.forward(
-                &input_ids,
-                input_ids_full.as_ref().unwrap(),
-                &seqlen_offsets,
-                seqlen_offsets_full.as_ref().unwrap(),
-                self.no_xlora_kv_cache,
-            ),
         };
         match result {
             Ok(v) => v,
@@ -469,7 +398,6 @@ impl Pipeline for GemmaPipeline {
     fn device(&self) -> &Device {
         match self.model {
             Model::Normal(ref model) => &model.device,
-            Model::XLoraNormal(ref model) => &model.device,
         }
     }
     fn num_hidden_layers(&self) -> usize {
@@ -477,8 +405,7 @@ impl Pipeline for GemmaPipeline {
     }
     fn cache(&self) -> &Cache {
         match self.model {
-            Model::Normal(ref model) => &model.cache,
-            Model::XLoraNormal(ref model) => &model.cache,
+            Model::Normal(ref model) => &model.kv_cache,
         }
     }
     fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs> {
@@ -510,18 +437,16 @@ impl Pipeline for GemmaPipeline {
             .expect("Unable to extract `<eos>` EOS token.")
     }
     fn name(&self) -> &'static str {
-        "gemma"
+        "llama"
     }
     fn get_max_seq_len(&self) -> usize {
         match &self.model {
-            Model::Normal(model) => model.max_seq_len,
-            Model::XLoraNormal(model) => model.max_seq_len,
+            Model::Normal(_) => quantized_llama::MAX_SEQ_LEN as usize,
         }
     }
     fn is_xlora(&self) -> bool {
         match &self.model {
             Model::Normal(_) => false,
-            Model::XLoraNormal(_) => true,
         }
     }
     fn has_no_xlora_kv_cache(&self) -> bool {
