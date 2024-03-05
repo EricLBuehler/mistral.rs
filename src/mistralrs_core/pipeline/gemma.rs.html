@@ -539,7 +539,7 @@
         messages: Vec&lt;HashMap&lt;String, String&gt;&gt;,
         add_generation_prompt: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;String, String&gt; {
-        <span class="kw">let </span>bos_token = <span class="string">"&lt;s&gt;"</span>.to_string();
+        <span class="kw">let </span>bos_token = <span class="string">"&lt;bos&gt;"</span>.to_string();
         <span class="kw">if </span>messages[<span class="number">0</span>][<span class="string">"role"</span>] == <span class="string">"system" </span>{
             <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="string">"System role not supported for Gemma."</span>.to_string());
         };
