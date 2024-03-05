@@ -23,6 +23,8 @@ while True:
     resp = completion.choices[0].message.content
     if "<|assistant|>" in resp:
         out = resp.split("<|assistant|>")[-1].strip()
+    elif "<start_of_turn>model" in resp:
+        out = resp.split("<start_of_turn>model")[-1].strip()
     else:
         out = resp.split("[/INST]")[-1].strip()
     if out.endswith("</s>"):

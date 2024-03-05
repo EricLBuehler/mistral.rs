@@ -475,9 +475,9 @@ impl Pipeline for GemmaPipeline {
     fn eos_tok(&self) -> u32 {
         self.tokenizer
             .get_vocab(true)
-            .get("</s>")
+            .get("<eos>")
             .copied()
-            .expect("Unable to extract `</s>` EOS token.")
+            .expect("Unable to extract `<eos>` EOS token.")
     }
     fn name(&self) -> &'static str {
         "gemma"
