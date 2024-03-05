@@ -43,6 +43,7 @@
 <a href="#42" id="42">42</a>
 <a href="#43" id="43">43</a>
 <a href="#44" id="44">44</a>
+<a href="#45" id="45">45</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
 
 <span class="kw">use </span>candle_core::Tensor;
@@ -50,6 +51,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::get_mut_arcmutex;
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>gemma;
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>llama;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>mistral;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>quantized_llama;
 
