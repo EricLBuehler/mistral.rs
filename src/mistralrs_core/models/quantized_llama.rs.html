@@ -900,7 +900,7 @@
             span,
             span_output,
             device: ct.device.clone(),
-            cache: Cache::new(ct.hparams.n_layer <span class="kw">as </span>usize),
+            cache: Cache::new(ct.hparams.n_layer <span class="kw">as </span>usize, <span class="bool-val">false</span>),
         })
     }
 
@@ -1019,7 +1019,7 @@
             span,
             span_output,
             device: device.clone(),
-            cache: Cache::new(block_count),
+            cache: Cache::new(block_count, <span class="bool-val">false</span>),
         })
     }
 

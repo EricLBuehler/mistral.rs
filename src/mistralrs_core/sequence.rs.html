@@ -157,6 +157,15 @@
 <a href="#156" id="156">156</a>
 <a href="#157" id="157">157</a>
 <a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a>
+<a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
+<a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{cell::Cell, sync::mpsc::Sender};
 
 <span class="kw">use </span>candle_core::Tensor;
@@ -188,8 +197,8 @@
     id: usize,
     timestamp: u64,
     state: Cell&lt;SequenceState&gt;,
-    gen_idx: usize,
     cache: Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt;,
+    xlora_cache: <span class="prelude-ty">Option</span>&lt;Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt;&gt;,
     responder: Sender&lt;Response&gt;,
     logits_processor: LogitsProcessor,
     stop_tokens: Vec&lt;u32&gt;,
@@ -209,6 +218,7 @@
         stop_tokens: Vec&lt;u32&gt;,
         max_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
         return_logprobs: bool,
+        is_xlora: bool,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>prompt_len = tokens.len();
         <span class="self">Self </span>{
@@ -218,8 +228,12 @@
             id,
             timestamp,
             state: Cell::new(SequenceState::Waiting),
-            gen_idx: <span class="number">0</span>,
             cache: <span class="macro">vec!</span>[<span class="prelude-val">None</span>; layers],
+            xlora_cache: <span class="kw">if </span>is_xlora {
+                <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="prelude-val">None</span>; layers])
+            } <span class="kw">else </span>{
+                <span class="prelude-val">None
+            </span>},
             responder,
             logits_processor,
             stop_tokens,
@@ -257,12 +271,16 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>.tokens
     }
 
-    <span class="kw">pub fn </span>gen_idx(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>usize {
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>.gen_idx
-    }
-
     <span class="kw">pub fn </span>cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt; {
         <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache
+    }
+
+    <span class="kw">pub fn </span>xlora_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt; {
+        <span class="self">self</span>.xlora_cache.as_mut().unwrap()
+    }
+
+    <span class="kw">pub fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="self">self</span>.xlora_cache.is_some()
     }
 
     <span class="kw">pub fn </span>logits_processor(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>LogitsProcessor {
