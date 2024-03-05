@@ -192,6 +192,38 @@ impl Engine {
                 },
             )));
         }
+        if get_mut_arcmutex!(self.pipeline).is_xlora()
+            && !get_mut_arcmutex!(self.pipeline).has_no_xlora_kv_cache()
+        {
+            let mut new_cache = Vec::new();
+            for layer in 0..get_mut_arcmutex!(self.pipeline).num_hidden_layers() {
+                let mut k_vec = Vec::new();
+                let mut v_vec = Vec::new();
+                for seq in seqs.iter() {
+                    let mut seq = deref_mut_refcell!(seq);
+                    let seq_cache = &*seq.xlora_cache();
+                    let cache = seq_cache.get(layer).unwrap();
+                    // Note(EricLBuehler): Unwrap reasoning: We are handling completions seqs so unwrap is OK.
+                    let cache = cache.as_ref().unwrap();
+                    k_vec.push(cache.0.clone());
+                    v_vec.push(cache.1.clone());
+                }
+                // NOTE(EricLBuehler): Unwrap reasoning: We have the correct dims
+                new_cache.push(Some((
+                    if k_vec.len() > 1 {
+                        Tensor::cat(&k_vec, 0).unwrap()
+                    } else {
+                        k_vec[0].clone()
+                    },
+                    if v_vec.len() > 1 {
+                        Tensor::cat(&v_vec, 0).unwrap()
+                    } else {
+                        v_vec[0].clone()
+                    },
+                )));
+            }
+            *get_mut_arcmutex!(self.pipeline).cache().xlora_lock() = new_cache;
+        }
         *get_mut_arcmutex!(self.pipeline).cache().lock() = new_cache;
     }
 
@@ -201,7 +233,10 @@ impl Engine {
         for _ in 0..get_mut_arcmutex!(self.pipeline).num_hidden_layers() {
             new_cache.push(None);
         }
-        *get_mut_arcmutex!(self.pipeline).cache().lock() = new_cache;
+        *get_mut_arcmutex!(self.pipeline).cache().lock() = new_cache.clone();
+        if get_mut_arcmutex!(self.pipeline).cache().is_xlora() {
+            *get_mut_arcmutex!(self.pipeline).cache().xlora_lock() = new_cache;
+        }
     }
 
     /// Clone the cache FROM the model cache TO the sequences. Used for prompt, completion seqs.
@@ -227,6 +262,27 @@ impl Engine {
                     k_caches.get(seq_i).unwrap().clone(),
                     v_caches.get(seq_i).unwrap().clone(),
                 ));
+            }
+            if pipeline.is_xlora() && !pipeline.has_no_xlora_kv_cache() {
+                let cache = pipeline.cache().xlora_lock();
+                let cache = cache.get(layer).unwrap();
+                let k_cache = cache.as_ref().unwrap().0.clone();
+                let v_cache = cache.as_ref().unwrap().1.clone();
+
+                let k_caches = k_cache.chunk(seqs.len(), 0).unwrap();
+                debug_assert_eq!(k_caches.len(), seqs.len());
+                let v_caches = v_cache.chunk(seqs.len(), 0).unwrap();
+                debug_assert_eq!(v_caches.len(), seqs.len());
+
+                for (seq_i, seq) in seqs.iter().enumerate() {
+                    let mut seq = deref_mut_refcell!(seq);
+                    let seq_cache = seq.xlora_cache();
+                    let seq_cache = seq_cache.get_mut(layer).unwrap();
+                    *seq_cache = Some((
+                        k_caches.get(seq_i).unwrap().clone(),
+                        v_caches.get(seq_i).unwrap().clone(),
+                    ));
+                }
             }
         }
     }
@@ -264,19 +320,30 @@ impl Engine {
             request.sampling_params.top_p,
             request.sampling_params.temperature,
         ) {
-            (Some(topk), None, _) => SamplingMethod::TopK(topk),
-            (None, Some(topp), _) => SamplingMethod::TopP(topp),
-            (None, None, Some(_)) | (Some(_), Some(_), Some(_)) | (Some(_), Some(_), None) => {
+            (Some(topk), None, Some(_)) => SamplingMethod::TopK(topk),
+            (None, Some(topp), Some(_)) => SamplingMethod::TopP(topp),
+            (Some(topk), Some(topp), Some(_)) => SamplingMethod::TopKP((topk, topp)),
+            (None, None, None) => SamplingMethod::Multinomial,
+            (Some(_), Some(_), None) | (None, Some(_), None) | (Some(_), None, None) => {
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                 request
                     .response
                     .send(Response::Error(
-                        "Please specify either topk or topp, or neither if temperature is not specified.".into(),
+                        "If topp or topk are specified and temperature is not specified then argmax sampling will be used. Consider using a temperature of 1.".into(),
                     ))
                     .unwrap();
                 return;
             }
-            (None, None, None) => SamplingMethod::Multinomial,
+            (None, None, Some(_)) => {
+                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
+                request
+                    .response
+                    .send(Response::Error(
+                        "If topp and topk are not specified but temperature is set then argmax sampling will be used.".into(),
+                    ))
+                    .unwrap();
+                return;
+            }
         };
         let num_hidden_layers = get_mut_arcmutex!(self.pipeline).num_hidden_layers();
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
@@ -325,6 +392,7 @@ impl Engine {
             stop_toks,
             request.sampling_params.max_len,
             request.return_logprobs,
+            get_mut_arcmutex!(self.pipeline).is_xlora(),
         );
         self.id += 1;
 

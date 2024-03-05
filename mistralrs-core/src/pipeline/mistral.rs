@@ -1,5 +1,6 @@
-use super::{Conversation, Loader, ModelKind, ModelPaths, Pipeline, SimpleModelPaths, TokenSource};
+use super::{Conversation, Loader, ModelKind, ModelPaths, Pipeline, TokenSource};
 use crate::models::{quantized_llama, Cache};
+use crate::xlora_models::{XLoraConfig, XLoraModel};
 use crate::{deref_mut_refcell, deref_refcell};
 use crate::{
     models::mistral::{Config, Model as NormalModel},
@@ -13,9 +14,12 @@ use candle_core::{DType, Device, Tensor};
 use candle_nn::Activation;
 use candle_sampling::logits_processor::Logprobs;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use mistralrs_lora::{LoraConfig, Ordering};
 use serde::Deserialize;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::{iter::repeat, rc::Rc, sync::Mutex};
 use thiserror::Error;
@@ -24,12 +28,18 @@ use tokenizers::Tokenizer;
 enum Model {
     Normal(NormalModel),
     Quantized(QModelWeights),
+    XLoraNormal(XLoraModel),
 }
 
-struct MistralConversation {}
+struct MistralConversation;
+struct ZephyrConversation;
 
 impl Conversation for MistralConversation {
-    fn get_prompt(&self, messages: Vec<HashMap<String, String>>) -> Result<String, String> {
+    fn get_prompt(
+        &self,
+        messages: Vec<HashMap<String, String>>,
+        _add_generation_prompt: bool,
+    ) -> Result<String, String> {
         let bos_token = "<s>".to_string();
         let eos_token = "</s>".to_string();
         let (loop_messages, system_message) = if messages[0]["role"] == "system" {
@@ -70,10 +80,74 @@ impl Conversation for MistralConversation {
     }
 }
 
+impl Conversation for ZephyrConversation {
+    fn get_prompt(
+        &self,
+        messages: Vec<HashMap<String, String>>,
+        add_generation_prompt: bool,
+    ) -> Result<String, String> {
+        let eos_token = "</s>".to_string();
+        let mut content = "".to_string();
+        for message in messages {
+            if message["role"] == "user" {
+                content += &format!("<|user|>\n{}{}", message["content"], eos_token);
+            } else if message["role"] == "system" {
+                content += &format!("<|system|>\n{}{}", message["content"], eos_token);
+            } else if message["role"] == "assistant" {
+                content += &format!("<|assistant|>\n{}{}", message["content"], eos_token);
+            }
+            content += "\n";
+        }
+        if add_generation_prompt {
+            content += "<|assistant|>\n";
+        }
+        Ok(content)
+    }
+}
+
+pub struct MistralModelPaths<P> {
+    tokenizer_filename: P,
+    config_filename: P,
+    filenames: Vec<P>,
+    xlora_adapter_filenames: Option<Vec<(String, P)>>,
+    xlora_adapter_configs: Option<Vec<(String, LoraConfig)>>,
+    classifier_path: Option<P>,
+    classifier_config: Option<P>,
+    xlora_ordering: Option<Ordering>,
+}
+
+impl ModelPaths for MistralModelPaths<PathBuf> {
+    fn get_config_filename(&self) -> &PathBuf {
+        &self.config_filename
+    }
+    fn get_tokenizer_filename(&self) -> &PathBuf {
+        &self.tokenizer_filename
+    }
+    fn get_weight_filenames(&self) -> &[PathBuf] {
+        &self.filenames
+    }
+    fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>> {
+        &self.xlora_adapter_filenames
+    }
+    fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>> {
+        &self.xlora_adapter_configs
+    }
+    fn get_classifier_config(&self) -> &Option<PathBuf> {
+        &self.classifier_config
+    }
+    fn get_classifier_path(&self) -> &Option<PathBuf> {
+        &self.classifier_path
+    }
+    fn get_ordering(&self) -> &Option<Ordering> {
+        &self.xlora_ordering
+    }
+}
+
 pub struct MistralPipeline {
     model: Model,
     tokenizer: Tokenizer,
     config: MistralSpecificConfig,
+    no_xlora_kv_cache: bool,
 }
 
 pub struct MistralLoader {
@@ -81,7 +155,10 @@ pub struct MistralLoader {
     config: MistralSpecificConfig,
     quantized_model_id: Option<String>,
     quantized_filename: Option<String>,
+    xlora_model_id: Option<String>,
     kind: ModelKind,
+    xlora_order: Option<Ordering>,
+    no_xlora_kv_cache: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -112,19 +189,26 @@ enum TokenizerError {
 }
 
 impl MistralLoader {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         model_id: String,
         config: MistralSpecificConfig,
         quantized_model_id: Option<String>,
         quantized_filename: Option<String>,
+        xlora_model_id: Option<String>,
         kind: ModelKind,
+        xlora_order: Option<Ordering>,
+        no_xlora_kv_cache: bool,
     ) -> Self {
         Self {
             model_id,
             config,
             quantized_model_id,
             quantized_filename,
+            xlora_model_id,
             kind,
+            xlora_order,
+            no_xlora_kv_cache,
         }
     }
 }
@@ -159,7 +243,7 @@ impl Loader for MistralLoader {
                 let qapi = qapi.repo(Repo::with_revision(
                     self.quantized_model_id.as_ref().unwrap().clone(),
                     RepoType::Model,
-                    revision,
+                    revision.clone(),
                 ));
                 vec![qapi.get(name).unwrap()]
             }
@@ -179,10 +263,89 @@ impl Loader for MistralLoader {
             }
         };
 
-        Ok(Box::new(SimpleModelPaths {
+        let (adapters_configs, adapters_safetensors, classifier_path, classifier_config, ordering) =
+            if let Some(ref xlora_id) = self.xlora_model_id {
+                let api = ApiBuilder::new()
+                    .with_progress(true)
+                    .with_token(Some(get_token(&token_source)?))
+                    .build()?;
+                let api = api.repo(Repo::with_revision(
+                    xlora_id.clone(),
+                    RepoType::Model,
+                    revision,
+                ));
+                let xlora_classifier = &api
+                    .info()?
+                    .siblings
+                    .iter()
+                    .map(|x| x.rfilename.clone())
+                    .filter(|x| x.contains("xlora_classifier.safetensors"))
+                    .collect::<Vec<_>>()[0];
+                let xlora_config = &api
+                    .info()?
+                    .siblings
+                    .iter()
+                    .map(|x| x.rfilename.clone())
+                    .filter(|x| x.contains("xlora_config.json"))
+                    .collect::<Vec<_>>()[0];
+                let classifier_path = api.get(xlora_classifier)?;
+                let config_path = api.get(xlora_config)?;
+
+                let adapter_files = api
+                    .info()?
+                    .siblings
+                    .iter()
+                    .map(|x| x.rfilename.clone())
+                    .filter(|x| x.contains("/adapter_"))
+                    .map(|x| {
+                        let mut split = x.split('/');
+                        let pos = split.clone().count() - 2;
+                        let name = split.nth(pos).unwrap().to_string();
+                        (x, name)
+                    })
+                    .collect::<Vec<_>>();
+                let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
+                for (file, name) in adapter_files {
+                    if let Some(paths) = adapters_paths.get_mut(&name) {
+                        paths.push(api.get(&file)?);
+                    } else {
+                        adapters_paths.insert(name, vec![api.get(&file)?]);
+                    }
+                }
+                let mut adapters_configs = Vec::new();
+                let mut adapters_safetensors = Vec::new();
+                for name in &self.xlora_order.as_ref().unwrap().adapters {
+                    let paths = adapters_paths.get(name).unwrap();
+                    for path in paths {
+                        if path.extension().unwrap() == "safetensors" {
+                            adapters_safetensors.push((name.clone(), path.to_owned()));
+                        } else {
+                            let conf = fs::read_to_string(path)?;
+                            let lora_config: LoraConfig = serde_json::from_str(&conf)?;
+                            adapters_configs.push((name.clone(), lora_config));
+                        }
+                    }
+                }
+                (
+                    Some(adapters_configs),
+                    Some(adapters_safetensors),
+                    Some(classifier_path),
+                    Some(config_path),
+                    self.xlora_order.clone(),
+                )
+            } else {
+                (None, None, None, None, None)
+            };
+
+        Ok(Box::new(MistralModelPaths {
             tokenizer_filename,
             config_filename,
             filenames,
+            xlora_adapter_configs: adapters_configs,
+            xlora_adapter_filenames: adapters_safetensors,
+            classifier_path,
+            classifier_config,
+            xlora_ordering: ordering,
         }))
     }
 
@@ -229,7 +392,8 @@ impl Loader for MistralLoader {
             ModelKind::QuantizedGGML => unreachable!(),
             ModelKind::Normal => {
                 let vb = from_mmaped_safetensors(
-                    paths.get_weight_filenames(),
+                    paths.get_weight_filenames().to_vec(),
+                    Vec::new(),
                     dtype.unwrap_or(default_dtype),
                     device,
                     false,
@@ -237,6 +401,38 @@ impl Loader for MistralLoader {
 
                 let model = NormalModel::new(&config, vb)?;
                 Model::Normal(model)
+            }
+            ModelKind::XLoraNormal => {
+                let mut safetensors_paths = paths.get_weight_filenames().iter().collect::<Vec<_>>();
+                safetensors_paths.push(paths.get_classifier_path().as_ref().unwrap());
+                let vb = from_mmaped_safetensors(
+                    safetensors_paths
+                        .iter()
+                        .map(|x| (*x).to_owned())
+                        .collect::<Vec<_>>(),
+                    paths
+                        .get_adapter_filenames()
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .map(|(_, x)| (*x).to_owned())
+                        .collect::<Vec<_>>(),
+                    dtype.unwrap_or(default_dtype),
+                    device,
+                    false,
+                )?;
+
+                let conf = fs::read_to_string(paths.get_classifier_config().as_ref().unwrap())?;
+                let xlora_config: XLoraConfig = serde_json::from_str(&conf)?;
+
+                let model = XLoraModel::new(
+                    &config,
+                    vb,
+                    paths.get_adapter_configs().as_ref().unwrap(),
+                    xlora_config,
+                    paths.get_ordering().as_ref().unwrap().clone(),
+                )?;
+                Model::XLoraNormal(model)
             }
         };
         println!("Model loaded.");
@@ -249,66 +445,97 @@ impl Loader for MistralLoader {
                 model,
                 tokenizer,
                 config: self.config,
+                no_xlora_kv_cache: self.no_xlora_kv_cache,
             })),
-            Arc::new(MistralConversation {}),
+            if self.model_id.contains("zephyr") {
+                Arc::new(ZephyrConversation)
+            } else {
+                Arc::new(MistralConversation)
+            },
         ))
     }
 }
 
+fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>], device: &Device) -> (Tensor, Vec<usize>) {
+    // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
+    let max_len = input_toks
+        .iter()
+        .map(|seq| deref_refcell!(seq).len())
+        .max()
+        .unwrap();
+    let padding_tok = 0;
+    // Pad each sequence by the padding token to the max len.
+    let mut seqs_tensors = Vec::new();
+    let mut seqlen_offsets = Vec::new();
+    for seq in input_toks.iter() {
+        let mut ctxt = deref_refcell!(seq).get_toks().to_vec();
+        seqlen_offsets.push(0);
+
+        ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
+
+        // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
+        seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
+    }
+    // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
+    (Tensor::cat(&seqs_tensors, 0).unwrap(), seqlen_offsets)
+}
+
+fn get_completion_input(
+    input_toks: &[Rc<RefCell<Sequence>>],
+    device: &Device,
+) -> (Tensor, Vec<usize>) {
+    // Pad each sequence by the padding token to the max len.
+    let mut seqs_tensors = Vec::new();
+    let mut seqlen_offsets = Vec::new();
+    for seq in input_toks.iter() {
+        let start_pos = deref_refcell!(seq).get_toks().len().saturating_sub(1);
+        let ctxt = deref_refcell!(seq).get_toks()[start_pos..].to_vec();
+        seqlen_offsets.push(start_pos);
+
+        // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
+        seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
+    }
+    // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
+    (Tensor::cat(&seqs_tensors, 0).unwrap(), seqlen_offsets)
+}
 impl Pipeline for MistralPipeline {
     fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor {
-        let (input_ids, seqlen_offsets) = if is_prompt {
-            // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
-            let max_len = input_toks
-                .iter()
-                .map(|seq| deref_refcell!(seq).len())
-                .max()
-                .unwrap();
-            let padding_tok = 0;
-            // Pad each sequence by the padding token to the max len.
-            let mut seqs_tensors = Vec::new();
-            let mut seqlen_offsets = Vec::new();
-            for seq in input_toks.iter() {
-                let mut ctxt = deref_refcell!(seq).get_toks().to_vec();
-                seqlen_offsets.push(0);
-                *deref_mut_refcell!(seq).gen_idx() += 1;
-
-                ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
-
-                // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
-                seqs_tensors.push(
-                    Tensor::new(ctxt, self.device())
-                        .unwrap()
-                        .unsqueeze(0)
-                        .unwrap(),
-                );
-            }
-            // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
-            (Tensor::cat(&seqs_tensors, 0).unwrap(), seqlen_offsets)
-        } else {
-            // Pad each sequence by the padding token to the max len.
-            let mut seqs_tensors = Vec::new();
-            let mut seqlen_offsets = Vec::new();
-            for seq in input_toks.iter() {
-                let start_pos = deref_refcell!(seq).get_toks().len().saturating_sub(1);
-                let ctxt = deref_refcell!(seq).get_toks()[start_pos..].to_vec();
-                seqlen_offsets.push(start_pos);
-                *deref_mut_refcell!(seq).gen_idx() += 1;
-
-                // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
-                seqs_tensors.push(
-                    Tensor::new(ctxt, self.device())
-                        .unwrap()
-                        .unsqueeze(0)
-                        .unwrap(),
-                );
-            }
-            // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
-            (Tensor::cat(&seqs_tensors, 0).unwrap(), seqlen_offsets)
-        };
+        let (input_ids, input_ids_full, seqlen_offsets, seqlen_offsets_full) =
+            if self.is_xlora() && !is_prompt {
+                let (input_ids_full, seqlen_offsets_full) =
+                    get_prompt_input(&input_toks, self.device());
+                let (input_ids, seqlen_offsets) = get_completion_input(&input_toks, self.device());
+                (
+                    input_ids,
+                    Some(input_ids_full),
+                    seqlen_offsets,
+                    Some(seqlen_offsets_full),
+                )
+            } else if self.is_xlora() && is_prompt {
+                let (input_ids_full, seqlen_offsets) = get_prompt_input(&input_toks, self.device());
+                (
+                    input_ids_full.clone(),
+                    Some(input_ids_full),
+                    seqlen_offsets.clone(),
+                    Some(seqlen_offsets),
+                )
+            } else if is_prompt {
+                let (input_ids, seqlen_offsets) = get_prompt_input(&input_toks, self.device());
+                (input_ids, None, seqlen_offsets, None)
+            } else {
+                let (input_ids, seqlen_offsets) = get_completion_input(&input_toks, self.device());
+                (input_ids, None, seqlen_offsets, None)
+            };
         let result = match self.model {
             Model::Normal(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
             Model::Quantized(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
+            Model::XLoraNormal(ref mut model) => model.forward(
+                &input_ids,
+                input_ids_full.as_ref().unwrap(),
+                &seqlen_offsets,
+                seqlen_offsets_full.as_ref().unwrap(),
+                self.no_xlora_kv_cache,
+            ),
         };
         match result {
             Ok(v) => v,
@@ -328,6 +555,7 @@ impl Pipeline for MistralPipeline {
         match self.model {
             Model::Normal(ref model) => &model.device,
             Model::Quantized(ref model) => &model.device,
+            Model::XLoraNormal(ref model) => &model.device,
         }
     }
     fn num_hidden_layers(&self) -> usize {
@@ -337,6 +565,7 @@ impl Pipeline for MistralPipeline {
         match self.model {
             Model::Normal(ref model) => &model.cache,
             Model::Quantized(ref model) => &model.cache,
+            Model::XLoraNormal(ref model) => &model.cache,
         }
     }
     fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs> {
@@ -374,6 +603,16 @@ impl Pipeline for MistralPipeline {
         match &self.model {
             Model::Normal(model) => model.max_seq_len,
             Model::Quantized(_) => quantized_llama::MAX_SEQ_LEN as usize,
+            Model::XLoraNormal(model) => model.max_seq_len,
         }
+    }
+    fn is_xlora(&self) -> bool {
+        match &self.model {
+            Model::Normal(_) | Model::Quantized(_) => false,
+            Model::XLoraNormal(_) => true,
+        }
+    }
+    fn has_no_xlora_kv_cache(&self) -> bool {
+        self.no_xlora_kv_cache
     }
 }

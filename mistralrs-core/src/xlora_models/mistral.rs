@@ -3,26 +3,12 @@
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
-use candle_transformers::models::with_tracing::{linear_no_bias, Linear};
+use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 use std::{iter::zip, sync::Arc};
 
-use super::Cache;
+use crate::models::{mistral::Config, Cache};
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Config {
-    pub(crate) vocab_size: usize,
-    pub(crate) hidden_size: usize,
-    pub(crate) intermediate_size: usize,
-    pub(crate) num_hidden_layers: usize,
-    pub(crate) num_attention_heads: usize,
-    pub(crate) num_key_value_heads: usize,
-    pub(crate) hidden_act: Activation,
-    pub(crate) max_position_embeddings: usize,
-    pub(crate) rms_norm_eps: f64,
-    pub(crate) rope_theta: f64,
-    pub(crate) sliding_window: usize,
-    pub(crate) use_flash_attn: bool,
-}
+use super::{classifier::XLoraClassifier, config::XLoraConfig};
 
 #[derive(Debug, Clone)]
 struct RmsNorm {
@@ -107,19 +93,46 @@ impl RotaryEmbedding {
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
+    gate_proj: Arc<dyn LinearLayerLike + Send + Sync>,
+    up_proj: Arc<dyn LinearLayerLike + Send + Sync>,
+    down_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     act_fn: Activation,
 }
 
 impl MLP {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(
+        cfg: &Config,
+        vb: VarBuilder,
+        lora_config: &Vec<(String, LoraConfig)>,
+        count: &mut usize,
+        ord: &Ordering,
+    ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let intermediate_sz = cfg.intermediate_size;
-        let gate_proj = linear_no_bias(hidden_sz, intermediate_sz, vb.pp("gate_proj"))?;
-        let up_proj = linear_no_bias(hidden_sz, intermediate_sz, vb.pp("up_proj"))?;
-        let down_proj = linear_no_bias(intermediate_sz, hidden_sz, vb.pp("down_proj"))?;
+        let gate_proj = linear_no_bias(
+            hidden_sz,
+            intermediate_sz,
+            vb.pp("gate_proj"),
+            lora_config,
+            count,
+            ord,
+        )?;
+        let up_proj = linear_no_bias(
+            hidden_sz,
+            intermediate_sz,
+            vb.pp("up_proj"),
+            lora_config,
+            count,
+            ord,
+        )?;
+        let down_proj = linear_no_bias(
+            intermediate_sz,
+            hidden_sz,
+            vb.pp("down_proj"),
+            lora_config,
+            count,
+            ord,
+        )?;
         Ok(Self {
             gate_proj,
             up_proj,
@@ -127,13 +140,17 @@ impl MLP {
             act_fn: cfg.hidden_act,
         })
     }
-}
 
-impl Module for MLP {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let lhs = xs.apply(&self.gate_proj)?.apply(&self.act_fn)?;
-        let rhs = xs.apply(&self.up_proj)?;
-        (lhs * rhs)?.apply(&self.down_proj)
+    fn forward(&self, xs: &Tensor, scalings: Tensor, global_scaling_weight: f64) -> Result<Tensor> {
+        let lhs = self
+            .gate_proj
+            .lora_forward(xs, scalings.clone(), global_scaling_weight)?
+            .apply(&self.act_fn)?;
+        let rhs = self
+            .up_proj
+            .lora_forward(xs, scalings.clone(), global_scaling_weight)?;
+        self.down_proj
+            .lora_forward(&(lhs * rhs)?, scalings, global_scaling_weight)
     }
 }
 
@@ -155,10 +172,10 @@ fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Ten
 
 #[derive(Debug, Clone)]
 struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: Arc<dyn LinearLayerLike + Send + Sync>,
+    k_proj: Arc<dyn LinearLayerLike + Send + Sync>,
+    v_proj: Arc<dyn LinearLayerLike + Send + Sync>,
+    o_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
@@ -169,16 +186,51 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(
+        rotary_emb: Arc<RotaryEmbedding>,
+        cfg: &Config,
+        vb: VarBuilder,
+        lora_config: &Vec<(String, LoraConfig)>,
+        count: &mut usize,
+        ord: &Ordering,
+    ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let num_kv_groups = num_heads / num_kv_heads;
         let head_dim = hidden_sz / num_heads;
-        let q_proj = linear_no_bias(hidden_sz, num_heads * head_dim, vb.pp("q_proj"))?;
-        let k_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("k_proj"))?;
-        let v_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("v_proj"))?;
-        let o_proj = linear_no_bias(num_heads * head_dim, hidden_sz, vb.pp("o_proj"))?;
+        let q_proj = linear_no_bias(
+            hidden_sz,
+            num_heads * head_dim,
+            vb.pp("q_proj"),
+            lora_config,
+            count,
+            ord,
+        )?;
+        let k_proj = linear_no_bias(
+            hidden_sz,
+            num_kv_heads * head_dim,
+            vb.pp("k_proj"),
+            lora_config,
+            count,
+            ord,
+        )?;
+        let v_proj = linear_no_bias(
+            hidden_sz,
+            num_kv_heads * head_dim,
+            vb.pp("v_proj"),
+            lora_config,
+            count,
+            ord,
+        )?;
+        let o_proj = linear_no_bias(
+            num_heads * head_dim,
+            hidden_sz,
+            vb.pp("o_proj"),
+            lora_config,
+            count,
+            ord,
+        )?;
         Ok(Self {
             q_proj,
             k_proj,
@@ -207,17 +259,25 @@ impl Attention {
     }
 
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
+        scalings: Tensor,
+        global_scaling_weight: f64,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let query_states = self.q_proj.forward(xs)?;
-        let key_states = self.k_proj.forward(xs)?;
-        let value_states = self.v_proj.forward(xs)?;
+        let query_states = self
+            .q_proj
+            .lora_forward(xs, scalings.clone(), global_scaling_weight)?;
+        let key_states = self
+            .k_proj
+            .lora_forward(xs, scalings.clone(), global_scaling_weight)?;
+        let value_states = self
+            .v_proj
+            .lora_forward(xs, scalings.clone(), global_scaling_weight)?;
 
         let query_states = query_states
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -264,10 +324,13 @@ impl Attention {
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
             attn_weights.matmul(&value_states)?
         };
-        attn_output
-            .transpose(1, 2)?
-            .reshape((b_sz, q_len, self.hidden_size))?
-            .apply(&self.o_proj)
+        self.o_proj.lora_forward(
+            &attn_output
+                .transpose(1, 2)?
+                .reshape((b_sz, q_len, self.hidden_size))?,
+            scalings,
+            global_scaling_weight,
+        )
     }
 }
 
@@ -280,9 +343,17 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
-        let mlp = MLP::new(cfg, vb.pp("mlp"))?;
+    fn new(
+        rotary_emb: Arc<RotaryEmbedding>,
+        cfg: &Config,
+        vb: VarBuilder,
+        lora_config: &Vec<(String, LoraConfig)>,
+        count: &mut usize,
+        ord: &Ordering,
+    ) -> Result<Self> {
+        let self_attn =
+            Attention::new(rotary_emb, cfg, vb.pp("self_attn"), lora_config, count, ord)?;
+        let mlp = MLP::new(cfg, vb.pp("mlp"), lora_config, count, ord)?;
         let input_layernorm =
             RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let post_attention_layernorm = RmsNorm::new(
@@ -299,51 +370,76 @@ impl DecoderLayer {
     }
 
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
+        scalings: Tensor,
+        global_scaling_weight: f64,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self
-            .self_attn
-            .forward(&xs, attention_mask, seqlen_offsets, kv_cache)?;
+        let xs = self.self_attn.forward(
+            &xs,
+            attention_mask,
+            seqlen_offsets,
+            kv_cache,
+            scalings.clone(),
+            global_scaling_weight,
+        )?;
         let xs = (xs + residual)?;
         let residual = &xs;
-        let xs = xs.apply(&self.post_attention_layernorm)?.apply(&self.mlp)?;
+        let xs = self.mlp.forward(
+            &xs.apply(&self.post_attention_layernorm)?,
+            scalings,
+            global_scaling_weight,
+        )?;
         residual + xs
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Model {
+pub struct XLoraModel {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: Linear,
+    lm_head: candle_nn::Linear,
     sliding_window: usize,
     dtype: DType,
     pub device: Device,
     pub cache: Cache,
     pub max_seq_len: usize,
+    xlora_classifier: XLoraClassifier,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl XLoraModel {
+    pub fn new(
+        cfg: &Config,
+        vb: VarBuilder,
+        lora_config: &Vec<(String, LoraConfig)>,
+        xlora_config: XLoraConfig,
+        xlora_ordering: Ordering,
+    ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
         let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb_m.device())?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
+        let mut count = 0;
         for layer_idx in 0..cfg.num_hidden_layers {
-            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
+            let layer = DecoderLayer::new(
+                rotary_emb.clone(),
+                cfg,
+                vb_l.pp(layer_idx),
+                lora_config,
+                &mut count,
+                &xlora_ordering,
+            )?;
             layers.push(layer)
         }
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
-        let lm_head = linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
+        let lm_head = candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         Ok(Self {
             embed_tokens,
             layers,
@@ -352,8 +448,9 @@ impl Model {
             sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
             dtype: vb.dtype(),
-            cache: Cache::new(cfg.num_hidden_layers, false),
+            cache: Cache::new(cfg.num_hidden_layers, true),
             max_seq_len: cfg.max_position_embeddings,
+            xlora_classifier: XLoraClassifier::new(xlora_config, count, lora_config.len(), vb)?,
         })
     }
 
@@ -386,9 +483,11 @@ impl Model {
             .to_dtype(self.dtype)
     }
 
-    fn calculate_past_kv_len(&mut self, seq_len: usize) -> Result<usize> {
-        let cache = self.cache.lock();
-        let kv_cache_1 = cache.first().unwrap();
+    fn calculate_past_kv_len(
+        &self,
+        seq_len: usize,
+        kv_cache_1: &Option<(Tensor, Tensor)>,
+    ) -> Result<usize> {
         if kv_cache_1.is_none() {
             return Ok(0);
         }
@@ -402,13 +501,34 @@ impl Model {
         }
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
+    fn inner_forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        scalings: Tensor,
+        is_full_pass: bool,
+        no_xlora_kv_cache: bool,
+    ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
         if seqlen_offsets.len() > b_size {
             candle_core::bail!("Expected seqlen offsets have length equal to batch size.")
         }
 
-        let past_key_values_length = self.calculate_past_kv_len(seq_len)?;
+        let mut cache = if is_full_pass {
+            if no_xlora_kv_cache {
+                let mut new_cache = Vec::new();
+                for _ in 0..self.cache.xlora_lock().len() {
+                    new_cache.push(None);
+                }
+
+                *self.cache.xlora_lock() = new_cache.clone();
+            }
+            self.cache.xlora_lock()
+        } else {
+            self.cache.lock()
+        };
+        let past_key_values_length =
+            self.calculate_past_kv_len(seq_len, cache.first().as_ref().unwrap())?;
         let attention_mask = if seq_len <= 1 {
             None
         } else {
@@ -417,17 +537,83 @@ impl Model {
             Some(mask)
         };
         let mut xs = self.embed_tokens.forward(input_ids)?;
-        let mut cache = self.cache.lock();
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             xs = layer.forward(
                 &xs,
                 attention_mask.as_ref(),
                 seqlen_offsets,
                 cache.get_mut(i).unwrap(),
+                scalings.clone(),
+                self.xlora_classifier.get_global_scaling_weight(),
             )?
         }
-        xs.apply(&self.norm)?
+        xs.apply(&self.norm)
+    }
+
+    pub fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        input_ids_full: &Tensor,
+        seqlen_offsets: &[usize],
+        seqlen_offsets_full: &[usize],
+        no_xlora_kv_cache: bool,
+    ) -> Result<Tensor> {
+        let (b_size, seq_len_full) = input_ids_full.dims2()?;
+        let (_, seq_len) = input_ids.dims2()?;
+
+        let dummy_scalings = self.xlora_classifier.get_dummy_scalings(
+            b_size,
+            seq_len,
+            input_ids.device(),
+            self.dtype,
+        )?;
+        // Using X-LoRA cache here
+        let hidden_states = if no_xlora_kv_cache {
+            let res = self.inner_forward(
+                input_ids_full,
+                seqlen_offsets_full,
+                dummy_scalings,
+                true,
+                no_xlora_kv_cache,
+            )?;
+
+            let mut new_cache = Vec::new();
+            for _ in 0..self.cache.xlora_lock().len() {
+                new_cache.push(Some((
+                    Tensor::zeros((1,), DType::U8, &Device::Cpu)?,
+                    Tensor::zeros((1,), DType::U8, &Device::Cpu)?,
+                )));
+            }
+            *self.cache.lock() = new_cache.clone();
+
+            res
+        } else {
+            self.inner_forward(
+                input_ids,
+                seqlen_offsets,
+                dummy_scalings,
+                false,
+                no_xlora_kv_cache,
+            )?
+        };
+
+        let scalings = self.xlora_classifier.forward(hidden_states)?;
+
+        if no_xlora_kv_cache {
+            self.inner_forward(
+                input_ids_full,
+                seqlen_offsets_full,
+                scalings,
+                true,
+                no_xlora_kv_cache,
+            )?
             .apply(&self.lm_head)?
-            .narrow(1, seq_len - 1, 1)
+            .narrow(1, seq_len_full - 1, 1)
+        } else {
+            // is_full_pass=true is ok because no_xlora_kv_cache=false
+            self.inner_forward(input_ids, seqlen_offsets, scalings, true, no_xlora_kv_cache)?
+                .apply(&self.lm_head)?
+                .narrow(1, seq_len - 1, 1)
+        }
     }
 }

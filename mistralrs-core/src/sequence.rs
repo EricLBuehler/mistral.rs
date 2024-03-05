@@ -29,8 +29,8 @@ pub struct Sequence {
     id: usize,
     timestamp: u64,
     state: Cell<SequenceState>,
-    gen_idx: usize,
     cache: Vec<Option<(Tensor, Tensor)>>,
+    xlora_cache: Option<Vec<Option<(Tensor, Tensor)>>>,
     responder: Sender<Response>,
     logits_processor: LogitsProcessor,
     stop_tokens: Vec<u32>,
@@ -50,6 +50,7 @@ impl Sequence {
         stop_tokens: Vec<u32>,
         max_len: Option<usize>,
         return_logprobs: bool,
+        is_xlora: bool,
     ) -> Self {
         let prompt_len = tokens.len();
         Self {
@@ -59,8 +60,12 @@ impl Sequence {
             id,
             timestamp,
             state: Cell::new(SequenceState::Waiting),
-            gen_idx: 0,
             cache: vec![None; layers],
+            xlora_cache: if is_xlora {
+                Some(vec![None; layers])
+            } else {
+                None
+            },
             responder,
             logits_processor,
             stop_tokens,
@@ -98,12 +103,16 @@ impl Sequence {
         &self.tokens
     }
 
-    pub fn gen_idx(&mut self) -> &mut usize {
-        &mut self.gen_idx
-    }
-
     pub fn cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
         &mut self.cache
+    }
+
+    pub fn xlora_cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
+        self.xlora_cache.as_mut().unwrap()
+    }
+
+    pub fn is_xlora(&self) -> bool {
+        self.xlora_cache.is_some()
     }
 
     pub fn logits_processor(&mut self) -> &mut LogitsProcessor {

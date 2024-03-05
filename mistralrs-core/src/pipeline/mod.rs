@@ -1,6 +1,7 @@
 mod mistral;
 use candle_sampling::logits_processor::Logprobs;
 pub use mistral::{MistralLoader, MistralSpecificConfig};
+use mistralrs_lora::{LoraConfig, Ordering};
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -19,6 +20,11 @@ pub trait ModelPaths {
     fn get_weight_filenames(&self) -> &[PathBuf];
     fn get_config_filename(&self) -> &PathBuf;
     fn get_tokenizer_filename(&self) -> &PathBuf;
+    fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>>;
+    fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>>;
+    fn get_classifier_path(&self) -> &Option<PathBuf>;
+    fn get_classifier_config(&self) -> &Option<PathBuf>;
+    fn get_ordering(&self) -> &Option<Ordering>;
 }
 
 pub enum TokenSource {
@@ -27,32 +33,19 @@ pub enum TokenSource {
     CacheToken,
 }
 
-pub struct SimpleModelPaths<P> {
-    tokenizer_filename: P,
-    config_filename: P,
-    filenames: Vec<P>,
-}
-
-impl ModelPaths for SimpleModelPaths<PathBuf> {
-    fn get_config_filename(&self) -> &PathBuf {
-        &self.config_filename
-    }
-    fn get_tokenizer_filename(&self) -> &PathBuf {
-        &self.tokenizer_filename
-    }
-    fn get_weight_filenames(&self) -> &[PathBuf] {
-        &self.filenames
-    }
-}
-
 pub enum ModelKind {
     Normal,
+    XLoraNormal,
     QuantizedGGUF,
     QuantizedGGML,
 }
 
 pub trait Conversation {
-    fn get_prompt(&self, messages: Vec<HashMap<String, String>>) -> Result<String, String>;
+    fn get_prompt(
+        &self,
+        messages: Vec<HashMap<String, String>>,
+        add_generation_prompt: bool,
+    ) -> Result<String, String>;
 }
 
 pub trait Loader {
@@ -102,4 +95,6 @@ pub trait Pipeline: Send + Sync {
     fn eos_tok(&self) -> u32;
     fn name(&self) -> &'static str;
     fn get_max_seq_len(&self) -> usize;
+    fn is_xlora(&self) -> bool;
+    fn has_no_xlora_kv_cache(&self) -> bool;
 }

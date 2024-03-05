@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fs::File,
     sync::{mpsc::channel, Arc},
 };
 
@@ -57,6 +58,25 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
     },
+
+    /// Select the mistral instruct model, with X-LoRA.
+    XLoraMistral {
+        /// Model ID to load from
+        #[arg(short, long, default_value = "mistralai/Mistral-7B-Instruct-v0.1")]
+        model_id: String,
+
+        /// Model ID to load Xlora from
+        #[arg(short, long, default_value = "lamm-mit/x-lora")]
+        xlora_model_id: String,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
+
+        /// Ordering JSON file
+        #[arg(short, long)]
+        order: String,
+    },
 }
 
 #[derive(Parser)]
@@ -83,6 +103,10 @@ struct Args {
     /// Maximum running sequences at any time
     #[arg(long, default_value_t = 2)]
     max_seqs: usize,
+
+    /// Use no KV cache for X-LoRA, only applicable for X-LoRA models.
+    #[arg(long, default_value_t = false)]
+    no_xlora_kv_cache: bool,
 }
 
 async fn chatcompletions(
@@ -105,7 +129,7 @@ async fn chatcompletions(
         message_map.insert("content".to_string(), message.content);
         messages.push(message_map);
     }
-    let prompt = match conv.get_prompt(messages) {
+    let prompt = match conv.get_prompt(messages, true) {
         Err(e) => return e,
         Ok(p) => p,
     };
@@ -164,7 +188,10 @@ async fn main() -> Result<()> {
             },
             None,
             None,
+            None,
             ModelKind::Normal,
+            None,
+            args.no_xlora_kv_cache,
         )),
         ModelSelected::MistralGGUF {
             tok_model_id,
@@ -179,7 +206,28 @@ async fn main() -> Result<()> {
             },
             quantized_model_id,
             quantized_filename,
+            None,
             ModelKind::QuantizedGGUF,
+            None,
+            args.no_xlora_kv_cache,
+        )),
+        ModelSelected::XLoraMistral {
+            model_id,
+            xlora_model_id,
+            repeat_last_n,
+            order,
+        } => Box::new(MistralLoader::new(
+            model_id,
+            MistralSpecificConfig {
+                use_flash_attn: false,
+                repeat_last_n,
+            },
+            None,
+            None,
+            Some(xlora_model_id),
+            ModelKind::XLoraNormal,
+            Some(serde_json::from_reader(File::open(order)?)?),
+            args.no_xlora_kv_cache,
         )),
     };
 
