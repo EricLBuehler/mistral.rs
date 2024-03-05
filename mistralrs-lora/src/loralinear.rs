@@ -58,7 +58,7 @@ impl LoraLinear {
             )?;
             let b_pp = b_vb.pp(name);
             assert!(b_pp.contains_tensor("weight"));
-            let b = b_pp.pp(name).get_with_hints(
+            let b = b_pp.get_with_hints(
                 (linear_config.out_features, cfg.rank),
                 "weight",
                 init::ZERO,
