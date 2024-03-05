@@ -91,7 +91,12 @@ impl LinearLayerLike for LoraLinear {
     fn shape(&self) -> &Shape {
         self.old.shape()
     }
-    fn lora_forward(&self, input: &Tensor, scalings: Tensor) -> Result<Tensor> {
+    fn lora_forward(
+        &self,
+        input: &Tensor,
+        scalings: Tensor,
+        global_scaling_weight: f64,
+    ) -> Result<Tensor> {
         let scalings = get_maybe_topk_scalings(scalings, self.layer_n)?;
         //No fan_in_fan_out so no weight.transpose(0,1)
         let mut result = self.old.forward(input)?;
@@ -115,7 +120,8 @@ impl LinearLayerLike for LoraLinear {
 
             let res = adapter_b
                 .forward(&adapter_a.forward(&input_new)?)?
-                .mul(*adapter_scale)?;
+                .mul(*adapter_scale)?
+                .mul(global_scaling_weight)?;
             result = (result + res)?;
         }
         Ok(result)

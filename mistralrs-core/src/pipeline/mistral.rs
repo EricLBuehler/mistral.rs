@@ -189,6 +189,7 @@ enum TokenizerError {
 }
 
 impl MistralLoader {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         model_id: String,
         config: MistralSpecificConfig,

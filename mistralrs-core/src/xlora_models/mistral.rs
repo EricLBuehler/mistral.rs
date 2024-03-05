@@ -141,13 +141,16 @@ impl MLP {
         })
     }
 
-    fn forward(&self, xs: &Tensor, scalings: Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, scalings: Tensor, global_scaling_weight: f64) -> Result<Tensor> {
         let lhs = self
             .gate_proj
-            .lora_forward(xs, scalings.clone())?
+            .lora_forward(xs, scalings.clone(), global_scaling_weight)?
             .apply(&self.act_fn)?;
-        let rhs = self.up_proj.lora_forward(xs, scalings.clone())?;
-        self.down_proj.lora_forward(&(lhs * rhs)?, scalings)
+        let rhs = self
+            .up_proj
+            .lora_forward(xs, scalings.clone(), global_scaling_weight)?;
+        self.down_proj
+            .lora_forward(&(lhs * rhs)?, scalings, global_scaling_weight)
     }
 }
 
@@ -262,12 +265,19 @@ impl Attention {
         seqlen_offsets: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Tensor,
+        global_scaling_weight: f64,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let query_states = self.q_proj.lora_forward(xs, scalings.clone())?;
-        let key_states = self.k_proj.lora_forward(xs, scalings.clone())?;
-        let value_states = self.v_proj.lora_forward(xs, scalings.clone())?;
+        let query_states = self
+            .q_proj
+            .lora_forward(xs, scalings.clone(), global_scaling_weight)?;
+        let key_states = self
+            .k_proj
+            .lora_forward(xs, scalings.clone(), global_scaling_weight)?;
+        let value_states = self
+            .v_proj
+            .lora_forward(xs, scalings.clone(), global_scaling_weight)?;
 
         let query_states = query_states
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -319,6 +329,7 @@ impl Attention {
                 .transpose(1, 2)?
                 .reshape((b_sz, q_len, self.hidden_size))?,
             scalings,
+            global_scaling_weight,
         )
     }
 }
@@ -365,6 +376,7 @@ impl DecoderLayer {
         seqlen_offsets: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Tensor,
+        global_scaling_weight: f64,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
@@ -374,17 +386,19 @@ impl DecoderLayer {
             seqlen_offsets,
             kv_cache,
             scalings.clone(),
+            global_scaling_weight,
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
-        let xs = self
-            .mlp
-            .forward(&xs.apply(&self.post_attention_layernorm)?, scalings)?;
+        let xs = self.mlp.forward(
+            &xs.apply(&self.post_attention_layernorm)?,
+            scalings,
+            global_scaling_weight,
+        )?;
         residual + xs
     }
 }
 
-#[derive(Debug)]
 pub struct XLoraModel {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
@@ -530,6 +544,7 @@ impl XLoraModel {
                 seqlen_offsets,
                 cache.get_mut(i).unwrap(),
                 scalings.clone(),
+                self.xlora_classifier.get_global_scaling_weight(),
             )?
         }
         xs.apply(&self.norm)

@@ -192,7 +192,9 @@ impl Engine {
                 },
             )));
         }
-        if get_mut_arcmutex!(self.pipeline).is_xlora() && !get_mut_arcmutex!(self.pipeline).has_no_xlora_kv_cache() {
+        if get_mut_arcmutex!(self.pipeline).is_xlora()
+            && !get_mut_arcmutex!(self.pipeline).has_no_xlora_kv_cache()
+        {
             let mut new_cache = Vec::new();
             for layer in 0..get_mut_arcmutex!(self.pipeline).num_hidden_layers() {
                 let mut k_vec = Vec::new();

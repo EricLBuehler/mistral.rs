@@ -55,7 +55,12 @@ pub trait LinearLayerLike: Debug {
     fn weight(&self) -> &Tensor;
     fn bias(&self) -> Option<&Tensor>;
     fn shape(&self) -> &Shape;
-    fn lora_forward(&self, x: &Tensor, scalings_layer: Tensor) -> Result<Tensor>;
+    fn lora_forward(
+        &self,
+        x: &Tensor,
+        scalings_layer: Tensor,
+        global_scaling_weight: f64,
+    ) -> Result<Tensor>;
 }
 
 impl LinearLayerLike for Linear {
@@ -68,7 +73,12 @@ impl LinearLayerLike for Linear {
     fn shape(&self) -> &Shape {
         self.weight().shape()
     }
-    fn lora_forward(&self, x: &Tensor, _scalings_layer: Tensor) -> Result<Tensor> {
+    fn lora_forward(
+        &self,
+        x: &Tensor,
+        _scalings_layer: Tensor,
+        _global_scaling_weight: f64,
+    ) -> Result<Tensor> {
         self.forward(x)
     }
 }

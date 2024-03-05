@@ -37,7 +37,12 @@ impl LinearLayerLike for FrozenLinear {
     fn shape(&self) -> &Shape {
         self.weight().shape()
     }
-    fn lora_forward(&self, x: &Tensor, _scalings_layer: Tensor) -> Result<Tensor> {
+    fn lora_forward(
+        &self,
+        x: &Tensor,
+        _scalings_layer: Tensor,
+        _global_scaling_weight: f64,
+    ) -> Result<Tensor> {
         self.linear.forward(x)
     }
 }
