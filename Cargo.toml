@@ -3,6 +3,7 @@ members = [
     "mistralrs-server",
     "mistralrs-core",
     "mistralrs-lora",
+    "mistralrs",
 ]
 resolver = "2"
 

@@ -45,6 +45,7 @@ pub enum ModelKind {
     QuantizedGGML,
 }
 
+/// Define a method to implement specific conversation processors which take in the messages and return a prompt.
 pub trait Conversation {
     fn get_prompt(
         &self,
@@ -53,6 +54,7 @@ pub trait Conversation {
     ) -> Result<String, String>;
 }
 
+/// Encapsulate downloading and setting up the model. The `load_model` method is used to create the pipeline.
 pub trait Loader {
     fn download_model(
         &self,

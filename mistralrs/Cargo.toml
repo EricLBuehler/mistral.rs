@@ -1,0 +1,15 @@
+[package]
+name = "mistralrs"
+readme = "README.md"
+authors = ["Eric Buehler"]
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+homepage.workspace = true
+
+[dependencies]
+mistralrs-core = { version = "0.1.0", path = "../mistralrs-core" }
