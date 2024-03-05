@@ -62,7 +62,7 @@ pub enum ModelSelected {
     /// Select the mistral instruct model, with X-LoRA.
     XLoraMistral {
         /// Model ID to load from
-        #[arg(short, long, default_value = "mistralai/Mistral-7B-Instruct-v0.1")]
+        #[arg(short, long, default_value = "HuggingFaceH4/zephyr-7b-beta")]
         model_id: String,
 
         /// Model ID to load Xlora from
@@ -231,12 +231,12 @@ async fn main() -> Result<()> {
         )),
     };
 
-    let (pipeline, conv) = loader.load_model(
-        None,
-        TokenSource::CacheToken,
-        None,
-        &Device::cuda_if_available(0)?,
-    )?;
+    #[cfg(feature = "metal")]
+    let device = Device::new_metal(0)?;
+    #[cfg(not(feature = "metal"))]
+    let device = Device::cuda_if_available(0)?;
+
+    let (pipeline, conv) = loader.load_model(None, TokenSource::CacheToken, None, &device)?;
     let mistralrs = MistralRs::new(
         pipeline,
         SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
