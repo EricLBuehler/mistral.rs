@@ -147,6 +147,8 @@
 <a href="#146" id="146">146</a>
 <a href="#147" id="147">147</a>
 <a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -194,7 +196,8 @@
     QuantizedGGML,
 }
 
-<span class="kw">pub trait </span>Conversation {
+<span class="doccomment">/// Define a method to implement specific conversation processors which take in the messages and return a prompt.
+</span><span class="kw">pub trait </span>Conversation {
     <span class="kw">fn </span>get_prompt(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         messages: Vec&lt;HashMap&lt;String, String&gt;&gt;,
@@ -202,7 +205,8 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;String, String&gt;;
 }
 
-<span class="kw">pub trait </span>Loader {
+<span class="doccomment">/// Encapsulate downloading and setting up the model. The `load_model` method is used to create the pipeline.
+</span><span class="kw">pub trait </span>Loader {
     <span class="kw">fn </span>download_model(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
