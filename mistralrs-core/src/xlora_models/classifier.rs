@@ -139,8 +139,8 @@ impl XLoraClassifier {
             scalings = softmax.forward(&scalings)?;
         }
 
-        
-        let scalings = logits.slice_assign(
+
+        let scalings = scalings.slice_assign(
             &[
                 0..scalings.dims()[0],
                 0..scalings.dims()[1],
@@ -158,7 +158,7 @@ impl XLoraClassifier {
                 scalings.device(),
             )?,
         )?;
-        let scalings = logits.slice_assign(
+        let scalings = scalings.slice_assign(
             &[
                 0..scalings.dims()[0],
                 0..scalings.dims()[1],
