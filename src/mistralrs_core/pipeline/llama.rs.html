@@ -894,7 +894,7 @@
     <span class="kw">fn </span>eos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u32 {
         <span class="self">self</span>.tokenizer
             .get_vocab(<span class="bool-val">true</span>)
-            .get(<span class="string">"&lt;eos&gt;"</span>)
+            .get(<span class="string">"&lt;/s&gt;"</span>)
             .copied()
             .expect(<span class="string">"Unable to extract `&lt;eos&gt;` EOS token."</span>)
     }
