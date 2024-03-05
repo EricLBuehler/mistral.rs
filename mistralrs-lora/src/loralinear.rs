@@ -115,6 +115,9 @@ impl LinearLayerLike for LoraLinear {
             } else {
                 input_new.clone()
             };
+            dbg!(adapter_b.weight().mean_all()?);
+            dbg!(adapter_a.weight().mean_all()?);
+            dbg!(input_new.mean_all()?);
 
             let res = adapter_b
                 .forward(&adapter_a.forward(&input_new)?)?
