@@ -39,7 +39,7 @@ impl Conversation for GemmaConversation {
         messages: Vec<HashMap<String, String>>,
         add_generation_prompt: bool,
     ) -> Result<String, String> {
-        let bos_token = "<s>".to_string();
+        let bos_token = "<bos>".to_string();
         if messages[0]["role"] == "system" {
             return Err("System role not supported for Gemma.".to_string());
         };
