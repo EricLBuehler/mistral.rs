@@ -177,7 +177,8 @@ impl XLoraClassifier {
             )?.to_dtype(
                 scalings.dtype())?,
         )?;
-        println!("{:?}", scalings.i((0,0,0,..))?);
+        println!("SCALINGS ARE {:?}", scalings.i((0,0,0,..))?);
+        dbg!(scalings.mean_all()?);
 
         Ok(scalings)
     }
