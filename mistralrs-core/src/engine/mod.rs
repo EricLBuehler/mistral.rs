@@ -261,7 +261,7 @@ impl Engine {
                     v_caches.get(seq_i).unwrap().clone(),
                 ));
             }
-            if pipeline.is_xlora() && !get_mut_arcmutex!(self.pipeline).has_no_xlora_kv_cache() {
+            if pipeline.is_xlora() && !pipeline.has_no_xlora_kv_cache() {
                 let cache = pipeline.cache().xlora_lock();
                 let cache = cache.get(layer).unwrap();
                 let k_cache = cache.as_ref().unwrap().0.clone();
