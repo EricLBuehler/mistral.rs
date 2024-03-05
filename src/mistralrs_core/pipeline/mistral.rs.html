@@ -568,16 +568,6 @@
 <a href="#567" id="567">567</a>
 <a href="#568" id="568">568</a>
 <a href="#569" id="569">569</a>
-<a href="#570" id="570">570</a>
-<a href="#571" id="571">571</a>
-<a href="#572" id="572">572</a>
-<a href="#573" id="573">573</a>
-<a href="#574" id="574">574</a>
-<a href="#575" id="575">575</a>
-<a href="#576" id="576">576</a>
-<a href="#577" id="577">577</a>
-<a href="#578" id="578">578</a>
-<a href="#579" id="579">579</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     get_completion_input, get_prompt_input, Conversation, Loader, ModelKind, ModelPaths, Pipeline,
     TokenSource,
@@ -625,12 +615,12 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;String, String&gt; {
         <span class="kw">let </span>bos_token = <span class="string">"&lt;s&gt;"</span>.to_string();
         <span class="kw">let </span>eos_token = <span class="string">"&lt;/s&gt;"</span>.to_string();
-        <span class="kw">let </span>(loop_messages, system_message) = <span class="kw">if </span>messages[<span class="number">0</span>][<span class="string">"role"</span>] == <span class="string">"system" </span>{
-            (<span class="kw-2">&amp;</span>messages[<span class="number">1</span>..], <span class="prelude-val">Some</span>(messages[<span class="number">0</span>][<span class="string">"content"</span>].clone()))
+        <span class="kw">let </span>loop_messages = <span class="kw">if </span>messages[<span class="number">0</span>][<span class="string">"role"</span>] == <span class="string">"system" </span>{
+            <span class="kw-2">&amp;</span>messages[<span class="number">1</span>..]
         } <span class="kw">else </span>{
-            (<span class="kw-2">&amp;</span>messages[..], <span class="prelude-val">None</span>)
+            <span class="kw-2">&amp;</span>messages[..]
         };
-        <span class="kw">let </span><span class="kw-2">mut </span>content = <span class="string">""</span>.to_string();
+        <span class="kw">let </span><span class="kw-2">mut </span>content = bos_token;
         <span class="kw">for </span>(i, message) <span class="kw">in </span>loop_messages.iter().enumerate() {
             <span class="kw">if </span>(message[<span class="string">"role"</span>] == <span class="string">"user"</span>) != (i % <span class="number">2 </span>== <span class="number">0</span>) {
                 <span class="kw">return </span><span class="prelude-val">Err</span>(
@@ -638,23 +628,13 @@
                         </span>.to_string(),
                 );
             }
-            content = <span class="kw">if </span>i == <span class="number">0 </span>&amp;&amp; system_message.is_some() {
-                content
-                    + <span class="kw-2">&amp;</span><span class="macro">format!</span>(
-                        <span class="string">"&lt;&lt;SYS&gt;&gt;\n{}\n&lt;&lt;/SYS&gt;&gt;\n\n{}"</span>,
-                        system_message.as_ref().unwrap(),
-                        message[<span class="string">"content"</span>]
-                    )
-            } <span class="kw">else </span>{
-                content + <span class="kw-2">&amp;</span>message[<span class="string">"content"</span>]
-            };
 
-            content = <span class="kw">if </span>message[<span class="string">"role"</span>] == <span class="string">"user" </span>{
-                bos_token.clone() + <span class="string">"[INST]" </span>+ content.trim() + <span class="string">"[/INST]"
-            </span>} <span class="kw">else if </span>message[<span class="string">"role"</span>] == <span class="string">"system" </span>{
-                <span class="macro">format!</span>(<span class="string">"&lt;&lt;SYS&gt;&gt;\n{}\n&lt;&lt;/SYS&gt;&gt;\n\n"</span>, content.trim())
+            content += <span class="kw-2">&amp;</span><span class="kw">if </span>message[<span class="string">"role"</span>] == <span class="string">"user" </span>{
+                <span class="macro">format!</span>(<span class="string">"[INST] {} [/INST]"</span>, message[<span class="string">"content"</span>])
+            } <span class="kw">else if </span>message[<span class="string">"role"</span>] == <span class="string">"system" </span>{
+                <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="string">"System role not supported for Mistral"</span>.to_string());
             } <span class="kw">else if </span>message[<span class="string">"role"</span>] == <span class="string">"assistant" </span>{
-                <span class="macro">format!</span>(<span class="string">" {} {}"</span>, content.trim(), eos_token)
+                <span class="macro">format!</span>(<span class="string">"{}{} "</span>, message[<span class="string">"content"</span>].trim(), eos_token)
             } <span class="kw">else </span>{
                 <span class="macro">unreachable!</span>();
             };

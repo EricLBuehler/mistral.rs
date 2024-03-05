@@ -454,6 +454,9 @@
 <a href="#453" id="453">453</a>
 <a href="#454" id="454">454</a>
 <a href="#455" id="455">455</a>
+<a href="#456" id="456">456</a>
+<a href="#457" id="457">457</a>
+<a href="#458" id="458">458</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     get_completion_input, get_prompt_input, Conversation, Loader, ModelKind, ModelPaths, Pipeline,
     TokenSource,
@@ -489,33 +492,36 @@
     <span class="kw">fn </span>get_prompt(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         messages: Vec&lt;HashMap&lt;String, String&gt;&gt;,
-        add_generation_prompt: bool,
+        _add_generation_prompt: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;String, String&gt; {
-        <span class="kw">let </span>bos_token = <span class="string">"&lt;bos&gt;"</span>.to_string();
-        <span class="kw">if </span>messages[<span class="number">0</span>][<span class="string">"role"</span>] == <span class="string">"system" </span>{
-            <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="string">"System role not supported for Llama."</span>.to_string());
+        <span class="kw">let </span>(loop_messages, system_msg) = <span class="kw">if </span>messages[<span class="number">0</span>][<span class="string">"role"</span>] == <span class="string">"system" </span>{
+            (<span class="kw-2">&amp;</span>messages[<span class="number">1</span>..], <span class="prelude-val">Some</span>(messages[<span class="number">0</span>][<span class="string">"content"</span>].clone()))
+        } <span class="kw">else </span>{
+            (<span class="kw-2">&amp;</span>messages[..], <span class="prelude-val">None</span>)
         };
-        <span class="kw">let </span><span class="kw-2">mut </span>content = bos_token;
-        <span class="kw">for </span>(i, message) <span class="kw">in </span>messages.iter().enumerate() {
+        <span class="kw">let </span><span class="kw-2">mut </span>content = <span class="string">""</span>.to_string();
+        <span class="kw">for </span>(i, message) <span class="kw">in </span>loop_messages.iter().enumerate() {
             <span class="kw">if </span>(message[<span class="string">"role"</span>] == <span class="string">"user"</span>) != (i % <span class="number">2 </span>== <span class="number">0</span>) {
                 <span class="kw">return </span><span class="prelude-val">Err</span>(
                     <span class="string">"Conversation roles must alternate user/assistant/user/assistant/..."
                         </span>.to_string(),
                 );
             }
-            <span class="kw">let </span>role = <span class="kw">if </span>message[<span class="string">"role"</span>] == <span class="string">"assistant" </span>{
-                <span class="string">"model"</span>.to_string()
+            <span class="kw">let </span>c = <span class="kw">if </span>i == <span class="number">0 </span>&amp;&amp; system_msg.as_ref().is_some() {
+                <span class="macro">format!</span>(
+                    <span class="string">"&lt;&lt;SYS&gt;&gt;\n{}\n&lt;&lt;/SYS&gt;&gt;\n\n{}"</span>,
+                    system_msg.as_ref().unwrap(),
+                    message[<span class="string">"content"</span>]
+                )
             } <span class="kw">else </span>{
-                message[<span class="string">"role"</span>].to_string()
+                message[<span class="string">"content"</span>].clone()
             };
-            content += <span class="kw-2">&amp;</span><span class="macro">format!</span>(
-                <span class="string">"&lt;start_of_turn&gt;{role}\n{}&lt;end_of_turn&gt;\n"</span>,
-                message[<span class="string">"content"</span>].trim()
-            )
+            <span class="kw">if </span>message[<span class="string">"role"</span>] == <span class="string">"user" </span>{
+                content += <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"&lt;s&gt;[INST] {} [/INST]"</span>, c.trim());
+            } <span class="kw">else if </span>message[<span class="string">"role"</span>] == <span class="string">"assistant" </span>{
+                content += <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">" {} &lt;/s&gt;"</span>, c.trim());
+            }
         }
-        <span class="kw">if </span>add_generation_prompt {
-            content += <span class="string">"&lt;start_of_turn&gt;model\n"
-        </span>}
         <span class="prelude-val">Ok</span>(content)
     }
 }
