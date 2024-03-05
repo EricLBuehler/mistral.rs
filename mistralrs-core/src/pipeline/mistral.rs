@@ -3,7 +3,7 @@ use super::{
     TokenSource,
 };
 use crate::models::{quantized_llama, Cache};
-use crate::xlora_models::{XLoraConfig, XLoraModel};
+use crate::xlora_models::{XLoraConfig, XLoraMistral};
 use crate::{deref_mut_refcell, deref_refcell};
 use crate::{
     models::mistral::{Config, Model as NormalModel},
@@ -31,7 +31,7 @@ use tokenizers::Tokenizer;
 enum Model {
     Normal(NormalModel),
     Quantized(QModelWeights),
-    XLoraNormal(XLoraModel),
+    XLoraNormal(XLoraMistral),
 }
 
 struct MistralConversation;
@@ -428,7 +428,7 @@ impl Loader for MistralLoader {
                 let conf = fs::read_to_string(paths.get_classifier_config().as_ref().unwrap())?;
                 let xlora_config: XLoraConfig = serde_json::from_str(&conf)?;
 
-                let model = XLoraModel::new(
+                let model = XLoraMistral::new(
                     &config,
                     vb,
                     paths.get_adapter_configs().as_ref().unwrap(),

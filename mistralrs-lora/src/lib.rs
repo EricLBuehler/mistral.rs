@@ -148,3 +148,19 @@ pub fn linear_no_bias(
 fn get_maybe_topk_scalings(scalings: Tensor, layer: usize) -> Result<Tensor> {
     scalings.i((.., .., layer, ..))
 }
+
+pub fn linear_b(
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+    vb: crate::VarBuilder,
+    lora_config: &Vec<(String, LoraConfig)>,
+    count: &mut usize,
+    ord: &Ordering,
+) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
+    if bias {
+        linear(in_dim, out_dim, vb, lora_config, count, ord)
+    } else {
+        linear_no_bias(in_dim, out_dim, vb, lora_config, count, ord)
+    }
+}
