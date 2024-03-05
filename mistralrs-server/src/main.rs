@@ -112,7 +112,7 @@ pub enum ModelSelected {
     /// Select the llama model.
     Llama {
         /// Model ID to load from
-        #[arg(short, long, default_value = "meta-llama/Llama-2-7b-hf")]
+        #[arg(short, long, default_value = "meta-llama/Llama-2-7b-chat-hf")]
         model_id: String,
 
         /// Control the application of repeat penalty for the last n tokens

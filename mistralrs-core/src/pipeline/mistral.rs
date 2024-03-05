@@ -45,12 +45,12 @@ impl Conversation for MistralConversation {
     ) -> Result<String, String> {
         let bos_token = "<s>".to_string();
         let eos_token = "</s>".to_string();
-        let (loop_messages, system_message) = if messages[0]["role"] == "system" {
-            (&messages[1..], Some(messages[0]["content"].clone()))
+        let loop_messages = if messages[0]["role"] == "system" {
+            &messages[1..]
         } else {
-            (&messages[..], None)
+            &messages[..]
         };
-        let mut content = "".to_string();
+        let mut content = bos_token;
         for (i, message) in loop_messages.iter().enumerate() {
             if (message["role"] == "user") != (i % 2 == 0) {
                 return Err(
@@ -58,23 +58,13 @@ impl Conversation for MistralConversation {
                         .to_string(),
                 );
             }
-            content = if i == 0 && system_message.is_some() {
-                content
-                    + &format!(
-                        "<<SYS>>\n{}\n<</SYS>>\n\n{}",
-                        system_message.as_ref().unwrap(),
-                        message["content"]
-                    )
-            } else {
-                content + &message["content"]
-            };
 
-            content = if message["role"] == "user" {
-                bos_token.clone() + "[INST]" + content.trim() + "[/INST]"
+            content += &if message["role"] == "user" {
+                format!("[INST] {} [/INST]", message["content"])
             } else if message["role"] == "system" {
-                format!("<<SYS>>\n{}\n<</SYS>>\n\n", content.trim())
+                return Err("System role not supported for Mistral".to_string());
             } else if message["role"] == "assistant" {
-                format!(" {} {}", content.trim(), eos_token)
+                format!("{}{} ", message["content"].trim(), eos_token)
             } else {
                 unreachable!();
             };

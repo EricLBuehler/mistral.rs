@@ -33,32 +33,35 @@ impl Conversation for LlamaConversation {
     fn get_prompt(
         &self,
         messages: Vec<HashMap<String, String>>,
-        add_generation_prompt: bool,
+        _add_generation_prompt: bool,
     ) -> Result<String, String> {
-        let bos_token = "<bos>".to_string();
-        if messages[0]["role"] == "system" {
-            return Err("System role not supported for Llama.".to_string());
+        let (loop_messages, system_msg) = if messages[0]["role"] == "system" {
+            (&messages[1..], Some(messages[0]["content"].clone()))
+        } else {
+            (&messages[..], None)
         };
-        let mut content = bos_token;
-        for (i, message) in messages.iter().enumerate() {
+        let mut content = "".to_string();
+        for (i, message) in loop_messages.iter().enumerate() {
             if (message["role"] == "user") != (i % 2 == 0) {
                 return Err(
                     "Conversation roles must alternate user/assistant/user/assistant/..."
                         .to_string(),
                 );
             }
-            let role = if message["role"] == "assistant" {
-                "model".to_string()
+            let c = if i == 0 && system_msg.as_ref().is_some() {
+                format!(
+                    "<<SYS>>\n{}\n<</SYS>>\n\n{}",
+                    system_msg.as_ref().unwrap(),
+                    message["content"]
+                )
             } else {
-                message["role"].to_string()
+                message["content"].clone()
             };
-            content += &format!(
-                "<start_of_turn>{role}\n{}<end_of_turn>\n",
-                message["content"].trim()
-            )
-        }
-        if add_generation_prompt {
-            content += "<start_of_turn>model\n"
+            if message["role"] == "user" {
+                content += &format!("<s>[INST] {} [/INST]", c.trim());
+            } else if message["role"] == "assistant" {
+                content += &format!(" {} </s>", c.trim());
+            }
         }
         Ok(content)
     }
