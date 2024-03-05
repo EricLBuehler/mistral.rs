@@ -462,6 +462,15 @@
 <a href="#461" id="461">461</a>
 <a href="#462" id="462">462</a>
 <a href="#463" id="463">463</a>
+<a href="#464" id="464">464</a>
+<a href="#465" id="465">465</a>
+<a href="#466" id="466">466</a>
+<a href="#467" id="467">467</a>
+<a href="#468" id="468">468</a>
+<a href="#469" id="469">469</a>
+<a href="#470" id="470">470</a>
+<a href="#471" id="471">471</a>
+<a href="#472" id="472">472</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fs::File,
@@ -678,6 +687,10 @@
     <span class="doccomment">/// Use no KV cache for X-LoRA, only applicable for X-LoRA models and the Llama Normal model.
     </span><span class="attr">#[arg(long, default_value_t = <span class="bool-val">false</span>)]
     </span>no_xlora_kv_cache: bool,
+
+    <span class="doccomment">/// Enable flash attention, only applicable if compiled with `--features flash-attn`
+    </span><span class="attr">#[arg(short, long, default_value_t = <span class="bool-val">false</span>)]
+    </span>use_flash_attn: bool,
 }
 
 <span class="kw">async fn </span>chatcompletions(
@@ -747,6 +760,11 @@
 </span><span class="kw">async fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
     <span class="kw">let </span>args = Args::parse();
 
+    <span class="attr">#[cfg(not(feature = <span class="string">"flash-attn"</span>))]
+    </span><span class="kw">let </span>use_flash_attn = <span class="bool-val">false</span>;
+    <span class="attr">#[cfg(feature = <span class="string">"flash-attn"</span>)]
+    </span><span class="kw">let </span>use_flash_attn = args.use_flash_attn;
+
     <span class="kw">let </span>loader: Box&lt;<span class="kw">dyn </span>Loader&gt; = <span class="kw">match </span>args.model {
         ModelSelected::Mistral {
             model_id,
@@ -754,7 +772,7 @@
         } =&gt; Box::new(MistralLoader::new(
             model_id,
             MistralSpecificConfig {
-                use_flash_attn: <span class="bool-val">false</span>,
+                use_flash_attn,
                 repeat_last_n,
             },
             <span class="prelude-val">None</span>,
@@ -772,7 +790,7 @@
         } =&gt; Box::new(MistralLoader::new(
             tok_model_id,
             MistralSpecificConfig {
-                use_flash_attn: <span class="bool-val">false</span>,
+                use_flash_attn,
                 repeat_last_n,
             },
             quantized_model_id,
@@ -790,7 +808,7 @@
         } =&gt; Box::new(MistralLoader::new(
             model_id,
             MistralSpecificConfig {
-                use_flash_attn: <span class="bool-val">false</span>,
+                use_flash_attn,
                 repeat_last_n,
             },
             <span class="prelude-val">None</span>,
@@ -835,7 +853,7 @@
             model_id,
             LlamaSpecificConfig {
                 repeat_last_n,
-                use_flash_attn: <span class="bool-val">false</span>,
+                use_flash_attn,
                 gqa: <span class="number">0</span>,
             },
             <span class="prelude-val">None</span>,
@@ -854,7 +872,7 @@
             tok_model_id,
             LlamaSpecificConfig {
                 repeat_last_n,
-                use_flash_attn: <span class="bool-val">false</span>,
+                use_flash_attn,
                 gqa: <span class="number">0</span>,
             },
             quantized_model_id,
@@ -874,7 +892,7 @@
             tok_model_id,
             LlamaSpecificConfig {
                 repeat_last_n,
-                use_flash_attn: <span class="bool-val">false</span>,
+                use_flash_attn,
                 gqa,
             },
             quantized_model_id,
@@ -893,7 +911,7 @@
             model_id,
             LlamaSpecificConfig {
                 repeat_last_n,
-                use_flash_attn: <span class="bool-val">false</span>,
+                use_flash_attn,
                 gqa: <span class="number">0</span>,
             },
             <span class="prelude-val">None</span>,
