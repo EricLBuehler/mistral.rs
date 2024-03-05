@@ -37,43 +37,32 @@ impl Conversation for GemmaConversation {
     fn get_prompt(
         &self,
         messages: Vec<HashMap<String, String>>,
-        _add_generation_prompt: bool,
+        add_generation_prompt: bool,
     ) -> Result<String, String> {
         let bos_token = "<s>".to_string();
-        let eos_token = "</s>".to_string();
-        let (loop_messages, system_message) = if messages[0]["role"] == "system" {
-            (&messages[1..], Some(messages[0]["content"].clone()))
-        } else {
-            (&messages[..], None)
+        if messages[0]["role"] == "system" {
+            return Err("System role not supported for Gemma.".to_string());
         };
-        let mut content = "".to_string();
-        for (i, message) in loop_messages.iter().enumerate() {
+        let mut content = bos_token;
+        for (i, message) in messages.iter().enumerate() {
             if (message["role"] == "user") != (i % 2 == 0) {
                 return Err(
                     "Conversation roles must alternate user/assistant/user/assistant/..."
                         .to_string(),
                 );
             }
-            content = if i == 0 && system_message.is_some() {
-                content
-                    + &format!(
-                        "<<SYS>>\n{}\n<</SYS>>\n\n{}",
-                        system_message.as_ref().unwrap(),
-                        message["content"]
-                    )
+            let role = if message["role"] == "assistant" {
+                "model".to_string()
             } else {
-                content + &message["content"]
+                message["role"].to_string()
             };
-
-            content = if message["role"] == "user" {
-                bos_token.clone() + "[INST]" + content.trim() + "[/INST]"
-            } else if message["role"] == "system" {
-                format!("<<SYS>>\n{}\n<</SYS>>\n\n", content.trim())
-            } else if message["role"] == "assistant" {
-                format!(" {} {}", content.trim(), eos_token)
-            } else {
-                unreachable!();
-            };
+            content += &format!(
+                "<start_of_turn>{role}\n{}<end_of_turn>\n",
+                message["content"].trim()
+            )
+        }
+        if add_generation_prompt {
+            content += "<start_of_turn>model\n"
         }
         Ok(content)
     }
