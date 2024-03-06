@@ -70,11 +70,11 @@ impl Engine {
             if scheduled.completion.len() > 0 {
                 self.set_none_cache();
                 // Run the completion seqs
-                //self.clone_in_cache(&scheduled.completion);
+                self.clone_in_cache(&scheduled.completion);
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
                 self.sample_seqs(&scheduled.completion, logits);
-                //self.clone_out_cache(&scheduled.completion);
+                self.clone_out_cache(&scheduled.completion);
 
                 self.set_none_cache();
                 //dbg!(get_mut_arcmutex!(self.pipeline).cache());
@@ -90,7 +90,7 @@ impl Engine {
                     deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
                 }
                 self.sample_seqs(&scheduled.prompt, logits);
-                //self.clone_out_cache(&scheduled.prompt);
+                self.clone_out_cache(&scheduled.prompt);
                 self.set_none_cache();
             }
 
