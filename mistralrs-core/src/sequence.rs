@@ -53,7 +53,6 @@ impl Sequence {
         is_xlora: bool,
     ) -> Self {
         let prompt_len = tokens.len();
-        println!("CREATING with Id {id}");
         Self {
             tokens,
             logprobs: Vec::new(),
