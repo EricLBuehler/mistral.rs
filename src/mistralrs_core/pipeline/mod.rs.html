@@ -149,6 +149,8 @@
 <a href="#148" id="148">148</a>
 <a href="#149" id="149">149</a>
 <a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -285,6 +287,8 @@
     input_toks: <span class="kw-2">&amp;</span>[Rc&lt;RefCell&lt;Sequence&gt;&gt;],
     device: <span class="kw-2">&amp;</span>Device,
 ) -&gt; (Tensor, Vec&lt;usize&gt;) {
+    <span class="kw">return </span>get_prompt_input(input_toks, device);
+    
     <span class="comment">// Pad each sequence by the padding token to the max len.
     </span><span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
     <span class="kw">let </span><span class="kw-2">mut </span>seqlen_offsets = Vec::new();
