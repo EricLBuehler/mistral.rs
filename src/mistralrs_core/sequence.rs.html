@@ -175,6 +175,7 @@
 <a href="#174" id="174">174</a>
 <a href="#175" id="175">175</a>
 <a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{cell::Cell, sync::mpsc::Sender};
 
 <span class="kw">use </span>candle_core::Tensor;
@@ -239,6 +240,7 @@
         is_xlora: bool,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>prompt_len = tokens.len();
+        <span class="macro">println!</span>(<span class="string">"CREATING with Id {id}"</span>);
         <span class="self">Self </span>{
             tokens,
             logprobs: Vec::new(),
