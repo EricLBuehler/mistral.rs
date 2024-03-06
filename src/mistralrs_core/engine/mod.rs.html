@@ -493,17 +493,17 @@
             doned=<span class="bool-val">false</span>;
 
             <span class="kw">if </span>scheduled.completion.len() &gt; <span class="number">0 </span>{
-                <span class="comment">//self.set_none_cache();
-                // Run the completion seqs
-                </span><span class="self">self</span>.clone_in_cache(<span class="kw-2">&amp;</span>scheduled.completion);
-                <span class="kw">let </span>logits =
+                <span class="self">self</span>.set_none_cache();
+                <span class="comment">// Run the completion seqs
+                //self.clone_in_cache(&amp;scheduled.completion);
+                </span><span class="kw">let </span>logits =
                     <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).forward(scheduled.completion.clone(), <span class="bool-val">false</span>);
                 <span class="self">self</span>.sample_seqs(<span class="kw-2">&amp;</span>scheduled.completion, logits);
-                <span class="self">self</span>.clone_out_cache(<span class="kw-2">&amp;</span>scheduled.completion);
+                <span class="comment">//self.clone_out_cache(&amp;scheduled.completion);
 
-                <span class="self">self</span>.set_none_cache();
-                <span class="macro">dbg!</span>(<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).cache());
-            }
+                //self.set_none_cache();
+                //dbg!(get_mut_arcmutex!(self.pipeline).cache());
+            </span>}
 
             <span class="kw">if </span>scheduled.prompt.len() &gt; <span class="number">0 </span>{
                 <span class="comment">//self.set_none_cache();
@@ -515,9 +515,9 @@
                     <span class="macro">deref_mut_refcell!</span>(seq).set_state(SequenceState::RunningCompletion);
                 }
                 <span class="self">self</span>.sample_seqs(<span class="kw-2">&amp;</span>scheduled.prompt, logits);
-                <span class="self">self</span>.clone_out_cache(<span class="kw-2">&amp;</span>scheduled.prompt);
-                <span class="self">self</span>.set_none_cache();
-            }
+                <span class="comment">//self.clone_out_cache(&amp;scheduled.prompt);
+                //self.set_none_cache();
+            </span>}
 
             <span class="kw">for </span>seq <span class="kw">in </span>scheduled.completion.iter() {
                 <span class="kw">if </span>!<span class="macro">deref_refcell!</span>(seq).is_running() {
