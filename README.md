@@ -73,7 +73,7 @@ Rust uses a feature flag system during build to implement compile-time build opt
 which may be specified using the `--features` command.
 1) `cuda`
 2) `metal`
-3) `flash-attn`
+3) `flash-attn`: Be sure to pass `--use_flash_attn`
 
 ## Preparing the X-LoRA Ordering File
 The X-LoRA ordering JSON file contains 2 parts. The first is the order of the adapters and the second, the layer ordering. The layer ordering has been automatically generated and should not be manipulated as it controls the application of scalings. However the order of adapter should be replaced by an array of strings of adapter names corresponding to the order the adapters were specified during training.
