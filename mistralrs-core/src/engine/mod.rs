@@ -260,6 +260,10 @@ impl Engine {
             debug_assert_eq!(v_caches.len(), seqs.len());
 
             for (seq_i, seq) in seqs.iter().enumerate() {
+                if !deref_refcell!(seq).is_running() {
+                    continue;
+                }
+                
                 let mut seq = deref_mut_refcell!(seq);
                 let seq_cache = seq.cache();
                 let seq_cache = seq_cache.get_mut(layer).unwrap();
