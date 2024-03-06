@@ -134,7 +134,7 @@ fn get_completion_input(
     input_toks: &[Rc<RefCell<Sequence>>],
     device: &Device,
 ) -> (Tensor, Vec<usize>) {
-    return get_prompt_input(input_toks, device);
+    //return get_prompt_input(input_toks, device);
 
     // Pad each sequence by the padding token to the max len.
     let mut seqs_tensors = Vec::new();
