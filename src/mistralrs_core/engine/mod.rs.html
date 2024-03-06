@@ -473,11 +473,11 @@
     }
 
     <span class="kw">pub fn </span>run(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+        <span class="kw">let </span><span class="kw-2">mut </span>doned=<span class="bool-val">false</span>;
         <span class="kw">loop </span>{
             <span class="kw">if let </span><span class="prelude-val">Ok</span>(request) = <span class="self">self</span>.rx.try_recv() {
                 <span class="self">self</span>.add_request(request);
             }
-            <span class="kw">let </span><span class="kw-2">mut </span>doned=<span class="bool-val">false</span>;
             <span class="kw">let </span>scheduled = <span class="self">self</span>.scheduler.schedule();
             <span class="kw">if </span>doned {
                 <span class="macro">dbg!</span>(<span class="self">self</span>.scheduler.running.len());
