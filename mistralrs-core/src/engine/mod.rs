@@ -260,15 +260,9 @@ impl Engine {
             debug_assert_eq!(v_caches.len(), seqs.len());
 
             for (seq_i, seq) in seqs.iter().enumerate() {
-
                 let mut seq = deref_mut_refcell!(seq);
-                let run = seq.is_running();
                 let seq_cache = seq.cache();
                 let seq_cache = seq_cache.get_mut(layer).unwrap();
-                if !run {
-                    *seq_cache = None;
-                    continue;
-                }
                 *seq_cache = Some((
                     k_caches.get(seq_i).unwrap().clone(),
                     v_caches.get(seq_i).unwrap().clone(),
