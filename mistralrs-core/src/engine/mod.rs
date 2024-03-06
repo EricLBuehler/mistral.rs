@@ -69,6 +69,7 @@ impl Engine {
                 self.clone_out_cache(&scheduled.completion);
 
                 self.set_none_cache();
+                dbg!(get_mut_arcmutex!(self.pipeline).cache());
             }
 
             if scheduled.prompt.len() > 0 {
