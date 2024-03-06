@@ -153,6 +153,14 @@ impl Engine {
                     },
                 };
 
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("Time travel has occurred!")
+                    .as_secs();
+                #[allow(clippy::cast_precision_loss)]
+                let tok_per_sec = deref_refcell!(seq).len() as f32
+                    / (now - deref_refcell!(seq).timestamp()) as f32;
+
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                 deref_refcell!(seq)
                     .responder()
@@ -167,6 +175,7 @@ impl Engine {
                             completion_tokens: deref_refcell!(seq).logprobs().len(),
                             prompt_tokens: deref_refcell!(seq).prompt_tokens(),
                             total_tokens: deref_refcell!(seq).len(),
+                            tok_per_sec,
                         },
                     }))
                     .unwrap();
