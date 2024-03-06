@@ -166,6 +166,13 @@
 <a href="#165" id="165">165</a>
 <a href="#166" id="166">166</a>
 <a href="#167" id="167">167</a>
+<a href="#168" id="168">168</a>
+<a href="#169" id="169">169</a>
+<a href="#170" id="170">170</a>
+<a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{cell::Cell, sync::mpsc::Sender};
 
 <span class="kw">use </span>candle_core::Tensor;
@@ -204,6 +211,13 @@
     stop_tokens: Vec&lt;u32&gt;,
     max_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     return_logprobs: bool,
+}
+
+<span class="kw">impl </span>Drop <span class="kw">for </span>Sequence {
+    <span class="kw">fn </span>drop(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+        <span class="macro">println!</span>(<span class="string">"Dropping {}"</span>, <span class="self">self</span>.id);
+        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span><span class="self">self</span>.cache);
+    }
 }
 
 <span class="kw">impl </span>Sequence {
