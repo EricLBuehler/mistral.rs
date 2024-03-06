@@ -7,6 +7,7 @@ use crate::get_mut_arcmutex;
 pub(crate) mod gemma;
 pub(crate) mod llama;
 pub(crate) mod mistral;
+pub(crate) mod mixtral;
 pub(crate) mod quantized_llama;
 
 pub type LayerCaches = Vec<Option<(Tensor, Tensor)>>;

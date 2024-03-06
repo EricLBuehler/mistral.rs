@@ -14,8 +14,9 @@ use candle_core::Device;
 use clap::{Parser, Subcommand};
 use mistralrs_core::{
     Conversation, GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader,
-    MistralLoader, MistralRs, MistralSpecificConfig, ModelKind, Request, Response, SamplingParams,
-    SchedulerMethod, StopTokens as InternalStopTokens, TokenSource,
+    MistralLoader, MistralRs, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig,
+    ModelKind, Request, Response, SamplingParams, SchedulerMethod,
+    StopTokens as InternalStopTokens, TokenSource,
 };
 use openai::{ChatCompletionRequest, StopTokens};
 mod openai;
@@ -183,6 +184,36 @@ pub enum ModelSelected {
         /// Ordering JSON file
         #[arg(short, long)]
         order: String,
+    },
+
+    /// Select the mixtral model.
+    Mixtral {
+        /// Model ID to load from
+        #[arg(short, long, default_value = "mistralai/Mixtral-8x7B-Instruct-v0.1")]
+        model_id: String,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
+    },
+
+    /// Select the quantized mixtral model with gguf.
+    MixtralGGUF {
+        /// Model ID to load the tokenizer from
+        #[arg(short, long, default_value = "mistralai/Mixtral-8x7B-Instruct-v0.1")]
+        tok_model_id: String,
+
+        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        #[arg(short = 'm', long, default_value = "TheBloke/Mixtral-8x7B-v0.1-GGUF")]
+        quantized_model_id: Option<String>,
+
+        /// Quantized filename, only applicable if `quantized` is set.
+        #[arg(short = 'f', long, default_value = "mixtral-8x7b-v0.1.Q4_K_M.gguf")]
+        quantized_filename: Option<String>,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
     },
 }
 
@@ -446,6 +477,40 @@ async fn main() -> Result<()> {
             Some(xlora_model_id),
             ModelKind::QuantizedGGML,
             Some(serde_json::from_reader(File::open(order)?)?),
+            args.no_kv_cache,
+        )),
+        ModelSelected::Mixtral {
+            model_id,
+            repeat_last_n,
+        } => Box::new(MixtralLoader::new(
+            model_id,
+            MixtralSpecificConfig {
+                repeat_last_n,
+                use_flash_attn,
+            },
+            None,
+            None,
+            None,
+            ModelKind::Normal,
+            None,
+            args.no_kv_cache,
+        )),
+        ModelSelected::MixtralGGUF {
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+        } => Box::new(MixtralLoader::new(
+            tok_model_id,
+            MixtralSpecificConfig {
+                repeat_last_n,
+                use_flash_attn,
+            },
+            quantized_model_id,
+            quantized_filename,
+            None,
+            ModelKind::QuantizedGGUF,
+            None,
             args.no_kv_cache,
         )),
     };

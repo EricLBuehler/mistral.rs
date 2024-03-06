@@ -1,11 +1,13 @@
 mod gemma;
 mod llama;
 mod mistral;
+mod mixtral;
 use candle_sampling::logits_processor::Logprobs;
 pub use gemma::{GemmaLoader, GemmaSpecificConfig};
 pub use llama::{LlamaLoader, LlamaSpecificConfig};
 pub use mistral::{MistralLoader, MistralSpecificConfig};
 use mistralrs_lora::{LoraConfig, Ordering};
+pub use mixtral::{MixtralLoader, MixtralSpecificConfig};
 use std::{
     cell::RefCell,
     collections::HashMap,

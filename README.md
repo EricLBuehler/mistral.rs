@@ -27,6 +27,9 @@ Mistral.rs is a LLM inference platform written in pure, safe Rust.
   - GGUF
   - GGML
   - X-LoRA
+- Mixtral 8x7B
+  - Normal
+  - GGUF
 
 **Library API**
 - Rust multithreaded API for easy integration into any application: [docs](https://ericlbuehler.github.io/mistral.rs/mistralrs/). To use, add `mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }` to the Cargo.toml.
