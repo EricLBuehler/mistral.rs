@@ -410,6 +410,8 @@
 <a href="#409" id="409">409</a>
 <a href="#410" id="410">410</a>
 <a href="#411" id="411">411</a>
+<a href="#412" id="412">412</a>
+<a href="#413" id="413">413</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -672,13 +674,15 @@
             <span class="macro">debug_assert_eq!</span>(v_caches.len(), seqs.len());
 
             <span class="kw">for </span>(seq_i, seq) <span class="kw">in </span>seqs.iter().enumerate() {
-                <span class="kw">if </span>!<span class="macro">deref_refcell!</span>(seq).is_running() {
-                    <span class="kw">continue</span>;
-                }
-                
+
                 <span class="kw">let </span><span class="kw-2">mut </span>seq = <span class="macro">deref_mut_refcell!</span>(seq);
+                <span class="kw">let </span>run = seq.is_running();
                 <span class="kw">let </span>seq_cache = seq.cache();
                 <span class="kw">let </span>seq_cache = seq_cache.get_mut(layer).unwrap();
+                <span class="kw">if </span>!run {
+                    <span class="kw-2">*</span>seq_cache = <span class="prelude-val">None</span>;
+                    <span class="kw">continue</span>;
+                }
                 <span class="kw-2">*</span>seq_cache = <span class="prelude-val">Some</span>((
                     k_caches.get(seq_i).unwrap().clone(),
                     v_caches.get(seq_i).unwrap().clone(),
