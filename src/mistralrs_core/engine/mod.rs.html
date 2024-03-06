@@ -415,6 +415,11 @@
 <a href="#414" id="414">414</a>
 <a href="#415" id="415">415</a>
 <a href="#416" id="416">416</a>
+<a href="#417" id="417">417</a>
+<a href="#418" id="418">418</a>
+<a href="#419" id="419">419</a>
+<a href="#420" id="420">420</a>
+<a href="#421" id="421">421</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -446,7 +451,6 @@
 <span class="kw">pub struct </span>Engine {
     rx: Receiver&lt;Request&gt;,
     pipeline: Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
-    requests: VecDeque&lt;Request&gt;,
     scheduler: Scheduler&lt;VecDeque&lt;Rc&lt;RefCell&lt;Sequence&gt;&gt;&gt;&gt;,
     id: usize,
     truncate_sequence: bool,
@@ -462,7 +466,6 @@
         <span class="self">Self </span>{
             rx,
             pipeline,
-            requests: VecDeque::new(),
             scheduler: Scheduler::new(method),
             id: <span class="number">0</span>,
             truncate_sequence,
@@ -474,7 +477,14 @@
             <span class="kw">if let </span><span class="prelude-val">Ok</span>(request) = <span class="self">self</span>.rx.try_recv() {
                 <span class="self">self</span>.add_request(request);
             }
+            <span class="kw">let </span><span class="kw-2">mut </span>doned=<span class="bool-val">false</span>;
             <span class="kw">let </span>scheduled = <span class="self">self</span>.scheduler.schedule();
+            <span class="kw">if </span>doned {
+                <span class="macro">dbg!</span>(<span class="self">self</span>.scheduler.running.len());
+                <span class="macro">dbg!</span>(<span class="self">self</span>.scheduler.waiting.iter().count());
+
+            }
+            doned=<span class="bool-val">false</span>;
 
             <span class="kw">if </span>scheduled.completion.len() &gt; <span class="number">0 </span>{
                 <span class="comment">//self.set_none_cache();
@@ -508,6 +518,7 @@
                     <span class="kw-2">*</span><span class="macro">deref_mut_refcell!</span>(seq).cache() = <span class="macro">vec!</span>[];
                     <span class="macro">dbg!</span>(<span class="self">self</span>.scheduler.running.len());
                     <span class="macro">dbg!</span>(<span class="self">self</span>.scheduler.waiting.iter().count());
+                    doned = <span class="bool-val">true</span>;
                 }
             }
         }
@@ -827,7 +838,6 @@
         );
         <span class="self">self</span>.id += <span class="number">1</span>;
 
-        <span class="self">self</span>.requests.push_back(request);
         <span class="self">self</span>.scheduler.add_seq(seq);
     }
 }
