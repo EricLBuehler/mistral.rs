@@ -115,7 +115,7 @@ pub struct LlamaPipeline {
     model: Model,
     tokenizer: Tokenizer,
     config: LlamaSpecificConfig,
-    no_xlora_kv_cache: bool,
+    no_kv_cache: bool,
 }
 
 pub struct LlamaLoader {
@@ -126,7 +126,7 @@ pub struct LlamaLoader {
     xlora_model_id: Option<String>,
     kind: ModelKind,
     xlora_order: Option<Ordering>,
-    no_xlora_kv_cache: bool,
+    no_kv_cache: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -152,7 +152,7 @@ impl LlamaLoader {
         xlora_model_id: Option<String>,
         kind: ModelKind,
         xlora_order: Option<Ordering>,
-        no_xlora_kv_cache: bool,
+        no_kv_cache: bool,
     ) -> Self {
         Self {
             model_id,
@@ -162,7 +162,7 @@ impl LlamaLoader {
             xlora_model_id,
             kind,
             xlora_order,
-            no_xlora_kv_cache,
+            no_kv_cache,
         }
     }
 }
@@ -350,7 +350,7 @@ impl Loader for LlamaLoader {
                     &basic_config.into_config(self.config.use_flash_attn),
                     dtype.unwrap_or(default_dtype),
                     device,
-                    self.no_xlora_kv_cache,
+                    self.no_kv_cache,
                 )?;
                 Model::Normal(model)
             }
@@ -385,7 +385,7 @@ impl Loader for LlamaLoader {
                     paths.get_adapter_configs().as_ref().unwrap(),
                     xlora_config,
                     paths.get_ordering().as_ref().unwrap().clone(),
-                    self.no_xlora_kv_cache,
+                    self.no_kv_cache,
                 )?;
                 Model::XLoraNormal(model)
             }
@@ -400,7 +400,7 @@ impl Loader for LlamaLoader {
                 model,
                 tokenizer,
                 config: self.config,
-                no_xlora_kv_cache: self.no_xlora_kv_cache,
+                no_kv_cache: self.no_kv_cache,
             })),
             Arc::new(LlamaConversation),
         ))
@@ -413,7 +413,8 @@ impl Pipeline for LlamaPipeline {
             if self.is_xlora() && !is_prompt {
                 let (input_ids_full, seqlen_offsets_full) =
                     get_prompt_input(&input_toks, self.device());
-                let (input_ids, seqlen_offsets) = get_completion_input(&input_toks, self.device());
+                let (input_ids, seqlen_offsets) =
+                    get_completion_input(&input_toks, self.device(), self.no_kv_cache);
                 (
                     input_ids,
                     Some(input_ids_full),
@@ -432,7 +433,8 @@ impl Pipeline for LlamaPipeline {
                 let (input_ids, seqlen_offsets) = get_prompt_input(&input_toks, self.device());
                 (input_ids, None, seqlen_offsets, None)
             } else {
-                let (input_ids, seqlen_offsets) = get_completion_input(&input_toks, self.device());
+                let (input_ids, seqlen_offsets) =
+                    get_completion_input(&input_toks, self.device(), self.no_kv_cache);
                 (input_ids, None, seqlen_offsets, None)
             };
         let result = match self.model {
@@ -443,7 +445,7 @@ impl Pipeline for LlamaPipeline {
                 input_ids_full.as_ref().unwrap(),
                 &seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap(),
-                self.no_xlora_kv_cache,
+                self.no_kv_cache,
             ),
         };
         match result {
@@ -520,7 +522,7 @@ impl Pipeline for LlamaPipeline {
             Model::XLoraNormal(_) => true,
         }
     }
-    fn has_no_xlora_kv_cache(&self) -> bool {
-        self.no_xlora_kv_cache
+    fn has_no_kv_cache(&self) -> bool {
+        self.no_kv_cache
     }
 }

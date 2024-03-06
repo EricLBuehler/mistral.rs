@@ -408,7 +408,7 @@ impl Llama {
         cfg: &Config,
         dtype: DType,
         device: &Device,
-        no_xlora_kv_cache: bool,
+        no_kv_cache: bool,
     ) -> Result<Self> {
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
@@ -422,7 +422,7 @@ impl Llama {
             blocks,
             ln_f,
             lm_head,
-            cache: Cache::new(!no_xlora_kv_cache, dtype, cfg, device)?,
+            cache: Cache::new(!no_kv_cache, dtype, cfg, device)?,
             kv_cache: super::Cache::new(cfg.num_hidden_layers, false),
             device: device.clone(),
         })

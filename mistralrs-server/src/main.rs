@@ -211,9 +211,9 @@ struct Args {
     #[arg(long, default_value_t = 2)]
     max_seqs: usize,
 
-    /// Use no KV cache for X-LoRA, only applicable for X-LoRA models and the Llama Normal model.
+    /// Use no KV cache.
     #[arg(long, default_value_t = false)]
-    no_xlora_kv_cache: bool,
+    no_kv_cache: bool,
 
     /// Enable flash attention, only applicable if compiled with `--features flash-attn`
     #[arg(short, long, default_value_t = false)]
@@ -307,7 +307,7 @@ async fn main() -> Result<()> {
             None,
             ModelKind::Normal,
             None,
-            args.no_xlora_kv_cache,
+            args.no_kv_cache,
         )),
         ModelSelected::MistralGGUF {
             tok_model_id,
@@ -325,7 +325,7 @@ async fn main() -> Result<()> {
             None,
             ModelKind::QuantizedGGUF,
             None,
-            args.no_xlora_kv_cache,
+            args.no_kv_cache,
         )),
         ModelSelected::XLoraMistral {
             model_id,
@@ -343,7 +343,7 @@ async fn main() -> Result<()> {
             Some(xlora_model_id),
             ModelKind::XLoraNormal,
             Some(serde_json::from_reader(File::open(order)?)?),
-            args.no_xlora_kv_cache,
+            args.no_kv_cache,
         )),
         ModelSelected::Gemma {
             model_id,
@@ -356,7 +356,7 @@ async fn main() -> Result<()> {
             None,
             ModelKind::Normal,
             None,
-            args.no_xlora_kv_cache,
+            args.no_kv_cache,
         )),
         ModelSelected::XLoraGemma {
             model_id,
@@ -371,7 +371,7 @@ async fn main() -> Result<()> {
             Some(xlora_model_id),
             ModelKind::Normal,
             Some(serde_json::from_reader(File::open(order)?)?),
-            args.no_xlora_kv_cache,
+            args.no_kv_cache,
         )),
         ModelSelected::Llama {
             model_id,
@@ -388,7 +388,7 @@ async fn main() -> Result<()> {
             None,
             ModelKind::Normal,
             None,
-            args.no_xlora_kv_cache,
+            args.no_kv_cache,
         )),
         ModelSelected::LlamaGGUF {
             tok_model_id,
@@ -407,7 +407,7 @@ async fn main() -> Result<()> {
             None,
             ModelKind::QuantizedGGUF,
             None,
-            args.no_xlora_kv_cache,
+            args.no_kv_cache,
         )),
         ModelSelected::LlamaGGML {
             tok_model_id,
@@ -427,7 +427,7 @@ async fn main() -> Result<()> {
             None,
             ModelKind::QuantizedGGML,
             None,
-            args.no_xlora_kv_cache,
+            args.no_kv_cache,
         )),
         ModelSelected::XLoraLlama {
             model_id,
@@ -446,7 +446,7 @@ async fn main() -> Result<()> {
             Some(xlora_model_id),
             ModelKind::QuantizedGGML,
             Some(serde_json::from_reader(File::open(order)?)?),
-            args.no_xlora_kv_cache,
+            args.no_kv_cache,
         )),
     };
 
@@ -461,6 +461,7 @@ async fn main() -> Result<()> {
         SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
         args.log,
         args.truncate_sequence,
+        args.no_kv_cache,
     );
 
     let app = get_router((mistralrs, conv));

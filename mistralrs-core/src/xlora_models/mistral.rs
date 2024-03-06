@@ -507,7 +507,7 @@ impl XLoraModel {
         seqlen_offsets: &[usize],
         scalings: Tensor,
         is_full_pass: bool,
-        no_xlora_kv_cache: bool,
+        no_kv_cache: bool,
     ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
         if seqlen_offsets.len() > b_size {
@@ -515,7 +515,7 @@ impl XLoraModel {
         }
 
         let mut cache = if is_full_pass {
-            if no_xlora_kv_cache {
+            if no_kv_cache {
                 let mut new_cache = Vec::new();
                 for _ in 0..self.cache.xlora_lock().len() {
                     new_cache.push(None);
@@ -556,7 +556,7 @@ impl XLoraModel {
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
         seqlen_offsets_full: &[usize],
-        no_xlora_kv_cache: bool,
+        no_kv_cache: bool,
     ) -> Result<Tensor> {
         let (b_size, seq_len_full) = input_ids_full.dims2()?;
         let (_, seq_len) = input_ids.dims2()?;
@@ -568,13 +568,13 @@ impl XLoraModel {
             self.dtype,
         )?;
         // Using X-LoRA cache here
-        let hidden_states = if no_xlora_kv_cache {
+        let hidden_states = if no_kv_cache {
             let res = self.inner_forward(
                 input_ids_full,
                 seqlen_offsets_full,
                 dummy_scalings,
                 true,
-                no_xlora_kv_cache,
+                no_kv_cache,
             )?;
 
             let mut new_cache = Vec::new();
@@ -593,25 +593,25 @@ impl XLoraModel {
                 seqlen_offsets,
                 dummy_scalings,
                 false,
-                no_xlora_kv_cache,
+                no_kv_cache,
             )?
         };
 
         let scalings = self.xlora_classifier.forward(hidden_states)?;
 
-        if no_xlora_kv_cache {
+        if no_kv_cache {
             self.inner_forward(
                 input_ids_full,
                 seqlen_offsets_full,
                 scalings,
                 true,
-                no_xlora_kv_cache,
+                no_kv_cache,
             )?
             .apply(&self.lm_head)?
             .narrow(1, seq_len_full - 1, 1)
         } else {
-            // is_full_pass=true is ok because no_xlora_kv_cache=false
-            self.inner_forward(input_ids, seqlen_offsets, scalings, true, no_xlora_kv_cache)?
+            // is_full_pass=true is ok because no_kv_cache=false
+            self.inner_forward(input_ids, seqlen_offsets, scalings, true, no_kv_cache)?
                 .apply(&self.lm_head)?
                 .narrow(1, seq_len - 1, 1)
         }

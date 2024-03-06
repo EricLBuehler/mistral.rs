@@ -405,11 +405,11 @@ impl XLoraLlama {
         seqlen_offsets: &[usize],
         scalings: Tensor,
         is_full_pass: bool,
-        no_xlora_kv_cache: bool,
+        no_kv_cache: bool,
     ) -> Result<Tensor> {
         let mut x = self.wte.forward(x)?;
         let mut cache = if is_full_pass {
-            if no_xlora_kv_cache {
+            if no_kv_cache {
                 let mut new_cache = Vec::new();
                 for _ in 0..self.kv_cache.xlora_lock().len() {
                     new_cache.push(None);
@@ -441,7 +441,7 @@ impl XLoraLlama {
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
         seqlen_offsets_full: &[usize],
-        no_xlora_kv_cache: bool,
+        no_kv_cache: bool,
     ) -> Result<Tensor> {
         let (b_size, seq_len_full) = input_ids_full.dims2()?;
         let (_, seq_len) = input_ids.dims2()?;
@@ -453,13 +453,13 @@ impl XLoraLlama {
             self.dtype,
         )?;
         // Using X-LoRA cache here
-        let hidden_states = if no_xlora_kv_cache {
+        let hidden_states = if no_kv_cache {
             let res = self.inner_forward(
                 input_ids_full,
                 seqlen_offsets_full,
                 dummy_scalings,
                 true,
-                no_xlora_kv_cache,
+                no_kv_cache,
             )?;
 
             let mut new_cache = Vec::new();
@@ -478,25 +478,25 @@ impl XLoraLlama {
                 seqlen_offsets,
                 dummy_scalings,
                 false,
-                no_xlora_kv_cache,
+                no_kv_cache,
             )?
         };
 
         let scalings = self.xlora_classifier.forward(hidden_states)?;
 
-        if no_xlora_kv_cache {
+        if no_kv_cache {
             self.inner_forward(
                 input_ids_full,
                 seqlen_offsets_full,
                 scalings,
                 true,
-                no_xlora_kv_cache,
+                no_kv_cache,
             )?
             .apply(&self.lm_head)?
             .i((.., seq_len_full - 1, ..))?
         } else {
-            // is_full_pass=true is ok because no_xlora_kv_cache=false
-            self.inner_forward(input_ids, seqlen_offsets, scalings, true, no_xlora_kv_cache)?
+            // is_full_pass=true is ok because no_kv_cache=false
+            self.inner_forward(input_ids, seqlen_offsets, scalings, true, no_kv_cache)?
                 .apply(&self.lm_head)?
                 .i((.., seq_len - 1, ..))?
         }
@@ -512,7 +512,7 @@ impl XLoraLlama {
         lora_config: &Vec<(String, LoraConfig)>,
         xlora_config: XLoraConfig,
         xlora_ordering: Ordering,
-        no_xlora_kv_cache: bool,
+        no_kv_cache: bool,
     ) -> Result<Self> {
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let lm_head = candle_nn::linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
@@ -536,7 +536,7 @@ impl XLoraLlama {
             blocks,
             ln_f,
             lm_head,
-            cache: Cache::new(!no_xlora_kv_cache, dtype, cfg, device)?,
+            cache: Cache::new(!no_kv_cache, dtype, cfg, device)?,
             kv_cache: models::Cache::new(cfg.num_hidden_layers, false),
             device: device.clone(),
             xlora_classifier: XLoraClassifier::new(xlora_config, count, lora_config.len(), vb)?,

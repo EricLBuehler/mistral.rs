@@ -32,6 +32,7 @@ pub struct Engine {
     scheduler: Scheduler<VecDeque<Rc<RefCell<Sequence>>>>,
     id: usize,
     truncate_sequence: bool,
+    no_kv_cache: bool,
 }
 
 impl Engine {
@@ -40,6 +41,7 @@ impl Engine {
         pipeline: Box<Mutex<dyn Pipeline>>,
         method: SchedulerMethod,
         truncate_sequence: bool,
+        no_kv_cache: bool,
     ) -> Self {
         Self {
             rx,
@@ -47,6 +49,7 @@ impl Engine {
             scheduler: Scheduler::new(method),
             id: 0,
             truncate_sequence,
+            no_kv_cache,
         }
     }
 
@@ -59,11 +62,17 @@ impl Engine {
 
             if scheduled.completion.len() > 0 {
                 // Run the completion seqs
-                self.clone_in_cache(&scheduled.completion);
+                if !self.no_kv_cache {
+                    self.clone_in_cache(&scheduled.completion);
+                }
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
                 self.sample_seqs(&scheduled.completion, logits);
-                self.clone_out_cache(&scheduled.completion);
+                if !self.no_kv_cache {
+                    self.clone_out_cache(&scheduled.completion);
+                } else {
+                    self.set_none_cache();
+                }
             }
 
             if scheduled.prompt.len() > 0 {
@@ -75,7 +84,11 @@ impl Engine {
                     deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
                 }
                 self.sample_seqs(&scheduled.prompt, logits);
-                self.clone_out_cache(&scheduled.prompt);
+                if !self.no_kv_cache {
+                    self.clone_out_cache(&scheduled.prompt);
+                } else {
+                    self.set_none_cache();
+                }
             }
         }
     }
@@ -191,7 +204,7 @@ impl Engine {
             )));
         }
         if get_mut_arcmutex!(self.pipeline).is_xlora()
-            && !get_mut_arcmutex!(self.pipeline).has_no_xlora_kv_cache()
+            && !get_mut_arcmutex!(self.pipeline).has_no_kv_cache()
         {
             let mut new_cache = Vec::new();
             for layer in 0..get_mut_arcmutex!(self.pipeline).num_hidden_layers() {
@@ -261,7 +274,7 @@ impl Engine {
                     v_caches.get(seq_i).unwrap().clone(),
                 ));
             }
-            if pipeline.is_xlora() && !pipeline.has_no_xlora_kv_cache() {
+            if pipeline.is_xlora() && !pipeline.has_no_kv_cache() {
                 let cache = pipeline.cache().xlora_lock();
                 let cache = cache.get(layer).unwrap();
                 let k_cache = cache.as_ref().unwrap().0.clone();

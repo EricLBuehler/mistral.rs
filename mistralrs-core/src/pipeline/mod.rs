@@ -103,7 +103,7 @@ pub trait Pipeline: Send + Sync {
     fn name(&self) -> &'static str;
     fn get_max_seq_len(&self) -> usize;
     fn is_xlora(&self) -> bool;
-    fn has_no_xlora_kv_cache(&self) -> bool;
+    fn has_no_kv_cache(&self) -> bool;
 }
 
 fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>], device: &Device) -> (Tensor, Vec<usize>) {
@@ -133,8 +133,11 @@ fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>], device: &Device) -> (T
 fn get_completion_input(
     input_toks: &[Rc<RefCell<Sequence>>],
     device: &Device,
+    no_kv_cache: bool,
 ) -> (Tensor, Vec<usize>) {
-    //return get_prompt_input(input_toks, device);
+    if no_kv_cache {
+        return get_prompt_input(input_toks, device);
+    }
 
     // Pad each sequence by the padding token to the max len.
     let mut seqs_tensors = Vec::new();

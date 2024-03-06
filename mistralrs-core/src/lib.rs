@@ -45,13 +45,14 @@ impl MistralRs {
         method: SchedulerMethod,
         log: Option<String>,
         truncate_sequence: bool,
+        no_kv_cache: bool,
     ) -> Arc<Self> {
         let (tx, rx) = channel();
 
         let this = Arc::new(Self { sender: tx, log });
 
         thread::spawn(move || {
-            let mut engine = Engine::new(rx, pipeline, method, truncate_sequence);
+            let mut engine = Engine::new(rx, pipeline, method, truncate_sequence, no_kv_cache);
             engine.run();
         });
 
