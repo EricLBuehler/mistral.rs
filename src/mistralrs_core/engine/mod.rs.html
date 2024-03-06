@@ -398,31 +398,6 @@
 <a href="#397" id="397">397</a>
 <a href="#398" id="398">398</a>
 <a href="#399" id="399">399</a>
-<a href="#400" id="400">400</a>
-<a href="#401" id="401">401</a>
-<a href="#402" id="402">402</a>
-<a href="#403" id="403">403</a>
-<a href="#404" id="404">404</a>
-<a href="#405" id="405">405</a>
-<a href="#406" id="406">406</a>
-<a href="#407" id="407">407</a>
-<a href="#408" id="408">408</a>
-<a href="#409" id="409">409</a>
-<a href="#410" id="410">410</a>
-<a href="#411" id="411">411</a>
-<a href="#412" id="412">412</a>
-<a href="#413" id="413">413</a>
-<a href="#414" id="414">414</a>
-<a href="#415" id="415">415</a>
-<a href="#416" id="416">416</a>
-<a href="#417" id="417">417</a>
-<a href="#418" id="418">418</a>
-<a href="#419" id="419">419</a>
-<a href="#420" id="420">420</a>
-<a href="#421" id="421">421</a>
-<a href="#422" id="422">422</a>
-<a href="#423" id="423">423</a>
-<a href="#424" id="424">424</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -476,56 +451,31 @@
     }
 
     <span class="kw">pub fn </span>run(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-        <span class="kw">let </span><span class="kw-2">mut </span>doned=<span class="bool-val">false</span>;
         <span class="kw">loop </span>{
             <span class="kw">if let </span><span class="prelude-val">Ok</span>(request) = <span class="self">self</span>.rx.try_recv() {
-                <span class="macro">dbg!</span>(<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).cache());
                 <span class="self">self</span>.add_request(request);
             }
             <span class="kw">let </span>scheduled = <span class="self">self</span>.scheduler.schedule();
-            <span class="kw">if </span>doned {
-                <span class="macro">dbg!</span>(<span class="self">self</span>.scheduler.running.len());
-                <span class="macro">dbg!</span>(<span class="self">self</span>.scheduler.waiting.iter().count());
-                <span class="macro">dbg!</span>(<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).cache());
-                <span class="macro">dbg!</span>(scheduled.completion.len());
-                <span class="macro">dbg!</span>(scheduled.prompt.len());
-            }
-            doned=<span class="bool-val">false</span>;
 
             <span class="kw">if </span>scheduled.completion.len() &gt; <span class="number">0 </span>{
-                <span class="self">self</span>.set_none_cache();
                 <span class="comment">// Run the completion seqs
                 </span><span class="self">self</span>.clone_in_cache(<span class="kw-2">&amp;</span>scheduled.completion);
                 <span class="kw">let </span>logits =
                     <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).forward(scheduled.completion.clone(), <span class="bool-val">false</span>);
                 <span class="self">self</span>.sample_seqs(<span class="kw-2">&amp;</span>scheduled.completion, logits);
                 <span class="self">self</span>.clone_out_cache(<span class="kw-2">&amp;</span>scheduled.completion);
-
-                <span class="self">self</span>.set_none_cache();
-                <span class="comment">//dbg!(get_mut_arcmutex!(self.pipeline).cache());
-            </span>}
+            }
 
             <span class="kw">if </span>scheduled.prompt.len() &gt; <span class="number">0 </span>{
-                <span class="comment">//self.set_none_cache();
-                </span><span class="self">self</span>.set_none_cache();
                 <span class="comment">// Run the prompt seqs
-                </span><span class="kw">let </span>logits =
+                </span><span class="self">self</span>.set_none_cache();
+                <span class="kw">let </span>logits =
                     <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).forward(scheduled.prompt.clone(), <span class="bool-val">true</span>);
                 <span class="kw">for </span>seq <span class="kw">in </span>scheduled.prompt.iter() {
                     <span class="macro">deref_mut_refcell!</span>(seq).set_state(SequenceState::RunningCompletion);
                 }
                 <span class="self">self</span>.sample_seqs(<span class="kw-2">&amp;</span>scheduled.prompt, logits);
                 <span class="self">self</span>.clone_out_cache(<span class="kw-2">&amp;</span>scheduled.prompt);
-                <span class="self">self</span>.set_none_cache();
-            }
-
-            <span class="kw">for </span>seq <span class="kw">in </span>scheduled.completion.iter() {
-                <span class="kw">if </span>!<span class="macro">deref_refcell!</span>(seq).is_running() {
-                    <span class="kw-2">*</span><span class="macro">deref_mut_refcell!</span>(seq).cache() = <span class="macro">vec!</span>[];
-                    <span class="macro">dbg!</span>(<span class="self">self</span>.scheduler.running.len());
-                    <span class="macro">dbg!</span>(<span class="self">self</span>.scheduler.waiting.iter().count());
-                    doned = <span class="bool-val">true</span>;
-                }
             }
         }
     }
