@@ -839,7 +839,7 @@
         cfg: <span class="kw-2">&amp;</span>Config,
         dtype: DType,
         device: <span class="kw-2">&amp;</span>Device,
-        no_xlora_kv_cache: bool,
+        no_kv_cache: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp(<span class="string">"model.embed_tokens"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp(<span class="string">"lm_head"</span>))<span class="question-mark">?</span>;
@@ -853,7 +853,7 @@
             blocks,
             ln_f,
             lm_head,
-            cache: Cache::new(!no_xlora_kv_cache, dtype, cfg, device)<span class="question-mark">?</span>,
+            cache: Cache::new(!no_kv_cache, dtype, cfg, device)<span class="question-mark">?</span>,
             kv_cache: <span class="kw">super</span>::Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
             device: device.clone(),
         })

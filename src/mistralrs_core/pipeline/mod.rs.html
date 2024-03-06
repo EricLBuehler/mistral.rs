@@ -151,6 +151,9 @@
 <a href="#150" id="150">150</a>
 <a href="#151" id="151">151</a>
 <a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -256,7 +259,7 @@
     <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str;
     <span class="kw">fn </span>get_max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
     <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
-    <span class="kw">fn </span>has_no_xlora_kv_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
+    <span class="kw">fn </span>has_no_kv_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
 }
 
 <span class="kw">fn </span>get_prompt_input(input_toks: <span class="kw-2">&amp;</span>[Rc&lt;RefCell&lt;Sequence&gt;&gt;], device: <span class="kw-2">&amp;</span>Device) -&gt; (Tensor, Vec&lt;usize&gt;) {
@@ -286,10 +289,13 @@
 <span class="kw">fn </span>get_completion_input(
     input_toks: <span class="kw-2">&amp;</span>[Rc&lt;RefCell&lt;Sequence&gt;&gt;],
     device: <span class="kw-2">&amp;</span>Device,
+    no_kv_cache: bool,
 ) -&gt; (Tensor, Vec&lt;usize&gt;) {
-    <span class="comment">//return get_prompt_input(input_toks, device);
+    <span class="kw">if </span>no_kv_cache {
+        <span class="kw">return </span>get_prompt_input(input_toks, device);
+    }
 
-    // Pad each sequence by the padding token to the max len.
+    <span class="comment">// Pad each sequence by the padding token to the max len.
     </span><span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
     <span class="kw">let </span><span class="kw-2">mut </span>seqlen_offsets = Vec::new();
     <span class="kw">for </span>seq <span class="kw">in </span>input_toks.iter() {

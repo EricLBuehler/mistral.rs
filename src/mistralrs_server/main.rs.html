@@ -471,6 +471,7 @@
 <a href="#470" id="470">470</a>
 <a href="#471" id="471">471</a>
 <a href="#472" id="472">472</a>
+<a href="#473" id="473">473</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fs::File,
@@ -684,9 +685,9 @@
     </span><span class="attr">#[arg(long, default_value_t = <span class="number">2</span>)]
     </span>max_seqs: usize,
 
-    <span class="doccomment">/// Use no KV cache for X-LoRA, only applicable for X-LoRA models and the Llama Normal model.
+    <span class="doccomment">/// Use no KV cache.
     </span><span class="attr">#[arg(long, default_value_t = <span class="bool-val">false</span>)]
-    </span>no_xlora_kv_cache: bool,
+    </span>no_kv_cache: bool,
 
     <span class="doccomment">/// Enable flash attention, only applicable if compiled with `--features flash-attn`
     </span><span class="attr">#[arg(short, long, default_value_t = <span class="bool-val">false</span>)]
@@ -780,7 +781,7 @@
             <span class="prelude-val">None</span>,
             ModelKind::Normal,
             <span class="prelude-val">None</span>,
-            args.no_xlora_kv_cache,
+            args.no_kv_cache,
         )),
         ModelSelected::MistralGGUF {
             tok_model_id,
@@ -798,7 +799,7 @@
             <span class="prelude-val">None</span>,
             ModelKind::QuantizedGGUF,
             <span class="prelude-val">None</span>,
-            args.no_xlora_kv_cache,
+            args.no_kv_cache,
         )),
         ModelSelected::XLoraMistral {
             model_id,
@@ -816,7 +817,7 @@
             <span class="prelude-val">Some</span>(xlora_model_id),
             ModelKind::XLoraNormal,
             <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order)<span class="question-mark">?</span>)<span class="question-mark">?</span>),
-            args.no_xlora_kv_cache,
+            args.no_kv_cache,
         )),
         ModelSelected::Gemma {
             model_id,
@@ -829,7 +830,7 @@
             <span class="prelude-val">None</span>,
             ModelKind::Normal,
             <span class="prelude-val">None</span>,
-            args.no_xlora_kv_cache,
+            args.no_kv_cache,
         )),
         ModelSelected::XLoraGemma {
             model_id,
@@ -844,7 +845,7 @@
             <span class="prelude-val">Some</span>(xlora_model_id),
             ModelKind::Normal,
             <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order)<span class="question-mark">?</span>)<span class="question-mark">?</span>),
-            args.no_xlora_kv_cache,
+            args.no_kv_cache,
         )),
         ModelSelected::Llama {
             model_id,
@@ -861,7 +862,7 @@
             <span class="prelude-val">None</span>,
             ModelKind::Normal,
             <span class="prelude-val">None</span>,
-            args.no_xlora_kv_cache,
+            args.no_kv_cache,
         )),
         ModelSelected::LlamaGGUF {
             tok_model_id,
@@ -880,7 +881,7 @@
             <span class="prelude-val">None</span>,
             ModelKind::QuantizedGGUF,
             <span class="prelude-val">None</span>,
-            args.no_xlora_kv_cache,
+            args.no_kv_cache,
         )),
         ModelSelected::LlamaGGML {
             tok_model_id,
@@ -900,7 +901,7 @@
             <span class="prelude-val">None</span>,
             ModelKind::QuantizedGGML,
             <span class="prelude-val">None</span>,
-            args.no_xlora_kv_cache,
+            args.no_kv_cache,
         )),
         ModelSelected::XLoraLlama {
             model_id,
@@ -919,7 +920,7 @@
             <span class="prelude-val">Some</span>(xlora_model_id),
             ModelKind::QuantizedGGML,
             <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order)<span class="question-mark">?</span>)<span class="question-mark">?</span>),
-            args.no_xlora_kv_cache,
+            args.no_kv_cache,
         )),
     };
 
@@ -934,6 +935,7 @@
         SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
         args.log,
         args.truncate_sequence,
+        args.no_kv_cache,
     );
 
     <span class="kw">let </span>app = get_router((mistralrs, conv));

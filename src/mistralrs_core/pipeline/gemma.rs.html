@@ -529,6 +529,8 @@
 <a href="#528" id="528">528</a>
 <a href="#529" id="529">529</a>
 <a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     get_completion_input, get_prompt_input, Conversation, Loader, ModelKind, ModelPaths, Pipeline,
     TokenSource,
@@ -640,7 +642,7 @@
     model: Model,
     tokenizer: Tokenizer,
     config: GemmaSpecificConfig,
-    no_xlora_kv_cache: bool,
+    no_kv_cache: bool,
 }
 
 <span class="kw">pub struct </span>GemmaLoader {
@@ -651,7 +653,7 @@
     xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     kind: ModelKind,
     xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
-    no_xlora_kv_cache: bool,
+    no_kv_cache: bool,
 }
 
 <span class="attr">#[derive(Clone, Copy)]
@@ -697,7 +699,7 @@
         xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         kind: ModelKind,
         xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
-        no_xlora_kv_cache: bool,
+        no_kv_cache: bool,
     ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             model_id,
@@ -707,7 +709,7 @@
             xlora_model_id,
             kind,
             xlora_order,
-            no_xlora_kv_cache,
+            no_kv_cache,
         }
     }
 }
@@ -938,7 +940,7 @@
                 model,
                 tokenizer,
                 config: <span class="self">self</span>.config,
-                no_xlora_kv_cache: <span class="self">self</span>.no_xlora_kv_cache,
+                no_kv_cache: <span class="self">self</span>.no_kv_cache,
             })),
             Arc::new(GemmaConversation),
         ))
@@ -951,7 +953,8 @@
             <span class="kw">if </span><span class="self">self</span>.is_xlora() &amp;&amp; !is_prompt {
                 <span class="kw">let </span>(input_ids_full, seqlen_offsets_full) =
                     get_prompt_input(<span class="kw-2">&amp;</span>input_toks, <span class="self">self</span>.device());
-                <span class="kw">let </span>(input_ids, seqlen_offsets) = get_completion_input(<span class="kw-2">&amp;</span>input_toks, <span class="self">self</span>.device());
+                <span class="kw">let </span>(input_ids, seqlen_offsets) =
+                    get_completion_input(<span class="kw-2">&amp;</span>input_toks, <span class="self">self</span>.device(), <span class="self">self</span>.no_kv_cache);
                 (
                     input_ids,
                     <span class="prelude-val">Some</span>(input_ids_full),
@@ -970,7 +973,8 @@
                 <span class="kw">let </span>(input_ids, seqlen_offsets) = get_prompt_input(<span class="kw-2">&amp;</span>input_toks, <span class="self">self</span>.device());
                 (input_ids, <span class="prelude-val">None</span>, seqlen_offsets, <span class="prelude-val">None</span>)
             } <span class="kw">else </span>{
-                <span class="kw">let </span>(input_ids, seqlen_offsets) = get_completion_input(<span class="kw-2">&amp;</span>input_toks, <span class="self">self</span>.device());
+                <span class="kw">let </span>(input_ids, seqlen_offsets) =
+                    get_completion_input(<span class="kw-2">&amp;</span>input_toks, <span class="self">self</span>.device(), <span class="self">self</span>.no_kv_cache);
                 (input_ids, <span class="prelude-val">None</span>, seqlen_offsets, <span class="prelude-val">None</span>)
             };
         <span class="kw">let </span>result = <span class="kw">match </span><span class="self">self</span>.model {
@@ -980,7 +984,7 @@
                 input_ids_full.as_ref().unwrap(),
                 <span class="kw-2">&amp;</span>seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap(),
-                <span class="self">self</span>.no_xlora_kv_cache,
+                <span class="self">self</span>.no_kv_cache,
             ),
         };
         <span class="kw">match </span>result {
@@ -1055,8 +1059,8 @@
             Model::XLoraNormal(<span class="kw">_</span>) =&gt; <span class="bool-val">true</span>,
         }
     }
-    <span class="kw">fn </span>has_no_xlora_kv_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-        <span class="self">self</span>.no_xlora_kv_cache
+    <span class="kw">fn </span>has_no_kv_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="self">self</span>.no_kv_cache
     }
 }
 </code></pre></div></section></main></body></html>
