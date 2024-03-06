@@ -262,9 +262,10 @@ impl Engine {
             for (seq_i, seq) in seqs.iter().enumerate() {
 
                 let mut seq = deref_mut_refcell!(seq);
+                let run = seq.is_running();
                 let seq_cache = seq.cache();
                 let seq_cache = seq_cache.get_mut(layer).unwrap();
-                if !deref_refcell!(seq).is_running() {
+                if !run {
                     *seq_cache = None;
                     continue;
                 }
