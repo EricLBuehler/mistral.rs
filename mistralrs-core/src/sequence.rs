@@ -42,6 +42,7 @@ impl Drop for Sequence {
     fn drop(&mut self) {
         println!("Dropping {}", self.id);
         dbg!(&self.cache);
+        self.cache.clear();
     }
 }
 
