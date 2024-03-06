@@ -60,6 +60,9 @@ impl Engine {
             if doned {
                 dbg!(self.scheduler.running.len());
                 dbg!(self.scheduler.waiting.iter().count());
+                dbg!(get_mut_arcmutex!(self.pipeline).cache());
+                dbg!(scheduled.completion.len());
+                dbg!(scheduled.prompt.len());
 
             }
             doned=false;
