@@ -501,8 +501,8 @@
                 <span class="self">self</span>.sample_seqs(<span class="kw-2">&amp;</span>scheduled.completion, logits);
                 <span class="comment">//self.clone_out_cache(&amp;scheduled.completion);
 
-                //self.set_none_cache();
-                //dbg!(get_mut_arcmutex!(self.pipeline).cache());
+                </span><span class="self">self</span>.set_none_cache();
+                <span class="comment">//dbg!(get_mut_arcmutex!(self.pipeline).cache());
             </span>}
 
             <span class="kw">if </span>scheduled.prompt.len() &gt; <span class="number">0 </span>{
@@ -516,8 +516,8 @@
                 }
                 <span class="self">self</span>.sample_seqs(<span class="kw-2">&amp;</span>scheduled.prompt, logits);
                 <span class="comment">//self.clone_out_cache(&amp;scheduled.prompt);
-                //self.set_none_cache();
-            </span>}
+                </span><span class="self">self</span>.set_none_cache();
+            }
 
             <span class="kw">for </span>seq <span class="kw">in </span>scheduled.completion.iter() {
                 <span class="kw">if </span>!<span class="macro">deref_refcell!</span>(seq).is_running() {
