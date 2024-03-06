@@ -76,7 +76,7 @@ impl Engine {
                 self.sample_seqs(&scheduled.completion, logits);
                 //self.clone_out_cache(&scheduled.completion);
 
-                //self.set_none_cache();
+                self.set_none_cache();
                 //dbg!(get_mut_arcmutex!(self.pipeline).cache());
             }
 
@@ -91,7 +91,7 @@ impl Engine {
                 }
                 self.sample_seqs(&scheduled.prompt, logits);
                 //self.clone_out_cache(&scheduled.prompt);
-                //self.set_none_cache();
+                self.set_none_cache();
             }
 
             for seq in scheduled.completion.iter() {
