@@ -85,6 +85,12 @@ impl Engine {
                 self.clone_out_cache(&scheduled.prompt);
                 self.set_none_cache();
             }
+
+            for seq in scheduled.completion.iter() {
+                if !deref_refcell!(seq).is_running() {
+                    *deref_mut_refcell!(seq).cache() = vec![];
+                }
+            }
         }
     }
 
