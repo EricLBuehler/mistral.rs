@@ -479,6 +479,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>doned=<span class="bool-val">false</span>;
         <span class="kw">loop </span>{
             <span class="kw">if let </span><span class="prelude-val">Ok</span>(request) = <span class="self">self</span>.rx.try_recv() {
+                <span class="macro">dbg!</span>(<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).cache());
                 <span class="self">self</span>.add_request(request);
             }
             <span class="kw">let </span>scheduled = <span class="self">self</span>.scheduler.schedule();
@@ -488,7 +489,6 @@
                 <span class="macro">dbg!</span>(<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).cache());
                 <span class="macro">dbg!</span>(scheduled.completion.len());
                 <span class="macro">dbg!</span>(scheduled.prompt.len());
-
             }
             doned=<span class="bool-val">false</span>;
 
