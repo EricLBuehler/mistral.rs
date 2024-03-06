@@ -44,6 +44,7 @@
 <a href="#43" id="43">43</a>
 <a href="#44" id="44">44</a>
 <a href="#45" id="45">45</a>
+<a href="#46" id="46">46</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
 
 <span class="kw">use </span>candle_core::Tensor;
@@ -53,6 +54,7 @@
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>gemma;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>llama;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>mistral;
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>mixtral;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>quantized_llama;
 
 <span class="kw">pub type </span>LayerCaches = Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt;;

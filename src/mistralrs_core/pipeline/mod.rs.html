@@ -154,14 +154,18 @@
 <a href="#153" id="153">153</a>
 <a href="#154" id="154">154</a>
 <a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
+<span class="kw">mod </span>mixtral;
 <span class="kw">use </span>candle_sampling::logits_processor::Logprobs;
 <span class="kw">pub use </span>gemma::{GemmaLoader, GemmaSpecificConfig};
 <span class="kw">pub use </span>llama::{LlamaLoader, LlamaSpecificConfig};
 <span class="kw">pub use </span>mistral::{MistralLoader, MistralSpecificConfig};
 <span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
+<span class="kw">pub use </span>mixtral::{MixtralLoader, MixtralSpecificConfig};
 <span class="kw">use </span>std::{
     cell::RefCell,
     collections::HashMap,
