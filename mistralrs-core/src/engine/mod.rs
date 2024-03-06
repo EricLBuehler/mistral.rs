@@ -29,7 +29,6 @@ const SEED: u64 = 0;
 pub struct Engine {
     rx: Receiver<Request>,
     pipeline: Box<Mutex<dyn Pipeline>>,
-    requests: VecDeque<Request>,
     scheduler: Scheduler<VecDeque<Rc<RefCell<Sequence>>>>,
     id: usize,
     truncate_sequence: bool,
@@ -45,7 +44,6 @@ impl Engine {
         Self {
             rx,
             pipeline,
-            requests: VecDeque::new(),
             scheduler: Scheduler::new(method),
             id: 0,
             truncate_sequence,
@@ -57,7 +55,14 @@ impl Engine {
             if let Ok(request) = self.rx.try_recv() {
                 self.add_request(request);
             }
+            let mut doned=false;
             let scheduled = self.scheduler.schedule();
+            if doned {
+                dbg!(self.scheduler.running.len());
+                dbg!(self.scheduler.waiting.iter().count());
+
+            }
+            doned=false;
 
             if scheduled.completion.len() > 0 {
                 //self.set_none_cache();
@@ -91,6 +96,7 @@ impl Engine {
                     *deref_mut_refcell!(seq).cache() = vec![];
                     dbg!(self.scheduler.running.len());
                     dbg!(self.scheduler.waiting.iter().count());
+                    doned = true;
                 }
             }
         }
@@ -410,7 +416,6 @@ impl Engine {
         );
         self.id += 1;
 
-        self.requests.push_back(request);
         self.scheduler.add_seq(seq);
     }
 }
