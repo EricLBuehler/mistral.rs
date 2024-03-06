@@ -171,7 +171,7 @@ impl Engine {
                     / (now - deref_refcell!(seq).timestamp()) as f32;
                 #[allow(clippy::cast_precision_loss)]
                 let compl_tok_per_sec = deref_refcell!(seq).len() as f32
-                    / (now - deref_refcell!(seq).timestamp()) as f32;
+                    / (now - deref_refcell!(seq).prompt_timestamp().unwrap()) as f32;
 
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                 deref_refcell!(seq)
