@@ -43,6 +43,7 @@ impl Drop for Sequence {
         println!("Dropping {}", self.id);
         dbg!(&self.cache);
         self.cache.clear();
+        dbg!(&self.cache);
     }
 }
 
