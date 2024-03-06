@@ -51,11 +51,11 @@ impl Engine {
     }
 
     pub fn run(&mut self) {
+        let mut doned=false;
         loop {
             if let Ok(request) = self.rx.try_recv() {
                 self.add_request(request);
             }
-            let mut doned=false;
             let scheduled = self.scheduler.schedule();
             if doned {
                 dbg!(self.scheduler.running.len());
