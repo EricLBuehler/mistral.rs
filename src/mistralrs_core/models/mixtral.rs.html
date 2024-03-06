@@ -427,7 +427,11 @@
 <a href="#426" id="426">426</a>
 <a href="#427" id="427">427</a>
 <a href="#428" id="428">428</a>
-</pre></div><pre class="rust"><code><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
+<a href="#429" id="429">429</a>
+<a href="#430" id="430">430</a>
+</pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
+</span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
 </span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{Activation, VarBuilder};
 <span class="kw">use </span>candle_transformers::models::with_tracing::{linear_no_bias, Linear};
