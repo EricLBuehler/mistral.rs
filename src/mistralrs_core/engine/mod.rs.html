@@ -406,6 +406,7 @@
 <a href="#405" id="405">405</a>
 <a href="#406" id="406">406</a>
 <a href="#407" id="407">407</a>
+<a href="#408" id="408">408</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -477,6 +478,7 @@
                 <span class="self">self</span>.clone_out_cache(<span class="kw-2">&amp;</span>scheduled.completion);
 
                 <span class="self">self</span>.set_none_cache();
+                <span class="macro">dbg!</span>(<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).cache());
             }
 
             <span class="kw">if </span>scheduled.prompt.len() &gt; <span class="number">0 </span>{
