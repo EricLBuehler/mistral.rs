@@ -145,6 +145,8 @@ pub struct BasicConfig {
     rms_norm_eps: f64,
     rope_theta: f64,
     sliding_window: usize,
+    num_experts_per_tok: usize,
+    num_local_experts: usize,
 }
 
 #[derive(Error, Debug)]
@@ -338,6 +340,8 @@ impl Loader for MixtralLoader {
             rope_theta: basic_config.rope_theta,
             sliding_window: basic_config.sliding_window,
             use_flash_attn: self.config.use_flash_attn,
+            num_experts_per_tok: basic_config.num_experts_per_tok,
+            num_local_experts: basic_config.num_local_experts,
         };
         let default_dtype = if device.is_cuda() {
             DType::BF16
