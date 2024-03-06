@@ -36,7 +36,9 @@ pub struct ChatCompletionUsage {
     pub completion_tokens: usize,
     pub prompt_tokens: usize,
     pub total_tokens: usize,
-    pub tok_per_sec: f32,
+    pub total_tok_per_sec: f32,
+    pub prompt_tok_per_sec: f32,
+    pub compl_tok_per_sec: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]

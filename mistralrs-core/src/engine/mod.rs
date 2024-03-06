@@ -82,6 +82,15 @@ impl Engine {
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.prompt.clone(), true);
                 for seq in scheduled.prompt.iter() {
                     deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .expect("Time travel has occurred!")
+                        .as_secs();
+                    #[allow(clippy::cast_precision_loss)]
+                    let prompt_tok_per_sec = deref_refcell!(seq).len() as f32
+                        / (now - deref_refcell!(seq).timestamp()) as f32;
+                    deref_mut_refcell!(seq).prompt_tok_per_sec = prompt_tok_per_sec;
+                    deref_mut_refcell!(seq).prompt_timestamp = Some(now);
                 }
                 self.sample_seqs(&scheduled.prompt, logits);
                 if !self.no_kv_cache {
@@ -158,7 +167,10 @@ impl Engine {
                     .expect("Time travel has occurred!")
                     .as_secs();
                 #[allow(clippy::cast_precision_loss)]
-                let tok_per_sec = deref_refcell!(seq).len() as f32
+                let total_tok_per_sec = deref_refcell!(seq).len() as f32
+                    / (now - deref_refcell!(seq).timestamp()) as f32;
+                #[allow(clippy::cast_precision_loss)]
+                let compl_tok_per_sec = deref_refcell!(seq).len() as f32
                     / (now - deref_refcell!(seq).timestamp()) as f32;
 
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
@@ -175,7 +187,9 @@ impl Engine {
                             completion_tokens: deref_refcell!(seq).logprobs().len(),
                             prompt_tokens: deref_refcell!(seq).prompt_tokens(),
                             total_tokens: deref_refcell!(seq).len(),
-                            tok_per_sec,
+                            total_tok_per_sec,
+                            compl_tok_per_sec,
+                            prompt_tok_per_sec: deref_refcell!(seq).prompt_tok_per_sec,
                         },
                     }))
                     .unwrap();

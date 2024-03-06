@@ -36,6 +36,8 @@ pub struct Sequence {
     stop_tokens: Vec<u32>,
     max_len: Option<usize>,
     return_logprobs: bool,
+    pub prompt_tok_per_sec: f32,
+    pub prompt_timestamp: Option<u64>,
 }
 
 impl Sequence {
@@ -71,6 +73,8 @@ impl Sequence {
             stop_tokens,
             max_len,
             return_logprobs,
+            prompt_tok_per_sec: 0.,
+            prompt_timestamp: None,
         }
     }
 
@@ -163,5 +167,9 @@ impl Sequence {
 
     pub fn timestamp(&self) -> u64 {
         self.timestamp
+    }
+
+    pub fn prompt_timestamp(&self) -> Option<u64> {
+        self.prompt_timestamp
     }
 }
