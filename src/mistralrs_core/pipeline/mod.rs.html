@@ -287,9 +287,9 @@
     input_toks: <span class="kw-2">&amp;</span>[Rc&lt;RefCell&lt;Sequence&gt;&gt;],
     device: <span class="kw-2">&amp;</span>Device,
 ) -&gt; (Tensor, Vec&lt;usize&gt;) {
-    <span class="kw">return </span>get_prompt_input(input_toks, device);
+    <span class="comment">//return get_prompt_input(input_toks, device);
 
-    <span class="comment">// Pad each sequence by the padding token to the max len.
+    // Pad each sequence by the padding token to the max len.
     </span><span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
     <span class="kw">let </span><span class="kw-2">mut </span>seqlen_offsets = Vec::new();
     <span class="kw">for </span>seq <span class="kw">in </span>input_toks.iter() {
