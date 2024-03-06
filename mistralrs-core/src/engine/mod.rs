@@ -89,6 +89,8 @@ impl Engine {
             for seq in scheduled.completion.iter() {
                 if !deref_refcell!(seq).is_running() {
                     *deref_mut_refcell!(seq).cache() = vec![];
+                    dbg!(self.scheduler.running.len());
+                    dbg!(self.scheduler.waiting.iter().count());
                 }
             }
         }
