@@ -402,6 +402,7 @@
 <a href="#401" id="401">401</a>
 <a href="#402" id="402">402</a>
 <a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -464,26 +465,27 @@
             <span class="kw">let </span>scheduled = <span class="self">self</span>.scheduler.schedule();
 
             <span class="kw">if </span>scheduled.completion.len() &gt; <span class="number">0 </span>{
+                <span class="self">self</span>.set_none_cache();
                 <span class="comment">// Run the completion seqs
-                </span><span class="self">self</span>.clone_in_cache(<span class="kw-2">&amp;</span>scheduled.completion);
-                <span class="kw">let </span>logits =
+                //self.clone_in_cache(&amp;scheduled.completion);
+                </span><span class="kw">let </span>logits =
                     <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).forward(scheduled.completion.clone(), <span class="bool-val">false</span>);
                 <span class="self">self</span>.sample_seqs(<span class="kw-2">&amp;</span>scheduled.completion, logits);
-                <span class="self">self</span>.clone_out_cache(<span class="kw-2">&amp;</span>scheduled.completion);
-            }
-            <span class="self">self</span>.set_none_cache();
+                <span class="comment">//self.clone_out_cache(&amp;scheduled.completion);
+            </span>}
 
             <span class="kw">if </span>scheduled.prompt.len() &gt; <span class="number">0 </span>{
-                <span class="comment">// Run the prompt seqs
+                <span class="self">self</span>.set_none_cache();
+                <span class="comment">//self.set_none_cache();
+                // Run the prompt seqs
                 </span><span class="kw">let </span>logits =
                     <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).forward(scheduled.prompt.clone(), <span class="bool-val">true</span>);
                 <span class="kw">for </span>seq <span class="kw">in </span>scheduled.prompt.iter() {
                     <span class="macro">deref_mut_refcell!</span>(seq).set_state(SequenceState::RunningCompletion);
                 }
                 <span class="self">self</span>.sample_seqs(<span class="kw-2">&amp;</span>scheduled.prompt, logits);
-                <span class="self">self</span>.clone_out_cache(<span class="kw-2">&amp;</span>scheduled.prompt);
-            }
-            <span class="self">self</span>.set_none_cache();
+                <span class="comment">//self.clone_out_cache(&amp;scheduled.prompt);
+            </span>}
         }
     }
 
