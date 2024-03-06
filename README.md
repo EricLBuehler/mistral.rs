@@ -38,6 +38,9 @@ Mistral.rs is a LLM inference platform written in pure, safe Rust.
 **HTTP Server**
 Mistral.rs provides an OpenAI API compatible API server. It is accessible through the command line when one builds mistral.rs.
 
+Request docs can be found [here](https://ericlbuehler.github.io/mistral.rs/mistralrs_server/openai/index.html), and response docs 
+[here](https://ericlbuehler.github.io/mistral.rs/mistralrs_core/index.html).
+
 ## Usage
 ## Build
 To build mistral.rs, one should ensure they have Rust installed by following [this](https://rustup.rs/) link.
