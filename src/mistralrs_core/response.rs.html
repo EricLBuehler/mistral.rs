@@ -54,6 +54,7 @@
 <a href="#53" id="53">53</a>
 <a href="#54" id="54">54</a>
 <a href="#55" id="55">55</a>
+<a href="#56" id="56">56</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::error::Error;
 
 <span class="kw">use </span>candle_sampling::logits_processor::TopLogprob;
@@ -92,6 +93,7 @@
     <span class="kw">pub </span>completion_tokens: usize,
     <span class="kw">pub </span>prompt_tokens: usize,
     <span class="kw">pub </span>total_tokens: usize,
+    <span class="kw">pub </span>tok_per_sec: f32,
 }
 
 <span class="attr">#[derive(Debug, Clone, Serialize)]

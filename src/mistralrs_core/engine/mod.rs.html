@@ -411,6 +411,15 @@
 <a href="#410" id="410">410</a>
 <a href="#411" id="411">411</a>
 <a href="#412" id="412">412</a>
+<a href="#413" id="413">413</a>
+<a href="#414" id="414">414</a>
+<a href="#415" id="415">415</a>
+<a href="#416" id="416">416</a>
+<a href="#417" id="417">417</a>
+<a href="#418" id="418">418</a>
+<a href="#419" id="419">419</a>
+<a href="#420" id="420">420</a>
+<a href="#421" id="421">421</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -566,6 +575,14 @@
                     </span>},
                 };
 
+                <span class="kw">let </span>now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect(<span class="string">"Time travel has occurred!"</span>)
+                    .as_secs();
+                <span class="attr">#[allow(clippy::cast_precision_loss)]
+                </span><span class="kw">let </span>tok_per_sec = <span class="macro">deref_refcell!</span>(seq).len() <span class="kw">as </span>f32
+                    / (now - <span class="macro">deref_refcell!</span>(seq).timestamp()) <span class="kw">as </span>f32;
+
                 <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                 </span><span class="macro">deref_refcell!</span>(seq)
                     .responder()
@@ -580,6 +597,7 @@
                             completion_tokens: <span class="macro">deref_refcell!</span>(seq).logprobs().len(),
                             prompt_tokens: <span class="macro">deref_refcell!</span>(seq).prompt_tokens(),
                             total_tokens: <span class="macro">deref_refcell!</span>(seq).len(),
+                            tok_per_sec,
                         },
                     }))
                     .unwrap();
