@@ -60,18 +60,20 @@ impl Engine {
             let scheduled = self.scheduler.schedule();
 
             if scheduled.completion.len() > 0 {
-                self.set_none_cache();
+                //self.set_none_cache();
                 // Run the completion seqs
-                //self.clone_in_cache(&scheduled.completion);
+                self.clone_in_cache(&scheduled.completion);
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
                 self.sample_seqs(&scheduled.completion, logits);
-                //self.clone_out_cache(&scheduled.completion);
+                self.clone_out_cache(&scheduled.completion);
+
+                self.set_none_cache();
             }
 
             if scheduled.prompt.len() > 0 {
-                self.set_none_cache();
                 //self.set_none_cache();
+                self.set_none_cache();
                 // Run the prompt seqs
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.prompt.clone(), true);
@@ -79,7 +81,8 @@ impl Engine {
                     deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
                 }
                 self.sample_seqs(&scheduled.prompt, logits);
-                //self.clone_out_cache(&scheduled.prompt);
+                self.clone_out_cache(&scheduled.prompt);
+                self.set_none_cache();
             }
         }
     }
