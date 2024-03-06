@@ -215,6 +215,25 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
     },
+
+    /// Select the mixtral model, with X-LoRA.
+    XLoraMixtral {
+        /// Model ID to load from
+        #[arg(short, long)]
+        model_id: String,
+
+        /// Model ID to load Xlora from
+        #[arg(short, long)]
+        xlora_model_id: String,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
+
+        /// Ordering JSON file
+        #[arg(short, long)]
+        order: String,
+    },
 }
 
 #[derive(Parser)]
@@ -511,6 +530,24 @@ async fn main() -> Result<()> {
             None,
             ModelKind::QuantizedGGUF,
             None,
+            args.no_kv_cache,
+        )),
+        ModelSelected::XLoraMixtral {
+            model_id,
+            xlora_model_id,
+            repeat_last_n,
+            order,
+        } => Box::new(MixtralLoader::new(
+            model_id,
+            MixtralSpecificConfig {
+                repeat_last_n,
+                use_flash_attn,
+            },
+            None,
+            None,
+            Some(xlora_model_id),
+            ModelKind::XLoraNormal,
+            Some(serde_json::from_reader(File::open(order)?)?),
             args.no_kv_cache,
         )),
     };

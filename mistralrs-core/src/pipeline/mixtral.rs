@@ -3,6 +3,7 @@ use super::{
     TokenSource,
 };
 use crate::models::{quantized_llama, Cache};
+use crate::xlora_models::{XLoraConfig, XLoraMixtral};
 use crate::{deref_mut_refcell, deref_refcell};
 use crate::{
     models::mixtral::{Config, Model as NormalModel},
@@ -30,6 +31,7 @@ use tokenizers::Tokenizer;
 enum Model {
     Normal(NormalModel),
     Quantized(QModelWeights),
+    XLoraNormal(XLoraMixtral),
 }
 
 struct MixtralConversation;
@@ -371,7 +373,38 @@ impl Loader for MixtralLoader {
                 let model = NormalModel::new(&config, vb)?;
                 Model::Normal(model)
             }
-            ModelKind::XLoraNormal => unreachable!(),
+            ModelKind::XLoraNormal => {
+                let mut safetensors_paths = paths.get_weight_filenames().iter().collect::<Vec<_>>();
+                safetensors_paths.push(paths.get_classifier_path().as_ref().unwrap());
+                let vb = from_mmaped_safetensors(
+                    safetensors_paths
+                        .iter()
+                        .map(|x| (*x).to_owned())
+                        .collect::<Vec<_>>(),
+                    paths
+                        .get_adapter_filenames()
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .map(|(_, x)| (*x).to_owned())
+                        .collect::<Vec<_>>(),
+                    dtype.unwrap_or(default_dtype),
+                    device,
+                    false,
+                )?;
+
+                let conf = fs::read_to_string(paths.get_classifier_config().as_ref().unwrap())?;
+                let xlora_config: XLoraConfig = serde_json::from_str(&conf)?;
+
+                let model = XLoraMixtral::new(
+                    &config,
+                    vb,
+                    paths.get_adapter_configs().as_ref().unwrap(),
+                    xlora_config,
+                    paths.get_ordering().as_ref().unwrap().clone(),
+                )?;
+                Model::XLoraNormal(model)
+            }
         };
         println!("Model loaded.");
 
@@ -392,7 +425,7 @@ impl Loader for MixtralLoader {
 
 impl Pipeline for MixtralPipeline {
     fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor {
-        let (input_ids, _input_ids_full, seqlen_offsets, _seqlen_offsets_full) =
+        let (input_ids, input_ids_full, seqlen_offsets, seqlen_offsets_full) =
             if self.is_xlora() && !is_prompt {
                 let (input_ids_full, seqlen_offsets_full) =
                     get_prompt_input(&input_toks, self.device());
@@ -423,6 +456,13 @@ impl Pipeline for MixtralPipeline {
         let result = match self.model {
             Model::Normal(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
             Model::Quantized(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
+            Model::XLoraNormal(ref mut model) => model.forward(
+                &input_ids,
+                input_ids_full.as_ref().unwrap(),
+                &seqlen_offsets,
+                seqlen_offsets_full.as_ref().unwrap(),
+                self.no_kv_cache,
+            ),
         };
         match result {
             Ok(v) => v,
@@ -442,6 +482,7 @@ impl Pipeline for MixtralPipeline {
         match self.model {
             Model::Normal(ref model) => &model.device,
             Model::Quantized(ref model) => &model.device,
+            Model::XLoraNormal(ref model) => &model.device,
         }
     }
     fn num_hidden_layers(&self) -> usize {
@@ -451,6 +492,7 @@ impl Pipeline for MixtralPipeline {
         match self.model {
             Model::Normal(ref model) => &model.cache,
             Model::Quantized(ref model) => &model.cache,
+            Model::XLoraNormal(ref model) => &model.cache,
         }
     }
     fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs> {
@@ -488,11 +530,13 @@ impl Pipeline for MixtralPipeline {
         match &self.model {
             Model::Normal(model) => model.max_seq_len,
             Model::Quantized(_) => quantized_llama::MAX_SEQ_LEN as usize,
+            Model::XLoraNormal(model) => model.max_seq_len,
         }
     }
     fn is_xlora(&self) -> bool {
         match &self.model {
             Model::Normal(_) | Model::Quantized(_) => false,
+            Model::XLoraNormal(_) => true,
         }
     }
     fn has_no_kv_cache(&self) -> bool {
