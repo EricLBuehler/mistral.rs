@@ -607,7 +607,7 @@
                     / (now - <span class="macro">deref_refcell!</span>(seq).timestamp()) <span class="kw">as </span>f32;
                 <span class="attr">#[allow(clippy::cast_precision_loss)]
                 </span><span class="kw">let </span>compl_tok_per_sec = <span class="macro">deref_refcell!</span>(seq).len() <span class="kw">as </span>f32
-                    / (now - <span class="macro">deref_refcell!</span>(seq).timestamp()) <span class="kw">as </span>f32;
+                    / (now - <span class="macro">deref_refcell!</span>(seq).prompt_timestamp().unwrap()) <span class="kw">as </span>f32;
 
                 <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                 </span><span class="macro">deref_refcell!</span>(seq)
