@@ -51,39 +51,24 @@ impl Engine {
     }
 
     pub fn run(&mut self) {
-        let mut doned=false;
         loop {
             if let Ok(request) = self.rx.try_recv() {
-                dbg!(get_mut_arcmutex!(self.pipeline).cache());
                 self.add_request(request);
             }
             let scheduled = self.scheduler.schedule();
-            if doned {
-                dbg!(self.scheduler.running.len());
-                dbg!(self.scheduler.waiting.iter().count());
-                dbg!(get_mut_arcmutex!(self.pipeline).cache());
-                dbg!(scheduled.completion.len());
-                dbg!(scheduled.prompt.len());
-            }
-            doned=false;
 
             if scheduled.completion.len() > 0 {
-                self.set_none_cache();
                 // Run the completion seqs
                 self.clone_in_cache(&scheduled.completion);
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
                 self.sample_seqs(&scheduled.completion, logits);
                 self.clone_out_cache(&scheduled.completion);
-
-                self.set_none_cache();
-                //dbg!(get_mut_arcmutex!(self.pipeline).cache());
             }
 
             if scheduled.prompt.len() > 0 {
-                //self.set_none_cache();
-                self.set_none_cache();
                 // Run the prompt seqs
+                self.set_none_cache();
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.prompt.clone(), true);
                 for seq in scheduled.prompt.iter() {
@@ -91,16 +76,6 @@ impl Engine {
                 }
                 self.sample_seqs(&scheduled.prompt, logits);
                 self.clone_out_cache(&scheduled.prompt);
-                self.set_none_cache();
-            }
-
-            for seq in scheduled.completion.iter() {
-                if !deref_refcell!(seq).is_running() {
-                    *deref_mut_refcell!(seq).cache() = vec![];
-                    dbg!(self.scheduler.running.len());
-                    dbg!(self.scheduler.waiting.iter().count());
-                    doned = true;
-                }
             }
         }
     }

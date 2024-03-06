@@ -38,15 +38,6 @@ pub struct Sequence {
     return_logprobs: bool,
 }
 
-impl Drop for Sequence {
-    fn drop(&mut self) {
-        println!("Dropping {}", self.id);
-        dbg!(&self.cache);
-        self.cache.clear();
-        dbg!(&self.cache);
-    }
-}
-
 impl Sequence {
     #[allow(clippy::too_many_arguments)]
     pub fn new_waiting(
