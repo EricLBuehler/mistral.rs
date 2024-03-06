@@ -204,8 +204,8 @@
 }
 
 <span class="kw">pub struct </span>Scheduler&lt;Backer: FcfsBacker&gt; {
-    waiting: Backer,
-    running: Vec&lt;Rc&lt;RefCell&lt;Sequence&gt;&gt;&gt;,
+    <span class="kw">pub </span>waiting: Backer,
+    <span class="kw">pub </span>running: Vec&lt;Rc&lt;RefCell&lt;Sequence&gt;&gt;&gt;,
     method: SchedulerMethod,
 }
 

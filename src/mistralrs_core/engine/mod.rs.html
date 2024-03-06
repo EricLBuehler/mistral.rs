@@ -413,6 +413,8 @@
 <a href="#412" id="412">412</a>
 <a href="#413" id="413">413</a>
 <a href="#414" id="414">414</a>
+<a href="#415" id="415">415</a>
+<a href="#416" id="416">416</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -504,6 +506,8 @@
             <span class="kw">for </span>seq <span class="kw">in </span>scheduled.completion.iter() {
                 <span class="kw">if </span>!<span class="macro">deref_refcell!</span>(seq).is_running() {
                     <span class="kw-2">*</span><span class="macro">deref_mut_refcell!</span>(seq).cache() = <span class="macro">vec!</span>[];
+                    <span class="macro">dbg!</span>(<span class="self">self</span>.scheduler.running.len());
+                    <span class="macro">dbg!</span>(<span class="self">self</span>.scheduler.waiting.iter().count());
                 }
             }
         }
