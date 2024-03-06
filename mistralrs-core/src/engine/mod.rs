@@ -54,6 +54,7 @@ impl Engine {
         let mut doned=false;
         loop {
             if let Ok(request) = self.rx.try_recv() {
+                dbg!(get_mut_arcmutex!(self.pipeline).cache());
                 self.add_request(request);
             }
             let scheduled = self.scheduler.schedule();
@@ -63,7 +64,6 @@ impl Engine {
                 dbg!(get_mut_arcmutex!(self.pipeline).cache());
                 dbg!(scheduled.completion.len());
                 dbg!(scheduled.prompt.len());
-
             }
             doned=false;
 
