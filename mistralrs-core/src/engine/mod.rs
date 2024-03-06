@@ -67,10 +67,10 @@ impl Engine {
                 self.sample_seqs(&scheduled.completion, logits);
                 self.clone_out_cache(&scheduled.completion);
             }
+            self.set_none_cache();
 
             if scheduled.prompt.len() > 0 {
                 // Run the prompt seqs
-                self.set_none_cache();
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.prompt.clone(), true);
                 for seq in scheduled.prompt.iter() {
@@ -79,6 +79,7 @@ impl Engine {
                 self.sample_seqs(&scheduled.prompt, logits);
                 self.clone_out_cache(&scheduled.prompt);
             }
+            self.set_none_cache();
         }
     }
 
