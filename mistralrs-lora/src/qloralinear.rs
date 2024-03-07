@@ -43,7 +43,7 @@ impl QLoraLinear {
                 b_adapters: vec![],
                 scale_adapters: vec![],
                 dropout_adapters: vec![],
-                layer_n: 1234,
+                layer_n: usize::MAX,
             });
         }
 
@@ -107,12 +107,12 @@ impl LinearLayerLike for QLoraLinear {
         scalings: Tensor,
         global_scaling_weight: f64,
     ) -> Result<Tensor> {
-        let scalings = get_maybe_topk_scalings(scalings, self.layer_n)?;
         //No fan_in_fan_out so no weight.transpose(0,1)
         let mut result = self.old.forward(input)?;
         if self.a_adapters.is_empty() {
             return Ok(result);
         }
+        let scalings = get_maybe_topk_scalings(scalings, self.layer_n)?;
 
         for (i, (adapter_a, (adapter_b, (adapter_scale, adapter_dropout)))) in zip(
             &self.a_adapters,
