@@ -1,4 +1,4 @@
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{
     activation, linear, linear_no_bias, ops::softmax_last_dim, Dropout, Linear, Module, ModuleT,
     VarBuilder,
@@ -282,45 +282,6 @@ impl XLoraClassifier {
         if let Some(ref softmax) = self.softmax {
             scalings = softmax.forward(&scalings)?;
         }
-
-        /*let scalings = scalings.slice_assign(
-            &[
-                0..scalings.dims()[0],
-                0..scalings.dims()[1],
-                0..scalings.dims()[2],
-                0..self.n_classes-1,
-            ],
-            &Tensor::zeros(
-                (
-                    scalings.dims()[0],
-                    scalings.dims()[1],
-                    scalings.dims()[2],
-                    self.n_classes - 1,
-                ),
-                scalings.dtype(),
-                scalings.device(),
-            )?,
-        )?;
-        let scalings = scalings.slice_assign(
-            &[
-                0..scalings.dims()[0],
-                0..scalings.dims()[1],
-                0..scalings.dims()[2],
-                self.n_classes - 1..self.n_classes,
-            ],
-            &Tensor::full(
-                1.,
-                (
-                    scalings.dims()[0],
-                    scalings.dims()[1],
-                    scalings.dims()[2],
-                    1,
-                ),
-                scalings.device(),
-            )?.to_dtype(
-                scalings.dtype())?,
-        )?;
-        println!("SCALINGS ARE {:?}", scalings.i((0,0,0,..))?);*/
 
         Ok(scalings)
     }

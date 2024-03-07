@@ -246,7 +246,7 @@ pub enum ModelSelected {
         quantized_model_id: Option<String>,
 
         /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(short = 'f', long, default_value = "zephyr-7b-beta.Q4_0.gguf")]
+        #[arg(short = 'f', long, default_value = "zephyr-7b-beta.Q8_0.gguf")]
         quantized_filename: Option<String>,
 
         /// Control the application of repeat penalty for the last n tokens

@@ -81,7 +81,6 @@ impl QLoraLinear {
             dropout_adapters.push(cfg.dropout.map(Dropout::new));
         }
         let layer = *ordering.layers.get(&prefix).unwrap();
-        dbg!(&prefix, layer);
 
         Ok(QLoraLinear {
             old,
@@ -126,7 +125,7 @@ impl LinearLayerLike for QLoraLinear {
         )
         .enumerate()
         {
-            let mut input_new = apply_scalings_to_x(input.clone(), &scalings, i, self.layer_n)?;
+            let mut input_new = apply_scalings_to_x(input.clone(), &scalings, i)?;
 
             input_new = if let Some(ref dropout) = adapter_dropout {
                 dropout.forward(&input_new, true)?
