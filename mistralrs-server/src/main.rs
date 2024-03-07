@@ -261,6 +261,95 @@ pub enum ModelSelected {
         #[arg(short, long)]
         order: String,
     },
+
+    /// Select the quantized mistral model with gguf and X-LoRA.
+    XLoraLlamaGGUF {
+        /// Model ID to load the tokenizer from
+        #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
+        tok_model_id: String,
+
+        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        #[arg(short = 'm', long, default_value = "TheBloke/Llama-2-13B-chat-GGUF")]
+        quantized_model_id: Option<String>,
+
+        /// Quantized filename, only applicable if `quantized` is set.
+        #[arg(short = 'f', long, default_value = "llama-2-13b-chat.Q4_K_M.gguf")]
+        quantized_filename: Option<String>,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
+
+        /// Model ID to load Xlora from
+        #[arg(short, long)]
+        xlora_model_id: String,
+
+        /// Ordering JSON file
+        #[arg(short, long)]
+        order: String,
+    },
+
+    /// Select the quantized mistral model with gguf and X-LoRA.
+    XLoraLlamaGGML {
+        /// Model ID to load the tokenizer from
+        #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
+        tok_model_id: String,
+
+        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        #[arg(short = 'm', long, default_value = "TheBloke/Llama-2-13B-chat-GGML")]
+        quantized_model_id: Option<String>,
+
+        /// Quantized filename, only applicable if `quantized` is set.
+        #[arg(
+            short = 'f',
+            long,
+            default_value = "llama-2-13b-chat.ggmlv3.q4_K_M.bin"
+        )]
+        quantized_filename: Option<String>,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
+
+        /// Model ID to load Xlora from
+        #[arg(short, long)]
+        xlora_model_id: String,
+
+        /// Ordering JSON file
+        #[arg(short, long)]
+        order: String,
+
+        /// GQA
+        #[arg(long, default_value_t = 1)]
+        gqa: usize,
+    },
+
+    /// Select the quantized mistral model with gguf and X-LoRA.
+    XLoraMixtralGGUF {
+        /// Model ID to load the tokenizer from
+        #[arg(short, long, default_value = "mistralai/Mixtral-8x7B-Instruct-v0.1")]
+        tok_model_id: String,
+
+        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        #[arg(short = 'm', long, default_value = "TheBloke/Mixtral-8x7B-v0.1-GGUF")]
+        quantized_model_id: Option<String>,
+
+        /// Quantized filename, only applicable if `quantized` is set.
+        #[arg(short = 'f', long, default_value = "mixtral-8x7b-v0.1.Q4_K_M.gguf")]
+        quantized_filename: Option<String>,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
+
+        /// Model ID to load Xlora from
+        #[arg(short, long)]
+        xlora_model_id: String,
+
+        /// Ordering JSON file
+        #[arg(short, long)]
+        order: String,
+    },
 }
 
 #[derive(Parser)]
@@ -590,6 +679,69 @@ async fn main() -> Result<()> {
             quantized_filename,
             Some(xlora_model_id),
             ModelKind::XLoraGGUF,
+            Some(serde_json::from_reader(File::open(order)?)?),
+            args.no_kv_cache,
+        )),
+        ModelSelected::XLoraMixtralGGUF {
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+            xlora_model_id,
+            order,
+        } => Box::new(MixtralLoader::new(
+            tok_model_id,
+            MixtralSpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+            },
+            quantized_model_id,
+            quantized_filename,
+            Some(xlora_model_id),
+            ModelKind::XLoraGGUF,
+            Some(serde_json::from_reader(File::open(order)?)?),
+            args.no_kv_cache,
+        )),
+        ModelSelected::XLoraLlamaGGUF {
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+            xlora_model_id,
+            order,
+        } => Box::new(LlamaLoader::new(
+            tok_model_id,
+            LlamaSpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+                gqa: 0,
+            },
+            quantized_model_id,
+            quantized_filename,
+            Some(xlora_model_id),
+            ModelKind::XLoraGGUF,
+            Some(serde_json::from_reader(File::open(order)?)?),
+            args.no_kv_cache,
+        )),
+        ModelSelected::XLoraLlamaGGML {
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+            xlora_model_id,
+            order,
+            gqa,
+        } => Box::new(LlamaLoader::new(
+            tok_model_id,
+            LlamaSpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+                gqa,
+            },
+            quantized_model_id,
+            quantized_filename,
+            Some(xlora_model_id),
+            ModelKind::XLoraGGML,
             Some(serde_json::from_reader(File::open(order)?)?),
             args.no_kv_cache,
         )),

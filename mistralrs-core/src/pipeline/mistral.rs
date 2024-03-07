@@ -460,6 +460,7 @@ impl Loader for MistralLoader {
                 )?;
                 Model::XLoraQuantized(model)
             }
+            ModelKind::XLoraGGML => unreachable!(),
         };
         println!("Model loaded.");
 

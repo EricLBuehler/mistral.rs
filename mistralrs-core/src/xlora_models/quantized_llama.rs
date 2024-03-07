@@ -312,7 +312,7 @@ fn precomput_freqs_cis(
 }
 
 impl ModelWeights {
-    pub fn _from_ggml(
+    pub fn from_ggml(
         mut ct: ggml_file::Content,
         gqa: usize,
         lora_config: &[(String, LoraConfig)],

@@ -3,7 +3,7 @@ use super::{
     TokenSource,
 };
 use crate::models::{quantized_llama, Cache};
-use crate::xlora_models::{XLoraConfig, XLoraMixtral};
+use crate::xlora_models::{XLoraConfig, XLoraMixtral, XLoraModelWeights};
 use crate::{deref_mut_refcell, deref_refcell};
 use crate::{
     models::mixtral::{Config, Model as NormalModel},
@@ -32,6 +32,7 @@ enum Model {
     Normal(NormalModel),
     Quantized(QModelWeights),
     XLoraNormal(XLoraMixtral),
+    XLoraQuantized(XLoraModelWeights),
 }
 
 struct MixtralConversation;
@@ -405,7 +406,39 @@ impl Loader for MixtralLoader {
                 )?;
                 Model::XLoraNormal(model)
             }
-            ModelKind::XLoraGGUF => unreachable!(),
+            ModelKind::XLoraGGUF => {
+                let vb = from_mmaped_safetensors(
+                    vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()],
+                    paths
+                        .get_adapter_filenames()
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .map(|(_, x)| (*x).to_owned())
+                        .collect::<Vec<_>>(),
+                    dtype.unwrap_or(default_dtype),
+                    device,
+                    false,
+                )?;
+
+                let conf = fs::read_to_string(paths.get_classifier_config().as_ref().unwrap())?;
+                let xlora_config: XLoraConfig = serde_json::from_str(&conf)?;
+
+                let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
+                let model = gguf_file::Content::read(&mut file)
+                    .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
+                let model = XLoraModelWeights::from_gguf(
+                    model,
+                    &mut file,
+                    device,
+                    paths.get_adapter_configs().as_ref().unwrap(),
+                    &vb,
+                    paths.get_ordering().as_ref().unwrap(),
+                    xlora_config,
+                )?;
+                Model::XLoraQuantized(model)
+            }
+            ModelKind::XLoraGGML => unreachable!(),
         };
         println!("Model loaded.");
 
@@ -464,6 +497,13 @@ impl Pipeline for MixtralPipeline {
                 seqlen_offsets_full.as_ref().unwrap(),
                 self.no_kv_cache,
             ),
+            Model::XLoraQuantized(ref mut model) => model.forward(
+                &input_ids,
+                input_ids_full.as_ref().unwrap(),
+                &seqlen_offsets,
+                seqlen_offsets_full.as_ref().unwrap(),
+                self.no_kv_cache,
+            ),
         };
         match result {
             Ok(v) => v,
@@ -484,6 +524,7 @@ impl Pipeline for MixtralPipeline {
             Model::Normal(ref model) => &model.device,
             Model::Quantized(ref model) => &model.device,
             Model::XLoraNormal(ref model) => &model.device,
+            Model::XLoraQuantized(ref model) => &model.device,
         }
     }
     fn num_hidden_layers(&self) -> usize {
@@ -494,6 +535,7 @@ impl Pipeline for MixtralPipeline {
             Model::Normal(ref model) => &model.cache,
             Model::Quantized(ref model) => &model.cache,
             Model::XLoraNormal(ref model) => &model.cache,
+            Model::XLoraQuantized(ref model) => &model.cache,
         }
     }
     fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs> {
@@ -530,14 +572,14 @@ impl Pipeline for MixtralPipeline {
     fn get_max_seq_len(&self) -> usize {
         match &self.model {
             Model::Normal(model) => model.max_seq_len,
-            Model::Quantized(_) => quantized_llama::MAX_SEQ_LEN as usize,
+            Model::Quantized(_) | Model::XLoraQuantized(_) => quantized_llama::MAX_SEQ_LEN as usize,
             Model::XLoraNormal(model) => model.max_seq_len,
         }
     }
     fn is_xlora(&self) -> bool {
         match &self.model {
             Model::Normal(_) | Model::Quantized(_) => false,
-            Model::XLoraNormal(_) => true,
+            Model::XLoraNormal(_) | Model::XLoraQuantized(_) => true,
         }
     }
     fn has_no_kv_cache(&self) -> bool {
