@@ -186,11 +186,13 @@ impl LinearLayerLike for LoraLinear {
             let mut inputs = Vec::new();
             let a = self.a.as_ref().right().unwrap();
             let b = self.b.as_ref().right().unwrap();
-            dbg!(self.layer_n);
-            dbg!(a.weight());
-            dbg!(b.weight());
             let dropout = self.dropout.as_ref().right().unwrap();
-            let init = Tensor::zeros((input.dims()[0], input.dims()[1], b.weight().dims()[0]), input.dtype(), input.device())?.unsqueeze(0)?;
+            let init = Tensor::zeros(
+                (input.dims()[0], input.dims()[1], b.weight().dims()[0]),
+                input.dtype(),
+                input.device(),
+            )?
+            .unsqueeze(0)?;
             for i in 0..self.n_adapters {
                 let mut input_new = input.to_dtype(a.weight().dtype())?;
                 input_new = apply_scalings_to_x(input_new.clone(), &scalings, i)?;
@@ -203,15 +205,12 @@ impl LinearLayerLike for LoraLinear {
                 inputs.push(input_new.unsqueeze(0)?);
             }
             let input = Tensor::cat(&inputs, 0)?;
-            dbg!(&input);
             let out = b.forward(&a.forward(&input)?)?;
-            dbg!(&out);
             let summed = (out
                 .chunk(self.n_adapters, 0)?
                 .iter()
                 .fold(init, |acc, x| (acc + x).unwrap())
                 * global_scaling_weight)?;
-            dbg!(&summed);
 
             result + (summed.squeeze(0)?)
         }
