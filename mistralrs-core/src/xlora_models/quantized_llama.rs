@@ -560,7 +560,7 @@ impl ModelWeights {
                             lora_config,
                             vb,
                             ordering,
-                            format!("model.layers.{layer_idx}.mlp.gate_proj"),
+                            format!("model.layers.{layer_idx}.mlp.gate_proj.{i}"),
                             &mut count,
                         )?,
                         feed_forward_w2: QLoraLinear::new(
@@ -569,7 +569,7 @@ impl ModelWeights {
                             lora_config,
                             vb,
                             ordering,
-                            format!("model.layers.{layer_idx}.mlp.down_proj"),
+                            format!("model.layers.{layer_idx}.mlp.down_proj.{i}"),
                             &mut count,
                         )?,
                         feed_forward_w3: QLoraLinear::new(
@@ -578,7 +578,7 @@ impl ModelWeights {
                             lora_config,
                             vb,
                             ordering,
-                            format!("model.layers.{layer_idx}.mlp.up_proj"),
+                            format!("model.layers.{layer_idx}.mlp.up_proj.{i}"),
                             &mut count,
                         )?,
                     })
