@@ -128,7 +128,7 @@ impl LoraLinear {
             dropout,
             layer_n,
             all_same,
-            n_adapters: 0,
+            n_adapters: config.len(),
         })
     }
 }
