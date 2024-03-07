@@ -108,7 +108,6 @@ impl LinearLayerLike for QLoraLinear {
         global_scaling_weight: f64,
     ) -> Result<Tensor> {
         let scalings = get_maybe_topk_scalings(scalings, self.layer_n)?;
-        dbg!(&input);
         //No fan_in_fan_out so no weight.transpose(0,1)
         let mut result = self.old.forward(input)?;
         if self.a_adapters.is_empty() {
@@ -131,12 +130,10 @@ impl LinearLayerLike for QLoraLinear {
             } else {
                 input_new.clone()
             };
-            dbg!(&input_new);
             let res = adapter_b
                 .forward(&adapter_a.forward(&input_new)?)?
                 .mul(*adapter_scale)?
                 .mul(global_scaling_weight)?;
-            dbg!(&res);
             result = (result + res)?;
         }
         Ok(result)
