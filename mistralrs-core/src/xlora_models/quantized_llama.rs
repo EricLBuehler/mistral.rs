@@ -749,7 +749,7 @@ impl ModelWeights {
             b_size,
             seq_len,
             input_ids.device(),
-            DType::BF16,
+            DType::F32,
         )?;
         // Using X-LoRA cache here
         let hidden_states = if no_kv_cache {
