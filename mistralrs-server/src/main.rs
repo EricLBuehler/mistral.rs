@@ -234,6 +234,33 @@ pub enum ModelSelected {
         #[arg(short, long)]
         order: String,
     },
+
+    /// Select the quantized mistral model with gguf and X-LoRA.
+    XLoraMistralGGUF {
+        /// Model ID to load the tokenizer from
+        #[arg(short, long, default_value = "HuggingFaceH4/zephyr-7b-beta")]
+        tok_model_id: String,
+
+        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        #[arg(short = 'm', long, default_value = "TheBloke/zephyr-7B-beta-GGUF")]
+        quantized_model_id: Option<String>,
+
+        /// Quantized filename, only applicable if `quantized` is set.
+        #[arg(short = 'f', long, default_value = "zephyr-7b-beta.Q4_0.gguf")]
+        quantized_filename: Option<String>,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
+
+        /// Model ID to load Xlora from
+        #[arg(short, long, default_value = "lamm-mit/x-lora")]
+        xlora_model_id: String,
+
+        /// Ordering JSON file
+        #[arg(short, long)]
+        order: String,
+    },
 }
 
 #[derive(Parser)]
@@ -543,6 +570,26 @@ async fn main() -> Result<()> {
             None,
             Some(xlora_model_id),
             ModelKind::XLoraNormal,
+            Some(serde_json::from_reader(File::open(order)?)?),
+            args.no_kv_cache,
+        )),
+        ModelSelected::XLoraMistralGGUF {
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+            xlora_model_id,
+            order,
+        } => Box::new(MistralLoader::new(
+            tok_model_id,
+            MistralSpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+            },
+            quantized_model_id,
+            quantized_filename,
+            Some(xlora_model_id),
+            ModelKind::XLoraGGUF,
             Some(serde_json::from_reader(File::open(order)?)?),
             args.no_kv_cache,
         )),
