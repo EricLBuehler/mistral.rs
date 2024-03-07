@@ -753,7 +753,6 @@ impl ModelWeights {
             input_ids.device(),
             DType::F32,
         )?;
-        dbg!(&dummy_scalings);
         // Using X-LoRA cache here
         let hidden_states = if no_kv_cache {
             let res = self.inner_forward(
@@ -783,10 +782,8 @@ impl ModelWeights {
                 no_kv_cache,
             )?
         };
-        dbg!(&hidden_states);
 
         let scalings = self.xlora_classifier.forward(hidden_states)?;
-        dbg!(&scalings);
 
         if no_kv_cache {
             self.inner_forward(
