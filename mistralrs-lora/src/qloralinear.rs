@@ -1,6 +1,6 @@
 use std::{iter::zip, ops::Mul};
 
-use candle_core::{quantized::QMatMul, Module, Result, Shape, Tensor};
+use candle_core::{quantized::QMatMul, DType, Module, Result, Shape, Tensor};
 use candle_nn::{init, Dropout, Linear, VarBuilder};
 
 use crate::{
@@ -63,11 +63,11 @@ impl QLoraLinear {
                 (cfg.rank, linear_config.in_features),
                 "weight",
                 init::DEFAULT_KAIMING_NORMAL,
-            )?;
+            )?.to_dtype(DType::F32)?;
             let b_pp = b_vb.pp(name);
             assert!(b_pp.contains_tensor("weight"));
             let b =
-                b_pp.get_with_hints((linear_config.out_features, cfg.rank), "weight", init::ZERO)?;
+                b_pp.get_with_hints((linear_config.out_features, cfg.rank), "weight", init::ZERO)?.to_dtype(DType::F32)?;
             a_adapters.push(Linear::new(a, None));
             b_adapters.push(Linear::new(b, None));
             scale_adapters.push(if cfg.rank > 0 {
