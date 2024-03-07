@@ -187,7 +187,6 @@ impl LinearLayerLike for LoraLinear {
                     .mul(global_scaling_weight)?;
                 result = (result + res)?;
             }
-            Ok(result)
         } else {
             let mut inputs = Vec::new();
             let a = self.a.as_ref().right().unwrap();
@@ -207,12 +206,11 @@ impl LinearLayerLike for LoraLinear {
             let input = Tensor::cat(&inputs, 0)?;
             let out = b.forward(&a.forward(&input)?)?;
 
-            Ok(out
-                .chunk(self.n_adapters, 0)?
-                .iter()
-                .fold(result, |acc, x| {
-                    (acc + (x.squeeze(0).unwrap()) * global_scaling_weight).unwrap()
-                }))
+            for chunk in out.chunk(self.n_adapters, 0)? {
+                let chunk = chunk.squeeze(0)?;
+                result = (result + (chunk * global_scaling_weight)?)?;
+            }
         }
+        Ok(result)
     }
 }
