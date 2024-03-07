@@ -134,6 +134,7 @@ impl LinearLayerLike for QLoraLinear {
                 .forward(&adapter_a.forward(&input_new)?)?
                 .mul(*adapter_scale)?
                 .mul(global_scaling_weight)?;
+            dbg!(res.mean_all());
             result = (result + res)?;
         }
         Ok(result)
