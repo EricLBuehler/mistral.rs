@@ -218,6 +218,9 @@ impl LinearLayerLike for LoraLinear {
             } else {
                 input.clone()
             };
+            dbg!(&input);
+            dbg!(a.weight());
+            dbg!(b.weight());
             let out = b.forward(&a.forward(&input)?)?;
 
             for chunk in out.chunk(self.n_adapters, 0)? {
