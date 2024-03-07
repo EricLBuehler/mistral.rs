@@ -24,13 +24,14 @@ impl MistralLoader {
         model_id: String,
         kind: Py<ModelKind>,
         no_kv_cache: bool,
-        use_flash_attn: bool,
+        mut use_flash_attn: bool,
         repeat_last_n: usize,
         order_file: Option<String>,
         quantized_model_id: Option<String>,
         quantized_filename: Option<String>,
         xlora_model_id: Option<String>,
     ) -> PyResult<Self> {
+        use_flash_attn = use_flash_attn & cfg!(feature="flash-attn");
         let order = if let Some(order_file) = order_file {
             let f = File::open(order_file);
             let f = match f {
