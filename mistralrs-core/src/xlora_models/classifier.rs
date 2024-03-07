@@ -261,7 +261,9 @@ impl XLoraClassifier {
         for layer in &self.inner {
             hidden_states = layer.forward_t(&hidden_states, true)?;
         }
+        dbg!(hidden_states.mean_all()?);
         let mut logits = self.last.forward(&hidden_states)?;
+        dbg!(logits.mean_all()?);
 
         if !self.config.layerwise_scalings {
             logits = logits.unsqueeze(2)?;
@@ -279,11 +281,11 @@ impl XLoraClassifier {
             self.model_layers,
             self.n_classes,
         ))?;
+        dbg!(scalings.mean_all()?);
         if let Some(ref softmax) = self.softmax {
             scalings = softmax.forward(&scalings)?;
         }
 
-        dbg!(scalings.mean_all()?);
         let scalings = scalings.slice_assign(
             &[
                 0..scalings.dims()[0],
