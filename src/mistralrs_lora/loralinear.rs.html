@@ -215,6 +215,7 @@
 <a href="#214" id="214">214</a>
 <a href="#215" id="215">215</a>
 <a href="#216" id="216">216</a>
+<a href="#217" id="217">217</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{Module, <span class="prelude-ty">Result</span>, Shape, Tensor};
 <span class="kw">use </span>candle_nn::{init, Dropout, Linear, VarBuilder};
 <span class="kw">use </span>either::Either;
@@ -366,6 +367,7 @@
         scalings: Tensor,
         global_scaling_weight: f64,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>input);
         <span class="kw">let </span>scalings = get_maybe_topk_scalings(scalings, <span class="self">self</span>.layer_n)<span class="question-mark">?</span>;
         <span class="comment">//No fan_in_fan_out so no weight.transpose(0,1)
         </span><span class="kw">let </span><span class="kw-2">mut </span>result = <span class="self">self</span>.old.forward(input)<span class="question-mark">?</span>;
