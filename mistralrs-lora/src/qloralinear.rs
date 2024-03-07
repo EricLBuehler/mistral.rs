@@ -26,6 +26,7 @@ impl QLoraLinear {
         vb: &VarBuilder,
         ordering: &Ordering,
         module: String,
+        count: &mut usize,
     ) -> Result<Self> {
         let target_modules = &config[0].1.target_modules;
         for (_, cfg) in config {
@@ -44,6 +45,8 @@ impl QLoraLinear {
                 layer_n: usize::MAX,
             });
         }
+
+        *count += 1;
 
         let mut a_adapters = Vec::with_capacity(config.len());
         let mut b_adapters = Vec::with_capacity(config.len());

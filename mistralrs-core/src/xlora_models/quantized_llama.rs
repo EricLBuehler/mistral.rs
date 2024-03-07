@@ -327,6 +327,7 @@ impl ModelWeights {
         let norm = RmsNorm::new(ct.remove("norm.weight")?, 1e-5)?;
         let output = ct.remove("output.weight")?;
         let mut layers = Vec::with_capacity(ct.hparams.n_layer as usize);
+        let mut count = 0;
         for layer_idx in 0..ct.hparams.n_layer {
             let prefix = format!("layers.{layer_idx}");
             let attention_wq = ct.remove(&format!("{prefix}.attention.wq.weight"))?;
@@ -348,6 +349,7 @@ impl ModelWeights {
                         vb,
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.gate_proj"),
+                        &mut count,
                     )?,
                     feed_forward_w2: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w2)?,
@@ -356,6 +358,7 @@ impl ModelWeights {
                         vb,
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.down_proj"),
+                        &mut count,
                     )?,
                     feed_forward_w3: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w3)?,
@@ -364,6 +367,7 @@ impl ModelWeights {
                         vb,
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.up_proj"),
+                        &mut count,
                     )?,
                 })
             };
@@ -384,6 +388,7 @@ impl ModelWeights {
                     vb,
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.q_proj"),
+                    &mut count,
                 )?,
                 attention_wk: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wk)?,
@@ -392,6 +397,7 @@ impl ModelWeights {
                     vb,
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.k_proj"),
+                    &mut count,
                 )?,
                 attention_wv: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wv)?,
@@ -400,6 +406,7 @@ impl ModelWeights {
                     vb,
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.v_proj"),
+                    &mut count,
                 )?,
                 attention_wo: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wo)?,
@@ -408,6 +415,7 @@ impl ModelWeights {
                     vb,
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.o_proj"),
+                    &mut count,
                 )?,
                 attention_norm: RmsNorm::new(attention_norm, 1e-5)?,
                 mlp_or_moe,
@@ -434,7 +442,7 @@ impl ModelWeights {
             cache: Cache::new(ct.hparams.n_layer as usize, true),
             xlora_classifier: XLoraClassifier::new(
                 xlora_config,
-                ct.hparams.n_layer as usize,
+                count,
                 lora_config.len(),
                 vb.clone(),
             )?,
@@ -483,6 +491,7 @@ impl ModelWeights {
         )?;
         let output = ct.tensor(reader, "output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
+        let mut count = 0;
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
             let attention_wq = ct.tensor(reader, &format!("{prefix}.attn_q.weight"), device)?;
@@ -508,6 +517,7 @@ impl ModelWeights {
                         vb,
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.gate_proj"),
+                        &mut count,
                     )?,
                     feed_forward_w2: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w2)?,
@@ -516,6 +526,7 @@ impl ModelWeights {
                         vb,
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.down_proj"),
+                        &mut count,
                     )?,
                     feed_forward_w3: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w3)?,
@@ -524,6 +535,7 @@ impl ModelWeights {
                         vb,
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.up_proj"),
+                        &mut count,
                     )?,
                 })
             } else {
@@ -548,6 +560,7 @@ impl ModelWeights {
                             vb,
                             ordering,
                             format!("model.layers.{layer_idx}.mlp.gate_proj"),
+                            &mut count,
                         )?,
                         feed_forward_w2: QLoraLinear::new(
                             QMatMul::from_qtensor(feed_forward_w2)?,
@@ -556,6 +569,7 @@ impl ModelWeights {
                             vb,
                             ordering,
                             format!("model.layers.{layer_idx}.mlp.down_proj"),
+                            &mut count,
                         )?,
                         feed_forward_w3: QLoraLinear::new(
                             QMatMul::from_qtensor(feed_forward_w3)?,
@@ -564,6 +578,7 @@ impl ModelWeights {
                             vb,
                             ordering,
                             format!("model.layers.{layer_idx}.mlp.up_proj"),
+                            &mut count,
                         )?,
                     })
                 }
@@ -591,6 +606,7 @@ impl ModelWeights {
                     vb,
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.q_proj"),
+                    &mut count,
                 )?,
                 attention_wk: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wk)?,
@@ -599,6 +615,7 @@ impl ModelWeights {
                     vb,
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.k_proj"),
+                    &mut count,
                 )?,
                 attention_wv: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wv)?,
@@ -607,6 +624,7 @@ impl ModelWeights {
                     vb,
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.v_proj"),
+                    &mut count,
                 )?,
                 attention_wo: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wo)?,
@@ -615,6 +633,7 @@ impl ModelWeights {
                     vb,
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.o_proj"),
+                    &mut count,
                 )?,
                 attention_norm: RmsNorm::new(attention_norm, rms_norm_eps)?,
                 mlp_or_moe,
@@ -641,7 +660,7 @@ impl ModelWeights {
             cache: Cache::new(block_count, true),
             xlora_classifier: XLoraClassifier::new(
                 xlora_config,
-                block_count,
+                count,
                 lora_config.len(),
                 vb.clone(),
             )?,
