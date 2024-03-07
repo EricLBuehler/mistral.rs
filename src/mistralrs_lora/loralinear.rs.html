@@ -329,7 +329,13 @@
                     <span class="string">"weight"</span>,
                     init::ZERO,
                 )<span class="question-mark">?</span>;
-                a_adapters.push((a * (cfg.alpha / cfg.rank <span class="kw">as </span>f64))<span class="question-mark">?</span>);
+                a_adapters.push(
+                    (a * <span class="kw">if </span>cfg.rank &gt; <span class="number">0 </span>{
+                        cfg.alpha / cfg.rank <span class="kw">as </span>f64
+                    } <span class="kw">else </span>{
+                        <span class="number">1.0
+                    </span>})<span class="question-mark">?</span>,
+                );
                 b_adapters.push(b);
             }
             <span class="kw">let </span>a = Tensor::cat(<span class="kw-2">&amp;</span>a_adapters, <span class="number">0</span>)<span class="question-mark">?</span>;
@@ -406,12 +412,6 @@
             <span class="kw">let </span>a = <span class="self">self</span>.a.as_ref().right().unwrap();
             <span class="kw">let </span>b = <span class="self">self</span>.b.as_ref().right().unwrap();
             <span class="kw">let </span>dropout = <span class="self">self</span>.dropout.as_ref().right().unwrap();
-            <span class="kw">let </span>init = Tensor::zeros(
-                (input.dims()[<span class="number">0</span>], input.dims()[<span class="number">1</span>], b.weight().dims()[<span class="number">0</span>]),
-                input.dtype(),
-                input.device(),
-            )<span class="question-mark">?
-            </span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>;
             <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..<span class="self">self</span>.n_adapters {
                 <span class="kw">let </span><span class="kw-2">mut </span>input_new = input.to_dtype(a.weight().dtype())<span class="question-mark">?</span>;
                 input_new = apply_scalings_to_x(input_new.clone(), <span class="kw-2">&amp;</span>scalings, i)<span class="question-mark">?</span>;
@@ -425,13 +425,13 @@
             }
             <span class="kw">let </span>input = Tensor::cat(<span class="kw-2">&amp;</span>inputs, <span class="number">0</span>)<span class="question-mark">?</span>;
             <span class="kw">let </span>out = b.forward(<span class="kw-2">&amp;</span>a.forward(<span class="kw-2">&amp;</span>input)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>summed = (out
+
+            <span class="prelude-val">Ok</span>(out
                 .chunk(<span class="self">self</span>.n_adapters, <span class="number">0</span>)<span class="question-mark">?
                 </span>.iter()
-                .fold(init, |acc, x| (acc + x).unwrap())
-                * global_scaling_weight)<span class="question-mark">?</span>;
-
-            result + (summed.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>)
+                .fold(result, |acc, x| {
+                    (acc + (x.squeeze(<span class="number">0</span>).unwrap()) * global_scaling_weight).unwrap()
+                }))
         }
     }
 }
