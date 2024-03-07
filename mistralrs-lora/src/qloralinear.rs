@@ -131,11 +131,12 @@ impl LinearLayerLike for QLoraLinear {
             } else {
                 input_new.clone()
             };
-
+            dbg!(&input_new);
             let res = adapter_b
                 .forward(&adapter_a.forward(&input_new)?)?
                 .mul(*adapter_scale)?
                 .mul(global_scaling_weight)?;
+            dbg!(&res);
             result = (result + res)?;
         }
         Ok(result)
