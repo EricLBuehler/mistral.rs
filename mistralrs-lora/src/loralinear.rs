@@ -221,7 +221,7 @@ impl LinearLayerLike for LoraLinear {
             dbg!(&input);
             dbg!(a.weight());
             dbg!(b.weight());
-            let out = b.forward(&a.forward(&input)?)?;
+            let out = batch_matmul(b.weight().clone(), batch_matmul(a.weight().clone(), input)?)?;// b.forward(&a.forward(&input)?)?;
 
             for chunk in out.chunk(self.n_adapters, 0)? {
                 let chunk = chunk.squeeze(0)?;
