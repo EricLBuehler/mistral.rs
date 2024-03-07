@@ -218,6 +218,7 @@
 <a href="#217" id="217">217</a>
 <a href="#218" id="218">218</a>
 <a href="#219" id="219">219</a>
+<a href="#220" id="220">220</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{Module, <span class="prelude-ty">Result</span>, Shape, Tensor};
 <span class="kw">use </span>candle_nn::{init, Dropout, Linear, VarBuilder};
 <span class="kw">use </span>either::Either;
@@ -333,6 +334,7 @@
                 a_adapters.push((a * (cfg.alpha / cfg.rank <span class="kw">as </span>f64))<span class="question-mark">?</span>);
                 b_adapters.push(b);
             }
+            <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>b_adapters);
             <span class="kw">let </span>a = Tensor::cat(<span class="kw-2">&amp;</span>a_adapters, <span class="number">0</span>)<span class="question-mark">?</span>;
             <span class="kw">let </span>b = Tensor::cat(<span class="kw-2">&amp;</span>b_adapters, <span class="number">1</span>)<span class="question-mark">?</span>;
             <span class="kw">let </span>a = Linear::new(a, <span class="prelude-val">None</span>);
