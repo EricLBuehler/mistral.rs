@@ -196,19 +196,18 @@ impl LinearLayerLike for LoraLinear {
                 let mut input_new = input.to_dtype(a.weight().dtype())?;
                 input_new = apply_scalings_to_x(input_new.clone(), &scalings, i)?;
 
-                input_new = if let Some(ref dropout) = dropout {
-                    dropout.forward(&input_new, true)?
-                } else {
-                    input_new.clone()
-                };
                 inputs.push(input_new.unsqueeze(0)?);
             }
             let input = Tensor::cat(&inputs, 0)?;
+            let input = if let Some(ref dropout) = dropout {
+                dropout.forward(&input, true)?
+            } else {
+                input.clone()
+            };
             let out = b.forward(&a.forward(&input)?)?;
 
             for chunk in out.chunk(self.n_adapters, 0)? {
                 let chunk = chunk.squeeze(0)?;
-                dbg!(chunk.mean_all().unwrap());
                 result = (result + (chunk * global_scaling_weight)?)?;
             }
         }
