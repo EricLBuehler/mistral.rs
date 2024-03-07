@@ -322,7 +322,7 @@ impl XLoraClassifier {
         )?;
         println!("SCALINGS ARE {:?}", scalings.i((0,0,0,..))?);*/
 
-        Ok((scalings*2.)?)
+        Ok(scalings)
     }
 
     pub fn get_dummy_scalings(
