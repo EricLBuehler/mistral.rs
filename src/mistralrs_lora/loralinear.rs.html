@@ -350,9 +350,9 @@
                         cfg.alpha / cfg.rank <span class="kw">as </span>f64
                     } <span class="kw">else </span>{
                         <span class="number">1.0
-                    </span>})<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>,
+                    </span>})<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>,
                 );
-                b_adapters.push(b.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>);
+                b_adapters.push(b.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>);
             }
             <span class="kw">let </span>a = Tensor::cat(<span class="kw-2">&amp;</span>a_adapters, <span class="number">0</span>)<span class="question-mark">?</span>;
             <span class="kw">let </span>b = Tensor::cat(<span class="kw-2">&amp;</span>b_adapters, <span class="number">0</span>)<span class="question-mark">?</span>;
@@ -445,7 +445,7 @@
                 <span class="kw">let </span><span class="kw-2">mut </span>input_new = input.to_dtype(a.weight().dtype())<span class="question-mark">?</span>;
                 input_new = apply_scalings_to_x(input_new.clone(), <span class="kw-2">&amp;</span>scalings, i)<span class="question-mark">?</span>;
 
-                inputs.push(input_new.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>);
+                inputs.push(input_new<span class="comment">/* unsqueeze(0)? */</span>);
             }
             <span class="kw">let </span>input = Tensor::cat(<span class="kw-2">&amp;</span>inputs, <span class="number">0</span>)<span class="question-mark">?</span>;
             <span class="kw">let </span>input = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>dropout) = dropout {
@@ -459,11 +459,11 @@
             <span class="comment">//let out = batch_matmul(b.weight().clone(), batch_matmul(a.weight().clone(), input)?)?;
             </span><span class="kw">let </span>out = b.forward(<span class="kw-2">&amp;</span>a.forward(<span class="kw-2">&amp;</span>input)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
 
-            <span class="comment">/*for chunk in out.chunk(self.n_adapters, 0)? {
-                let chunk = chunk.squeeze(0)?;
-                result = (result + (chunk * global_scaling_weight)?)?;
-            }*/
-        </span>}
+            <span class="kw">for </span>chunk <span class="kw">in </span>out.chunk(<span class="self">self</span>.n_adapters, <span class="number">0</span>)<span class="question-mark">? </span>{
+                <span class="kw">let </span>chunk = chunk.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>;
+                result = (result + (chunk * global_scaling_weight)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+            }
+        }
         <span class="prelude-val">Ok</span>(result)
     }
 }
