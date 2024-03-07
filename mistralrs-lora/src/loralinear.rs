@@ -221,6 +221,7 @@ impl LinearLayerLike for LoraLinear {
             dbg!(&input);
             dbg!(a.weight());
             dbg!(b.weight());
+            dbg!(a.weight().matmul(&input));
             //let out = batch_matmul(b.weight().clone(), batch_matmul(a.weight().clone(), input)?)?;
             let out = b.forward(&a.forward(&input)?)?;
 
