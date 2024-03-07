@@ -224,10 +224,10 @@ impl LinearLayerLike for LoraLinear {
             //let out = batch_matmul(b.weight().clone(), batch_matmul(a.weight().clone(), input)?)?;
             let out = b.forward(&a.forward(&input)?)?;
 
-            for chunk in out.chunk(self.n_adapters, 0)? {
+            /*for chunk in out.chunk(self.n_adapters, 0)? {
                 let chunk = chunk.squeeze(0)?;
                 result = (result + (chunk * global_scaling_weight)?)?;
-            }
+            }*/
         }
         Ok(result)
     }
