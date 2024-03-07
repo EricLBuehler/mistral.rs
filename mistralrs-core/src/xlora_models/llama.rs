@@ -539,7 +539,13 @@ impl XLoraLlama {
             cache: Cache::new(!no_kv_cache, dtype, cfg, device)?,
             kv_cache: models::Cache::new(cfg.num_hidden_layers, true),
             device: device.clone(),
-            xlora_classifier: XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false)?,
+            xlora_classifier: XLoraClassifier::new(
+                xlora_config,
+                count,
+                lora_config.len(),
+                vb,
+                false,
+            )?,
             dtype,
         })
     }

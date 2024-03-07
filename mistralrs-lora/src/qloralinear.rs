@@ -60,15 +60,18 @@ impl QLoraLinear {
         for (name, cfg) in config.iter() {
             let a_pp = a_vb.pp(name);
             assert!(a_pp.contains_tensor("weight"));
-            let a = a_pp.get_with_hints(
-                (cfg.rank, linear_config.in_features),
-                "weight",
-                init::DEFAULT_KAIMING_NORMAL,
-            )?.to_dtype(DType::F32)?;
+            let a = a_pp
+                .get_with_hints(
+                    (cfg.rank, linear_config.in_features),
+                    "weight",
+                    init::DEFAULT_KAIMING_NORMAL,
+                )?
+                .to_dtype(DType::F32)?;
             let b_pp = b_vb.pp(name);
             assert!(b_pp.contains_tensor("weight"));
-            let b =
-                b_pp.get_with_hints((linear_config.out_features, cfg.rank), "weight", init::ZERO)?.to_dtype(DType::F32)?;
+            let b = b_pp
+                .get_with_hints((linear_config.out_features, cfg.rank), "weight", init::ZERO)?
+                .to_dtype(DType::F32)?;
             a_adapters.push(Linear::new(a, None));
             b_adapters.push(Linear::new(b, None));
             scale_adapters.push(if cfg.rank > 0 {

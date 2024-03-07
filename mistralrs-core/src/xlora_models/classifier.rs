@@ -25,7 +25,6 @@ pub struct XLoraClassifier {
     model_layers: usize,
     n_classes: usize,
     config: XLoraConfig,
-    is_quantized: bool,
 }
 
 impl XLoraClassifier {
@@ -40,120 +39,207 @@ impl XLoraClassifier {
             // TODO(EricLBuehler): Implement
             candle_core::bail!("`top_k_lora` and `enable_softmax_topk` are not yet supported.");
         }
-        let (last, inner): (Linear, Vec<Box<dyn ModuleT + Send + Sync>>) =
-            if config.xlora_depth == 1 {
-                let dim = if config.layerwise_scalings {
-                    n_classes * n_layers
-                } else {
-                    n_classes
-                };
-                assert!(vb.contains_tensor("last.weight"));
-                if config.use_bias {
-                    assert!(vb.contains_tensor("last.bias"));
-                    (
-                        linear(config.hidden_size, dim, vb.pp("last")).unwrap(),
-                        vec![],
-                    )
-                } else {
-                    (
-                        linear_no_bias(config.hidden_size, dim, vb.pp("last")).unwrap(),
-                        vec![],
-                    )
-                }
-            } else if config.xlora_depth == 2 {
-                let mut inner: Vec<Box<dyn ModuleT + Send + Sync>> = Vec::new();
-                assert!(vb.contains_tensor("inner.0.weight"));
-                if config.use_bias {
-                    assert!(vb.contains_tensor("inner.0.bias"));
-                    inner.push(Box::new(linear(
-                        config.hidden_size,
-                        config.xlora_size,
-                        vb.pp("inner.0"),
-                    )?));
-                } else {
-                    inner.push(Box::new(linear_no_bias(
-                        config.hidden_size,
-                        config.xlora_size,
-                        vb.pp("inner.0"),
-                    )?));
-                }
-                if config.enable_relu_and_dropout {
-                    inner.push(Box::new(activation::Activation::Relu));
-                    inner.push(Box::new(Dropout::new(config.xlora_dropout_p)));
-                }
-                assert!(vb.contains_tensor("last.weight"));
-                let dim = if config.layerwise_scalings {
-                    n_classes * n_layers
-                } else {
-                    n_classes
-                };
-                if config.use_bias {
-                    assert!(vb.contains_tensor("last.bias"));
-                    (linear(config.xlora_size, dim, vb.pp("last"))?, inner)
-                } else {
-                    (
-                        linear_no_bias(config.xlora_size, dim, vb.pp("last"))?,
-                        inner,
-                    )
-                }
+        let (last, inner): (Linear, Vec<Box<dyn ModuleT + Send + Sync>>) = if config.xlora_depth
+            == 1
+        {
+            let dim = if config.layerwise_scalings {
+                n_classes * n_layers
             } else {
-                let mut inner: Vec<Box<dyn ModuleT + Send + Sync>> = Vec::new();
-                assert!(vb.contains_tensor("inner.0.weight"));
-                if config.use_bias {
-                    assert!(vb.contains_tensor("inner.0.bias"));
-                    inner.push(Box::new(linear(
-                        config.hidden_size,
-                        config.xlora_size,
-                        vb.pp("inner.0"),
-                    )?));
+                n_classes
+            };
+            assert!(vb.contains_tensor("last.weight"));
+            if config.use_bias {
+                assert!(vb.contains_tensor("last.bias"));
+                let lin = linear(config.hidden_size, dim, vb.pp("last"))?;
+                (
+                    if is_quantized {
+                        Linear::new(
+                            lin.weight().to_dtype(DType::F32)?,
+                            lin.bias().map(|x| x.to_dtype(DType::F32).unwrap()),
+                        )
+                    } else {
+                        lin
+                    },
+                    vec![],
+                )
+            } else {
+                let lin = linear_no_bias(config.hidden_size, dim, vb.pp("last"))?;
+                (
+                    if is_quantized {
+                        Linear::new(
+                            lin.weight().to_dtype(DType::F32)?,
+                            lin.bias().map(|x| x.to_dtype(DType::F32).unwrap()),
+                        )
+                    } else {
+                        lin
+                    },
+                    vec![],
+                )
+            }
+        } else if config.xlora_depth == 2 {
+            let mut inner: Vec<Box<dyn ModuleT + Send + Sync>> = Vec::new();
+            assert!(vb.contains_tensor("inner.0.weight"));
+            if config.use_bias {
+                assert!(vb.contains_tensor("inner.0.bias"));
+                let lin = linear(config.hidden_size, config.xlora_size, vb.pp("inner.0"))?;
+                inner.push(Box::new(if is_quantized {
+                    Linear::new(
+                        lin.weight().to_dtype(DType::F32)?,
+                        lin.bias().map(|x| x.to_dtype(DType::F32).unwrap()),
+                    )
                 } else {
-                    inner.push(Box::new(linear_no_bias(
-                        config.hidden_size,
+                    lin
+                }));
+            } else {
+                let lin = linear_no_bias(config.hidden_size, config.xlora_size, vb.pp("inner.0"))?;
+                inner.push(Box::new(if is_quantized {
+                    Linear::new(
+                        lin.weight().to_dtype(DType::F32)?,
+                        lin.bias().map(|x| x.to_dtype(DType::F32).unwrap()),
+                    )
+                } else {
+                    lin
+                }));
+            }
+            if config.enable_relu_and_dropout {
+                inner.push(Box::new(activation::Activation::Relu));
+                inner.push(Box::new(Dropout::new(config.xlora_dropout_p)));
+            }
+            let dim = if config.layerwise_scalings {
+                n_classes * n_layers
+            } else {
+                n_classes
+            };
+            assert!(vb.contains_tensor("last.weight"));
+            if config.use_bias {
+                assert!(vb.contains_tensor("last.bias"));
+                let lin = linear(config.hidden_size, dim, vb.pp("last"))?;
+                (
+                    if is_quantized {
+                        Linear::new(
+                            lin.weight().to_dtype(DType::F32)?,
+                            lin.bias().map(|x| x.to_dtype(DType::F32).unwrap()),
+                        )
+                    } else {
+                        lin
+                    },
+                    inner,
+                )
+            } else {
+                let lin = linear_no_bias(config.hidden_size, dim, vb.pp("last"))?;
+                (
+                    if is_quantized {
+                        Linear::new(
+                            lin.weight().to_dtype(DType::F32)?,
+                            lin.bias().map(|x| x.to_dtype(DType::F32).unwrap()),
+                        )
+                    } else {
+                        lin
+                    },
+                    inner,
+                )
+            }
+        } else {
+            let mut inner: Vec<Box<dyn ModuleT + Send + Sync>> = Vec::new();
+            assert!(vb.contains_tensor("inner.0.weight"));
+            if config.use_bias {
+                assert!(vb.contains_tensor("inner.0.bias"));
+                let lin = linear(config.hidden_size, config.xlora_size, vb.pp("inner.0"))?;
+                inner.push(Box::new(if is_quantized {
+                    Linear::new(
+                        lin.weight().to_dtype(DType::F32)?,
+                        lin.bias().map(|x| x.to_dtype(DType::F32).unwrap()),
+                    )
+                } else {
+                    lin
+                }));
+            } else {
+                let lin = linear_no_bias(config.hidden_size, config.xlora_size, vb.pp("inner.0"))?;
+                inner.push(Box::new(if is_quantized {
+                    Linear::new(
+                        lin.weight().to_dtype(DType::F32)?,
+                        lin.bias().map(|x| x.to_dtype(DType::F32).unwrap()),
+                    )
+                } else {
+                    lin
+                }));
+            }
+            if config.enable_relu_and_dropout {
+                inner.push(Box::new(activation::Activation::Relu));
+                inner.push(Box::new(Dropout::new(config.xlora_dropout_p)));
+            }
+            for i in 1..=config.xlora_depth - 2 {
+                assert!(vb.contains_tensor(&format!("inner.{i}.weight")));
+                if config.use_bias {
+                    assert!(vb.contains_tensor(&format!("inner.{i}.bias")));
+                    let lin = linear(
                         config.xlora_size,
-                        vb.pp("inner.0"),
-                    )?));
+                        config.xlora_size,
+                        vb.pp(&format!("inner.{i}")),
+                    )?;
+                    inner.push(Box::new(Linear::new(
+                        lin.weight().to_dtype(DType::F32)?,
+                        lin.bias().map(|x| x.to_dtype(DType::F32).unwrap()),
+                    )));
+                } else {
+                    let lin = linear_no_bias(
+                        config.xlora_size,
+                        config.xlora_size,
+                        vb.pp(&format!("inner.{i}")),
+                    )?;
+                    inner.push(Box::new(Linear::new(
+                        lin.weight().to_dtype(DType::F32)?,
+                        lin.bias().map(|x| x.to_dtype(DType::F32).unwrap()),
+                    )));
                 }
                 if config.enable_relu_and_dropout {
                     inner.push(Box::new(activation::Activation::Relu));
                     inner.push(Box::new(Dropout::new(config.xlora_dropout_p)));
                 }
-                for i in 1..=config.xlora_depth - 2 {
-                    assert!(vb.contains_tensor(&format!("inner.{i}.weight")));
-                    if config.use_bias {
-                        assert!(vb.contains_tensor(&format!("inner.{i}.bias")));
-                        inner.push(Box::new(linear(
-                            config.xlora_size,
-                            config.xlora_size,
-                            vb.pp(&format!("inner.{i}")),
-                        )?));
-                    } else {
-                        inner.push(Box::new(linear_no_bias(
-                            config.xlora_size,
-                            config.xlora_size,
-                            vb.pp(&format!("inner.{i}")),
-                        )?));
-                    }
-                    if config.enable_relu_and_dropout {
-                        inner.push(Box::new(activation::Activation::Relu));
-                        inner.push(Box::new(Dropout::new(config.xlora_dropout_p)));
-                    }
-                }
-                assert!(vb.contains_tensor("last.weight"));
-                let dim = if config.layerwise_scalings {
-                    n_classes * n_layers
-                } else {
-                    n_classes
-                };
-                if config.use_bias {
-                    assert!(vb.contains_tensor("last.bias"));
-                    (linear(config.xlora_size, dim, vb.pp("last"))?, inner)
-                } else {
-                    (
-                        linear_no_bias(config.xlora_size, dim, vb.pp("last"))?,
-                        inner,
-                    )
-                }
+            }
+            let dim = if config.layerwise_scalings {
+                n_classes * n_layers
+            } else {
+                n_classes
             };
+            assert!(vb.contains_tensor("last.weight"));
+            if config.use_bias {
+                assert!(vb.contains_tensor("last.bias"));
+                let lin = linear(config.hidden_size, dim, vb.pp("last"))?;
+                (
+                    if is_quantized {
+                        Linear::new(
+                            lin.weight().to_dtype(DType::F32)?,
+                            lin.bias().map(|x| x.to_dtype(DType::F32).unwrap()),
+                        )
+                    } else {
+                        lin
+                    },
+                    inner,
+                )
+            } else {
+                let lin = linear_no_bias(config.hidden_size, dim, vb.pp("last"))?;
+                (
+                    if is_quantized {
+                        Linear::new(
+                            lin.weight().to_dtype(DType::F32)?,
+                            lin.bias().map(|x| x.to_dtype(DType::F32).unwrap()),
+                        )
+                    } else {
+                        lin
+                    },
+                    inner,
+                )
+            }
+        };
+        let last = if is_quantized {
+            Linear::new(
+                last.weight().to_dtype(DType::F32)?,
+                last.bias().map(|x| x.to_dtype(DType::F32).unwrap()),
+            )
+        } else {
+            last
+        };
         Ok(Self {
             last,
             inner,
@@ -168,14 +254,10 @@ impl XLoraClassifier {
             model_layers: n_layers,
             n_classes,
             config,
-            is_quantized,
         })
     }
 
     pub fn forward(&self, mut hidden_states: Tensor) -> Result<Tensor> {
-        if self.is_quantized {
-            hidden_states = hidden_states.to_dtype(DType::BF16)?;
-        }
         for layer in &self.inner {
             hidden_states = layer.forward_t(&hidden_states, true)?;
         }
@@ -201,7 +283,7 @@ impl XLoraClassifier {
             scalings = softmax.forward(&scalings)?;
         }
 
-        scalings.to_dtype(DType::F32)
+        Ok(scalings)
     }
 
     pub fn get_dummy_scalings(
