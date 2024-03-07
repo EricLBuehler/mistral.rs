@@ -1,0 +1,19 @@
+[package]
+name = "mistralrs-pyo3"
+authors = ["Eric Buehler"]
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+homepage.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "mistralrs"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = "0.20.0"
