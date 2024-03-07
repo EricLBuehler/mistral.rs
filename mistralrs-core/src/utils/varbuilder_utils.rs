@@ -138,5 +138,7 @@ pub(crate) fn from_mmaped_safetensors<'a>(
         }
     }
 
+    dbg!(map.data().lock().unwrap());
+
     Ok(VarBuilder::from_varmap(&map, dtype, device))
 }
