@@ -99,10 +99,12 @@ impl MistralLoader {
         revision: Option<String>,
         token_source_value: Option<String>,
     ) -> PyResult<MistralRunner> {
+        println!("Loading");
         #[cfg(feature = "metal")]
         let device = Device::new_metal(0);
         #[cfg(not(feature = "metal"))]
         let device = Device::cuda_if_available(0);
+        dbg!(&device);
         let device = match device {
             Ok(x) => x,
             Err(y) => return Err(PyValueError::new_err(y.to_string())),
