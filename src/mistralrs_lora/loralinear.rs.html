@@ -215,6 +215,20 @@
 <a href="#214" id="214">214</a>
 <a href="#215" id="215">215</a>
 <a href="#216" id="216">216</a>
+<a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a>
+<a href="#219" id="219">219</a>
+<a href="#220" id="220">220</a>
+<a href="#221" id="221">221</a>
+<a href="#222" id="222">222</a>
+<a href="#223" id="223">223</a>
+<a href="#224" id="224">224</a>
+<a href="#225" id="225">225</a>
+<a href="#226" id="226">226</a>
+<a href="#227" id="227">227</a>
+<a href="#228" id="228">228</a>
+<a href="#229" id="229">229</a>
+<a href="#230" id="230">230</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{Module, <span class="prelude-ty">Result</span>, Shape, Tensor};
 <span class="kw">use </span>candle_nn::{init, Dropout, Linear, VarBuilder};
 <span class="kw">use </span>either::Either;
@@ -332,12 +346,12 @@
                         cfg.alpha / cfg.rank <span class="kw">as </span>f64
                     } <span class="kw">else </span>{
                         <span class="number">1.0
-                    </span>})<span class="question-mark">?</span>,
+                    </span>})<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>,
                 );
-                b_adapters.push(b);
+                b_adapters.push(b.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>);
             }
             <span class="kw">let </span>a = Tensor::cat(<span class="kw-2">&amp;</span>a_adapters, <span class="number">0</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>b = Tensor::cat(<span class="kw-2">&amp;</span>b_adapters, <span class="number">1</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>b = Tensor::cat(<span class="kw-2">&amp;</span>b_adapters, <span class="number">0</span>)<span class="question-mark">?</span>;
             <span class="kw">let </span>a = Linear::new(a, <span class="prelude-val">None</span>);
             <span class="kw">let </span>b = Linear::new(b, <span class="prelude-val">None</span>);
             (Either::Right(a), Either::Right(b), Either::Right(dropout))
@@ -354,6 +368,20 @@
             n_adapters: config.len(),
         })
     }
+}
+
+<span class="kw">fn </span>batch_matmul(a: Tensor, b: Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+    <span class="comment">// a has shape (N, L, M)
+    // b has shape (N, M, P)
+
+    // a -&gt; (N, L, M, 1)
+    </span><span class="kw">let </span>a = a.unsqueeze(<span class="number">3</span>)<span class="question-mark">?</span>;
+    <span class="comment">// b -&gt; (N, L, M, 1)
+    </span><span class="kw">let </span>b = b.unsqueeze(<span class="number">1</span>)<span class="question-mark">?</span>;
+
+    <span class="kw">let </span>res = (a<span class="kw-2">*</span>b)<span class="question-mark">?</span>;
+    
+    res.sum(<span class="number">2</span>)
 }
 
 <span class="kw">impl </span>LinearLayerLike <span class="kw">for </span>LoraLinear {
