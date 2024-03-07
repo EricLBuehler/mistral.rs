@@ -95,5 +95,6 @@ impl MistralRunner {
 fn mistralrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<MistralRunner>()?;
     m.add_class::<MistralLoader>()?;
+    m.add_class::<ModelKind>()?;
     Ok(())
 }
