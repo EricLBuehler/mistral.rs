@@ -396,6 +396,7 @@ impl Loader for GemmaLoader {
                 )?;
                 Model::XLoraNormal(model)
             }
+            ModelKind::XLoraGGUF => unreachable!(),
         };
         println!("Model loaded.");
 

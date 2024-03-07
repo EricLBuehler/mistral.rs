@@ -1,12 +1,14 @@
 use std::{collections::HashSet, fmt::Debug, sync::Arc};
 
-use candle_core::{IndexOp, Result, Shape, Tensor, D};
+use candle_core::{quantized::QTensor, IndexOp, Result, Shape, Tensor, D};
 use candle_nn::{Linear, Module, VarBuilder};
-use loralinear::{LoraLinear, LoraLinearConfig};
+use loralinear::LoraLinear;
+pub use qloralinear::QLoraLinear;
 use serde::Deserialize;
 
 mod frozenlinear;
 mod loralinear;
+mod qloralinear;
 
 use std::collections::HashMap;
 
@@ -15,6 +17,22 @@ pub struct Ordering {
     #[serde(rename = "order")]
     pub adapters: Vec<String>,
     pub layers: HashMap<String, usize>,
+}
+
+#[derive(Clone, Debug)]
+/// Configuration for LoraLinear
+pub struct LoraLinearConfig {
+    in_features: usize,
+    out_features: usize,
+}
+
+impl LoraLinearConfig {
+    pub fn new(in_features: usize, out_features: usize) -> Self {
+        LoraLinearConfig {
+            in_features,
+            out_features,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -163,4 +181,8 @@ pub fn linear_b(
     } else {
         linear_no_bias(in_dim, out_dim, vb, lora_config, count, ord)
     }
+}
+
+pub fn get_lora_cfg(tensor: &QTensor) -> LoraLinearConfig {
+    LoraLinearConfig::new(tensor.shape().dims()[1], tensor.shape().dims()[0])
 }

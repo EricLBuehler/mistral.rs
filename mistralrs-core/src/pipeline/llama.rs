@@ -389,6 +389,7 @@ impl Loader for LlamaLoader {
                 )?;
                 Model::XLoraNormal(model)
             }
+            ModelKind::XLoraGGUF => unreachable!(),
         };
         println!("Model loaded.");
 

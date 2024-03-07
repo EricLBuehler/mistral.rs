@@ -78,6 +78,15 @@ which may be specified using the `--features` command.
 ## Preparing the X-LoRA Ordering File
 The X-LoRA ordering JSON file contains 2 parts. The first is the order of the adapters and the second, the layer ordering. The layer ordering has been automatically generated and should not be manipulated as it controls the application of scalings. However the order of adapter should be replaced by an array of strings of adapter names corresponding to the order the adapters were specified during training.
 
+### Supported quantized modules
+- model.layers.{layer_idx}.self_attn.q_proj
+- model.layers.{layer_idx}.self_attn.k_proj
+- model.layers.{layer_idx}.self_attn.v_proj
+- model.layers.{layer_idx}.self_attn.o_proj
+- model.layers.{layer_idx}.mlp.up_proj
+- model.layers.{layer_idx}.mlp.down_proj
+- model.layers.{layer_idx}.mlp.gate_proj
+
 ## Run
 
 To start a server serving Mistral on `localhost:1234`, 
@@ -94,7 +103,7 @@ To start an X-LoRA server with the default weights, run the following after modi
 ## Benchmarks
 For the prompt "Tell me about the Rust type system in depth." and a maximum length of 256.
 
-**A6000** Mistral + CUDA + Flash Attention
+**A6000** Mistral + CUDA + FlashAttention
 - 30.44 tok/s
 
 **A6000** Mistral GGUF + CUDA

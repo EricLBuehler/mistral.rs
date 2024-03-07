@@ -1,16 +1,16 @@
 use std::{iter::zip, ops::Mul};
 
-use candle_core::{Module, Result, Shape, Tensor};
+use candle_core::{quantized::QMatMul, Module, Result, Shape, Tensor};
 use candle_nn::{init, Dropout, Linear, VarBuilder};
 
 use crate::{
-    apply_scalings_to_x, frozenlinear::FrozenLinear, get_maybe_topk_scalings, LinearLayerLike,
-    LoraConfig, LoraLinearConfig,
+    apply_scalings_to_x, get_maybe_topk_scalings, LinearLayerLike, LoraConfig, LoraLinearConfig,
+    Ordering,
 };
 
 #[derive(Debug)]
-pub struct LoraLinear {
-    old: FrozenLinear,
+pub struct QLoraLinear {
+    old: QMatMul,
     a_adapters: Vec<Linear>,
     b_adapters: Vec<Linear>,
     scale_adapters: Vec<f64>,
@@ -18,14 +18,33 @@ pub struct LoraLinear {
     layer_n: usize,
 }
 
-impl LoraLinear {
+impl QLoraLinear {
     pub fn new(
-        old: &dyn LinearLayerLike,
+        old: QMatMul,
         linear_config: &LoraLinearConfig,
         config: &[(String, LoraConfig)],
         vb: &VarBuilder,
-        layer_n: usize,
+        ordering: &Ordering,
+        module: String,
     ) -> Result<Self> {
+        let target_modules = &config[0].1.target_modules;
+        for (_, cfg) in config {
+            if &cfg.target_modules != target_modules {
+                candle_core::bail!("Expected all target modules to be the same.");
+            }
+        }
+
+        if !target_modules.contains(&module) {
+            return Ok(Self {
+                old,
+                a_adapters: vec![],
+                b_adapters: vec![],
+                scale_adapters: vec![],
+                dropout_adapters: vec![],
+                layer_n: usize::MAX,
+            });
+        }
+
         let mut a_adapters = Vec::with_capacity(config.len());
         let mut b_adapters = Vec::with_capacity(config.len());
         let mut scale_adapters = Vec::with_capacity(config.len());
@@ -54,26 +73,26 @@ impl LoraLinear {
             dropout_adapters.push(cfg.dropout.map(Dropout::new));
         }
 
-        Ok(LoraLinear {
-            old: FrozenLinear::new_from_linear(old)?,
+        Ok(QLoraLinear {
+            old,
             a_adapters,
             b_adapters,
             scale_adapters,
             dropout_adapters,
-            layer_n,
+            layer_n: *ordering.layers.get(&module).unwrap(),
         })
     }
 }
 
-impl LinearLayerLike for LoraLinear {
+impl LinearLayerLike for QLoraLinear {
     fn bias(&self) -> Option<&Tensor> {
-        self.old.bias()
+        None
     }
     fn weight(&self) -> &Tensor {
-        self.old.weight()
+        unimplemented!()
     }
     fn shape(&self) -> &Shape {
-        self.old.shape()
+        unimplemented!()
     }
     fn lora_forward(
         &self,
@@ -84,6 +103,10 @@ impl LinearLayerLike for LoraLinear {
         let scalings = get_maybe_topk_scalings(scalings, self.layer_n)?;
         //No fan_in_fan_out so no weight.transpose(0,1)
         let mut result = self.old.forward(input)?;
+        if self.a_adapters.is_empty() {
+            return Ok(result);
+        }
+
         for (i, (adapter_a, (adapter_b, (adapter_scale, adapter_dropout)))) in zip(
             &self.a_adapters,
             zip(

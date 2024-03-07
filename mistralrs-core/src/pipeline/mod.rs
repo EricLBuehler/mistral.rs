@@ -44,6 +44,7 @@ pub enum ModelKind {
     Normal,
     XLoraNormal,
     QuantizedGGUF,
+    XLoraGGUF,
     QuantizedGGML,
 }
 

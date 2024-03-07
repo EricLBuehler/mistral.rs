@@ -405,6 +405,7 @@ impl Loader for MixtralLoader {
                 )?;
                 Model::XLoraNormal(model)
             }
+            ModelKind::XLoraGGUF => unreachable!(),
         };
         println!("Model loaded.");
 
