@@ -208,6 +208,7 @@ impl LinearLayerLike for LoraLinear {
 
             for chunk in out.chunk(self.n_adapters, 0)? {
                 let chunk = chunk.squeeze(0)?;
+                dbg!(chunk.mean_all().unwrap());
                 result = (result + (chunk * global_scaling_weight)?)?;
             }
         }
