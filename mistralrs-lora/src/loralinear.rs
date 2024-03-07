@@ -186,6 +186,7 @@ impl LinearLayerLike for LoraLinear {
             let mut inputs = Vec::new();
             let a = self.a.as_ref().right().unwrap();
             let b = self.b.as_ref().right().unwrap();
+            dbg!(self.layer_n);
             dbg!(a.weight());
             dbg!(b.weight());
             let dropout = self.dropout.as_ref().right().unwrap();
