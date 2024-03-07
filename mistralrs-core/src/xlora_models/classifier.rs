@@ -283,6 +283,7 @@ impl XLoraClassifier {
             scalings = softmax.forward(&scalings)?;
         }
 
+        dbg!(scalings.mean_all()?);
         let scalings = scalings.slice_assign(
             &[
                 0..scalings.dims()[0],
@@ -321,7 +322,6 @@ impl XLoraClassifier {
                 scalings.dtype())?,
         )?;
         println!("SCALINGS ARE {:?}", scalings.i((0,0,0,..))?);
-        dbg!(scalings.mean_all()?);
 
         Ok(scalings)
     }
