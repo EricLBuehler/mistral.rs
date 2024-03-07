@@ -113,7 +113,6 @@ impl LinearLayerLike for QLoraLinear {
             return Ok(result);
         }
         let scalings = get_maybe_topk_scalings(scalings, self.layer_n)?;
-        dbg!(self.layer_n);
 
         for (i, (adapter_a, (adapter_b, (adapter_scale, adapter_dropout)))) in zip(
             &self.a_adapters,
@@ -134,7 +133,7 @@ impl LinearLayerLike for QLoraLinear {
             let res = adapter_b
                 .forward(&adapter_a.forward(&input_new)?)?
                 .mul(*adapter_scale)?
-                .mul(global_scaling_weight)?;
+                .mul(global_scaling_weight)?*100.;
             result = (result + res)?;
         }
         Ok(result)
