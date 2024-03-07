@@ -330,7 +330,7 @@
                 b_adapters.push(b);
             }
             <span class="kw">let </span>a = Tensor::cat(<span class="kw-2">&amp;</span>a_adapters, <span class="number">0</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>b = Tensor::cat(<span class="kw-2">&amp;</span>a_adapters, <span class="number">1</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>b = Tensor::cat(<span class="kw-2">&amp;</span>b_adapters, <span class="number">1</span>)<span class="question-mark">?</span>;
             <span class="kw">let </span>a = Linear::new(a, <span class="prelude-val">None</span>);
             <span class="kw">let </span>b = Linear::new(b, <span class="prelude-val">None</span>);
             (Either::Right(a), Either::Right(b), Either::Right(dropout))
