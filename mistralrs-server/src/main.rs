@@ -264,10 +264,6 @@ struct Args {
     /// Use no KV cache.
     #[arg(long, default_value_t = false)]
     no_kv_cache: bool,
-
-    /// Enable flash attention, only applicable if compiled with `--features flash-attn`
-    #[arg(short, long, default_value_t = false)]
-    use_flash_attn: bool,
 }
 
 async fn chatcompletions(
@@ -340,7 +336,7 @@ async fn main() -> Result<()> {
     #[cfg(not(feature = "flash-attn"))]
     let use_flash_attn = false;
     #[cfg(feature = "flash-attn")]
-    let use_flash_attn = args.use_flash_attn;
+    let use_flash_attn = true;
 
     let loader: Box<dyn Loader> = match args.model {
         ModelSelected::Mistral {
