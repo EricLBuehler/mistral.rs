@@ -16,25 +16,17 @@ Mistral.rs is a LLM inference platform written in pure, safe Rust.
 
 **Supported models:**
 - Mistral 7B
-  - Normal
-  - GGUF
-  - X-LoRA
-  - X-LoRA + GGUF
 - Gemma
-  - Normal
-  - X-LoRA
 - Llama
-  - Normal
-  - GGUF
-  - GGML
-  - X-LoRA
-  - X-LoRA + GGUF
-  - X-LoRA + GGML
 - Mixtral 8x7B
-  - Normal
-  - GGUF
-  - X-LoRA
-  - X-LoRA + GGUF
+
+|Model|GGUF|GGML|X-LoRA|X-LoRA+GGUF|X-LoRA+GGML|
+|--|--|--|--|--|--|
+|Mistral 7B |✅| |✅|✅| |
+|Gemma| | |✅| | |
+|Llama|✅|✅|✅|✅|✅|
+|Mixtral 8x7B|✅| |✅|✅|✅|
+
 
 **Library API**
 - Rust multithreaded API for easy integration into any application: [docs](https://ericlbuehler.github.io/mistral.rs/mistralrs/). To use, add `mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }` to the Cargo.toml.
