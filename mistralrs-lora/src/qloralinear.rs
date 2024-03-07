@@ -54,6 +54,7 @@ impl QLoraLinear {
         let mut scale_adapters = Vec::with_capacity(config.len());
         let mut dropout_adapters = Vec::with_capacity(config.len());
         let vb = vb.pp(prefix.clone());
+        dbg!(&prefix);
         let a_vb = vb.pp("lora_A".to_string());
         let b_vb = vb.pp("lora_B".to_string());
         for (name, cfg) in config.iter() {
@@ -133,7 +134,7 @@ impl LinearLayerLike for QLoraLinear {
             let res = adapter_b
                 .forward(&adapter_a.forward(&input_new)?)?
                 .mul(*adapter_scale)?
-                .mul(global_scaling_weight)?*100.;
+                .mul(global_scaling_weight)?;
             result = (result + res)?;
         }
         Ok(result)
