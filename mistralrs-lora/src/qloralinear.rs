@@ -124,9 +124,7 @@ impl LinearLayerLike for QLoraLinear {
         )
         .enumerate()
         {
-            let mut input_new = input.to_dtype(adapter_a.weight().dtype())?;
-            dbg!(&input_new);
-            input_new = apply_scalings_to_x(input_new.clone(), &scalings, i)?;
+            let mut input_new = apply_scalings_to_x(input.clone(), &scalings, i)?;
 
             input_new = if let Some(ref dropout) = adapter_dropout {
                 dropout.forward(&input_new, true)?
