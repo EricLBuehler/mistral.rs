@@ -170,6 +170,7 @@ impl XLoraClassifier {
     }
 
     pub fn forward(&self, mut hidden_states: Tensor) -> Result<Tensor> {
+        dbg!(hidden_states);
         for layer in &self.inner {
             hidden_states = layer.forward_t(&hidden_states, true)?;
         }
@@ -195,7 +196,7 @@ impl XLoraClassifier {
             scalings = softmax.forward(&scalings)?;
         }
 
-        dbg!(&scalings);
+        dbg!(scalings);
 
         Ok(scalings)
     }
