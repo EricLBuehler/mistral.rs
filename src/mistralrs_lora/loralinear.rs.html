@@ -459,11 +459,11 @@
             <span class="comment">//let out = batch_matmul(b.weight().clone(), batch_matmul(a.weight().clone(), input)?)?;
             </span><span class="kw">let </span>out = b.forward(<span class="kw-2">&amp;</span>a.forward(<span class="kw-2">&amp;</span>input)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
 
-            <span class="kw">for </span>chunk <span class="kw">in </span>out.chunk(<span class="self">self</span>.n_adapters, <span class="number">0</span>)<span class="question-mark">? </span>{
-                <span class="kw">let </span>chunk = chunk.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>;
-                result = (result + (chunk * global_scaling_weight)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-            }
-        }
+            <span class="comment">/*for chunk in out.chunk(self.n_adapters, 0)? {
+                let chunk = chunk.squeeze(0)?;
+                result = (result + (chunk * global_scaling_weight)?)?;
+            }*/
+        </span>}
         <span class="prelude-val">Ok</span>(result)
     }
 }
