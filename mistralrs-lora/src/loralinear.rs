@@ -113,6 +113,7 @@ impl LoraLinear {
                 a_adapters.push((a * (cfg.alpha / cfg.rank as f64))?);
                 b_adapters.push(b);
             }
+            dbg!(&b_adapters);
             let a = Tensor::cat(&a_adapters, 0)?;
             let b = Tensor::cat(&b_adapters, 1)?;
             let a = Linear::new(a, None);
