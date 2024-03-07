@@ -149,7 +149,6 @@ impl LinearLayerLike for LoraLinear {
         scalings: Tensor,
         global_scaling_weight: f64,
     ) -> Result<Tensor> {
-        dbg!(&input);
         let scalings = get_maybe_topk_scalings(scalings, self.layer_n)?;
         //No fan_in_fan_out so no weight.transpose(0,1)
         let mut result = self.old.forward(input)?;
@@ -187,6 +186,8 @@ impl LinearLayerLike for LoraLinear {
             let mut inputs = Vec::new();
             let a = self.a.as_ref().right().unwrap();
             let b = self.b.as_ref().right().unwrap();
+            dbg!(a.weight());
+            dbg!(b.weight());
             let dropout = self.dropout.as_ref().right().unwrap();
             let init = Tensor::zeros(input.shape(), input.dtype(), input.device())?.unsqueeze(0)?;
             for i in 0..self.n_adapters {
