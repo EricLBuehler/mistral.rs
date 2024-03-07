@@ -545,6 +545,12 @@
 <a href="#544" id="544">544</a>
 <a href="#545" id="545">545</a>
 <a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
+<a href="#551" id="551">551</a>
+<a href="#552" id="552">552</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -1086,7 +1092,13 @@
             cache: Cache::new(!no_kv_cache, dtype, cfg, device)<span class="question-mark">?</span>,
             kv_cache: models::Cache::new(cfg.num_hidden_layers, <span class="bool-val">true</span>),
             device: device.clone(),
-            xlora_classifier: XLoraClassifier::new(xlora_config, count, lora_config.len(), vb)<span class="question-mark">?</span>,
+            xlora_classifier: XLoraClassifier::new(
+                xlora_config,
+                count,
+                lora_config.len(),
+                vb,
+                <span class="bool-val">false</span>,
+            )<span class="question-mark">?</span>,
             dtype,
         })
     }

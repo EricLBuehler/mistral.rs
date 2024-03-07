@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-lora/src/loralinear.rs`."><title>loralinear.rs - source</title><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/SourceSerif4-Regular-46f98efaafac5295.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/FiraSans-Regular-018c141bf0843ffd.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/FiraSans-Medium-8f9a781e4970d388.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2"><link rel="stylesheet" href="../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../static.files/rustdoc-ac92e1bbe349e143.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="mistralrs_lora" data-themes="" data-resource-suffix="" data-rustdoc-version="1.76.0 (07dca489a 2024-02-04)" data-channel="1.76.0" data-search-js="search-2b6ce74ff89ae146.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../static.files/storage-f2adc0d6ca4d09fb.js"></script><script defer src="../../static.files/src-script-39ed315d46fb705f.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-305769736d49e732.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-feafe1bb7466e4bd.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-16x16-8b506e7a72182f1c.png"><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"></nav><div class="sidebar-resizer"></div>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-lora/src/qloralinear.rs`."><title>qloralinear.rs - source</title><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/SourceSerif4-Regular-46f98efaafac5295.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/FiraSans-Regular-018c141bf0843ffd.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/FiraSans-Medium-8f9a781e4970d388.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2"><link rel="stylesheet" href="../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../static.files/rustdoc-ac92e1bbe349e143.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="mistralrs_lora" data-themes="" data-resource-suffix="" data-rustdoc-version="1.76.0 (07dca489a 2024-02-04)" data-channel="1.76.0" data-search-js="search-2b6ce74ff89ae146.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../static.files/storage-f2adc0d6ca4d09fb.js"></script><script defer src="../../static.files/src-script-39ed315d46fb705f.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-305769736d49e732.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-feafe1bb7466e4bd.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-16x16-8b506e7a72182f1c.png"><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"></nav><div class="sidebar-resizer"></div>
     <main><nav class="sub"><form class="search-form"><span></span><input class="search-input" name="search" aria-label="Run search in the documentation" autocomplete="off" spellcheck="false" placeholder="Click or press ‘S’ to search, ‘?’ for more options…" type="search"><div id="help-button" tabindex="-1"><a href="../../help.html" title="help">?</a></div><div id="settings-menu" tabindex="-1"><a href="../../settings.html" title="settings"><img width="22" height="22" alt="Change settings" src="../../static.files/wheel-7b819b6101059cd0.svg"></a></div></form></nav><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
@@ -112,19 +112,49 @@
 <a href="#111" id="111">111</a>
 <a href="#112" id="112">112</a>
 <a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+<a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{iter::zip, ops::Mul};
 
-<span class="kw">use </span>candle_core::{Module, <span class="prelude-ty">Result</span>, Shape, Tensor};
+<span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Module, <span class="prelude-ty">Result</span>, Shape, Tensor};
 <span class="kw">use </span>candle_nn::{init, Dropout, Linear, VarBuilder};
 
 <span class="kw">use crate</span>::{
-    apply_scalings_to_x, frozenlinear::FrozenLinear, get_maybe_topk_scalings, LinearLayerLike,
-    LoraConfig, LoraLinearConfig,
+    apply_scalings_to_x, get_maybe_topk_scalings, LinearLayerLike, LoraConfig, LoraLinearConfig,
+    Ordering,
 };
 
 <span class="attr">#[derive(Debug)]
-</span><span class="kw">pub struct </span>LoraLinear {
-    old: FrozenLinear,
+</span><span class="kw">pub struct </span>QLoraLinear {
+    old: QMatMul,
     a_adapters: Vec&lt;Linear&gt;,
     b_adapters: Vec&lt;Linear&gt;,
     scale_adapters: Vec&lt;f64&gt;,
@@ -132,32 +162,59 @@
     layer_n: usize,
 }
 
-<span class="kw">impl </span>LoraLinear {
+<span class="kw">impl </span>QLoraLinear {
     <span class="kw">pub fn </span>new(
-        old: <span class="kw-2">&amp;</span><span class="kw">dyn </span>LinearLayerLike,
+        old: QMatMul,
         linear_config: <span class="kw-2">&amp;</span>LoraLinearConfig,
         config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
         vb: <span class="kw-2">&amp;</span>VarBuilder,
-        layer_n: usize,
+        ordering: <span class="kw-2">&amp;</span>Ordering,
+        prefix: String,
+        count: <span class="kw-2">&amp;mut </span>usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">let </span>target_modules = <span class="kw-2">&amp;</span>config[<span class="number">0</span>].<span class="number">1</span>.target_modules;
+        <span class="kw">for </span>(<span class="kw">_</span>, cfg) <span class="kw">in </span>config {
+            <span class="kw">if </span><span class="kw-2">&amp;</span>cfg.target_modules != target_modules {
+                <span class="macro">candle_core::bail!</span>(<span class="string">"Expected all target modules to be the same."</span>);
+            }
+        }
+
+        <span class="kw">let </span>module = prefix.split(<span class="string">'.'</span>).last().unwrap();
+        <span class="kw">if </span>!target_modules.contains(module) {
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+                old,
+                a_adapters: <span class="macro">vec!</span>[],
+                b_adapters: <span class="macro">vec!</span>[],
+                scale_adapters: <span class="macro">vec!</span>[],
+                dropout_adapters: <span class="macro">vec!</span>[],
+                layer_n: usize::MAX,
+            });
+        }
+
+        <span class="kw-2">*</span>count += <span class="number">1</span>;
+
         <span class="kw">let </span><span class="kw-2">mut </span>a_adapters = Vec::with_capacity(config.len());
         <span class="kw">let </span><span class="kw-2">mut </span>b_adapters = Vec::with_capacity(config.len());
         <span class="kw">let </span><span class="kw-2">mut </span>scale_adapters = Vec::with_capacity(config.len());
         <span class="kw">let </span><span class="kw-2">mut </span>dropout_adapters = Vec::with_capacity(config.len());
+        <span class="kw">let </span>vb = vb.pp(prefix.clone());
         <span class="kw">let </span>a_vb = vb.pp(<span class="string">"lora_A"</span>.to_string());
         <span class="kw">let </span>b_vb = vb.pp(<span class="string">"lora_B"</span>.to_string());
         <span class="kw">for </span>(name, cfg) <span class="kw">in </span>config.iter() {
             <span class="kw">let </span>a_pp = a_vb.pp(name);
             <span class="macro">assert!</span>(a_pp.contains_tensor(<span class="string">"weight"</span>));
-            <span class="kw">let </span>a = a_pp.get_with_hints(
-                (cfg.rank, linear_config.in_features),
-                <span class="string">"weight"</span>,
-                init::DEFAULT_KAIMING_NORMAL,
-            )<span class="question-mark">?</span>;
+            <span class="kw">let </span>a = a_pp
+                .get_with_hints(
+                    (cfg.rank, linear_config.in_features),
+                    <span class="string">"weight"</span>,
+                    init::DEFAULT_KAIMING_NORMAL,
+                )<span class="question-mark">?
+                </span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
             <span class="kw">let </span>b_pp = b_vb.pp(name);
             <span class="macro">assert!</span>(b_pp.contains_tensor(<span class="string">"weight"</span>));
-            <span class="kw">let </span>b =
-                b_pp.get_with_hints((linear_config.out_features, cfg.rank), <span class="string">"weight"</span>, init::ZERO)<span class="question-mark">?</span>;
+            <span class="kw">let </span>b = b_pp
+                .get_with_hints((linear_config.out_features, cfg.rank), <span class="string">"weight"</span>, init::ZERO)<span class="question-mark">?
+                </span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
             a_adapters.push(Linear::new(a, <span class="prelude-val">None</span>));
             b_adapters.push(Linear::new(b, <span class="prelude-val">None</span>));
             scale_adapters.push(<span class="kw">if </span>cfg.rank &gt; <span class="number">0 </span>{
@@ -167,27 +224,28 @@
             </span>});
             dropout_adapters.push(cfg.dropout.map(Dropout::new));
         }
+        <span class="kw">let </span>layer = <span class="kw-2">*</span>ordering.layers.get(<span class="kw-2">&amp;</span>prefix).unwrap();
 
-        <span class="prelude-val">Ok</span>(LoraLinear {
-            old: FrozenLinear::new_from_linear(old)<span class="question-mark">?</span>,
+        <span class="prelude-val">Ok</span>(QLoraLinear {
+            old,
             a_adapters,
             b_adapters,
             scale_adapters,
             dropout_adapters,
-            layer_n,
+            layer_n: layer,
         })
     }
 }
 
-<span class="kw">impl </span>LinearLayerLike <span class="kw">for </span>LoraLinear {
+<span class="kw">impl </span>LinearLayerLike <span class="kw">for </span>QLoraLinear {
     <span class="kw">fn </span>bias(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt; {
-        <span class="self">self</span>.old.bias()
-    }
+        <span class="prelude-val">None
+    </span>}
     <span class="kw">fn </span>weight(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Tensor {
-        <span class="self">self</span>.old.weight()
+        <span class="macro">unimplemented!</span>()
     }
     <span class="kw">fn </span>shape(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Shape {
-        <span class="self">self</span>.old.shape()
+        <span class="macro">unimplemented!</span>()
     }
     <span class="kw">fn </span>lora_forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -195,9 +253,13 @@
         scalings: Tensor,
         global_scaling_weight: f64,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>scalings = get_maybe_topk_scalings(scalings, <span class="self">self</span>.layer_n)<span class="question-mark">?</span>;
         <span class="comment">//No fan_in_fan_out so no weight.transpose(0,1)
         </span><span class="kw">let </span><span class="kw-2">mut </span>result = <span class="self">self</span>.old.forward(input)<span class="question-mark">?</span>;
+        <span class="kw">if </span><span class="self">self</span>.a_adapters.is_empty() {
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(result);
+        }
+        <span class="kw">let </span>scalings = get_maybe_topk_scalings(scalings, <span class="self">self</span>.layer_n)<span class="question-mark">?</span>;
+
         <span class="kw">for </span>(i, (adapter_a, (adapter_b, (adapter_scale, adapter_dropout)))) <span class="kw">in </span>zip(
             <span class="kw-2">&amp;</span><span class="self">self</span>.a_adapters,
             zip(
@@ -207,15 +269,13 @@
         )
         .enumerate()
         {
-            <span class="kw">let </span><span class="kw-2">mut </span>input_new = input.to_dtype(adapter_a.weight().dtype())<span class="question-mark">?</span>;
-            input_new = apply_scalings_to_x(input_new.clone(), <span class="kw-2">&amp;</span>scalings, i)<span class="question-mark">?</span>;
+            <span class="kw">let </span><span class="kw-2">mut </span>input_new = apply_scalings_to_x(input.clone(), <span class="kw-2">&amp;</span>scalings, i)<span class="question-mark">?</span>;
 
             input_new = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>dropout) = adapter_dropout {
                 dropout.forward(<span class="kw-2">&amp;</span>input_new, <span class="bool-val">true</span>)<span class="question-mark">?
             </span>} <span class="kw">else </span>{
                 input_new.clone()
             };
-
             <span class="kw">let </span>res = adapter_b
                 .forward(<span class="kw-2">&amp;</span>adapter_a.forward(<span class="kw-2">&amp;</span>input_new)<span class="question-mark">?</span>)<span class="question-mark">?
                 </span>.mul(<span class="kw-2">*</span>adapter_scale)<span class="question-mark">?

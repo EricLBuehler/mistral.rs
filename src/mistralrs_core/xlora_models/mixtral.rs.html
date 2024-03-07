@@ -710,6 +710,12 @@
 <a href="#709" id="709">709</a>
 <a href="#710" id="710">710</a>
 <a href="#711" id="711">711</a>
+<a href="#712" id="712">712</a>
+<a href="#713" id="713">713</a>
+<a href="#714" id="714">714</a>
+<a href="#715" id="715">715</a>
+<a href="#716" id="716">716</a>
+<a href="#717" id="717">717</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
@@ -1261,7 +1267,13 @@
             dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
             max_seq_len: cfg.max_position_embeddings,
-            xlora_classifier: XLoraClassifier::new(xlora_config, count, lora_config.len(), vb)<span class="question-mark">?</span>,
+            xlora_classifier: XLoraClassifier::new(
+                xlora_config,
+                count,
+                lora_config.len(),
+                vb,
+                <span class="bool-val">false</span>,
+            )<span class="question-mark">?</span>,
         })
     }
 

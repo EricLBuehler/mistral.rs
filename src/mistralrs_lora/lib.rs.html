@@ -165,15 +165,39 @@
 <a href="#164" id="164">164</a>
 <a href="#165" id="165">165</a>
 <a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
+<a href="#168" id="168">168</a>
+<a href="#169" id="169">169</a>
+<a href="#170" id="170">170</a>
+<a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
+<a href="#175" id="175">175</a>
+<a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a>
+<a href="#178" id="178">178</a>
+<a href="#179" id="179">179</a>
+<a href="#180" id="180">180</a>
+<a href="#181" id="181">181</a>
+<a href="#182" id="182">182</a>
+<a href="#183" id="183">183</a>
+<a href="#184" id="184">184</a>
+<a href="#185" id="185">185</a>
+<a href="#186" id="186">186</a>
+<a href="#187" id="187">187</a>
+<a href="#188" id="188">188</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashSet, fmt::Debug, sync::Arc};
 
-<span class="kw">use </span>candle_core::{IndexOp, <span class="prelude-ty">Result</span>, Shape, Tensor, D};
+<span class="kw">use </span>candle_core::{quantized::QTensor, IndexOp, <span class="prelude-ty">Result</span>, Shape, Tensor, D};
 <span class="kw">use </span>candle_nn::{Linear, Module, VarBuilder};
-<span class="kw">use </span>loralinear::{LoraLinear, LoraLinearConfig};
+<span class="kw">use </span>loralinear::LoraLinear;
+<span class="kw">pub use </span>qloralinear::QLoraLinear;
 <span class="kw">use </span>serde::Deserialize;
 
 <span class="kw">mod </span>frozenlinear;
 <span class="kw">mod </span>loralinear;
+<span class="kw">mod </span>qloralinear;
 
 <span class="kw">use </span>std::collections::HashMap;
 
@@ -182,6 +206,22 @@
     <span class="attr">#[serde(rename = <span class="string">"order"</span>)]
     </span><span class="kw">pub </span>adapters: Vec&lt;String&gt;,
     <span class="kw">pub </span>layers: HashMap&lt;String, usize&gt;,
+}
+
+<span class="attr">#[derive(Clone, Debug)]
+</span><span class="doccomment">/// Configuration for LoraLinear
+</span><span class="kw">pub struct </span>LoraLinearConfig {
+    in_features: usize,
+    out_features: usize,
+}
+
+<span class="kw">impl </span>LoraLinearConfig {
+    <span class="kw">pub fn </span>new(in_features: usize, out_features: usize) -&gt; <span class="self">Self </span>{
+        LoraLinearConfig {
+            in_features,
+            out_features,
+        }
+    }
 }
 
 <span class="attr">#[derive(Clone, Debug, Deserialize)]
@@ -330,5 +370,9 @@
     } <span class="kw">else </span>{
         linear_no_bias(in_dim, out_dim, vb, lora_config, count, ord)
     }
+}
+
+<span class="kw">pub fn </span>get_lora_cfg(tensor: <span class="kw-2">&amp;</span>QTensor) -&gt; LoraLinearConfig {
+    LoraLinearConfig::new(tensor.shape().dims()[<span class="number">1</span>], tensor.shape().dims()[<span class="number">0</span>])
 }
 </code></pre></div></section></main></body></html>

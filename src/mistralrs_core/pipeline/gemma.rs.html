@@ -531,6 +531,8 @@
 <a href="#530" id="530">530</a>
 <a href="#531" id="531">531</a>
 <a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     get_completion_input, get_prompt_input, Conversation, Loader, ModelKind, ModelPaths, Pipeline,
     TokenSource,
@@ -929,6 +931,8 @@
                 )<span class="question-mark">?</span>;
                 Model::XLoraNormal(model)
             }
+            ModelKind::XLoraGGUF =&gt; <span class="macro">unreachable!</span>(),
+            ModelKind::XLoraGGML =&gt; <span class="macro">unreachable!</span>(),
         };
         <span class="macro">println!</span>(<span class="string">"Model loaded."</span>);
 
