@@ -570,10 +570,6 @@
 <a href="#569" id="569">569</a>
 <a href="#570" id="570">570</a>
 <a href="#571" id="571">571</a>
-<a href="#572" id="572">572</a>
-<a href="#573" id="573">573</a>
-<a href="#574" id="574">574</a>
-<a href="#575" id="575">575</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fs::File,
@@ -840,10 +836,6 @@
     <span class="doccomment">/// Use no KV cache.
     </span><span class="attr">#[arg(long, default_value_t = <span class="bool-val">false</span>)]
     </span>no_kv_cache: bool,
-
-    <span class="doccomment">/// Enable flash attention, only applicable if compiled with `--features flash-attn`
-    </span><span class="attr">#[arg(short, long, default_value_t = <span class="bool-val">false</span>)]
-    </span>use_flash_attn: bool,
 }
 
 <span class="kw">async fn </span>chatcompletions(
@@ -916,7 +908,7 @@
     <span class="attr">#[cfg(not(feature = <span class="string">"flash-attn"</span>))]
     </span><span class="kw">let </span>use_flash_attn = <span class="bool-val">false</span>;
     <span class="attr">#[cfg(feature = <span class="string">"flash-attn"</span>)]
-    </span><span class="kw">let </span>use_flash_attn = args.use_flash_attn;
+    </span><span class="kw">let </span>use_flash_attn = <span class="bool-val">true</span>;
 
     <span class="kw">let </span>loader: Box&lt;<span class="kw">dyn </span>Loader&gt; = <span class="kw">match </span>args.model {
         ModelSelected::Mistral {
