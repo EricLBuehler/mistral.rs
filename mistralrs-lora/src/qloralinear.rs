@@ -80,8 +80,7 @@ impl QLoraLinear {
             });
             dropout_adapters.push(cfg.dropout.map(Dropout::new));
         }
-        let name = prefix.split("lora_A").last().unwrap();
-        let layer = *ordering.layers.get(name).unwrap();
+        let layer = *ordering.layers.get(&prefix).unwrap();
         dbg!(&prefix, layer);
 
         Ok(QLoraLinear {
