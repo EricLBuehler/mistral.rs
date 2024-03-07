@@ -43,7 +43,7 @@ impl QLoraLinear {
                 b_adapters: vec![],
                 scale_adapters: vec![],
                 dropout_adapters: vec![],
-                layer_n: usize::MAX,
+                layer_n: 1234,
             });
         }
 
