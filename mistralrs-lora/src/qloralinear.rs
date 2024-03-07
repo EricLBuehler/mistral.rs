@@ -54,7 +54,6 @@ impl QLoraLinear {
         let mut scale_adapters = Vec::with_capacity(config.len());
         let mut dropout_adapters = Vec::with_capacity(config.len());
         let vb = vb.pp(prefix.clone());
-        dbg!(&prefix);
         let a_vb = vb.pp("lora_A".to_string());
         let b_vb = vb.pp("lora_B".to_string());
         for (name, cfg) in config.iter() {
@@ -83,6 +82,7 @@ impl QLoraLinear {
         }
         let name = prefix.split("lora_A").last().unwrap();
         let layer = *ordering.layers.get(name).unwrap();
+        dbg!(&prefix, layer);
 
         Ok(QLoraLinear {
             old,
