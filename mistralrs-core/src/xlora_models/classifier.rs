@@ -195,6 +195,8 @@ impl XLoraClassifier {
             scalings = softmax.forward(&scalings)?;
         }
 
+        dbg!(&scalings);
+
         Ok(scalings)
     }
 
