@@ -310,7 +310,7 @@ impl Loader for LlamaLoader {
         dtype: Option<DType>,
         device: &Device,
     ) -> Result<(
-        Box<Mutex<dyn Pipeline>>,
+        Box<Mutex<dyn Pipeline + Send + Sync>>,
         Arc<dyn Conversation + Send + Sync>,
     )> {
         let basic_config: LlamaConfig =

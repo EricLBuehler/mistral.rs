@@ -35,6 +35,7 @@ pub trait ModelPaths {
 }
 
 pub enum TokenSource {
+    Literal(String),
     EnvVar(String),
     Path(String),
     CacheToken,
@@ -73,7 +74,7 @@ pub trait Loader {
         dtype: Option<DType>,
         device: &Device,
     ) -> Result<(
-        Box<Mutex<dyn Pipeline>>,
+        Box<Mutex<dyn Pipeline + Send + Sync>>,
         Arc<dyn Conversation + Send + Sync>,
     )>;
 
@@ -87,7 +88,7 @@ pub trait Loader {
         dtype: Option<DType>,
         device: &Device,
     ) -> Result<(
-        Box<Mutex<dyn Pipeline>>,
+        Box<Mutex<dyn Pipeline + Send + Sync>>,
         Arc<dyn Conversation + Send + Sync>,
     )> {
         let paths = self.download_model(revision, token_source)?;

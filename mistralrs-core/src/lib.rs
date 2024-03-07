@@ -11,7 +11,8 @@ use std::{
 };
 
 use engine::Engine;
-use pipeline::Pipeline;
+pub use mistralrs_lora::Ordering;
+pub use pipeline::Pipeline;
 
 mod engine;
 mod models;

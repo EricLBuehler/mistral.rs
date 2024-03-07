@@ -17,3 +17,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = "0.20.0"
+mistralrs = { version = "0.1.0", path = "../mistralrs" }
+serde.workspace = true
+serde_json.workspace = true
+candle-core.workspace = true
