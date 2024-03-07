@@ -110,7 +110,13 @@ impl LoraLinear {
                     "weight",
                     init::ZERO,
                 )?;
-                a_adapters.push((a * (cfg.alpha / cfg.rank as f64))?);
+                a_adapters.push(
+                    (a * if cfg.rank > 0 {
+                        cfg.alpha / cfg.rank as f64
+                    } else {
+                        1.0
+                    })?,
+                );
                 b_adapters.push(b);
             }
             let a = Tensor::cat(&a_adapters, 0)?;
@@ -187,12 +193,6 @@ impl LinearLayerLike for LoraLinear {
             let a = self.a.as_ref().right().unwrap();
             let b = self.b.as_ref().right().unwrap();
             let dropout = self.dropout.as_ref().right().unwrap();
-            let init = Tensor::zeros(
-                (input.dims()[0], input.dims()[1], b.weight().dims()[0]),
-                input.dtype(),
-                input.device(),
-            )?
-            .unsqueeze(0)?;
             for i in 0..self.n_adapters {
                 let mut input_new = input.to_dtype(a.weight().dtype())?;
                 input_new = apply_scalings_to_x(input_new.clone(), &scalings, i)?;
@@ -206,13 +206,13 @@ impl LinearLayerLike for LoraLinear {
             }
             let input = Tensor::cat(&inputs, 0)?;
             let out = b.forward(&a.forward(&input)?)?;
-            let summed = (out
+
+            Ok(out
                 .chunk(self.n_adapters, 0)?
                 .iter()
-                .fold(init, |acc, x| (acc + x).unwrap())
-                * global_scaling_weight)?;
-
-            result + (summed.squeeze(0)?)
+                .fold(result, |acc, x| {
+                    (acc + (x.squeeze(0).unwrap()) * global_scaling_weight).unwrap()
+                }))
         }
     }
 }
