@@ -19,6 +19,7 @@ Mistral.rs is a LLM inference platform written in pure, safe Rust.
   - Normal
   - GGUF
   - X-LoRA
+  - X-LoRA + GGUF
 - Gemma
   - Normal
   - X-LoRA
@@ -27,10 +28,13 @@ Mistral.rs is a LLM inference platform written in pure, safe Rust.
   - GGUF
   - GGML
   - X-LoRA
+  - X-LoRA + GGUF
+  - X-LoRA + GGML
 - Mixtral 8x7B
   - Normal
   - GGUF
   - X-LoRA
+  - X-LoRA + GGUF
 
 **Library API**
 - Rust multithreaded API for easy integration into any application: [docs](https://ericlbuehler.github.io/mistral.rs/mistralrs/). To use, add `mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }` to the Cargo.toml.
@@ -42,7 +46,7 @@ Request docs can be found [here](https://ericlbuehler.github.io/mistral.rs/mistr
 [here](https://ericlbuehler.github.io/mistral.rs/mistralrs_core/index.html).
 
 ## Usage
-## Build
+### Build
 To build mistral.rs, one should ensure they have Rust installed by following [this](https://rustup.rs/) link.
 The Huggingface token should be provided in `~/.cache/huggingface/token`. 
 - Using a script
@@ -68,15 +72,31 @@ The Huggingface token should be provided in `~/.cache/huggingface/token`.
     If Rust is installed and the Huggingface token is set, then one may build mistral.rs by executing the build command.
     `cargo build --release`.
 The build process will output a binary `misralrs-server` at `./target/release/mistralrs-server`.
-## Building for GPU, Metal or enabling other features
+### Building for GPU, Metal or enabling other features
 Rust uses a feature flag system during build to implement compile-time build options. As such, the following is a list of features
 which may be specified using the `--features` command.
 1) `cuda`
 2) `metal`
 3) `flash-attn`: Be sure to pass `--use_flash_attn`
 
-## Preparing the X-LoRA Ordering File
+### X-LoRA
+**Preparing the X-LoRA Ordering File**
 The X-LoRA ordering JSON file contains 2 parts. The first is the order of the adapters and the second, the layer ordering. The layer ordering has been automatically generated and should not be manipulated as it controls the application of scalings. However the order of adapter should be replaced by an array of strings of adapter names corresponding to the order the adapters were specified during training.
+
+---
+
+**Quantized X-LoRA models**
+Mistral.rs supports running quantized models with X-LoRA. The X-LoRA layers will not be quantized, only the base model. Please note that
+using a high quantization level (eg., 4-bit) can distort the signal and prevent the classifier from acting properly. Therefore, it is better to use slightly higher levels such as 8-bit.
+
+**Supported X-LoRA quantized layers**
+- model.layers.{layer_idx}.self_attn.q_proj
+- model.layers.{layer_idx}.self_attn.k_proj
+- model.layers.{layer_idx}.self_attn.v_proj
+- model.layers.{layer_idx}.self_attn.o_proj
+- model.layers.{layer_idx}.mlp.up_proj
+- model.layers.{layer_idx}.mlp.down_proj
+- model.layers.{layer_idx}.mlp.gate_proj
 
 ## Run
 
@@ -94,7 +114,7 @@ To start an X-LoRA server with the default weights, run the following after modi
 ## Benchmarks
 For the prompt "Tell me about the Rust type system in depth." and a maximum length of 256.
 
-**A6000** Mistral + CUDA + Flash Attention
+**A6000** Mistral + CUDA + FlashAttention
 - 30.44 tok/s
 
 **A6000** Mistral GGUF + CUDA

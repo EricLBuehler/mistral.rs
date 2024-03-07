@@ -549,7 +549,13 @@ impl XLoraModel {
             dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: cfg.max_position_embeddings,
-            xlora_classifier: XLoraClassifier::new(xlora_config, count, lora_config.len(), vb)?,
+            xlora_classifier: XLoraClassifier::new(
+                xlora_config,
+                count,
+                lora_config.len(),
+                vb,
+                false,
+            )?,
         })
     }
 

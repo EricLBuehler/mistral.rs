@@ -43,6 +43,8 @@ pub enum TokenSource {
 pub enum ModelKind {
     Normal,
     XLoraNormal,
+    XLoraGGUF,
+    XLoraGGML,
     QuantizedGGUF,
     QuantizedGGML,
 }
