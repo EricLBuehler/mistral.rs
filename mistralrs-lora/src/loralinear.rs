@@ -113,7 +113,6 @@ impl LoraLinear {
                 a_adapters.push((a * (cfg.alpha / cfg.rank as f64))?);
                 b_adapters.push(b);
             }
-            dbg!(&b_adapters);
             let a = Tensor::cat(&a_adapters, 0)?;
             let b = Tensor::cat(&b_adapters, 1)?;
             let a = Linear::new(a, None);
@@ -191,7 +190,7 @@ impl LinearLayerLike for LoraLinear {
             dbg!(a.weight());
             dbg!(b.weight());
             let dropout = self.dropout.as_ref().right().unwrap();
-            let init = Tensor::zeros(input.shape(), input.dtype(), input.device())?.unsqueeze(0)?;
+            let init = Tensor::zeros((input.dims()[0], input.dims()[1], b.weight().dims()[0]), input.dtype(), input.device())?.unsqueeze(0)?;
             for i in 0..self.n_adapters {
                 let mut input_new = input.to_dtype(a.weight().dtype())?;
                 input_new = apply_scalings_to_x(input_new.clone(), &scalings, i)?;
