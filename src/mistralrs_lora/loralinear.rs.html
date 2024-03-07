@@ -229,6 +229,9 @@
 <a href="#228" id="228">228</a>
 <a href="#229" id="229">229</a>
 <a href="#230" id="230">230</a>
+<a href="#231" id="231">231</a>
+<a href="#232" id="232">232</a>
+<a href="#233" id="233">233</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{Module, <span class="prelude-ty">Result</span>, Shape, Tensor};
 <span class="kw">use </span>candle_nn::{init, Dropout, Linear, VarBuilder};
 <span class="kw">use </span>either::Either;
@@ -449,6 +452,9 @@
             </span>} <span class="kw">else </span>{
                 input.clone()
             };
+            <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>input);
+            <span class="macro">dbg!</span>(a.weight());
+            <span class="macro">dbg!</span>(b.weight());
             <span class="kw">let </span>out = b.forward(<span class="kw-2">&amp;</span>a.forward(<span class="kw-2">&amp;</span>input)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
 
             <span class="kw">for </span>chunk <span class="kw">in </span>out.chunk(<span class="self">self</span>.n_adapters, <span class="number">0</span>)<span class="question-mark">? </span>{
