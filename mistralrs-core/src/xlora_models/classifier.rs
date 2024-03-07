@@ -25,6 +25,7 @@ pub struct XLoraClassifier {
     model_layers: usize,
     n_classes: usize,
     config: XLoraConfig,
+    is_quantized: bool,
 }
 
 impl XLoraClassifier {
@@ -33,6 +34,7 @@ impl XLoraClassifier {
         n_layers: usize,
         n_classes: usize,
         vb: VarBuilder,
+        is_quantized: bool,
     ) -> Result<Self> {
         if config.top_k_lora.is_some() || config.enable_softmax_topk {
             // TODO(EricLBuehler): Implement
@@ -166,10 +168,14 @@ impl XLoraClassifier {
             model_layers: n_layers,
             n_classes,
             config,
+            is_quantized,
         })
     }
 
     pub fn forward(&self, mut hidden_states: Tensor) -> Result<Tensor> {
+        if self.is_quantized {
+            hidden_states = hidden_states.to_dtype(DType::BF16)?;
+        }
         for layer in &self.inner {
             hidden_states = layer.forward_t(&hidden_states, true)?;
         }
@@ -195,7 +201,7 @@ impl XLoraClassifier {
             scalings = softmax.forward(&scalings)?;
         }
 
-        Ok(scalings)
+        scalings.to_dtype(DType::F32)
     }
 
     pub fn get_dummy_scalings(

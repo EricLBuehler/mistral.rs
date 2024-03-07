@@ -442,7 +442,7 @@ impl XLoraModel {
             hidden_size: cfg.hidden_size,
             cache: Cache::new(cfg.num_hidden_layers, true),
             max_seq_len: default_max_position_embeddings(),
-            xlora_classifier: XLoraClassifier::new(xlora_config, count, lora_config.len(), vb)?,
+            xlora_classifier: XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false)?,
         })
     }
 

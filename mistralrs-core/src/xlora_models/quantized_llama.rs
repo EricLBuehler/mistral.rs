@@ -445,6 +445,7 @@ impl ModelWeights {
                 count,
                 lora_config.len(),
                 vb.clone(),
+                true,
             )?,
         })
     }
@@ -663,6 +664,7 @@ impl ModelWeights {
                 count,
                 lora_config.len(),
                 vb.clone(),
+                true,
             )?,
         })
     }
