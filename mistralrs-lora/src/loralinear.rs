@@ -115,9 +115,9 @@ impl LoraLinear {
                         cfg.alpha / cfg.rank as f64
                     } else {
                         1.0
-                    })?.unsqueeze(0)?,
+                    })?.unsqueeze(0)?.unsqueeze(0)?,
                 );
-                b_adapters.push(b.unsqueeze(0)?);
+                b_adapters.push(b.unsqueeze(0)?.unsqueeze(0)?);
             }
             let a = Tensor::cat(&a_adapters, 0)?;
             let b = Tensor::cat(&b_adapters, 0)?;
