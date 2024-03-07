@@ -7,6 +7,7 @@ use std::{
 use ::mistralrs::{
     Conversation, MistralRs, Request as _Request, Response, SamplingParams, StopTokens,
 };
+use loaders::mistral::MistralLoader;
 use pyo3::{exceptions::PyValueError, prelude::*};
 mod loaders;
 
@@ -90,14 +91,9 @@ impl MistralRunner {
     }
 }
 
-/// Formats the sum of two numbers as string.
-#[pyfunction]
-fn sum_as_string(a: usize, b: usize) -> PyResult<String> {
-    Ok((a + b).to_string())
-}
-
 #[pymodule]
 fn mistralrs(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(sum_as_string, m)?)?;
+    m.add_class::<MistralRunner>()?;
+    m.add_class::<MistralLoader>()?;
     Ok(())
 }

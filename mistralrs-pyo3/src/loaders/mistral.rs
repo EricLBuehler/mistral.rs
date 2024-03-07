@@ -10,7 +10,7 @@ use pyo3::{exceptions::PyValueError, prelude::*};
 use crate::{MistralRunner, ModelKind};
 
 #[pyclass]
-struct MistralLoader {
+pub struct MistralLoader {
     loader: _MistralLoader,
     no_kv_cache: bool,
 }

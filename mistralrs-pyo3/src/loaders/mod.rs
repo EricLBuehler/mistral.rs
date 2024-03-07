@@ -1,1 +1,1 @@
-mod mistral;
+pub mod mistral;
