@@ -55,7 +55,7 @@ impl QLoraLinear {
         let mut dropout_adapters = Vec::with_capacity(config.len());
         dbg!(vb.prefix());
         dbg!(&prefix);
-        let vb = vb.pp(prefix);
+        let vb = vb.pp(prefix.clone());
         let a_vb = vb.pp("lora_A".to_string());
         let b_vb = vb.pp("lora_B".to_string());
         for (name, cfg) in config.iter() {
