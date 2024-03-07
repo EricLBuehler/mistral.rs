@@ -217,6 +217,7 @@
 <a href="#216" id="216">216</a>
 <a href="#217" id="217">217</a>
 <a href="#218" id="218">218</a>
+<a href="#219" id="219">219</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{Module, <span class="prelude-ty">Result</span>, Shape, Tensor};
 <span class="kw">use </span>candle_nn::{init, Dropout, Linear, VarBuilder};
 <span class="kw">use </span>either::Either;
@@ -405,6 +406,7 @@
             <span class="kw">let </span><span class="kw-2">mut </span>inputs = Vec::new();
             <span class="kw">let </span>a = <span class="self">self</span>.a.as_ref().right().unwrap();
             <span class="kw">let </span>b = <span class="self">self</span>.b.as_ref().right().unwrap();
+            <span class="macro">dbg!</span>(<span class="self">self</span>.layer_n);
             <span class="macro">dbg!</span>(a.weight());
             <span class="macro">dbg!</span>(b.weight());
             <span class="kw">let </span>dropout = <span class="self">self</span>.dropout.as_ref().right().unwrap();
