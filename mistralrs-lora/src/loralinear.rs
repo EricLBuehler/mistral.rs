@@ -115,12 +115,12 @@ impl LoraLinear {
                         cfg.alpha / cfg.rank as f64
                     } else {
                         1.0
-                    })?,
+                    })?.unsqueeze(0)?,
                 );
-                b_adapters.push(b);
+                b_adapters.push(b.unsqueeze(0)?);
             }
             let a = Tensor::cat(&a_adapters, 0)?;
-            let b = Tensor::cat(&b_adapters, 1)?;
+            let b = Tensor::cat(&b_adapters, 0)?;
             let a = Linear::new(a, None);
             let b = Linear::new(b, None);
             (Either::Right(a), Either::Right(b), Either::Right(dropout))
@@ -137,6 +137,20 @@ impl LoraLinear {
             n_adapters: config.len(),
         })
     }
+}
+
+fn batch_matmul(a: Tensor, b: Tensor) -> Result<Tensor> {
+    // a has shape (N, L, M)
+    // b has shape (N, M, P)
+
+    // a -> (N, L, M, 1)
+    let a = a.unsqueeze(3)?;
+    // b -> (N, L, M, 1)
+    let b = b.unsqueeze(1)?;
+
+    let res = (a*b)?;
+    
+    res.sum(2)
 }
 
 impl LinearLayerLike for LoraLinear {
