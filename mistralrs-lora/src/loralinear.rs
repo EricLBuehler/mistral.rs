@@ -114,7 +114,7 @@ impl LoraLinear {
                 b_adapters.push(b);
             }
             let a = Tensor::cat(&a_adapters, 0)?;
-            let b = Tensor::cat(&a_adapters, 1)?;
+            let b = Tensor::cat(&b_adapters, 1)?;
             let a = Linear::new(a, None);
             let b = Linear::new(b, None);
             (Either::Right(a), Either::Right(b), Either::Right(dropout))
