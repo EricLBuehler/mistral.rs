@@ -202,6 +202,7 @@ impl LinearLayerLike for LoraLinear {
             let input = Tensor::cat(&inputs, 0)?;
             dbg!(&input);
             let out = b.forward(&a.forward(&input)?)?;
+            dbg!(&out);
             let summed = (out
                 .chunk(self.n_adapters, 0)?
                 .iter()
