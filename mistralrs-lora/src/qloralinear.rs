@@ -25,7 +25,7 @@ impl QLoraLinear {
         config: &[(String, LoraConfig)],
         vb: &VarBuilder,
         ordering: &Ordering,
-        module: String,
+        prefix: String,
         count: &mut usize,
     ) -> Result<Self> {
         let target_modules = &config[0].1.target_modules;
@@ -35,7 +35,8 @@ impl QLoraLinear {
             }
         }
 
-        if !target_modules.contains(&module) {
+        let module = prefix.split('.').last().unwrap();
+        if !target_modules.contains(module) {
             return Ok(Self {
                 old,
                 a_adapters: vec![],
@@ -75,6 +76,8 @@ impl QLoraLinear {
             });
             dropout_adapters.push(cfg.dropout.map(Dropout::new));
         }
+        let name = prefix.split("lora_A").last().unwrap();
+        let layer = *ordering.layers.get(name).unwrap();
 
         Ok(QLoraLinear {
             old,
@@ -82,7 +85,7 @@ impl QLoraLinear {
             b_adapters,
             scale_adapters,
             dropout_adapters,
-            layer_n: *ordering.layers.get(&module).unwrap(),
+            layer_n: layer,
         })
     }
 }
