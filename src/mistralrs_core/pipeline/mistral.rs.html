@@ -614,6 +614,18 @@
 <a href="#613" id="613">613</a>
 <a href="#614" id="614">614</a>
 <a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
+<a href="#617" id="617">617</a>
+<a href="#618" id="618">618</a>
+<a href="#619" id="619">619</a>
+<a href="#620" id="620">620</a>
+<a href="#621" id="621">621</a>
+<a href="#622" id="622">622</a>
+<a href="#623" id="623">623</a>
+<a href="#624" id="624">624</a>
+<a href="#625" id="625">625</a>
+<a href="#626" id="626">626</a>
+<a href="#627" id="627">627</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     get_completion_input, get_prompt_input, Conversation, Loader, ModelKind, ModelPaths, Pipeline,
     TokenSource,
@@ -722,7 +734,7 @@
     xlora_adapter_filenames: <span class="prelude-ty">Option</span>&lt;Vec&lt;(String, P)&gt;&gt;,
     xlora_adapter_configs: <span class="prelude-ty">Option</span>&lt;Vec&lt;(String, LoraConfig)&gt;&gt;,
     classifier_path: <span class="prelude-ty">Option</span>&lt;P&gt;,
-    classifier_config: <span class="prelude-ty">Option</span>&lt;P&gt;,
+    classifier_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
     xlora_ordering: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
 }
 
@@ -742,7 +754,7 @@
     <span class="kw">fn </span>get_adapter_configs(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Vec&lt;(String, LoraConfig)&gt;&gt; {
         <span class="kw-2">&amp;</span><span class="self">self</span>.xlora_adapter_configs
     }
-    <span class="kw">fn </span>get_classifier_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt; {
+    <span class="kw">fn </span>get_classifier_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;XLoraConfig&gt; {
         <span class="kw-2">&amp;</span><span class="self">self</span>.classifier_config
     }
     <span class="kw">fn </span>get_classifier_path(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt; {
@@ -873,7 +885,7 @@
             }
         };
 
-        <span class="kw">let </span>(adapters_configs, adapters_safetensors, classifier_path, classifier_config, ordering) =
+        <span class="kw">let </span>(adapters_configs, adapters_safetensors, classifier_path, ordering, xlora_config) =
             <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>xlora_id) = <span class="self">self</span>.xlora_model_id {
                 <span class="kw">let </span>api = ApiBuilder::new()
                     .with_progress(<span class="bool-val">true</span>)
@@ -900,6 +912,8 @@
                     .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()[<span class="number">0</span>];
                 <span class="kw">let </span>classifier_path = api.get(xlora_classifier)<span class="question-mark">?</span>;
                 <span class="kw">let </span>config_path = api.get(xlora_config)<span class="question-mark">?</span>;
+                <span class="kw">let </span>conf = fs::read_to_string(config_path)<span class="question-mark">?</span>;
+                <span class="kw">let </span>xlora_config: XLoraConfig = serde_json::from_str(<span class="kw-2">&amp;</span>conf)<span class="question-mark">?</span>;
 
                 <span class="kw">let </span>adapter_files = api
                     .info()<span class="question-mark">?
@@ -924,7 +938,23 @@
                 }
                 <span class="kw">let </span><span class="kw-2">mut </span>adapters_configs = Vec::new();
                 <span class="kw">let </span><span class="kw-2">mut </span>adapters_safetensors = Vec::new();
-                <span class="kw">for </span>name <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.xlora_order.as_ref().unwrap().adapters {
+                <span class="kw">let </span>adapter_order = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>a) = xlora_config.adapters {
+                    a.keys().cloned().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+                } <span class="kw">else </span>{
+                    <span class="kw">if </span><span class="self">self</span>.xlora_order.as_ref().unwrap().adapters.is_none() {
+                        <span class="kw">return </span><span class="prelude-val">Err</span>(anyhow::Error::msg(
+                            <span class="string">"Must specify adapters in ordering."</span>.to_string(),
+                        ));
+                    }
+                    <span class="self">self</span>.xlora_order
+                        .as_ref()
+                        .unwrap()
+                        .adapters
+                        .as_ref()
+                        .unwrap()
+                        .clone()
+                };
+                <span class="kw">for </span>name <span class="kw">in </span><span class="kw-2">&amp;</span>adapter_order {
                     <span class="kw">let </span>paths = adapters_paths.get(name).unwrap();
                     <span class="kw">for </span>path <span class="kw">in </span>paths {
                         <span class="kw">if </span>path.extension().unwrap() == <span class="string">"safetensors" </span>{
@@ -940,8 +970,8 @@
                     <span class="prelude-val">Some</span>(adapters_configs),
                     <span class="prelude-val">Some</span>(adapters_safetensors),
                     <span class="prelude-val">Some</span>(classifier_path),
-                    <span class="prelude-val">Some</span>(config_path),
                     <span class="self">self</span>.xlora_order.clone(),
+                    <span class="prelude-val">Some</span>(xlora_config),
                 )
             } <span class="kw">else </span>{
                 (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
@@ -954,7 +984,7 @@
             xlora_adapter_configs: adapters_configs,
             xlora_adapter_filenames: adapters_safetensors,
             classifier_path,
-            classifier_config,
+            classifier_config: xlora_config,
             xlora_ordering: ordering,
         }))
     }
@@ -1032,14 +1062,11 @@
                     <span class="bool-val">false</span>,
                 )<span class="question-mark">?</span>;
 
-                <span class="kw">let </span>conf = fs::read_to_string(paths.get_classifier_config().as_ref().unwrap())<span class="question-mark">?</span>;
-                <span class="kw">let </span>xlora_config: XLoraConfig = serde_json::from_str(<span class="kw-2">&amp;</span>conf)<span class="question-mark">?</span>;
-
                 <span class="kw">let </span>model = XLoraMistral::new(
                     <span class="kw-2">&amp;</span>config,
                     vb,
                     paths.get_adapter_configs().as_ref().unwrap(),
-                    xlora_config,
+                    paths.get_classifier_config().as_ref().unwrap().clone(),
                     paths.get_ordering().as_ref().unwrap().clone(),
                 )<span class="question-mark">?</span>;
                 Model::XLoraNormal(model)
@@ -1059,9 +1086,6 @@
                     <span class="bool-val">false</span>,
                 )<span class="question-mark">?</span>;
 
-                <span class="kw">let </span>conf = fs::read_to_string(paths.get_classifier_config().as_ref().unwrap())<span class="question-mark">?</span>;
-                <span class="kw">let </span>xlora_config: XLoraConfig = serde_json::from_str(<span class="kw-2">&amp;</span>conf)<span class="question-mark">?</span>;
-
                 <span class="kw">let </span><span class="kw-2">mut </span>file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())<span class="question-mark">?</span>;
                 <span class="kw">let </span>model = gguf_file::Content::read(<span class="kw-2">&amp;mut </span>file)
                     .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))<span class="question-mark">?</span>;
@@ -1072,7 +1096,7 @@
                     paths.get_adapter_configs().as_ref().unwrap(),
                     <span class="kw-2">&amp;</span>vb,
                     paths.get_ordering().as_ref().unwrap(),
-                    xlora_config,
+                    paths.get_classifier_config().as_ref().unwrap().clone(),
                 )<span class="question-mark">?</span>;
                 Model::XLoraQuantized(model)
             }

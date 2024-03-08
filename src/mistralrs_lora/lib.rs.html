@@ -204,7 +204,7 @@
 <span class="attr">#[derive(Clone, Debug, Deserialize)]
 </span><span class="kw">pub struct </span>Ordering {
     <span class="attr">#[serde(rename = <span class="string">"order"</span>)]
-    </span><span class="kw">pub </span>adapters: Vec&lt;String&gt;,
+    </span><span class="kw">pub </span>adapters: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
     <span class="kw">pub </span>layers: HashMap&lt;String, usize&gt;,
 }
 
