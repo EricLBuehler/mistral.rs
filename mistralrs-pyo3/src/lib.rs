@@ -55,24 +55,6 @@ struct MistralRunner {
     conversation: Arc<dyn Conversation + Send + Sync>,
 }
 
-#[pyclass]
-#[derive(Debug)]
-pub struct Request {
-    pub messages: Vec<HashMap<String, String>>,
-    pub model: String,
-    pub logit_bias: Option<HashMap<u32, f64>>,
-    pub logprobs: bool,
-    pub top_logprobs: Option<usize>,
-    pub max_tokens: Option<usize>,
-    pub n_choices: usize,
-    pub presence_penalty: Option<f32>,
-    pub repetition_penalty: Option<f32>,
-    pub stop_token_ids: Option<Vec<u32>>,
-    pub temperature: Option<f64>,
-    pub top_p: Option<f64>,
-    pub top_k: Option<usize>,
-}
-
 #[pymethods]
 impl MistralRunner {
     fn add_request(&mut self, request: Py<Request>) -> PyResult<String> {
@@ -119,10 +101,67 @@ impl MistralRunner {
     }
 }
 
+#[pyclass]
+#[derive(Debug)]
+struct Request {
+    messages: Vec<HashMap<String, String>>,
+    _model: String,
+    _logit_bias: Option<HashMap<u32, f64>>,
+    logprobs: bool,
+    top_logprobs: Option<usize>,
+    max_tokens: Option<usize>,
+    _n_choices: usize,
+    presence_penalty: Option<f32>,
+    repetition_penalty: Option<f32>,
+    stop_token_ids: Option<Vec<u32>>,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    top_k: Option<usize>,
+}
+
+#[pymethods]
+impl Request {
+    #[new]
+    #[pyo3(signature = (messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, repetition_penalty = None, stop_token_ids = None, temperature = None, top_p = None, top_k = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        messages: Vec<HashMap<String, String>>,
+        model: String,
+        logprobs: bool,
+        n_choices: usize,
+        logit_bias: Option<HashMap<u32, f64>>,
+        top_logprobs: Option<usize>,
+        max_tokens: Option<usize>,
+        presence_penalty: Option<f32>,
+        repetition_penalty: Option<f32>,
+        stop_token_ids: Option<Vec<u32>>,
+        temperature: Option<f64>,
+        top_p: Option<f64>,
+        top_k: Option<usize>,
+    ) -> Self {
+        Self {
+            messages,
+            _model: model,
+            _logit_bias: logit_bias,
+            logprobs,
+            top_logprobs,
+            max_tokens,
+            _n_choices: n_choices,
+            presence_penalty,
+            repetition_penalty,
+            stop_token_ids,
+            temperature,
+            top_p,
+            top_k,
+        }
+    }
+}
+
 #[pymodule]
 fn mistralrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<MistralRunner>()?;
     m.add_class::<MistralLoader>()?;
     m.add_class::<ModelKind>()?;
+    m.add_class::<Request>()?;
     Ok(())
 }
