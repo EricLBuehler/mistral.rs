@@ -27,6 +27,11 @@ Mistral.rs is a LLM inference platform written in pure, safe Rust.
 |Llama|✅|✅|✅|✅|✅|
 |Mixtral 8x7B|✅| |✅|✅|✅|
 
+Please note that when using a derivative model with a quantized architecture, it is important to specify the corresponding model ID for the tokenizer with `-t`:
+
+`./mistralrs-server --port 1234 --log output.txt mistral-gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf`
+
+Failing to do so will result in a incorrect prompt templating.
 
 **Library API**
 - Rust multithreaded API for easy integration into any application: [docs](https://ericlbuehler.github.io/mistral.rs/mistralrs/). To use, add `mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }` to the Cargo.toml.
