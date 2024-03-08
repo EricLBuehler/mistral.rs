@@ -13,10 +13,9 @@ use axum::{
 use candle_core::Device;
 use clap::{Parser, Subcommand};
 use mistralrs_core::{
-    Conversation, GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader,
-    MistralLoader, MistralRs, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig,
-    ModelKind, Request, Response, SamplingParams, SchedulerMethod,
-    StopTokens as InternalStopTokens, TokenSource,
+    GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader, MistralLoader,
+    MistralRs, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind, Request,
+    Response, SamplingParams, SchedulerMethod, StopTokens as InternalStopTokens, TokenSource,
 };
 use openai::{ChatCompletionRequest, StopTokens};
 mod openai;
@@ -391,7 +390,7 @@ struct Args {
 }
 
 async fn chatcompletions(
-    State((state, conv)): State<(Arc<MistralRs>, Arc<dyn Conversation + Send + Sync>)>,
+    State(state): State<Arc<MistralRs>>,
     Json(oairequest): Json<ChatCompletionRequest>,
 ) -> String {
     let (tx, rx) = channel();
@@ -410,12 +409,8 @@ async fn chatcompletions(
         message_map.insert("content".to_string(), message.content);
         messages.push(message_map);
     }
-    let prompt = match conv.get_prompt(messages, true) {
-        Err(e) => return e,
-        Ok(p) => p,
-    };
     let request = Request {
-        prompt,
+        messages,
         sampling_params: SamplingParams {
             temperature: oairequest.temperature,
             top_k: oairequest.top_k,
@@ -447,7 +442,7 @@ async fn chatcompletions(
     }
 }
 
-fn get_router(state: (Arc<MistralRs>, Arc<dyn Conversation + Send + Sync>)) -> Router {
+fn get_router(state: Arc<MistralRs>) -> Router {
     Router::new()
         .route("/v1/chat/completions", post(chatcompletions))
         .with_state(state)
@@ -760,7 +755,7 @@ async fn main() -> Result<()> {
     #[cfg(not(feature = "metal"))]
     let device = Device::cuda_if_available(0)?;
 
-    let (pipeline, conv) = loader.load_model(None, TokenSource::CacheToken, None, &device)?;
+    let pipeline = loader.load_model(None, TokenSource::CacheToken, None, &device)?;
     let mistralrs = MistralRs::new(
         pipeline,
         SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
@@ -769,7 +764,7 @@ async fn main() -> Result<()> {
         args.no_kv_cache,
     );
 
-    let app = get_router((mistralrs, conv));
+    let app = get_router(mistralrs);
 
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", args.port)).await?;
     println!("Serving on http://127.0.0.1:{}.", args.port);

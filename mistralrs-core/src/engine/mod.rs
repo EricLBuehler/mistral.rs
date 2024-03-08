@@ -323,8 +323,12 @@ impl Engine {
     }
 
     fn add_request(&mut self, request: Request) {
+        let prompt = handle_seq_error!(
+            get_mut_arcmutex!(self.pipeline).apply_chat_template(request.messages.clone(), true),
+            request.response
+        );
         let mut prompt = handle_seq_error!(
-            get_mut_arcmutex!(self.pipeline).tokenize_prompt(&request.prompt),
+            get_mut_arcmutex!(self.pipeline).tokenize_prompt(&prompt),
             request.response
         );
         if prompt.len() > get_mut_arcmutex!(self.pipeline).get_max_seq_len() {

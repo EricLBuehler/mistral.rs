@@ -9,18 +9,14 @@ use hf_hub::{
     Repo, RepoType,
 };
 pub use llama::{LlamaLoader, LlamaSpecificConfig};
+use minijinja::{context, Environment};
 pub use mistral::{MistralLoader, MistralSpecificConfig};
 use mistralrs_lora::{LoraConfig, Ordering};
 pub use mixtral::{MixtralLoader, MixtralSpecificConfig};
+use serde::Deserialize;
 use std::{
-    cell::RefCell,
-    collections::HashMap,
-    fs,
-    iter::repeat,
-    path::PathBuf,
-    rc::Rc,
-    str::FromStr,
-    sync::{Arc, Mutex},
+    cell::RefCell, collections::HashMap, fs, iter::repeat, path::PathBuf, rc::Rc, str::FromStr,
+    sync::Mutex,
 };
 use tokenizers::Tokenizer;
 
@@ -36,11 +32,46 @@ pub trait ModelPaths {
     fn get_weight_filenames(&self) -> &[PathBuf];
     fn get_config_filename(&self) -> &PathBuf;
     fn get_tokenizer_filename(&self) -> &PathBuf;
+    fn get_template_filename(&self) -> &PathBuf;
     fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>>;
     fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>>;
     fn get_classifier_path(&self) -> &Option<PathBuf>;
     fn get_classifier_config(&self) -> &Option<XLoraConfig>;
     fn get_ordering(&self) -> &Option<Ordering>;
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+pub struct AddedTokensDecoder {
+    content: String,
+    lstrip: bool,
+    normalized: bool,
+    rstrip: bool,
+    single_word: bool,
+    special: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+pub struct ChatTemplate {
+    add_bos_token: bool,
+    add_eos_token: bool,
+    added_tokens_decoder: HashMap<String, AddedTokensDecoder>,
+    additional_special_tokens: Vec<String>,
+    bos_token: String,
+    chat_template: String,
+    clean_up_tokenization_spaces: bool,
+    device_map: String,
+    eos_token: String,
+    legacy: bool,
+    model_max_length: usize,
+    pad_token: String,
+    sp_model_kwargs: HashMap<String, String>,
+    spaces_between_special_tokens: bool,
+    tokenizer_class: String,
+    truncation_size: String,
+    unk_token: String,
+    use_default_system_prompt: bool,
 }
 
 pub enum TokenSource {
@@ -59,15 +90,6 @@ pub enum ModelKind {
     QuantizedGGML,
 }
 
-/// Define a method to implement specific conversation processors which take in the messages and return a prompt.
-pub trait Conversation {
-    fn get_prompt(
-        &self,
-        messages: Vec<HashMap<String, String>>,
-        add_generation_prompt: bool,
-    ) -> Result<String, String>;
-}
-
 /// Encapsulate downloading and setting up the model. The `load_model` method is used to create the pipeline.
 pub trait Loader {
     fn download_model(
@@ -82,10 +104,7 @@ pub trait Loader {
         paths: &dyn ModelPaths,
         dtype: Option<DType>,
         device: &Device,
-    ) -> Result<(
-        Box<Mutex<dyn Pipeline + Send + Sync>>,
-        Arc<dyn Conversation + Send + Sync>,
-    )>;
+    ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>>;
 
     /// If `revision` is None, then it defaults to `main`.
     /// If `dtype` is None, then it defaults to the model default (usually F32). TODO(EricLBuehler): refine
@@ -96,10 +115,7 @@ pub trait Loader {
         token_source: TokenSource,
         dtype: Option<DType>,
         device: &Device,
-    ) -> Result<(
-        Box<Mutex<dyn Pipeline + Send + Sync>>,
-        Arc<dyn Conversation + Send + Sync>,
-    )> {
+    ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths = self.download_model(revision, token_source)?;
         self._setup_model(&*paths, dtype, device)
     }
@@ -118,6 +134,23 @@ pub trait Pipeline: Send + Sync {
     fn get_max_seq_len(&self) -> usize;
     fn is_xlora(&self) -> bool;
     fn has_no_kv_cache(&self) -> bool;
+    fn apply_chat_template(
+        &self,
+        messages: Vec<HashMap<String, String>>,
+        add_generation_prompt: bool,
+    ) -> Result<String> {
+        let mut env = Environment::new();
+        env.add_template("chat_template", &self.get_chat_template().chat_template)?;
+        let tmpl = env.get_template("chat_template").unwrap();
+        Ok(tmpl.render(context! {
+            messages => messages,
+            add_generation_prompt => add_generation_prompt,
+            bos_token => self.get_chat_template().bos_token,
+            eos_token => self.get_chat_template().eos_token,
+            unk_token => self.get_chat_template().unk_token
+        })?)
+    }
+    fn get_chat_template(&self) -> &ChatTemplate;
 }
 
 fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>], device: &Device) -> (Tensor, Vec<usize>) {

@@ -26,9 +26,8 @@ mod utils;
 mod xlora_models;
 
 pub use pipeline::{
-    Conversation, GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader,
-    MistralLoader, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind,
-    TokenSource,
+    GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader, MistralLoader,
+    MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind, TokenSource,
 };
 pub use request::Request;
 pub use response::Response;

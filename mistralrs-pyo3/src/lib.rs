@@ -5,9 +5,7 @@ use std::{
     sync::{mpsc::channel, Arc},
 };
 
-use ::mistralrs::{
-    Conversation, MistralRs, Request as _Request, Response, SamplingParams, StopTokens,
-};
+use ::mistralrs::{MistralRs, Request as _Request, Response, SamplingParams, StopTokens};
 use candle_core::Device;
 use loaders::{
     gemma::GemmaLoader, llama::LlamaLoader, mistral::MistralLoader, mixtral::MixtralLoader,
@@ -55,7 +53,6 @@ fn get_device() -> Result<Device> {
 /// An object wrapping the underlying Rust system to handle requests and process conversations.
 struct Runner {
     runner: Arc<MistralRs>,
-    conversation: Arc<dyn Conversation + Send + Sync>,
 }
 
 #[pymethods]
@@ -69,12 +66,8 @@ impl Runner {
                 .stop_token_ids
                 .as_ref()
                 .map(|x| StopTokens::Ids(x.to_vec()));
-            let prompt = match self.conversation.get_prompt(request.messages.clone(), true) {
-                Err(e) => return Err(PyValueError::new_err(e.to_string())),
-                Ok(p) => p,
-            };
             let model_request = _Request {
-                prompt,
+                messages: request.messages.clone(),
                 sampling_params: SamplingParams {
                     temperature: request.temperature,
                     top_k: request.top_k,

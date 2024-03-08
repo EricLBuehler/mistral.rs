@@ -1,5 +1,5 @@
 use super::{
-    get_completion_input, get_model_paths, get_prompt_input, get_xlora_paths, Conversation, Loader,
+    get_completion_input, get_model_paths, get_prompt_input, get_xlora_paths, ChatTemplate, Loader,
     ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
 };
 use crate::models::llama::MAX_SEQ_LEN;
@@ -19,9 +19,8 @@ use candle_sampling::logits_processor::Logprobs;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::{rc::Rc, sync::Mutex};
 use thiserror::Error;
 use tokenizers::Tokenizer;
@@ -33,49 +32,10 @@ enum Model {
     XLoraQuantized(XLoraModelWeights),
 }
 
-struct LlamaConversation;
-
-impl Conversation for LlamaConversation {
-    fn get_prompt(
-        &self,
-        messages: Vec<HashMap<String, String>>,
-        _add_generation_prompt: bool,
-    ) -> Result<String, String> {
-        let (loop_messages, system_msg) = if messages[0]["role"] == "system" {
-            (&messages[1..], Some(messages[0]["content"].clone()))
-        } else {
-            (&messages[..], None)
-        };
-        let mut content = "".to_string();
-        for (i, message) in loop_messages.iter().enumerate() {
-            if (message["role"] == "user") != (i % 2 == 0) {
-                return Err(
-                    "Conversation roles must alternate user/assistant/user/assistant/..."
-                        .to_string(),
-                );
-            }
-            let c = if i == 0 && system_msg.as_ref().is_some() {
-                format!(
-                    "<<SYS>>\n{}\n<</SYS>>\n\n{}",
-                    system_msg.as_ref().unwrap(),
-                    message["content"]
-                )
-            } else {
-                message["content"].clone()
-            };
-            if message["role"] == "user" {
-                content += &format!("<s>[INST] {} [/INST]", c.trim());
-            } else if message["role"] == "assistant" {
-                content += &format!(" {} </s>", c.trim());
-            }
-        }
-        Ok(content)
-    }
-}
-
 pub struct LlamaModelPaths<P> {
     tokenizer_filename: P,
     config_filename: P,
+    template_filename: P,
     filenames: Vec<P>,
     xlora_adapter_filenames: Option<Vec<(String, P)>>,
     xlora_adapter_configs: Option<Vec<(String, LoraConfig)>>,
@@ -109,6 +69,9 @@ impl ModelPaths for LlamaModelPaths<PathBuf> {
     fn get_ordering(&self) -> &Option<Ordering> {
         &self.xlora_ordering
     }
+    fn get_template_filename(&self) -> &PathBuf {
+        &self.template_filename
+    }
 }
 
 pub struct LlamaPipeline {
@@ -116,6 +79,7 @@ pub struct LlamaPipeline {
     tokenizer: Tokenizer,
     config: LlamaSpecificConfig,
     no_kv_cache: bool,
+    chat_template: ChatTemplate,
 }
 
 pub struct LlamaLoader {
@@ -209,6 +173,8 @@ impl Loader for LlamaLoader {
             &self.xlora_order,
         )?;
 
+        let template_filename = api.get("tokenizer_config.json")?;
+
         Ok(Box::new(LlamaModelPaths {
             tokenizer_filename,
             config_filename,
@@ -218,6 +184,7 @@ impl Loader for LlamaLoader {
             classifier_path,
             classifier_config: xlora_config,
             xlora_ordering: xlora_order,
+            template_filename,
         }))
     }
 
@@ -226,10 +193,7 @@ impl Loader for LlamaLoader {
         paths: &dyn ModelPaths,
         dtype: Option<DType>,
         device: &Device,
-    ) -> Result<(
-        Box<Mutex<dyn Pipeline + Send + Sync>>,
-        Arc<dyn Conversation + Send + Sync>,
-    )> {
+    ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         let basic_config: LlamaConfig =
             serde_json::from_slice(&std::fs::read(paths.get_config_filename())?)?;
         let default_dtype = if device.is_cuda() {
@@ -367,15 +331,16 @@ impl Loader for LlamaLoader {
         let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
 
-        Ok((
-            Box::new(Mutex::new(LlamaPipeline {
-                model,
-                tokenizer,
-                config: self.config,
-                no_kv_cache: self.no_kv_cache,
-            })),
-            Arc::new(LlamaConversation),
-        ))
+        let chat_template: ChatTemplate =
+            serde_json::from_str(&fs::read_to_string(paths.get_template_filename())?).unwrap();
+
+        Ok(Box::new(Mutex::new(LlamaPipeline {
+            model,
+            tokenizer,
+            config: self.config,
+            no_kv_cache: self.no_kv_cache,
+            chat_template,
+        })))
     }
 }
 
@@ -505,5 +470,8 @@ impl Pipeline for LlamaPipeline {
     }
     fn has_no_kv_cache(&self) -> bool {
         self.no_kv_cache
+    }
+    fn get_chat_template(&self) -> &ChatTemplate {
+        &self.chat_template
     }
 }

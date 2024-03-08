@@ -1,8 +1,9 @@
 use super::{
-    get_completion_input, get_model_paths, get_prompt_input, get_xlora_paths, Conversation, Loader,
-    ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
+    get_completion_input, get_model_paths, get_prompt_input, get_xlora_paths, Loader, ModelKind,
+    ModelPaths, Pipeline, TokenSource, XLoraPaths,
 };
 use crate::models::Cache;
+use crate::pipeline::ChatTemplate;
 use crate::xlora_models::{XLoraConfig, XLoraGemma};
 use crate::{deref_mut_refcell, deref_refcell};
 use crate::{
@@ -17,9 +18,8 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
 use serde::Deserialize;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::{rc::Rc, sync::Mutex};
 use thiserror::Error;
 use tokenizers::Tokenizer;
@@ -29,46 +29,10 @@ enum Model {
     XLoraNormal(XLoraGemma),
 }
 
-struct GemmaConversation;
-
-impl Conversation for GemmaConversation {
-    fn get_prompt(
-        &self,
-        messages: Vec<HashMap<String, String>>,
-        add_generation_prompt: bool,
-    ) -> Result<String, String> {
-        let bos_token = "<bos>".to_string();
-        if messages[0]["role"] == "system" {
-            return Err("System role not supported for Gemma.".to_string());
-        };
-        let mut content = bos_token;
-        for (i, message) in messages.iter().enumerate() {
-            if (message["role"] == "user") != (i % 2 == 0) {
-                return Err(
-                    "Conversation roles must alternate user/assistant/user/assistant/..."
-                        .to_string(),
-                );
-            }
-            let role = if message["role"] == "assistant" {
-                "model".to_string()
-            } else {
-                message["role"].to_string()
-            };
-            content += &format!(
-                "<start_of_turn>{role}\n{}<end_of_turn>\n",
-                message["content"].trim()
-            )
-        }
-        if add_generation_prompt {
-            content += "<start_of_turn>model\n"
-        }
-        Ok(content)
-    }
-}
-
 pub struct GemmaModelPaths<P> {
     tokenizer_filename: P,
     config_filename: P,
+    template_filename: P,
     filenames: Vec<P>,
     xlora_adapter_filenames: Option<Vec<(String, P)>>,
     xlora_adapter_configs: Option<Vec<(String, LoraConfig)>>,
@@ -102,6 +66,9 @@ impl ModelPaths for GemmaModelPaths<PathBuf> {
     fn get_ordering(&self) -> &Option<Ordering> {
         &self.xlora_ordering
     }
+    fn get_template_filename(&self) -> &PathBuf {
+        &self.template_filename
+    }
 }
 
 pub struct GemmaPipeline {
@@ -109,6 +76,7 @@ pub struct GemmaPipeline {
     tokenizer: Tokenizer,
     config: GemmaSpecificConfig,
     no_kv_cache: bool,
+    chat_template: ChatTemplate,
 }
 
 pub struct GemmaLoader {
@@ -222,6 +190,8 @@ impl Loader for GemmaLoader {
             &self.xlora_order,
         )?;
 
+        let template_filename = api.get("tokenizer_config.json")?;
+
         Ok(Box::new(GemmaModelPaths {
             tokenizer_filename,
             config_filename,
@@ -231,6 +201,7 @@ impl Loader for GemmaLoader {
             classifier_path,
             classifier_config: xlora_config,
             xlora_ordering: xlora_order,
+            template_filename,
         }))
     }
 
@@ -239,10 +210,7 @@ impl Loader for GemmaLoader {
         paths: &dyn ModelPaths,
         dtype: Option<DType>,
         device: &Device,
-    ) -> Result<(
-        Box<Mutex<dyn Pipeline + Send + Sync>>,
-        Arc<dyn Conversation + Send + Sync>,
-    )> {
+    ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         let basic_config: BasicConfig =
             serde_json::from_slice(&std::fs::read(paths.get_config_filename())?)?;
         let config = Config {
@@ -318,15 +286,16 @@ impl Loader for GemmaLoader {
         let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
 
-        Ok((
-            Box::new(Mutex::new(GemmaPipeline {
-                model,
-                tokenizer,
-                config: self.config,
-                no_kv_cache: self.no_kv_cache,
-            })),
-            Arc::new(GemmaConversation),
-        ))
+        let chat_template: ChatTemplate =
+            serde_json::from_str(&fs::read_to_string(paths.get_template_filename())?).unwrap();
+
+        Ok(Box::new(Mutex::new(GemmaPipeline {
+            model,
+            tokenizer,
+            config: self.config,
+            no_kv_cache: self.no_kv_cache,
+            chat_template,
+        })))
     }
 }
 
@@ -444,5 +413,8 @@ impl Pipeline for GemmaPipeline {
     }
     fn has_no_kv_cache(&self) -> bool {
         self.no_kv_cache
+    }
+    fn get_chat_template(&self) -> &ChatTemplate {
+        &self.chat_template
     }
 }

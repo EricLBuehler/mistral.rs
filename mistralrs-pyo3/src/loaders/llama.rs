@@ -152,7 +152,7 @@ impl LlamaLoader {
         };
 
         let res = self.loader.load_model(revision, source, None, &device);
-        let (pipeline, conversation) = match res {
+        let pipeline = match res {
             Ok(x) => x,
             Err(y) => return Err(PyValueError::new_err(y.to_string())),
         };
@@ -165,9 +165,6 @@ impl LlamaLoader {
             self.no_kv_cache,
         );
 
-        Ok(Runner {
-            runner: mistralrs,
-            conversation,
-        })
+        Ok(Runner { runner: mistralrs })
     }
 }

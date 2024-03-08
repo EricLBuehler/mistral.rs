@@ -30,6 +30,7 @@ range-checked = { git = "https://github.com/EricLBuehler/range-checked.git", ver
 chrono = "0.4.34"
 mistralrs-lora = { version = "0.1.0", path = "../mistralrs-lora" }
 indexmap = { version = "2.2.5", features = ["serde"] }
+minijinja = "1.0.12"
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
