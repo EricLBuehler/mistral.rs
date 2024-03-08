@@ -1,0 +1,28 @@
+[package]
+name = "mistralrs-pyo3"
+authors = ["Eric Buehler"]
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "mistralrs"
+crate-type = ["cdylib"]
+doc = false
+
+[dependencies]
+pyo3 = "0.20.0"
+mistralrs = { version = "0.1.0", path = "../mistralrs" }
+serde.workspace = true
+serde_json.workspace = true
+candle-core.workspace = true
+
+[features]
+cuda = ["candle-core/cuda", "mistralrs/cuda"]
+metal = ["candle-core/metal", "mistralrs/metal"]
+flash-attn = ["cuda", "mistralrs/flash-attn"]

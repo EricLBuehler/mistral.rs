@@ -13,6 +13,7 @@ enum TokenRetrievalError {
 
 pub(crate) fn get_token(source: &TokenSource) -> Result<String> {
     Ok(match source {
+        TokenSource::Literal(data) => data.clone(),
         TokenSource::EnvVar(envvar) => env::var(envvar)?,
         TokenSource::Path(path) => fs::read_to_string(path)?,
         TokenSource::CacheToken => fs::read_to_string(format!(
