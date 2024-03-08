@@ -468,89 +468,9 @@
 <a href="#467" id="467">467</a>
 <a href="#468" id="468">468</a>
 <a href="#469" id="469">469</a>
-<a href="#470" id="470">470</a>
-<a href="#471" id="471">471</a>
-<a href="#472" id="472">472</a>
-<a href="#473" id="473">473</a>
-<a href="#474" id="474">474</a>
-<a href="#475" id="475">475</a>
-<a href="#476" id="476">476</a>
-<a href="#477" id="477">477</a>
-<a href="#478" id="478">478</a>
-<a href="#479" id="479">479</a>
-<a href="#480" id="480">480</a>
-<a href="#481" id="481">481</a>
-<a href="#482" id="482">482</a>
-<a href="#483" id="483">483</a>
-<a href="#484" id="484">484</a>
-<a href="#485" id="485">485</a>
-<a href="#486" id="486">486</a>
-<a href="#487" id="487">487</a>
-<a href="#488" id="488">488</a>
-<a href="#489" id="489">489</a>
-<a href="#490" id="490">490</a>
-<a href="#491" id="491">491</a>
-<a href="#492" id="492">492</a>
-<a href="#493" id="493">493</a>
-<a href="#494" id="494">494</a>
-<a href="#495" id="495">495</a>
-<a href="#496" id="496">496</a>
-<a href="#497" id="497">497</a>
-<a href="#498" id="498">498</a>
-<a href="#499" id="499">499</a>
-<a href="#500" id="500">500</a>
-<a href="#501" id="501">501</a>
-<a href="#502" id="502">502</a>
-<a href="#503" id="503">503</a>
-<a href="#504" id="504">504</a>
-<a href="#505" id="505">505</a>
-<a href="#506" id="506">506</a>
-<a href="#507" id="507">507</a>
-<a href="#508" id="508">508</a>
-<a href="#509" id="509">509</a>
-<a href="#510" id="510">510</a>
-<a href="#511" id="511">511</a>
-<a href="#512" id="512">512</a>
-<a href="#513" id="513">513</a>
-<a href="#514" id="514">514</a>
-<a href="#515" id="515">515</a>
-<a href="#516" id="516">516</a>
-<a href="#517" id="517">517</a>
-<a href="#518" id="518">518</a>
-<a href="#519" id="519">519</a>
-<a href="#520" id="520">520</a>
-<a href="#521" id="521">521</a>
-<a href="#522" id="522">522</a>
-<a href="#523" id="523">523</a>
-<a href="#524" id="524">524</a>
-<a href="#525" id="525">525</a>
-<a href="#526" id="526">526</a>
-<a href="#527" id="527">527</a>
-<a href="#528" id="528">528</a>
-<a href="#529" id="529">529</a>
-<a href="#530" id="530">530</a>
-<a href="#531" id="531">531</a>
-<a href="#532" id="532">532</a>
-<a href="#533" id="533">533</a>
-<a href="#534" id="534">534</a>
-<a href="#535" id="535">535</a>
-<a href="#536" id="536">536</a>
-<a href="#537" id="537">537</a>
-<a href="#538" id="538">538</a>
-<a href="#539" id="539">539</a>
-<a href="#540" id="540">540</a>
-<a href="#541" id="541">541</a>
-<a href="#542" id="542">542</a>
-<a href="#543" id="543">543</a>
-<a href="#544" id="544">544</a>
-<a href="#545" id="545">545</a>
-<a href="#546" id="546">546</a>
-<a href="#547" id="547">547</a>
-<a href="#548" id="548">548</a>
-<a href="#549" id="549">549</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
-    get_completion_input, get_prompt_input, Conversation, Loader, ModelKind, ModelPaths, Pipeline,
-    TokenSource,
+    get_completion_input, get_prompt_input, get_xlora_paths, Conversation, Loader, ModelKind,
+    ModelPaths, Pipeline, TokenSource, XLoraPaths,
 };
 <span class="kw">use </span><span class="kw">crate</span>::models::Cache;
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::{XLoraConfig, XLoraGemma};
@@ -568,7 +488,6 @@
 <span class="kw">use </span>serde::Deserialize;
 <span class="kw">use </span>std::cell::RefCell;
 <span class="kw">use </span>std::collections::HashMap;
-<span class="kw">use </span>std::fs;
 <span class="kw">use </span>std::path::PathBuf;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{rc::Rc, sync::Mutex};
@@ -781,107 +700,28 @@
             }
         };
 
-        <span class="kw">let </span>(adapters_configs, adapters_safetensors, classifier_path, ordering, xlora_config) =
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>xlora_id) = <span class="self">self</span>.xlora_model_id {
-                <span class="kw">let </span>api = ApiBuilder::new()
-                    .with_progress(<span class="bool-val">true</span>)
-                    .with_token(<span class="prelude-val">Some</span>(get_token(<span class="kw-2">&amp;</span>token_source)<span class="question-mark">?</span>))
-                    .build()<span class="question-mark">?</span>;
-                <span class="kw">let </span>api = api.repo(Repo::with_revision(
-                    xlora_id.clone(),
-                    RepoType::Model,
-                    revision,
-                ));
-                <span class="kw">let </span>xlora_classifier = <span class="kw-2">&amp;</span>api
-                    .info()<span class="question-mark">?
-                    </span>.siblings
-                    .iter()
-                    .map(|x| x.rfilename.clone())
-                    .filter(|x| x.contains(<span class="string">"xlora_classifier.safetensors"</span>))
-                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()[<span class="number">0</span>];
-                <span class="kw">let </span>xlora_config = <span class="kw-2">&amp;</span>api
-                    .info()<span class="question-mark">?
-                    </span>.siblings
-                    .iter()
-                    .map(|x| x.rfilename.clone())
-                    .filter(|x| x.contains(<span class="string">"xlora_config.json"</span>))
-                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()[<span class="number">0</span>];
-                <span class="kw">let </span>classifier_path = api.get(xlora_classifier)<span class="question-mark">?</span>;
-                <span class="kw">let </span>config_path = api.get(xlora_config)<span class="question-mark">?</span>;
-                <span class="kw">let </span>conf = fs::read_to_string(config_path)<span class="question-mark">?</span>;
-                <span class="kw">let </span>xlora_config: XLoraConfig = serde_json::from_str(<span class="kw-2">&amp;</span>conf)<span class="question-mark">?</span>;
-
-                <span class="kw">let </span>adapter_files = api
-                    .info()<span class="question-mark">?
-                    </span>.siblings
-                    .iter()
-                    .map(|x| x.rfilename.clone())
-                    .filter(|x| x.contains(<span class="string">"/adapter_"</span>))
-                    .map(|x| {
-                        <span class="kw">let </span><span class="kw-2">mut </span>split = x.split(<span class="string">'/'</span>);
-                        <span class="kw">let </span>pos = split.clone().count() - <span class="number">2</span>;
-                        <span class="kw">let </span>name = split.nth(pos).unwrap().to_string();
-                        (x, name)
-                    })
-                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-                <span class="kw">let </span><span class="kw-2">mut </span>adapters_paths: HashMap&lt;String, Vec&lt;PathBuf&gt;&gt; = HashMap::new();
-                <span class="kw">for </span>(file, name) <span class="kw">in </span>adapter_files {
-                    <span class="kw">if let </span><span class="prelude-val">Some</span>(paths) = adapters_paths.get_mut(<span class="kw-2">&amp;</span>name) {
-                        paths.push(api.get(<span class="kw-2">&amp;</span>file)<span class="question-mark">?</span>);
-                    } <span class="kw">else </span>{
-                        adapters_paths.insert(name, <span class="macro">vec!</span>[api.get(<span class="kw-2">&amp;</span>file)<span class="question-mark">?</span>]);
-                    }
-                }
-                <span class="kw">let </span><span class="kw-2">mut </span>adapters_configs = Vec::new();
-                <span class="kw">let </span><span class="kw-2">mut </span>adapters_safetensors = Vec::new();
-                <span class="kw">let </span>adapter_order = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>a) = xlora_config.adapters {
-                    a.keys().cloned().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-                } <span class="kw">else </span>{
-                    <span class="kw">if </span><span class="self">self</span>.xlora_order.as_ref().unwrap().adapters.is_none() {
-                        <span class="kw">return </span><span class="prelude-val">Err</span>(anyhow::Error::msg(
-                            <span class="string">"Must specify adapters in ordering."</span>.to_string(),
-                        ));
-                    }
-                    <span class="self">self</span>.xlora_order
-                        .as_ref()
-                        .unwrap()
-                        .adapters
-                        .as_ref()
-                        .unwrap()
-                        .clone()
-                };
-                <span class="kw">for </span>name <span class="kw">in </span><span class="kw-2">&amp;</span>adapter_order {
-                    <span class="kw">let </span>paths = adapters_paths.get(name).unwrap();
-                    <span class="kw">for </span>path <span class="kw">in </span>paths {
-                        <span class="kw">if </span>path.extension().unwrap() == <span class="string">"safetensors" </span>{
-                            adapters_safetensors.push((name.clone(), path.to_owned()));
-                        } <span class="kw">else </span>{
-                            <span class="kw">let </span>conf = fs::read_to_string(path)<span class="question-mark">?</span>;
-                            <span class="kw">let </span>lora_config: LoraConfig = serde_json::from_str(<span class="kw-2">&amp;</span>conf)<span class="question-mark">?</span>;
-                            adapters_configs.push((name.clone(), lora_config));
-                        }
-                    }
-                }
-                (
-                    <span class="prelude-val">Some</span>(adapters_configs),
-                    <span class="prelude-val">Some</span>(adapters_safetensors),
-                    <span class="prelude-val">Some</span>(classifier_path),
-                    <span class="self">self</span>.xlora_order.clone(),
-                    <span class="prelude-val">Some</span>(xlora_config),
-                )
-            } <span class="kw">else </span>{
-                (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
-            };
+        <span class="kw">let </span>XLoraPaths {
+            adapter_configs,
+            adapter_safetensors,
+            classifier_path,
+            xlora_order,
+            xlora_config,
+        } = get_xlora_paths(
+            <span class="kw-2">&amp;</span><span class="self">self</span>.xlora_model_id,
+            <span class="kw-2">&amp;</span>token_source,
+            revision.clone(),
+            <span class="kw-2">&amp;</span><span class="self">self</span>.xlora_order,
+        )<span class="question-mark">?</span>;
 
         <span class="prelude-val">Ok</span>(Box::new(GemmaModelPaths {
             tokenizer_filename,
             config_filename,
             filenames,
-            xlora_adapter_configs: adapters_configs,
-            xlora_adapter_filenames: adapters_safetensors,
+            xlora_adapter_configs: adapter_configs,
+            xlora_adapter_filenames: adapter_safetensors,
             classifier_path,
             classifier_config: xlora_config,
-            xlora_ordering: ordering,
+            xlora_ordering: xlora_order,
         }))
     }
 
