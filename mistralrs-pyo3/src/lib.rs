@@ -23,7 +23,9 @@ enum ModelKind {
     QuantizedGGML,
 }
 
+#[cfg(not(feature = "metal"))]
 static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
+#[cfg(feature = "metal")]
 static METAL_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
 
 #[cfg(not(feature = "metal"))]
@@ -32,7 +34,9 @@ fn get_device() -> Result<Device> {
     if let Some(device) = device.as_ref() {
         return Ok(device.clone());
     };
-    Device::cuda_if_available(0)
+    let res = Device::cuda_if_available(0)?;
+    *device = Some(res.clone());
+    return Ok(res);
 }
 #[cfg(feature = "metal")]
 fn get_device() -> Result<Device> {
@@ -40,7 +44,9 @@ fn get_device() -> Result<Device> {
     if let Some(device) = device.as_ref() {
         return Ok(device.clone());
     };
-    Device::new_metal(0)
+    let res = Device::new_metal(0)?;
+    *device = Some(res.clone());
+    return Ok(res);
 }
 
 #[pyclass]

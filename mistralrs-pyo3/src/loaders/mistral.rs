@@ -7,7 +7,7 @@ use mistralrs::{
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
 
-use crate::{get_device, MistralRunner, ModelKind, METAL_DEVICE};
+use crate::{get_device, MistralRunner, ModelKind};
 
 #[pyclass]
 pub struct MistralLoader {
