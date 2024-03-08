@@ -10,7 +10,7 @@ loader = MistralLoader(
     quantized_filename="mistral-7b-instruct-v0.1.Q4_K_M.gguf",
 )
 runner = loader.load()
-res = runner.add_request(
+res = runner.make_request(
     Request(
         model="mistral",
         messages=[
