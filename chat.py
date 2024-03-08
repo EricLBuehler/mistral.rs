@@ -16,9 +16,9 @@ while True:
         model="mistral",
         messages=messages,
         max_tokens=256,
-        frequency_penalty=1.,
-        top_p=0.1,# top_k=32,  
-        temperature=.1
+        frequency_penalty=1.0,
+        top_p=0.1,  # top_k=32,
+        temperature=0.1,
     )
     resp = completion.choices[0].message.content
     if "<|assistant|>" in resp:
