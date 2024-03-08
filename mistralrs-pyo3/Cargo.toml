@@ -9,6 +9,7 @@ keywords.workspace = true
 categories.workspace = true
 license.workspace = true
 homepage.workspace = true
+doc = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
