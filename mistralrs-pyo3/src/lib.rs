@@ -50,6 +50,7 @@ fn get_device() -> Result<Device> {
 }
 
 #[pyclass]
+/// An object wrapping the underlying Rust system to handle requests and process conversations.
 struct MistralRunner {
     runner: Arc<MistralRs>,
     conversation: Arc<dyn Conversation + Send + Sync>,
@@ -57,7 +58,8 @@ struct MistralRunner {
 
 #[pymethods]
 impl MistralRunner {
-    fn add_request(&mut self, request: Py<Request>) -> PyResult<String> {
+    /// Send an OpenAI API compatible request, returning raw JSON.
+    fn send_chat_completion_request(&mut self, request: Py<Request>) -> PyResult<String> {
         let (tx, rx) = channel();
         Python::with_gil(|py| {
             let request = request.as_ref(py).borrow();
@@ -103,6 +105,7 @@ impl MistralRunner {
 
 #[pyclass]
 #[derive(Debug)]
+/// An OpenAI API compatible chat completion request.
 struct Request {
     messages: Vec<HashMap<String, String>>,
     _model: String,
