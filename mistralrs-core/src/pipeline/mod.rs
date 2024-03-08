@@ -40,38 +40,12 @@ pub trait ModelPaths {
     fn get_ordering(&self) -> &Option<Ordering>;
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-pub struct AddedTokensDecoder {
-    content: String,
-    lstrip: bool,
-    normalized: bool,
-    rstrip: bool,
-    single_word: bool,
-    special: bool,
-}
-
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct ChatTemplate {
-    add_bos_token: bool,
-    add_eos_token: bool,
-    added_tokens_decoder: HashMap<String, AddedTokensDecoder>,
-    additional_special_tokens: Vec<String>,
     bos_token: String,
     chat_template: String,
-    clean_up_tokenization_spaces: bool,
-    device_map: Option<String>,
     eos_token: String,
-    legacy: bool,
-    model_max_length: f64,
-    pad_token: Option<String>,
-    sp_model_kwargs: HashMap<String, String>,
-    spaces_between_special_tokens: bool,
-    tokenizer_class: String,
-    truncation_size: Option<String>,
     unk_token: String,
-    use_default_system_prompt: bool,
 }
 
 pub enum TokenSource {
