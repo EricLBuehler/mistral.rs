@@ -4,10 +4,11 @@
 Mistral.rs is a LLM inference platform written in pure, safe Rust.
 
 ## Upcoming features
-- Python bindings
+- Falcon
 
 ## Description
 - Lightweight OpenAI API compatible HTTP server.
+- Python API.
 - Fast performance with per-sequence and catch-up KV cache management technique.
 - Continuous batching.
 - First X-LoRA inference platform with first class support.
@@ -33,15 +34,19 @@ Please note that when using a derivative model with a quantized architecture, it
 
 `./mistralrs-server --port 1234 --log output.txt mistral-gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf`
 
-**Library API**
+**Rust Library API**
 
 Rust multithreaded API for easy integration into any application: [docs](https://ericlbuehler.github.io/mistral.rs/mistralrs/). To use, add `mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }` to the Cargo.toml.
+
+**Python API**
+
+A Python API is provided. Please see [these docs](mistralrs-pyo3/README.md) for getting started, and [this file](examples/python_api.py) for a use case.
 
 **HTTP Server**
 
 Mistral.rs provides an OpenAI API compatible API server, documentation [here](examples/http.md).
 
-To get started see [this](README.md#run) section.
+To get started see [this](README.md#run) section, and [this file](examples/chat.py) for an example of a simple chat program.
 
 ## Usage
 ### Build
