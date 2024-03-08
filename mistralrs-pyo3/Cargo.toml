@@ -9,11 +9,11 @@ keywords.workspace = true
 categories.workspace = true
 license.workspace = true
 homepage.workspace = true
-doc = false
 
 [lib]
 name = "mistralrs"
 crate-type = ["cdylib"]
+doc = false
 
 [dependencies]
 pyo3 = "0.20.0"
