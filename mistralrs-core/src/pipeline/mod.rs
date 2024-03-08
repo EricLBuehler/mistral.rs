@@ -65,7 +65,7 @@ pub struct ChatTemplate {
     eos_token: String,
     legacy: bool,
     model_max_length: f64,
-    pad_token: String,
+    pad_token: Option<String>,
     sp_model_kwargs: HashMap<String, String>,
     spaces_between_special_tokens: bool,
     tokenizer_class: String,
