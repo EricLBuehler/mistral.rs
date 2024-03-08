@@ -30,8 +30,8 @@ pub use pipeline::{
     TokenSource,
 };
 pub use request::Request;
-pub use response::{ChatCompletionResponse, ChatCompletionUsage};
 pub use response::Response;
+pub use response::{ChatCompletionResponse, ChatCompletionUsage};
 pub use sampling::{SamplingParams, StopTokens};
 pub use scheduler::SchedulerMethod;
 
