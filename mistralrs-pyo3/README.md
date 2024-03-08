@@ -1,6 +1,6 @@
 # mistralrs PyO3 Bindings
 
-To use, activate a Python virtual enviornment and ensure that `maturin` is installed, for example
+To use, activate a Python virtual enviornment and ensure that `maturin` is installed, for example:
 
 ```bash
 python3 -m venv myenv
@@ -8,7 +8,7 @@ source myenv/bin/activate
 pip install maturin
 ```
 
-And then install `mistralrs` by executing the following.
+And then install `mistralrs` by executing the following in this directory.
 
 ```bash
 maturin develop -r --features ...
