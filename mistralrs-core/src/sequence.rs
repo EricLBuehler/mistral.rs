@@ -27,7 +27,7 @@ pub struct Sequence {
     logprobs: Vec<Logprobs>,
     prompt_len: usize,
     id: usize,
-    timestamp: u64,
+    timestamp: u128,
     state: Cell<SequenceState>,
     cache: Vec<Option<(Tensor, Tensor)>>,
     xlora_cache: Option<Vec<Option<(Tensor, Tensor)>>>,
@@ -37,7 +37,7 @@ pub struct Sequence {
     max_len: Option<usize>,
     return_logprobs: bool,
     pub prompt_tok_per_sec: f32,
-    pub prompt_timestamp: Option<u64>,
+    pub prompt_timestamp: Option<u128>,
 }
 
 impl Sequence {
@@ -45,7 +45,7 @@ impl Sequence {
     pub fn new_waiting(
         tokens: Vec<u32>,
         id: usize,
-        timestamp: u64,
+        timestamp: u128,
         layers: usize,
         responder: Sender<Response>,
         logits_processor: LogitsProcessor,
@@ -165,11 +165,11 @@ impl Sequence {
         self.prompt_len
     }
 
-    pub fn timestamp(&self) -> u64 {
+    pub fn timestamp(&self) -> u128 {
         self.timestamp
     }
 
-    pub fn prompt_timestamp(&self) -> Option<u64> {
+    pub fn prompt_timestamp(&self) -> Option<u128> {
         self.prompt_timestamp
     }
 }

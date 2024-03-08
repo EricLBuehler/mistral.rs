@@ -85,11 +85,11 @@ impl Engine {
                     let now = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .expect("Time travel has occurred!")
-                        .as_secs();
+                        .as_millis();
                     #[allow(clippy::cast_precision_loss)]
                     let prompt_tok_per_sec = deref_refcell!(seq).len() as f32
                         / (now - deref_refcell!(seq).timestamp()) as f32;
-                    deref_mut_refcell!(seq).prompt_tok_per_sec = prompt_tok_per_sec;
+                    deref_mut_refcell!(seq).prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
                     deref_mut_refcell!(seq).prompt_timestamp = Some(now);
                 }
                 self.sample_seqs(&scheduled.prompt, logits);
@@ -166,7 +166,7 @@ impl Engine {
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .expect("Time travel has occurred!")
-                    .as_secs();
+                    .as_millis();
                 #[allow(clippy::cast_precision_loss)]
                 let total_tok_per_sec = deref_refcell!(seq).len() as f32
                     / (now - deref_refcell!(seq).timestamp()) as f32;
@@ -188,8 +188,8 @@ impl Engine {
                             completion_tokens: deref_refcell!(seq).logprobs().len(),
                             prompt_tokens: deref_refcell!(seq).prompt_tokens(),
                             total_tokens: deref_refcell!(seq).len(),
-                            total_tok_per_sec,
-                            compl_tok_per_sec,
+                            total_tok_per_sec: total_tok_per_sec * 1000.,
+                            compl_tok_per_sec: compl_tok_per_sec * 1000.,
                             prompt_tok_per_sec: deref_refcell!(seq).prompt_tok_per_sec,
                         },
                     }))
@@ -412,7 +412,7 @@ impl Engine {
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("Time travel has occurred!")
-                .as_secs(),
+                .as_millis(),
             num_hidden_layers,
             request.response.clone(),
             LogitsProcessor::new(
