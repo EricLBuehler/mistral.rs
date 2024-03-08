@@ -69,7 +69,7 @@ pub struct ChatTemplate {
     sp_model_kwargs: HashMap<String, String>,
     spaces_between_special_tokens: bool,
     tokenizer_class: String,
-    truncation_size: String,
+    truncation_size: Option<String>,
     unk_token: String,
     use_default_system_prompt: bool,
 }
