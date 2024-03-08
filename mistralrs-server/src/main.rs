@@ -41,6 +41,7 @@ pub enum ModelSelected {
         tok_model_id: String,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         #[arg(
             short = 'm',
             long,
@@ -128,6 +129,7 @@ pub enum ModelSelected {
         tok_model_id: String,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         #[arg(short = 'm', long, default_value = "TheBloke/Llama-2-13B-chat-GGUF")]
         quantized_model_id: Option<String>,
 
@@ -147,6 +149,7 @@ pub enum ModelSelected {
         tok_model_id: String,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// If it is set to an empty string then the quantized filename will be used as a path to the GGML file.
         #[arg(short = 'm', long, default_value = "TheBloke/Llama-2-13B-chat-GGML")]
         quantized_model_id: Option<String>,
 
@@ -204,6 +207,7 @@ pub enum ModelSelected {
         tok_model_id: String,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         #[arg(short = 'm', long, default_value = "TheBloke/Mixtral-8x7B-v0.1-GGUF")]
         quantized_model_id: Option<String>,
 
@@ -242,6 +246,7 @@ pub enum ModelSelected {
         tok_model_id: String,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         #[arg(short = 'm', long, default_value = "TheBloke/zephyr-7B-beta-GGUF")]
         quantized_model_id: Option<String>,
 
@@ -269,6 +274,7 @@ pub enum ModelSelected {
         tok_model_id: String,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         #[arg(short = 'm', long, default_value = "TheBloke/Llama-2-13B-chat-GGUF")]
         quantized_model_id: Option<String>,
 
@@ -296,6 +302,7 @@ pub enum ModelSelected {
         tok_model_id: String,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// If it is set to an empty string then the quantized filename will be used as a path to the GGML file.
         #[arg(short = 'm', long, default_value = "TheBloke/Llama-2-13B-chat-GGML")]
         quantized_model_id: Option<String>,
 
@@ -331,6 +338,7 @@ pub enum ModelSelected {
         tok_model_id: String,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         #[arg(short = 'm', long, default_value = "TheBloke/Mixtral-8x7B-v0.1-GGUF")]
         quantized_model_id: Option<String>,
 

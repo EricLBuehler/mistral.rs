@@ -136,9 +136,10 @@ impl Engine {
                 }
 
                 let res = handle_seq_error!(
-                    get_mut_arcmutex!(self.pipeline)
-                        .tokenizer()
-                        .decode(&deref_refcell!(seq).get_toks()[deref_refcell!(seq).prompt_tokens()..], false),
+                    get_mut_arcmutex!(self.pipeline).tokenizer().decode(
+                        &deref_refcell!(seq).get_toks()[deref_refcell!(seq).prompt_tokens()..],
+                        false
+                    ),
                     deref_refcell!(seq).responder()
                 );
 

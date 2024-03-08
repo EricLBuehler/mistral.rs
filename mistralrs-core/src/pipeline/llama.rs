@@ -1,6 +1,6 @@
 use super::{
-    get_completion_input, get_prompt_input, get_xlora_paths, Conversation, Loader, ModelKind,
-    ModelPaths, Pipeline, TokenSource, XLoraPaths,
+    get_completion_input, get_model_paths, get_prompt_input, get_xlora_paths, Conversation, Loader,
+    ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
 };
 use crate::models::llama::MAX_SEQ_LEN;
 use crate::models::{quantized_llama, Cache};
@@ -188,34 +188,13 @@ impl Loader for LlamaLoader {
 
         let config_filename = api.get("config.json")?;
 
-        let filenames = match &self.quantized_filename {
-            Some(name) => {
-                let qapi = ApiBuilder::new()
-                    .with_progress(true)
-                    .with_token(Some(get_token(&token_source)?))
-                    .build()?;
-                let qapi = qapi.repo(Repo::with_revision(
-                    self.quantized_model_id.as_ref().unwrap().clone(),
-                    RepoType::Model,
-                    revision.clone(),
-                ));
-                vec![qapi.get(name).unwrap()]
-            }
-            None => {
-                let mut filenames = vec![];
-                for rfilename in api
-                    .info()?
-                    .siblings
-                    .iter()
-                    .map(|x| x.rfilename.clone())
-                    .filter(|x| x.ends_with(".safetensors"))
-                {
-                    let filename = api.get(&rfilename)?;
-                    filenames.push(filename);
-                }
-                filenames
-            }
-        };
+        let filenames = get_model_paths(
+            revision.clone(),
+            &token_source,
+            &self.quantized_model_id,
+            &self.quantized_filename,
+            &api,
+        )?;
 
         let XLoraPaths {
             adapter_configs,

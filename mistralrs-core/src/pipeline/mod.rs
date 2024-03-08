@@ -4,7 +4,10 @@ mod mistral;
 mod mixtral;
 use candle_sampling::logits_processor::Logprobs;
 pub use gemma::{GemmaLoader, GemmaSpecificConfig};
-use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use hf_hub::{
+    api::sync::{ApiBuilder, ApiRepo},
+    Repo, RepoType,
+};
 pub use llama::{LlamaLoader, LlamaSpecificConfig};
 pub use mistral::{MistralLoader, MistralSpecificConfig};
 use mistralrs_lora::{LoraConfig, Ordering};
@@ -16,6 +19,7 @@ use std::{
     iter::repeat,
     path::PathBuf,
     rc::Rc,
+    str::FromStr,
     sync::{Arc, Mutex},
 };
 use tokenizers::Tokenizer;
@@ -274,4 +278,44 @@ fn get_xlora_paths(
             xlora_config: None,
         }
     })
+}
+
+fn get_model_paths(
+    revision: String,
+    token_source: &TokenSource,
+    quantized_model_id: &Option<String>,
+    quantized_filename: &Option<String>,
+    api: &ApiRepo,
+) -> Result<Vec<PathBuf>> {
+    match &quantized_filename {
+        Some(name) => match quantized_model_id.as_ref().unwrap().as_str() {
+            "" => Ok(vec![PathBuf::from_str(name).unwrap()]),
+            id => {
+                let qapi = ApiBuilder::new()
+                    .with_progress(true)
+                    .with_token(Some(get_token(token_source)?))
+                    .build()?;
+                let qapi = qapi.repo(Repo::with_revision(
+                    id.to_string(),
+                    RepoType::Model,
+                    revision.clone(),
+                ));
+                Ok(vec![qapi.get(name).unwrap()])
+            }
+        },
+        None => {
+            let mut filenames = vec![];
+            for rfilename in api
+                .info()?
+                .siblings
+                .iter()
+                .map(|x| x.rfilename.clone())
+                .filter(|x| x.ends_with(".safetensors"))
+            {
+                let filename = api.get(&rfilename)?;
+                filenames.push(filename);
+            }
+            Ok(filenames)
+        }
+    }
 }
