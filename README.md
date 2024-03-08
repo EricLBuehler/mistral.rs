@@ -49,12 +49,6 @@ Mistral.rs provides an OpenAI API compatible API server, documentation [here](ex
 To get started see [this](README.md#run) section, and [this file](examples/chat.py) for an example of a simple chat program.
 
 ## Benchmarks
-**A6000** Mistral + CUDA
-- __ tok/s
-
-**A6000** Mistral GGUF + CUDA (prompt tokens = 1123, completion tokens = 256)
-- 98.5 tok/s
-
 **A6000** X-LoRA Mistral GGUF + CUDA (8-bit quantization, prompt tokens = 27, completion tokens = 64)
 - 3.13 tok/s
 
