@@ -1,4 +1,4 @@
-from mistralrs import ModelKind, MistalLoader, Request
+from mistralrs import ModelKind, MistralLoader, Request
 
 kind = ModelKind.QuantizedGGUF
 loader = MistralLoader(
