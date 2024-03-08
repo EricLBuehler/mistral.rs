@@ -772,7 +772,7 @@ async fn main() -> Result<()> {
     let app = get_router((mistralrs, conv));
 
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", args.port)).await?;
-    println!("Serving on 127.0.0.1:{}", args.port);
+    println!("Serving on http://127.0.0.1:{}.", args.port);
     axum::serve(listener, app).await?;
 
     Ok(())

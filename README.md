@@ -48,6 +48,16 @@ Mistral.rs provides an OpenAI API compatible API server, documentation [here](ex
 
 To get started see [this](README.md#run) section, and [this file](examples/chat.py) for an example of a simple chat program.
 
+## Benchmarks
+**A6000** Mistral + CUDA
+- __ tok/s
+
+**A6000** Mistral GGUF + CUDA (prompt tokens = 1123, completion tokens = 256)
+- 98.5 tok/s
+
+**A6000** X-LoRA Mistral GGUF + CUDA (8-bit quantization, prompt tokens = 27, completion tokens = 64)
+- 3.13 tok/s
+
 ## Usage
 ### Build
 To build mistral.rs, one should ensure they have Rust installed by following [this](https://rustup.rs/) link.
@@ -129,12 +139,3 @@ Mistral.rs uses subcommands to control the model type. They are of format `<XLOR
 To start an X-LoRA server with the default weights, run the following after modifying or copying the ordering file as described [here](README.md#x-lora).
 
 `./mistralrs-server --port 1234 x-lora-mistral -o ordering.json`
-
-## Benchmarks
-For the prompt "Tell me about the Rust type system in depth." and a maximum length of 256.
-
-**A6000** Mistral + CUDA + FlashAttention
-- 30.44 tok/s
-
-**A6000** Mistral GGUF + CUDA
-- 39.3 tok/s
