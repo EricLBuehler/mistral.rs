@@ -5,9 +5,9 @@ Mistral.rs provides a lightweight OpenAI API compatible HTTP server based on [ax
 The API consists of the following endpoints.
 
 ## `POST`: `/v1/chat/completions`
-Process an OpenAI compatible request, returning an OpenAI compatible response when finished. Please find API documentation [here](https://platform.openai.com/docs/api-reference/chat).
+Process an OpenAI compatible request, returning an OpenAI compatible response when finished. Please find the official OpenAI API documentation [here](https://platform.openai.com/docs/api-reference/chat).
 
-To send a request with Python:
+To send a request with the Python `openai` library:
 
 ```python
 import openai
