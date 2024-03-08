@@ -61,7 +61,7 @@ pub struct ChatTemplate {
     bos_token: String,
     chat_template: String,
     clean_up_tokenization_spaces: bool,
-    device_map: String,
+    device_map: Option<String>,
     eos_token: String,
     legacy: bool,
     model_max_length: f64,
