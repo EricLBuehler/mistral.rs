@@ -29,6 +29,7 @@ candle-sampling = { git = "https://github.com/EricLBuehler/candle-sampling.git",
 range-checked = { git = "https://github.com/EricLBuehler/range-checked.git", version = "0.1.0" }
 chrono = "0.4.34"
 mistralrs-lora = { version = "0.1.0", path = "../mistralrs-lora" }
+indexmap = { version = "2.2.5", features = ["serde"] }
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]

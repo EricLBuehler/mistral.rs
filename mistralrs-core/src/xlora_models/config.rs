@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 use serde::Deserialize;
 
@@ -26,12 +26,10 @@ fn default_0f64() -> f64 {
     0.0
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct XLoraConfig {
     pub hidden_size: usize,
-    // Not used
-    #[serde(rename = "adapters")]
-    pub _adapters: Option<HashMap<String, String>>,
+    pub adapters: Option<IndexMap<String, String>>,
     #[serde(default = "false_default")]
     pub layerwise_scalings: bool,
     #[serde(default = "false_default")]

@@ -21,7 +21,7 @@ use tokenizers::Tokenizer;
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 
-use crate::{deref_refcell, models::Cache, sequence::Sequence};
+use crate::{deref_refcell, models::Cache, sequence::Sequence, xlora_models::XLoraConfig};
 
 pub trait ModelPaths {
     fn get_weight_filenames(&self) -> &[PathBuf];
@@ -30,7 +30,7 @@ pub trait ModelPaths {
     fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>>;
     fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>>;
     fn get_classifier_path(&self) -> &Option<PathBuf>;
-    fn get_classifier_config(&self) -> &Option<PathBuf>;
+    fn get_classifier_config(&self) -> &Option<XLoraConfig>;
     fn get_ordering(&self) -> &Option<Ordering>;
 }
 

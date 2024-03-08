@@ -15,7 +15,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug, Deserialize)]
 pub struct Ordering {
     #[serde(rename = "order")]
-    pub adapters: Vec<String>,
+    pub adapters: Option<Vec<String>>,
     pub layers: HashMap<String, usize>,
 }
 

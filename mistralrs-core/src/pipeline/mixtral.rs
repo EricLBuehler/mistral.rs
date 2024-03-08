@@ -80,7 +80,7 @@ pub struct MixtralModelPaths<P> {
     xlora_adapter_filenames: Option<Vec<(String, P)>>,
     xlora_adapter_configs: Option<Vec<(String, LoraConfig)>>,
     classifier_path: Option<P>,
-    classifier_config: Option<P>,
+    classifier_config: Option<XLoraConfig>,
     xlora_ordering: Option<Ordering>,
 }
 
@@ -100,7 +100,7 @@ impl ModelPaths for MixtralModelPaths<PathBuf> {
     fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>> {
         &self.xlora_adapter_configs
     }
-    fn get_classifier_config(&self) -> &Option<PathBuf> {
+    fn get_classifier_config(&self) -> &Option<XLoraConfig> {
         &self.classifier_config
     }
     fn get_classifier_path(&self) -> &Option<PathBuf> {
@@ -233,7 +233,7 @@ impl Loader for MixtralLoader {
             }
         };
 
-        let (adapters_configs, adapters_safetensors, classifier_path, classifier_config, ordering) =
+        let (adapters_configs, adapters_safetensors, classifier_path, ordering, xlora_config) =
             if let Some(ref xlora_id) = self.xlora_model_id {
                 let api = ApiBuilder::new()
                     .with_progress(true)
@@ -260,6 +260,8 @@ impl Loader for MixtralLoader {
                     .collect::<Vec<_>>()[0];
                 let classifier_path = api.get(xlora_classifier)?;
                 let config_path = api.get(xlora_config)?;
+                let conf = fs::read_to_string(config_path)?;
+                let xlora_config: XLoraConfig = serde_json::from_str(&conf)?;
 
                 let adapter_files = api
                     .info()?
@@ -284,7 +286,23 @@ impl Loader for MixtralLoader {
                 }
                 let mut adapters_configs = Vec::new();
                 let mut adapters_safetensors = Vec::new();
-                for name in &self.xlora_order.as_ref().unwrap().adapters {
+                let adapter_order = if let Some(ref a) = xlora_config.adapters {
+                    a.keys().cloned().collect::<Vec<_>>()
+                } else {
+                    if self.xlora_order.as_ref().unwrap().adapters.is_none() {
+                        return Err(anyhow::Error::msg(
+                            "Must specify adapters in ordering.".to_string(),
+                        ));
+                    }
+                    self.xlora_order
+                        .as_ref()
+                        .unwrap()
+                        .adapters
+                        .as_ref()
+                        .unwrap()
+                        .clone()
+                };
+                for name in &adapter_order {
                     let paths = adapters_paths.get(name).unwrap();
                     for path in paths {
                         if path.extension().unwrap() == "safetensors" {
@@ -300,8 +318,8 @@ impl Loader for MixtralLoader {
                     Some(adapters_configs),
                     Some(adapters_safetensors),
                     Some(classifier_path),
-                    Some(config_path),
                     self.xlora_order.clone(),
+                    Some(xlora_config),
                 )
             } else {
                 (None, None, None, None, None)
@@ -314,7 +332,7 @@ impl Loader for MixtralLoader {
             xlora_adapter_configs: adapters_configs,
             xlora_adapter_filenames: adapters_safetensors,
             classifier_path,
-            classifier_config,
+            classifier_config: xlora_config,
             xlora_ordering: ordering,
         }))
     }
@@ -394,14 +412,11 @@ impl Loader for MixtralLoader {
                     false,
                 )?;
 
-                let conf = fs::read_to_string(paths.get_classifier_config().as_ref().unwrap())?;
-                let xlora_config: XLoraConfig = serde_json::from_str(&conf)?;
-
                 let model = XLoraMixtral::new(
                     &config,
                     vb,
                     paths.get_adapter_configs().as_ref().unwrap(),
-                    xlora_config,
+                    paths.get_classifier_config().as_ref().unwrap().clone(),
                     paths.get_ordering().as_ref().unwrap().clone(),
                 )?;
                 Model::XLoraNormal(model)
@@ -421,9 +436,6 @@ impl Loader for MixtralLoader {
                     false,
                 )?;
 
-                let conf = fs::read_to_string(paths.get_classifier_config().as_ref().unwrap())?;
-                let xlora_config: XLoraConfig = serde_json::from_str(&conf)?;
-
                 let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
                 let model = gguf_file::Content::read(&mut file)
                     .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
@@ -434,7 +446,7 @@ impl Loader for MixtralLoader {
                     paths.get_adapter_configs().as_ref().unwrap(),
                     &vb,
                     paths.get_ordering().as_ref().unwrap(),
-                    xlora_config,
+                    paths.get_classifier_config().as_ref().unwrap().clone(),
                 )?;
                 Model::XLoraQuantized(model)
             }
