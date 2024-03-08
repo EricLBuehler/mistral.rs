@@ -770,6 +770,14 @@
 <a href="#769" id="769">769</a>
 <a href="#770" id="770">770</a>
 <a href="#771" id="771">771</a>
+<a href="#772" id="772">772</a>
+<a href="#773" id="773">773</a>
+<a href="#774" id="774">774</a>
+<a href="#775" id="775">775</a>
+<a href="#776" id="776">776</a>
+<a href="#777" id="777">777</a>
+<a href="#778" id="778">778</a>
+<a href="#779" id="779">779</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fs::File,
@@ -813,6 +821,7 @@
         </span>tok_model_id: String,
 
         <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         </span><span class="attr">#[arg(
             short = <span class="string">'m'</span>,
             long,
@@ -900,6 +909,7 @@
         </span>tok_model_id: String,
 
         <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         </span><span class="attr">#[arg(short = <span class="string">'m'</span>, long, default_value = <span class="string">"TheBloke/Llama-2-13B-chat-GGUF"</span>)]
         </span>quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
@@ -919,6 +929,7 @@
         </span>tok_model_id: String,
 
         <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// If it is set to an empty string then the quantized filename will be used as a path to the GGML file.
         </span><span class="attr">#[arg(short = <span class="string">'m'</span>, long, default_value = <span class="string">"TheBloke/Llama-2-13B-chat-GGML"</span>)]
         </span>quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
@@ -976,6 +987,7 @@
         </span>tok_model_id: String,
 
         <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         </span><span class="attr">#[arg(short = <span class="string">'m'</span>, long, default_value = <span class="string">"TheBloke/Mixtral-8x7B-v0.1-GGUF"</span>)]
         </span>quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
@@ -1014,6 +1026,7 @@
         </span>tok_model_id: String,
 
         <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         </span><span class="attr">#[arg(short = <span class="string">'m'</span>, long, default_value = <span class="string">"TheBloke/zephyr-7B-beta-GGUF"</span>)]
         </span>quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
@@ -1041,6 +1054,7 @@
         </span>tok_model_id: String,
 
         <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         </span><span class="attr">#[arg(short = <span class="string">'m'</span>, long, default_value = <span class="string">"TheBloke/Llama-2-13B-chat-GGUF"</span>)]
         </span>quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
@@ -1068,6 +1082,7 @@
         </span>tok_model_id: String,
 
         <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// If it is set to an empty string then the quantized filename will be used as a path to the GGML file.
         </span><span class="attr">#[arg(short = <span class="string">'m'</span>, long, default_value = <span class="string">"TheBloke/Llama-2-13B-chat-GGML"</span>)]
         </span>quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
@@ -1103,6 +1118,7 @@
         </span>tok_model_id: String,
 
         <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         </span><span class="attr">#[arg(short = <span class="string">'m'</span>, long, default_value = <span class="string">"TheBloke/Mixtral-8x7B-v0.1-GGUF"</span>)]
         </span>quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
