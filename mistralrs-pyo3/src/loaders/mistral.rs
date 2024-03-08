@@ -99,9 +99,7 @@ impl MistralLoader {
         revision: Option<String>,
         token_source_value: Option<String>,
     ) -> PyResult<MistralRunner> {
-        println!("Loading");
         let device = get_device();
-        dbg!(&device);
         let device = match device {
             Ok(x) => x,
             Err(y) => return Err(PyValueError::new_err(y.to_string())),
