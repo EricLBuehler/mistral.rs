@@ -78,7 +78,23 @@ which may be specified using the `--features` command.
 
 ### X-LoRA
 **Preparing the X-LoRA Ordering File**
-The X-LoRA ordering JSON file contains 2 parts. The first is the order of the adapters and the second, the layer ordering. The layer ordering has been automatically generated and should not be manipulated as it controls the application of scalings. However the order of adapter should be replaced by an array of strings of adapter names corresponding to the order the adapters were specified during training.
+The X-LoRA ordering file is only necessary if the X-LoRA config JSON file does not contain a mapping of adapters. If it does, it is not necessary to modify the ordering file.
+
+The X-LoRA ordering JSON file contains 2 parts. The first is the order of the adapters and the second, the layer ordering. The layer ordering has been automatically generated and should not be manipulated as it controls the application of scalings. However the order of adapter should be an array of strings which are the adapter names corresponding to the order the adapters were specified during training. For example, if the adapters were specified as a dictionary:
+
+```python
+adapters = {
+    "math": ...,
+    "reasoning": ...,
+    "biology": ...
+}
+```
+
+The specified order would be `["math", "reasoning", "biology"]`
+
+For convenience, a script `generate.py` in `xlora-orderings` is provided which prompts the user for a comma delimited list of numbers and then writes the file. If the X-LoRA config contains a mapping of adapters defining the order, it is not necessary to use this script. However, for both cases, it is recommended to copy the modified ordering file from `xlora-orderings.json` to the directory where the server will be run for convenience. For example:
+
+`cp ./xlora-orderings/mistral-ordering.json ordering.json`
 
 ---
 
