@@ -522,11 +522,11 @@
                     <span class="kw">let </span>now = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .expect(<span class="string">"Time travel has occurred!"</span>)
-                        .as_secs();
+                        .as_millis();
                     <span class="attr">#[allow(clippy::cast_precision_loss)]
                     </span><span class="kw">let </span>prompt_tok_per_sec = <span class="macro">deref_refcell!</span>(seq).len() <span class="kw">as </span>f32
                         / (now - <span class="macro">deref_refcell!</span>(seq).timestamp()) <span class="kw">as </span>f32;
-                    <span class="macro">deref_mut_refcell!</span>(seq).prompt_tok_per_sec = prompt_tok_per_sec;
+                    <span class="macro">deref_mut_refcell!</span>(seq).prompt_tok_per_sec = prompt_tok_per_sec * <span class="number">1000.</span>;
                     <span class="macro">deref_mut_refcell!</span>(seq).prompt_timestamp = <span class="prelude-val">Some</span>(now);
                 }
                 <span class="self">self</span>.sample_seqs(<span class="kw-2">&amp;</span>scheduled.prompt, logits);
@@ -603,7 +603,7 @@
                 <span class="kw">let </span>now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .expect(<span class="string">"Time travel has occurred!"</span>)
-                    .as_secs();
+                    .as_millis();
                 <span class="attr">#[allow(clippy::cast_precision_loss)]
                 </span><span class="kw">let </span>total_tok_per_sec = <span class="macro">deref_refcell!</span>(seq).len() <span class="kw">as </span>f32
                     / (now - <span class="macro">deref_refcell!</span>(seq).timestamp()) <span class="kw">as </span>f32;
@@ -625,8 +625,8 @@
                             completion_tokens: <span class="macro">deref_refcell!</span>(seq).logprobs().len(),
                             prompt_tokens: <span class="macro">deref_refcell!</span>(seq).prompt_tokens(),
                             total_tokens: <span class="macro">deref_refcell!</span>(seq).len(),
-                            total_tok_per_sec,
-                            compl_tok_per_sec,
+                            total_tok_per_sec: total_tok_per_sec * <span class="number">1000.</span>,
+                            compl_tok_per_sec: compl_tok_per_sec * <span class="number">1000.</span>,
                             prompt_tok_per_sec: <span class="macro">deref_refcell!</span>(seq).prompt_tok_per_sec,
                         },
                     }))
@@ -849,7 +849,7 @@
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect(<span class="string">"Time travel has occurred!"</span>)
-                .as_secs(),
+                .as_millis(),
             num_hidden_layers,
             request.response.clone(),
             LogitsProcessor::new(
