@@ -1,6 +1,5 @@
 use std::fs::File;
 
-use candle_core::Device;
 use mistralrs::{
     Loader, MistralLoader as _MistralLoader, MistralRs, MistralSpecificConfig,
     ModelKind as _ModelKind, SchedulerMethod, TokenSource,
@@ -31,7 +30,7 @@ impl MistralLoader {
         quantized_filename: Option<String>,
         xlora_model_id: Option<String>,
     ) -> PyResult<Self> {
-        use_flash_attn = use_flash_attn & cfg!(feature="flash-attn");
+        use_flash_attn &= cfg!(feature = "flash-attn");
         let order = if let Some(order_file) = order_file {
             let f = File::open(order_file);
             let f = match f {

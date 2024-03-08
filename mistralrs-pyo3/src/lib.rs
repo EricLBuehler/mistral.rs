@@ -1,14 +1,14 @@
+use candle_core::Result;
 use std::{
     collections::HashMap,
     fmt::Debug,
     sync::{mpsc::channel, Arc},
 };
-use candle_core::Result;
 
-use candle_core::Device;
 use ::mistralrs::{
     Conversation, MistralRs, Request as _Request, Response, SamplingParams, StopTokens,
 };
+use candle_core::Device;
 use loaders::mistral::MistralLoader;
 use pyo3::{exceptions::PyValueError, prelude::*};
 mod loaders;
@@ -36,7 +36,7 @@ fn get_device() -> Result<Device> {
     };
     let res = Device::cuda_if_available(0)?;
     *device = Some(res.clone());
-    return Ok(res);
+    Ok(res)
 }
 #[cfg(feature = "metal")]
 fn get_device() -> Result<Device> {
@@ -46,7 +46,7 @@ fn get_device() -> Result<Device> {
     };
     let res = Device::new_metal(0)?;
     *device = Some(res.clone());
-    return Ok(res);
+    Ok(res)
 }
 
 #[pyclass]
