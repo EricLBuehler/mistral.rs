@@ -773,11 +773,6 @@
 <a href="#772" id="772">772</a>
 <a href="#773" id="773">773</a>
 <a href="#774" id="774">774</a>
-<a href="#775" id="775">775</a>
-<a href="#776" id="776">776</a>
-<a href="#777" id="777">777</a>
-<a href="#778" id="778">778</a>
-<a href="#779" id="779">779</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fs::File,
@@ -793,10 +788,9 @@
 <span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::{Parser, Subcommand};
 <span class="kw">use </span>mistralrs_core::{
-    Conversation, GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader,
-    MistralLoader, MistralRs, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig,
-    ModelKind, Request, Response, SamplingParams, SchedulerMethod,
-    StopTokens <span class="kw">as </span>InternalStopTokens, TokenSource,
+    GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader, MistralLoader,
+    MistralRs, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind, Request,
+    Response, SamplingParams, SchedulerMethod, StopTokens <span class="kw">as </span>InternalStopTokens, TokenSource,
 };
 <span class="kw">use </span>openai::{ChatCompletionRequest, StopTokens};
 <span class="kw">mod </span>openai;
@@ -1171,7 +1165,7 @@
 }
 
 <span class="kw">async fn </span>chatcompletions(
-    State((state, conv)): State&lt;(Arc&lt;MistralRs&gt;, Arc&lt;<span class="kw">dyn </span>Conversation + Send + Sync&gt;)&gt;,
+    State(state): State&lt;Arc&lt;MistralRs&gt;&gt;,
     Json(oairequest): Json&lt;ChatCompletionRequest&gt;,
 ) -&gt; String {
     <span class="kw">let </span>(tx, rx) = channel();
@@ -1190,12 +1184,8 @@
         message_map.insert(<span class="string">"content"</span>.to_string(), message.content);
         messages.push(message_map);
     }
-    <span class="kw">let </span>prompt = <span class="kw">match </span>conv.get_prompt(messages, <span class="bool-val">true</span>) {
-        <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span>e,
-        <span class="prelude-val">Ok</span>(p) =&gt; p,
-    };
     <span class="kw">let </span>request = Request {
-        prompt,
+        messages,
         sampling_params: SamplingParams {
             temperature: oairequest.temperature,
             top_k: oairequest.top_k,
@@ -1227,7 +1217,7 @@
     }
 }
 
-<span class="kw">fn </span>get_router(state: (Arc&lt;MistralRs&gt;, Arc&lt;<span class="kw">dyn </span>Conversation + Send + Sync&gt;)) -&gt; Router {
+<span class="kw">fn </span>get_router(state: Arc&lt;MistralRs&gt;) -&gt; Router {
     Router::new()
         .route(<span class="string">"/v1/chat/completions"</span>, post(chatcompletions))
         .with_state(state)
@@ -1540,7 +1530,7 @@
     <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
     </span><span class="kw">let </span>device = Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?</span>;
 
-    <span class="kw">let </span>(pipeline, conv) = loader.load_model(<span class="prelude-val">None</span>, TokenSource::CacheToken, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>;
+    <span class="kw">let </span>pipeline = loader.load_model(<span class="prelude-val">None</span>, TokenSource::CacheToken, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>;
     <span class="kw">let </span>mistralrs = MistralRs::new(
         pipeline,
         SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
@@ -1549,7 +1539,7 @@
         args.no_kv_cache,
     );
 
-    <span class="kw">let </span>app = get_router((mistralrs, conv));
+    <span class="kw">let </span>app = get_router(mistralrs);
 
     <span class="kw">let </span>listener = tokio::net::TcpListener::bind(<span class="macro">format!</span>(<span class="string">"127.0.0.1:{}"</span>, args.port)).<span class="kw">await</span><span class="question-mark">?</span>;
     <span class="macro">println!</span>(<span class="string">"Serving on http://127.0.0.1:{}."</span>, args.port);

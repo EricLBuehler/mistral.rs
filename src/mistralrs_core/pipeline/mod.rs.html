@@ -320,6 +320,39 @@
 <a href="#319" id="319">319</a>
 <a href="#320" id="320">320</a>
 <a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a>
+<a href="#342" id="342">342</a>
+<a href="#343" id="343">343</a>
+<a href="#344" id="344">344</a>
+<a href="#345" id="345">345</a>
+<a href="#346" id="346">346</a>
+<a href="#347" id="347">347</a>
+<a href="#348" id="348">348</a>
+<a href="#349" id="349">349</a>
+<a href="#350" id="350">350</a>
+<a href="#351" id="351">351</a>
+<a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a>
+<a href="#354" id="354">354</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -331,18 +364,14 @@
     Repo, RepoType,
 };
 <span class="kw">pub use </span>llama::{LlamaLoader, LlamaSpecificConfig};
+<span class="kw">use </span>minijinja::{context, Environment};
 <span class="kw">pub use </span>mistral::{MistralLoader, MistralSpecificConfig};
 <span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
 <span class="kw">pub use </span>mixtral::{MixtralLoader, MixtralSpecificConfig};
+<span class="kw">use </span>serde::Deserialize;
 <span class="kw">use </span>std::{
-    cell::RefCell,
-    collections::HashMap,
-    fs,
-    iter::repeat,
-    path::PathBuf,
-    rc::Rc,
-    str::FromStr,
-    sync::{Arc, Mutex},
+    cell::RefCell, collections::HashMap, fs, iter::repeat, path::PathBuf, rc::Rc, str::FromStr,
+    sync::Mutex,
 };
 <span class="kw">use </span>tokenizers::Tokenizer;
 
@@ -358,11 +387,46 @@
     <span class="kw">fn </span>get_weight_filenames(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[PathBuf];
     <span class="kw">fn </span>get_config_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf;
     <span class="kw">fn </span>get_tokenizer_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf;
+    <span class="kw">fn </span>get_template_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf;
     <span class="kw">fn </span>get_adapter_filenames(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Vec&lt;(String, PathBuf)&gt;&gt;;
     <span class="kw">fn </span>get_adapter_configs(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Vec&lt;(String, LoraConfig)&gt;&gt;;
     <span class="kw">fn </span>get_classifier_path(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt;;
     <span class="kw">fn </span>get_classifier_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;;
     <span class="kw">fn </span>get_ordering(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Ordering&gt;;
+}
+
+<span class="attr">#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+</span><span class="kw">pub struct </span>AddedTokensDecoder {
+    content: String,
+    lstrip: bool,
+    normalized: bool,
+    rstrip: bool,
+    single_word: bool,
+    special: bool,
+}
+
+<span class="attr">#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+</span><span class="kw">pub struct </span>ChatTemplate {
+    add_bos_token: bool,
+    add_eos_token: bool,
+    added_tokens_decoder: HashMap&lt;String, AddedTokensDecoder&gt;,
+    additional_special_tokens: Vec&lt;String&gt;,
+    bos_token: String,
+    chat_template: String,
+    clean_up_tokenization_spaces: bool,
+    device_map: String,
+    eos_token: String,
+    legacy: bool,
+    model_max_length: usize,
+    pad_token: String,
+    sp_model_kwargs: HashMap&lt;String, String&gt;,
+    spaces_between_special_tokens: bool,
+    tokenizer_class: String,
+    truncation_size: String,
+    unk_token: String,
+    use_default_system_prompt: bool,
 }
 
 <span class="kw">pub enum </span>TokenSource {
@@ -381,15 +445,6 @@
     QuantizedGGML,
 }
 
-<span class="doccomment">/// Define a method to implement specific conversation processors which take in the messages and return a prompt.
-</span><span class="kw">pub trait </span>Conversation {
-    <span class="kw">fn </span>get_prompt(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        messages: Vec&lt;HashMap&lt;String, String&gt;&gt;,
-        add_generation_prompt: bool,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;String, String&gt;;
-}
-
 <span class="doccomment">/// Encapsulate downloading and setting up the model. The `load_model` method is used to create the pipeline.
 </span><span class="kw">pub trait </span>Loader {
     <span class="kw">fn </span>download_model(
@@ -404,10 +459,7 @@
         paths: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelPaths,
         dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
         device: <span class="kw-2">&amp;</span>Device,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;(
-        Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;,
-        Arc&lt;<span class="kw">dyn </span>Conversation + Send + Sync&gt;,
-    )&gt;;
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt;;
 
     <span class="doccomment">/// If `revision` is None, then it defaults to `main`.
     /// If `dtype` is None, then it defaults to the model default (usually F32). TODO(EricLBuehler): refine
@@ -418,10 +470,7 @@
         token_source: TokenSource,
         dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
         device: <span class="kw-2">&amp;</span>Device,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;(
-        Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;,
-        Arc&lt;<span class="kw">dyn </span>Conversation + Send + Sync&gt;,
-    )&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>paths = <span class="self">self</span>.download_model(revision, token_source)<span class="question-mark">?</span>;
         <span class="self">self</span>._setup_model(<span class="kw-2">&amp;*</span>paths, dtype, device)
     }
@@ -440,6 +489,23 @@
     <span class="kw">fn </span>get_max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
     <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
     <span class="kw">fn </span>has_no_kv_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
+    <span class="kw">fn </span>apply_chat_template(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        messages: Vec&lt;HashMap&lt;String, String&gt;&gt;,
+        add_generation_prompt: bool,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>env = Environment::new();
+        env.add_template(<span class="string">"chat_template"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.get_chat_template().chat_template)<span class="question-mark">?</span>;
+        <span class="kw">let </span>tmpl = env.get_template(<span class="string">"chat_template"</span>).unwrap();
+        <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context! </span>{
+            messages =&gt; messages,
+            add_generation_prompt =&gt; add_generation_prompt,
+            bos_token =&gt; <span class="self">self</span>.get_chat_template().bos_token,
+            eos_token =&gt; <span class="self">self</span>.get_chat_template().eos_token,
+            unk_token =&gt; <span class="self">self</span>.get_chat_template().unk_token
+        })<span class="question-mark">?</span>)
+    }
+    <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ChatTemplate;
 }
 
 <span class="kw">fn </span>get_prompt_input(input_toks: <span class="kw-2">&amp;</span>[Rc&lt;RefCell&lt;Sequence&gt;&gt;], device: <span class="kw-2">&amp;</span>Device) -&gt; (Tensor, Vec&lt;usize&gt;) {
