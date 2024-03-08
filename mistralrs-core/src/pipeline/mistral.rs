@@ -467,6 +467,7 @@ impl Loader for MistralLoader {
         let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
 
+        dbg!(&self.model_id);
         Ok((
             Box::new(Mutex::new(MistralPipeline {
                 model,
