@@ -92,6 +92,7 @@
 <a href="#91" id="91">91</a>
 <a href="#92" id="92">92</a>
 <a href="#93" id="93">93</a>
+<a href="#94" id="94">94</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -105,7 +106,8 @@
 };
 
 <span class="kw">use </span>engine::Engine;
-<span class="kw">use </span>pipeline::Pipeline;
+<span class="kw">pub use </span>mistralrs_lora::Ordering;
+<span class="kw">pub use </span>pipeline::Pipeline;
 
 <span class="kw">mod </span>engine;
 <span class="kw">mod </span>models;

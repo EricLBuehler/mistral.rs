@@ -275,6 +275,7 @@
 <a href="#274" id="274">274</a>
 <a href="#275" id="275">275</a>
 <a href="#276" id="276">276</a>
+<a href="#277" id="277">277</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -317,6 +318,7 @@
 }
 
 <span class="kw">pub enum </span>TokenSource {
+    Literal(String),
     EnvVar(String),
     Path(String),
     CacheToken,
@@ -355,7 +357,7 @@
         dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
         device: <span class="kw-2">&amp;</span>Device,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(
-        Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
+        Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;,
         Arc&lt;<span class="kw">dyn </span>Conversation + Send + Sync&gt;,
     )&gt;;
 
@@ -369,7 +371,7 @@
         dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
         device: <span class="kw-2">&amp;</span>Device,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(
-        Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
+        Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;,
         Arc&lt;<span class="kw">dyn </span>Conversation + Send + Sync&gt;,
     )&gt; {
         <span class="kw">let </span>paths = <span class="self">self</span>.download_model(revision, token_source)<span class="question-mark">?</span>;

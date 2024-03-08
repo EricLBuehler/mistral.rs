@@ -731,7 +731,7 @@
         dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
         device: <span class="kw-2">&amp;</span>Device,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(
-        Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
+        Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;,
         Arc&lt;<span class="kw">dyn </span>Conversation + Send + Sync&gt;,
     )&gt; {
         <span class="kw">let </span>basic_config: BasicConfig =

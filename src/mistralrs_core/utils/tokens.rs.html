@@ -26,6 +26,7 @@
 <a href="#25" id="25">25</a>
 <a href="#26" id="26">26</a>
 <a href="#27" id="27">27</a>
+<a href="#28" id="28">28</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{env, fs};
 <span class="kw">use </span>thiserror::Error;
 
@@ -41,6 +42,7 @@
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_token(source: <span class="kw-2">&amp;</span>TokenSource) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
     <span class="prelude-val">Ok</span>(<span class="kw">match </span>source {
+        TokenSource::Literal(data) =&gt; data.clone(),
         TokenSource::EnvVar(envvar) =&gt; env::var(envvar)<span class="question-mark">?</span>,
         TokenSource::Path(path) =&gt; fs::read_to_string(path)<span class="question-mark">?</span>,
         TokenSource::CacheToken =&gt; fs::read_to_string(<span class="macro">format!</span>(
