@@ -7,7 +7,7 @@ use mistralrs::{
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
 
-use crate::{MistralRunner, ModelKind};
+use crate::{get_device, MistralRunner, ModelKind, METAL_DEVICE};
 
 #[pyclass]
 pub struct MistralLoader {
@@ -100,10 +100,7 @@ impl MistralLoader {
         token_source_value: Option<String>,
     ) -> PyResult<MistralRunner> {
         println!("Loading");
-        #[cfg(feature = "metal")]
-        let device = Device::new_metal(0);
-        #[cfg(not(feature = "metal"))]
-        let device = Device::cuda_if_available(0);
+        let device = get_device();
         dbg!(&device);
         let device = match device {
             Ok(x) => x,

@@ -3,7 +3,9 @@ use std::{
     fmt::Debug,
     sync::{mpsc::channel, Arc},
 };
+use candle_core::Result;
 
+use candle_core::Device;
 use ::mistralrs::{
     Conversation, MistralRs, Request as _Request, Response, SamplingParams, StopTokens,
 };
@@ -19,6 +21,26 @@ enum ModelKind {
     XLoraGGML,
     QuantizedGGUF,
     QuantizedGGML,
+}
+
+static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
+static METAL_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
+
+#[cfg(not(feature = "metal"))]
+fn get_device() -> Result<Device> {
+    let mut device = CUDA_DEVICE.lock().unwrap();
+    if let Some(device) = device.as_ref() {
+        return Ok(device.clone());
+    };
+    Device::cuda_if_available(0)
+}
+#[cfg(feature = "metal")]
+fn get_device() -> Result<Device> {
+    let mut device = METAL_DEVICE.lock().unwrap();
+    if let Some(device) = device.as_ref() {
+        return Ok(device.clone());
+    };
+    Device::new_metal(0)
 }
 
 #[pyclass]
