@@ -9,7 +9,9 @@ use ::mistralrs::{
     Conversation, MistralRs, Request as _Request, Response, SamplingParams, StopTokens,
 };
 use candle_core::Device;
-use loaders::mistral::MistralLoader;
+use loaders::{
+    gemma::GemmaLoader, llama::LlamaLoader, mistral::MistralLoader, mixtral::MixtralLoader,
+};
 use pyo3::{exceptions::PyValueError, prelude::*};
 mod loaders;
 
@@ -51,13 +53,13 @@ fn get_device() -> Result<Device> {
 
 #[pyclass]
 /// An object wrapping the underlying Rust system to handle requests and process conversations.
-struct MistralRunner {
+struct Runner {
     runner: Arc<MistralRs>,
     conversation: Arc<dyn Conversation + Send + Sync>,
 }
 
 #[pymethods]
-impl MistralRunner {
+impl Runner {
     /// Send an OpenAI API compatible request, returning raw JSON.
     fn send_chat_completion_request(&mut self, request: Py<Request>) -> PyResult<String> {
         let (tx, rx) = channel();
@@ -162,8 +164,11 @@ impl Request {
 
 #[pymodule]
 fn mistralrs(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_class::<MistralRunner>()?;
+    m.add_class::<Runner>()?;
     m.add_class::<MistralLoader>()?;
+    m.add_class::<MixtralLoader>()?;
+    m.add_class::<GemmaLoader>()?;
+    m.add_class::<LlamaLoader>()?;
     m.add_class::<ModelKind>()?;
     m.add_class::<Request>()?;
     Ok(())

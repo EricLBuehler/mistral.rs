@@ -1,8 +1,8 @@
 use std::fs::File;
 
 use mistralrs::{
-    Loader, MistralLoader as _MistralLoader, MistralRs, MistralSpecificConfig,
-    ModelKind as _ModelKind, SchedulerMethod, TokenSource,
+    GemmaLoader as _GemmaLoader, GemmaSpecificConfig, Loader, MistralRs, ModelKind as _ModelKind,
+    SchedulerMethod, TokenSource,
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
 
@@ -10,28 +10,26 @@ use crate::{get_device, ModelKind, Runner};
 
 #[pyclass]
 /// A loader for a Runner.
-pub struct MistralLoader {
-    loader: _MistralLoader,
+pub struct GemmaLoader {
+    loader: _GemmaLoader,
     no_kv_cache: bool,
 }
 
 #[pymethods]
-impl MistralLoader {
+impl GemmaLoader {
     #[new]
-    #[pyo3(signature = (model_id, kind, no_kv_cache=false, use_flash_attn=cfg!(feature="flash-attn"), repeat_last_n=64, order_file=None, quantized_model_id=None,quantized_filename=None,xlora_model_id=None))]
+    #[pyo3(signature = (model_id, kind, no_kv_cache=false, repeat_last_n=64, order_file=None, quantized_model_id=None,quantized_filename=None,xlora_model_id=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         model_id: String,
         kind: Py<ModelKind>,
         no_kv_cache: bool,
-        mut use_flash_attn: bool,
         repeat_last_n: usize,
         order_file: Option<String>,
         quantized_model_id: Option<String>,
         quantized_filename: Option<String>,
         xlora_model_id: Option<String>,
     ) -> PyResult<Self> {
-        use_flash_attn &= cfg!(feature = "flash-attn");
         let order = if let Some(ref order_file) = order_file {
             let f = File::open(order_file);
             let f = match f {
@@ -85,12 +83,9 @@ impl MistralLoader {
             return Err(PyValueError::new_err("Expected a quantized model id and quantized filename and order file and xlora model id."));
         }
         Ok(Self {
-            loader: _MistralLoader::new(
+            loader: _GemmaLoader::new(
                 model_id,
-                MistralSpecificConfig {
-                    use_flash_attn,
-                    repeat_last_n,
-                },
+                GemmaSpecificConfig { repeat_last_n },
                 quantized_model_id,
                 quantized_filename,
                 xlora_model_id,

@@ -1,7 +1,7 @@
 use std::fs::File;
 
 use mistralrs::{
-    Loader, MistralLoader as _MistralLoader, MistralRs, MistralSpecificConfig,
+    Loader, MistralRs, MixtralLoader as _MixtralLoader, MixtralSpecificConfig,
     ModelKind as _ModelKind, SchedulerMethod, TokenSource,
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
@@ -10,13 +10,13 @@ use crate::{get_device, ModelKind, Runner};
 
 #[pyclass]
 /// A loader for a Runner.
-pub struct MistralLoader {
-    loader: _MistralLoader,
+pub struct MixtralLoader {
+    loader: _MixtralLoader,
     no_kv_cache: bool,
 }
 
 #[pymethods]
-impl MistralLoader {
+impl MixtralLoader {
     #[new]
     #[pyo3(signature = (model_id, kind, no_kv_cache=false, use_flash_attn=cfg!(feature="flash-attn"), repeat_last_n=64, order_file=None, quantized_model_id=None,quantized_filename=None,xlora_model_id=None))]
     #[allow(clippy::too_many_arguments)]
@@ -85,9 +85,9 @@ impl MistralLoader {
             return Err(PyValueError::new_err("Expected a quantized model id and quantized filename and order file and xlora model id."));
         }
         Ok(Self {
-            loader: _MistralLoader::new(
+            loader: _MixtralLoader::new(
                 model_id,
-                MistralSpecificConfig {
+                MixtralSpecificConfig {
                     use_flash_attn,
                     repeat_last_n,
                 },

@@ -1,8 +1,8 @@
 use std::fs::File;
 
 use mistralrs::{
-    Loader, MistralLoader as _MistralLoader, MistralRs, MistralSpecificConfig,
-    ModelKind as _ModelKind, SchedulerMethod, TokenSource,
+    LlamaLoader as _LlamaLoader, LlamaSpecificConfig, Loader, MistralRs, ModelKind as _ModelKind,
+    SchedulerMethod, TokenSource,
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
 
@@ -10,15 +10,15 @@ use crate::{get_device, ModelKind, Runner};
 
 #[pyclass]
 /// A loader for a Runner.
-pub struct MistralLoader {
-    loader: _MistralLoader,
+pub struct LlamaLoader {
+    loader: _LlamaLoader,
     no_kv_cache: bool,
 }
 
 #[pymethods]
-impl MistralLoader {
+impl LlamaLoader {
     #[new]
-    #[pyo3(signature = (model_id, kind, no_kv_cache=false, use_flash_attn=cfg!(feature="flash-attn"), repeat_last_n=64, order_file=None, quantized_model_id=None,quantized_filename=None,xlora_model_id=None))]
+    #[pyo3(signature = (model_id, kind, no_kv_cache=false, use_flash_attn=cfg!(feature="flash-attn"), repeat_last_n=64, gqa=1, order_file=None, quantized_model_id=None,quantized_filename=None,xlora_model_id=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         model_id: String,
@@ -26,6 +26,7 @@ impl MistralLoader {
         no_kv_cache: bool,
         mut use_flash_attn: bool,
         repeat_last_n: usize,
+        gqa: usize,
         order_file: Option<String>,
         quantized_model_id: Option<String>,
         quantized_filename: Option<String>,
@@ -85,11 +86,12 @@ impl MistralLoader {
             return Err(PyValueError::new_err("Expected a quantized model id and quantized filename and order file and xlora model id."));
         }
         Ok(Self {
-            loader: _MistralLoader::new(
+            loader: _LlamaLoader::new(
                 model_id,
-                MistralSpecificConfig {
+                LlamaSpecificConfig {
                     use_flash_attn,
                     repeat_last_n,
+                    gqa,
                 },
                 quantized_model_id,
                 quantized_filename,
