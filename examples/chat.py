@@ -21,12 +21,12 @@ while True:
         temperature=0.1,
     )
     resp = completion.choices[0].message.content
-    if out.endswith("</s>"):
-        out = out[:-4]
+    if resp.endswith("</s>"):
+        out = resp[:-4]
         print(out)
-    elif out.endswith("<eos>"):
-        out = out[:-5]
+    elif resp.endswith("<eos>"):
+        out = resp[:-5]
         print(out)
     else:
-        print(out + "...")
-    messages.append({"role": "assistant", "content": out})
+        print(resp + "...")
+    messages.append({"role": "assistant", "content": resp})
