@@ -574,7 +574,7 @@
                 <span class="kw">let </span>res = <span class="macro">handle_seq_error!</span>(
                     <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
                         .tokenizer()
-                        .decode(<span class="macro">deref_refcell!</span>(seq).get_toks(), <span class="bool-val">false</span>),
+                        .decode(<span class="kw-2">&amp;</span><span class="macro">deref_refcell!</span>(seq).get_toks()[<span class="macro">deref_refcell!</span>(seq).prompt_tokens()..], <span class="bool-val">false</span>),
                     <span class="macro">deref_refcell!</span>(seq).responder()
                 );
 
