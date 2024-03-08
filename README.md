@@ -37,10 +37,9 @@ Failing to do so will result in a incorrect prompt templating.
 - Rust multithreaded API for easy integration into any application: [docs](https://ericlbuehler.github.io/mistral.rs/mistralrs/). To use, add `mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }` to the Cargo.toml.
 
 **HTTP Server**
-Mistral.rs provides an OpenAI API compatible API server. It is accessible through the command line when one builds mistral.rs.
+Mistral.rs provides an OpenAI API compatible API server, documentation [here](examples/http.md).
 
-Request docs can be found [here](https://ericlbuehler.github.io/mistral.rs/mistralrs_server/openai/index.html), and response docs 
-[here](https://ericlbuehler.github.io/mistral.rs/mistralrs_core/index.html).
+To get started see [this](README.md#run) section.
 
 ## Usage
 ### Build
@@ -118,7 +117,7 @@ To start a server serving Mistral on `localhost:1234`,
 ./mistralrs-server --port 1234 --log output.log mistral
 ```
 
-Mistral.rs uses subcommands to control the model type. Please run `./mistralrs-server --help` to see the subcommands.
+Mistral.rs uses subcommands to control the model type. They are of format `<XLORA>-<ARCHITECTURE>-<QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
 
 To start an X-LoRA server with the default weights, run the following after modifying or copying the ordering file as described [here](README.md#preparing-the-x-lora-ordering-file).
 
