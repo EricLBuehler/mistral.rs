@@ -64,7 +64,7 @@ pub struct ChatTemplate {
     device_map: String,
     eos_token: String,
     legacy: bool,
-    model_max_length: usize,
+    model_max_length: f64,
     pad_token: String,
     sp_model_kwargs: HashMap<String, String>,
     spaces_between_special_tokens: bool,
