@@ -614,7 +614,6 @@
 <a href="#613" id="613">613</a>
 <a href="#614" id="614">614</a>
 <a href="#615" id="615">615</a>
-<a href="#616" id="616">616</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     get_completion_input, get_prompt_input, Conversation, Loader, ModelKind, ModelPaths, Pipeline,
     TokenSource,
@@ -1084,7 +1083,6 @@
         <span class="kw">let </span>tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
             .map_err(|e| TokenizerError::Error(e.to_string()))<span class="question-mark">?</span>;
 
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span><span class="self">self</span>.model_id);
         <span class="prelude-val">Ok</span>((
             Box::new(Mutex::new(MistralPipeline {
                 model,
