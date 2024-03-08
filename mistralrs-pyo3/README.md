@@ -1,6 +1,6 @@
 # Mistral.rs PyO3 Bindings
 
-To use, activate a Python virtual enviornment and ensure that `maturin` is installed, for example:
+To use, activate a Python virtual environment and ensure that `maturin` is installed, for example:
 
 ```bash
 python3 -m venv myenv
