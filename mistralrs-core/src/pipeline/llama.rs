@@ -1,6 +1,6 @@
 use super::{
-    get_completion_input, get_prompt_input, Conversation, Loader, ModelKind, ModelPaths, Pipeline,
-    TokenSource,
+    get_completion_input, get_prompt_input, get_xlora_paths, Conversation, Loader, ModelKind,
+    ModelPaths, Pipeline, TokenSource, XLoraPaths,
 };
 use crate::models::llama::MAX_SEQ_LEN;
 use crate::models::{quantized_llama, Cache};
@@ -20,7 +20,6 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::{rc::Rc, sync::Mutex};
@@ -218,107 +217,28 @@ impl Loader for LlamaLoader {
             }
         };
 
-        let (adapters_configs, adapters_safetensors, classifier_path, ordering, xlora_config) =
-            if let Some(ref xlora_id) = self.xlora_model_id {
-                let api = ApiBuilder::new()
-                    .with_progress(true)
-                    .with_token(Some(get_token(&token_source)?))
-                    .build()?;
-                let api = api.repo(Repo::with_revision(
-                    xlora_id.clone(),
-                    RepoType::Model,
-                    revision,
-                ));
-                let xlora_classifier = &api
-                    .info()?
-                    .siblings
-                    .iter()
-                    .map(|x| x.rfilename.clone())
-                    .filter(|x| x.contains("xlora_classifier.safetensors"))
-                    .collect::<Vec<_>>()[0];
-                let xlora_config = &api
-                    .info()?
-                    .siblings
-                    .iter()
-                    .map(|x| x.rfilename.clone())
-                    .filter(|x| x.contains("xlora_config.json"))
-                    .collect::<Vec<_>>()[0];
-                let classifier_path = api.get(xlora_classifier)?;
-                let config_path = api.get(xlora_config)?;
-                let conf = fs::read_to_string(config_path)?;
-                let xlora_config: XLoraConfig = serde_json::from_str(&conf)?;
-
-                let adapter_files = api
-                    .info()?
-                    .siblings
-                    .iter()
-                    .map(|x| x.rfilename.clone())
-                    .filter(|x| x.contains("/adapter_"))
-                    .map(|x| {
-                        let mut split = x.split('/');
-                        let pos = split.clone().count() - 2;
-                        let name = split.nth(pos).unwrap().to_string();
-                        (x, name)
-                    })
-                    .collect::<Vec<_>>();
-                let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
-                for (file, name) in adapter_files {
-                    if let Some(paths) = adapters_paths.get_mut(&name) {
-                        paths.push(api.get(&file)?);
-                    } else {
-                        adapters_paths.insert(name, vec![api.get(&file)?]);
-                    }
-                }
-                let mut adapters_configs = Vec::new();
-                let mut adapters_safetensors = Vec::new();
-                let adapter_order = if let Some(ref a) = xlora_config.adapters {
-                    a.keys().cloned().collect::<Vec<_>>()
-                } else {
-                    if self.xlora_order.as_ref().unwrap().adapters.is_none() {
-                        return Err(anyhow::Error::msg(
-                            "Must specify adapters in ordering.".to_string(),
-                        ));
-                    }
-                    self.xlora_order
-                        .as_ref()
-                        .unwrap()
-                        .adapters
-                        .as_ref()
-                        .unwrap()
-                        .clone()
-                };
-                for name in &adapter_order {
-                    let paths = adapters_paths.get(name).unwrap();
-                    for path in paths {
-                        if path.extension().unwrap() == "safetensors" {
-                            adapters_safetensors.push((name.clone(), path.to_owned()));
-                        } else {
-                            let conf = fs::read_to_string(path)?;
-                            let lora_config: LoraConfig = serde_json::from_str(&conf)?;
-                            adapters_configs.push((name.clone(), lora_config));
-                        }
-                    }
-                }
-                (
-                    Some(adapters_configs),
-                    Some(adapters_safetensors),
-                    Some(classifier_path),
-                    self.xlora_order.clone(),
-                    Some(xlora_config),
-                )
-            } else {
-                (None, None, None, None, None)
-            };
+        let XLoraPaths {
+            adapter_configs,
+            adapter_safetensors,
+            classifier_path,
+            xlora_order,
+            xlora_config,
+        } = get_xlora_paths(
+            &self.xlora_model_id,
+            &token_source,
+            revision.clone(),
+            &self.xlora_order,
+        )?;
 
         Ok(Box::new(LlamaModelPaths {
             tokenizer_filename,
             config_filename,
             filenames,
-            xlora_adapter_configs: adapters_configs,
-            xlora_adapter_filenames: adapters_safetensors,
+            xlora_adapter_configs: adapter_configs,
+            xlora_adapter_filenames: adapter_safetensors,
             classifier_path,
             classifier_config: xlora_config,
-            xlora_ordering: ordering,
+            xlora_ordering: xlora_order,
         }))
     }
 
