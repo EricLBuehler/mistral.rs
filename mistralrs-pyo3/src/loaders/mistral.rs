@@ -32,7 +32,7 @@ impl MistralLoader {
         xlora_model_id: Option<String>,
     ) -> PyResult<Self> {
         use_flash_attn &= cfg!(feature = "flash-attn");
-        let order = if let Some(order_file) = order_file {
+        let order = if let Some(ref order_file) = order_file {
             let f = File::open(order_file);
             let f = match f {
                 Ok(x) => x,
@@ -45,6 +45,45 @@ impl MistralLoader {
         } else {
             None
         };
+        let kind = Python::with_gil(|py| match &*kind.as_ref(py).borrow() {
+            ModelKind::Normal => _ModelKind::Normal,
+            ModelKind::XLoraNormal => _ModelKind::XLoraNormal,
+            ModelKind::QuantizedGGUF => _ModelKind::QuantizedGGUF,
+            ModelKind::QuantizedGGML => _ModelKind::QuantizedGGML,
+            ModelKind::XLoraGGUF => _ModelKind::XLoraGGUF,
+            ModelKind::XLoraGGML => _ModelKind::XLoraGGML,
+        });
+        if matches!(kind, _ModelKind::Normal)
+            && (order_file.is_some()
+                || quantized_model_id.is_some()
+                || quantized_filename.is_some()
+                || xlora_model_id.is_some())
+        {
+            return Err(PyValueError::new_err("Expected no order file, no quantized model id, no quantized filename, and no xlora model id."));
+        } else if matches!(kind, _ModelKind::XLoraNormal)
+            && (order_file.is_none()
+                || quantized_model_id.is_some()
+                || quantized_filename.is_some()
+                || xlora_model_id.is_none())
+        {
+            return Err(PyValueError::new_err("Expected an order file and xlora model id but no quantized model id and no quantized filename."));
+        } else if matches!(kind, _ModelKind::QuantizedGGUF)
+            || matches!(kind, _ModelKind::QuantizedGGML)
+                && (order_file.is_some()
+                    || quantized_model_id.is_none()
+                    || quantized_filename.is_none()
+                    || xlora_model_id.is_some())
+        {
+            return Err(PyValueError::new_err("Expected a quantized model id and quantized filename but no order file and no xlora model id."));
+        } else if matches!(kind, _ModelKind::XLoraGGUF)
+            || matches!(kind, _ModelKind::XLoraGGML)
+                && (order_file.is_none()
+                    || quantized_model_id.is_none()
+                    || quantized_filename.is_none()
+                    || xlora_model_id.is_none())
+        {
+            return Err(PyValueError::new_err("Expected a quantized model id and quantized filename and order file and xlora model id."));
+        }
         Ok(Self {
             loader: _MistralLoader::new(
                 model_id,
@@ -55,14 +94,7 @@ impl MistralLoader {
                 quantized_model_id,
                 quantized_filename,
                 xlora_model_id,
-                Python::with_gil(|py| match &*kind.as_ref(py).borrow() {
-                    ModelKind::Normal => _ModelKind::Normal,
-                    ModelKind::XLoraNormal => _ModelKind::XLoraNormal,
-                    ModelKind::QuantizedGGUF => _ModelKind::QuantizedGGUF,
-                    ModelKind::QuantizedGGML => _ModelKind::QuantizedGGML,
-                    ModelKind::XLoraGGUF => _ModelKind::XLoraGGUF,
-                    ModelKind::XLoraGGML => _ModelKind::XLoraGGML,
-                }),
+                kind,
                 order,
                 no_kv_cache,
             ),
