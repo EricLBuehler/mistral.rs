@@ -27,16 +27,16 @@ Mistral.rs is a LLM inference platform written in pure, safe Rust.
 |Llama|✅|✅|✅|✅|✅|
 |Mixtral 8x7B|✅| |✅|✅|✅|
 
-Please note that when using a derivative model with a quantized architecture, it is important to specify the corresponding model ID for the tokenizer with `-t`:
+Please note that when using a derivative model with a quantized architecture, it is important to specify the corresponding model ID for the tokenizer with `-t` as failing to do so will result in a incorrect prompt templating:
 
 `./mistralrs-server --port 1234 --log output.txt mistral-gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf`
 
-Failing to do so will result in a incorrect prompt templating.
-
 **Library API**
-- Rust multithreaded API for easy integration into any application: [docs](https://ericlbuehler.github.io/mistral.rs/mistralrs/). To use, add `mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }` to the Cargo.toml.
+
+Rust multithreaded API for easy integration into any application: [docs](https://ericlbuehler.github.io/mistral.rs/mistralrs/). To use, add `mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }` to the Cargo.toml.
 
 **HTTP Server**
+
 Mistral.rs provides an OpenAI API compatible API server, documentation [here](examples/http.md).
 
 To get started see [this](README.md#run) section.
@@ -73,7 +73,7 @@ Rust uses a feature flag system during build to implement compile-time build opt
 which may be specified using the `--features` command.
 1) `cuda`
 2) `metal`
-3) `flash-attn`: Be sure to pass `--use_flash_attn`
+3) `flash-attn`
 
 ### X-LoRA
 **Preparing the X-LoRA Ordering File**
@@ -119,7 +119,7 @@ To start a server serving Mistral on `localhost:1234`,
 
 Mistral.rs uses subcommands to control the model type. They are of format `<XLORA>-<ARCHITECTURE>-<QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
 
-To start an X-LoRA server with the default weights, run the following after modifying or copying the ordering file as described [here](README.md#preparing-the-x-lora-ordering-file).
+To start an X-LoRA server with the default weights, run the following after modifying or copying the ordering file as described [here](README.md#x-lora).
 
 `./mistralrs-server --port 1234 x-lora-mistral -o ordering.json`
 
