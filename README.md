@@ -96,7 +96,7 @@ which may be specified using the `--features` command.
 
 ### X-LoRA
 **Preparing the X-LoRA Ordering File**
-The X-LoRA ordering file is only necessary if the X-LoRA config JSON file does not contain a mapping of adapters. If it does, it is not necessary to modify the ordering file.
+The X-LoRA ordering file is necessary to prepare before inference with an X-LoRA model. However, it is easy with a provided [`script`](xlora-orderings/create_ordering.py)!
 
 The X-LoRA ordering JSON file contains 2 parts. The first is the order of the adapters and the second, the layer ordering. The layer ordering has been automatically generated and should not be manipulated as it controls the application of scalings. However the order of adapter should be an array of strings which are the adapter names corresponding to the order the adapters were specified during training. For example, if the adapters were specified as a dictionary:
 
@@ -110,11 +110,17 @@ adapters = {
 
 The specified order would be `["math", "reasoning", "biology"]`.
 
-For convenience, a script [`generate.py`](xlora-orderings/generate.py) is provided which prompts the user for a comma delimited list of adapter names and then writes the file. If the X-LoRA config contains a mapping of adapters defining the order, it is not necessary to use this script.
+There are 2 scripts to prepare the ordering file. The ordering file is specific to each architecture and set of target modules. Therefore, if either are changed, it is necessary to create a new ordering file using the first option. If only the adapter order or adapters changed, then it the second option should be used.
 
-Regardless of whether a new X-LoRA ordering file was created with `generate.py`, it is recommended to copy the ordering file from `xlora-orderings` to the directory where the server will be run for convenience. For example:
+1) From scratch: No ordering file for the architecture and target modules
 
-`cp ./xlora-orderings/mistral-ordering.json ordering.json`
+    A script [`create_ordering.py`](xlora-orderings/create_ordering.py) is provided which prompts the user for the model ID, target modules, and adapter names. The user is prompted for an output file location, relative to the working directory.
+
+2) Create a new ordering file from an existing ordering file for an architecture and target modules
+
+    A script [`modify_names.py`](xlora-orderings/modify_names.py) is provided which prompts the user for the adapter names and the old ordering file. The user is prompted for an output file location, relative to the working directory.
+
+A provide a [default ordering file](xlora-orderings/default-ordering.json) which contains the ordering for the X-LoRA model associated with [the paper](https://arxiv.org/abs/2402.07148) and the Huggingface repository: https://huggingface.co/lamm-mit/x-lora.
 
 ---
 
@@ -168,6 +174,6 @@ To start a server serving Mistral on `localhost:1234`,
 
 Mistral.rs uses subcommands to control the model type. They are of format `<XLORA>-<ARCHITECTURE>-<QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
 
-To start an X-LoRA server with the default weights, run the following after modifying or copying the ordering file as described [here](README.md#x-lora).
+To start an X-LoRA server with the default weights, run the following after creating the ordering file as described [here](README.md#x-lora).
 
 `./mistralrs-server --port 1234 x-lora-mistral -o ordering.json`

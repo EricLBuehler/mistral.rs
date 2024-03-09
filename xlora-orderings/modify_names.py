@@ -4,7 +4,9 @@ filename = input("Enter input ordering file: ")
 
 with open(filename, "r") as f:
     data = json.loads(f.read())
-    adapters = input("Enter a comma delimited list of adapter names as they were specified when training: ")
+    adapters = input(
+        "Enter a comma delimited list of adapter names as they were specified when training: "
+    )
     split = adapters.split(",")
     split = [x for x in split if len(x) > 0]
     split = [x.strip() for x in split]
