@@ -12,7 +12,7 @@ pub mod mistral;
 pub mod mixtral;
 
 #[pyclass]
-struct NormalLoader {
+pub struct NormalLoader {
     inner: Py<PyAny>,
 }
 
@@ -123,7 +123,7 @@ impl NormalLoader {
 }
 
 #[pyclass]
-struct XLoraLoader {
+pub struct XLoraLoader {
     inner: Py<PyAny>,
 }
 
@@ -239,7 +239,7 @@ impl XLoraLoader {
 }
 
 #[pyclass]
-struct QuantizedLoader {
+pub struct QuantizedLoader {
     inner: Py<PyAny>,
 }
 
@@ -361,7 +361,7 @@ impl QuantizedLoader {
     }
 }
 #[pyclass]
-struct XLoraQuantizedLoader {
+pub struct XLoraQuantizedLoader {
     inner: Py<PyAny>,
 }
 

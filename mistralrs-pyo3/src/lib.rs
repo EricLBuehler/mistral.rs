@@ -9,6 +9,7 @@ use ::mistralrs::{MistralRs, Request as _Request, Response, SamplingParams, Stop
 use candle_core::Device;
 use loaders::{
     gemma::GemmaLoader, llama::LlamaLoader, mistral::MistralLoader, mixtral::MixtralLoader,
+    NormalLoader, QuantizedLoader, XLoraLoader, XLoraQuantizedLoader,
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
 mod loaders;
@@ -164,5 +165,9 @@ fn mistralrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<LlamaLoader>()?;
     m.add_class::<ModelKind>()?;
     m.add_class::<Request>()?;
+    m.add_class::<NormalLoader>()?;
+    m.add_class::<XLoraLoader>()?;
+    m.add_class::<QuantizedLoader>()?;
+    m.add_class::<XLoraQuantizedLoader>()?;
     Ok(())
 }
