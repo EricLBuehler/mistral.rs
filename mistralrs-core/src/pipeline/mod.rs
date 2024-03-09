@@ -382,6 +382,9 @@ fn get_model_paths(
 #[macro_export]
 macro_rules! deserialize_chat_template {
     ($paths:expr, $this:ident) => {{
+        dbg!(fs::read_to_string(
+            $paths.get_template_filename(),
+        )?);
         let template: ChatTemplate = serde_json::from_str(&fs::read_to_string(
             $paths.get_template_filename(),
         )?).unwrap();
