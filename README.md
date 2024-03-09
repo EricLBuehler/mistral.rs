@@ -134,7 +134,7 @@ Mistral.rs attempts to automatically load a chat template from the `tokenizer_co
 ./mitralrs-server --port 1234 --log output.log --chat-template ... llama
 ```
 
-The JINJA chat template may use `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs. For example, for an [`Orca 2 13B`](https://huggingface.co/microsoft/Orca-2-13b) model, one may use the chat template `<|im_start|>system\n{system_message}<|im_end|>\n<|im_start|>user\n{user_message}<|im_end|>\n<|im_start|>assistant`.
+The JINJA chat template may use `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs. For example, if one wanted to use an Orca model where the first message is always the system prompt and the second is always the user's message, the following may be used: `<|im_start|>system\n{messages[0]["content"]}<|im_end|>\n<|im_start|>user\n{messages[1]["content"]}<|im_end|>\n<|im_start|>assistant`. If no JINJA chat template is provided, then the default chat template will be used.
 
 ## Run
 
