@@ -740,7 +740,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>adapters_configs = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>adapters_safetensors = Vec::new();
         <span class="kw">let </span>adapter_order = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>a) = xlora_config.adapters {
-            a.keys().cloned().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+            a.clone()
         } <span class="kw">else </span>{
             <span class="kw">if </span>xlora_order.as_ref().unwrap().adapters.is_none() {
                 <span class="kw">return </span><span class="prelude-val">Err</span>(anyhow::Error::msg(
