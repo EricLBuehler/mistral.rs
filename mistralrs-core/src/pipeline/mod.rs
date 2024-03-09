@@ -50,7 +50,7 @@ pub struct AddedTokensDecoder {
     normalized: bool,
     rstrip: bool,
     single_word: bool,
-    special: bool,
+    special: Option<bool>,
 }
 
 #[allow(dead_code)]
