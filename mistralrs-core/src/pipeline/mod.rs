@@ -58,7 +58,7 @@ pub struct AddedTokensDecoder {
 pub struct ChatTemplate {
     add_bos_token: bool,
     add_eos_token: bool,
-    added_tokens_decoder: HashMap<String, AddedTokensDecoder>,
+    added_tokens_decoder: Option<HashMap<String, AddedTokensDecoder>>,
     additional_special_tokens: Option<Vec<String>>,
     #[serde(with = "either::serde_untagged")]
     bos_token: Either<String, AddedTokensDecoder>,
