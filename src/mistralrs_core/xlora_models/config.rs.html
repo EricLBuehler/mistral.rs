@@ -55,6 +55,8 @@
 <a href="#54" id="54">54</a>
 <a href="#55" id="55">55</a>
 <a href="#56" id="56">56</a>
+<a href="#57" id="57">57</a>
+<a href="#58" id="58">58</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>serde::Deserialize;
 
 <span class="kw">fn </span>true_default() -&gt; bool {
@@ -84,6 +86,8 @@
 <span class="attr">#[derive(Clone, Debug, Deserialize)]
 </span><span class="kw">pub struct </span>XLoraConfig {
     <span class="kw">pub </span>hidden_size: usize,
+    <span class="attr">#[serde(rename = <span class="string">"base_model_id"</span>)]
+    </span><span class="kw">pub </span>_base_model_id: String,
     <span class="kw">pub </span>adapters: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
     <span class="attr">#[serde(default = <span class="string">"false_default"</span>)]
     </span><span class="kw">pub </span>layerwise_scalings: bool,
