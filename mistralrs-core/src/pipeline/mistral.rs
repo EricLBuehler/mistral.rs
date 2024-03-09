@@ -450,7 +450,7 @@ impl Pipeline for MistralPipeline {
             .get_vocab(true)
             .get(eos_tok)
             .copied()
-            .expect(&format!("Unable to extract `{eos_tok}` EOS token."))
+            .unwrap_or_else(|| panic!("Unable to extract `{eos_tok}` EOS token."))
     }
     fn name(&self) -> &'static str {
         "mistral"

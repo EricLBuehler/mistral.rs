@@ -128,13 +128,11 @@ using a high quantization level (eg., 4-bit) can distort the signal and prevent 
 - model.layers.{layer_idx}.mlp.gate_proj
 
 ### Chat Templates and Tokenizer
-Mistral.rs attempts to automatically load a chat template from the `tokenizer_config.json` file. This enables high flexibility across instruction-tuned models and ensures accurate chat templating. However, if the `chat_template` field is missing, then a manual JINJA template will be used:
+**Chat Templates**
 
-```bash
-./mitralrs-server --port 1234 --log output.log --chat-template ... llama
-```
+Mistral.rs attempts to automatically load a chat template from the `tokenizer_config.json` file. This enables high flexibility across instruction-tuned models and ensures accurate chat templating. However, if the `chat_template` field is missing, then a JINJA chat template should be provided. The JINJA chat template may use `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs. Some chat templates are provided [here](chat_templates), and it is easy to modify or create others.
 
-The JINJA chat template may use `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs. Some default chat templates are provided [here](chat_templates). For example, if one wanted to use an Orca model where the first message is always the system prompt and the second is always the user's message, the following may be used: 
+For example, to use the `chatml` template, `--chat-template` is specified *before* the model architecture. For example:
 
 ```bash
 ./mitralrs-server --port 1234 --log output.log --chat-template ./chat_templates/chatml.json llama
@@ -142,7 +140,9 @@ The JINJA chat template may use `messages`, `add_generation_prompt`, `bos_token`
 
 If no JINJA chat template is provided, then the default chat template located [here](default.json) will be loaded. It is recommended to copy this file to the working directory where `./mistralrs-server` will be run.
 
-Some models do not provide a `tokenizer.json` file although mistral.rs expects one. To solve this, please run [this](examples/get_tokenizers_json.py) script. It will output the `tokenizer.json` file for your specific model. This may be uploaded to HF hub or a manually specified tokenizer path can be specified by passing the `--tokenizer-json` flag after the model architecture has been selected. For example:
+**Tokenizer**
+
+Some models do not provide a `tokenizer.json` file although mistral.rs expects one. To solve this, please run [this](examples/get_tokenizers_json.py) script. It will output the `tokenizer.json` file for your specific model. This may be used by passing the `--tokenizer-json` flag *after* the model architecture. For example:
 
 ```bash
 $ python3 examples/get_tokenizers_json.py
@@ -150,10 +150,10 @@ Enter model ID: microsoft/Orca-2-13b
 $ ./mistralrs-server --port 1234 --log output.log llama --tokenizer-json tokenizer.json
 ```
 
-Putting it all together, to run, for example, an Orca model (which does not come with a `tokenizer.json` or chat template):
+Putting it all together, to run, for example, an [Orca](https://huggingface.co/microsoft/Orca-2-13b) model (which does not come with a `tokenizer.json` or chat template):
 1) Generate the `tokenizer.json` by running the script at `examples/get_tokenizers_json.py`. This will output some files including `tokenizer.json` in the working directory.
 2) Find and copy the correct chat template from `chat-templates` to the working directory (eg., `cp chat_templates/chatml.json .`)
-3) Run `mistralrs-server` while specifying the tokenizer and chat template: `cargo run --release --features cuda -- --port 1234 --log output.txt --chat-template chatml.json llama -m microsoft/Orca-2-13b -t tokenizer.json`
+3) Run `mistralrs-server`, specifying the tokenizer and chat template: `cargo run --release --features cuda -- --port 1234 --log output.txt --chat-template chatml.json llama -m microsoft/Orca-2-13b -t tokenizer.json`
 
 ## Run
 
