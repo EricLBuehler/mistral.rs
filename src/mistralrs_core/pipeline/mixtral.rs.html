@@ -659,7 +659,7 @@
         ));
 
         <span class="kw">let </span>tokenizer_filename = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>p) = <span class="self">self</span>.tokenizer_json {
-            <span class="macro">println!</span>(<span class="string">"Using tokenizer.json at `{p}`"</span>);
+            <span class="macro">eprintln!</span>(<span class="string">"Using tokenizer.json at `{p}`"</span>);
             PathBuf::from_str(p)<span class="question-mark">?
         </span>} <span class="kw">else </span>{
             api.get(<span class="string">"tokenizer.json"</span>)<span class="question-mark">?
@@ -733,7 +733,7 @@
             DType::F32
         };
 
-        <span class="macro">println!</span>(<span class="string">"Loading model on {device:?}..."</span>);
+        <span class="macro">eprintln!</span>(<span class="string">"Loading model on {device:?}..."</span>);
         <span class="kw">let </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
             ModelKind::QuantizedGGUF =&gt; {
                 <span class="kw">let </span><span class="kw-2">mut </span>file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())<span class="question-mark">?</span>;
@@ -815,7 +815,7 @@
             }
             ModelKind::XLoraGGML =&gt; <span class="macro">unreachable!</span>(),
         };
-        <span class="macro">println!</span>(<span class="string">"Model loaded."</span>);
+        <span class="macro">eprintln!</span>(<span class="string">"Model loaded."</span>);
 
         <span class="kw">let </span>tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
             .map_err(|e| TokenizerError::Error(e.to_string()))<span class="question-mark">?</span>;
