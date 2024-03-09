@@ -166,6 +166,7 @@ A provide a [default ordering file](scripts/default-ordering.json) which contain
 ---
 
 **Quantized X-LoRA models**
+
 Mistral.rs supports running quantized models with X-LoRA. The X-LoRA layers will not be quantized, only the base model. Please note that
 using a high quantization level (eg., 4-bit) can distort the signal and prevent the classifier from acting properly. Therefore, it is better to use slightly higher levels such as 8-bit.
 
