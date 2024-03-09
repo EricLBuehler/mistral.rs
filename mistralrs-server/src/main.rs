@@ -453,7 +453,7 @@ struct Args {
     no_kv_cache: bool,
 
     /// JINJA chat template with `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
-    /// Used if the automatic deserialization fails.
+    /// Used if the automatic deserialization fails. If this ends with `.jinja` (ie., it is a file) then that template is loaded.
     #[arg(short, long)]
     chat_template: Option<String>,
 }

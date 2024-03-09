@@ -389,10 +389,17 @@ macro_rules! deserialize_chat_template {
                     serde_json::from_str(&fs::read_to_string($paths.get_template_filename())?)
                         .unwrap();
                 let template = match $this.chat_template.clone() {
-                    Some(t) => t,
+                    Some(t) => {
+                        if t.ends_with(".jinja") {
+                            println!("Loading specified loading JINJA chat template at `{t}`");
+                            fs::read_to_string(t)?
+                        } else {
+                            t
+                        }
+                    },
                     None => {
-                        println!("No specified JINJA template, loading default chat template at ./default_chat_template.jinja");
-                        fs::read_to_string("./default_chat_template.jinja")?
+                        println!("No specified JINJA template, loading default chat template at ./default.jinja");
+                        fs::read_to_string("./default.jinja")?
                     }
                 };
                 deser.insert(
