@@ -17,6 +17,18 @@ pub struct LlamaLoader {
 
 #[pymethods]
 impl LlamaLoader {
+    /// - `model_id`: Base model ID, or tokenizer ID if quantized model type.
+    /// - `kind`: Model kind
+    /// - `no_kv_cache=False`: Disable kv cache.
+    /// - `use_flash_attn=<feature>`: Use flash attn, only used if feature is enabled.
+    /// - `repeat_last_n=64`: Repeat last n context window.
+    /// - `gqa=1`: GQA, irrelevant if non quantized model type.
+    /// - `order_file=None`: Ordering JSON file.
+    /// - `quantized_model_id=None`: Quantized model ID.
+    /// - `quantized_filename=None`: Quantized filename (gguf/ggml),
+    /// - `xlora_model_id=None`: X-LoRA model
+    /// - `chat_template=None`: Chat template literal or file.
+    /// - `tokenizer_json=None`: Tokenizer json file.
     #[new]
     #[pyo3(signature = (
         model_id,
@@ -121,25 +133,27 @@ impl LlamaLoader {
         })
     }
 
+    /// Load a model.
+    ///
+    /// - `token_source="cache"`
     /// Specify token source and token source value as the following pairing:
     /// "cache" -> None
     /// "literal" -> str
     /// "envvar" -> str
     /// "path" -> str
     ///
-    /// `log`:
-    /// Log all responses and requests to this file
+    /// - `max_seqs=2`: Maximum running sequences at any time.
     ///
-    /// `truncate_sequence`:
+    /// - `truncate_sequence=False`:
     /// If a sequence is larger than the maximum model length, truncate the number
     /// of tokens such that the sequence will fit at most the maximum length.
     /// If `max_tokens` is not specified in the request, space for 10 tokens will be reserved instead.
     ///
-    /// `max_seqs`:
-    /// Maximum running sequences at any time
+    /// - `logfile=None`: Log all responses and requests to this file.
     ///
-    /// `no_kv_cache`:
-    /// Use no KV cache.
+    /// - `revision=None`: HF revision.
+    ///
+    /// - `token_source_value=None`: Value of token source value for `token_source`
     #[pyo3(signature = (token_source = "cache", max_seqs = 2, truncate_sequence = false, logfile = None, revision = None, token_source_value = None))]
     fn load(
         &mut self,
