@@ -134,20 +134,20 @@ Mistral.rs attempts to automatically load a chat template from the `tokenizer_co
 ./mitralrs-server --port 1234 --log output.log --chat-template ... llama
 ```
 
-The JINJA chat template may use `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs. For example, if one wanted to use an Orca model where the first message is always the system prompt and the second is always the user's message, the following may be used: 
+The JINJA chat template may use `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs. Some default chat templates are provided [here](chat_templates). For example, if one wanted to use an Orca model where the first message is always the system prompt and the second is always the user's message, the following may be used: 
 
 ```bash
-./mitralrs-server --port 1234 --log output.log --chat-template <|im_start|>system\n{messages[0]["content"]}<|im_end|>\n<|im_start|>user\n{messages[1]["content"]}<|im_end|>\n<|im_start|>assistant llama
+./mitralrs-server --port 1234 --log output.log --chat-template ./chat_templates/chatml.jinja llama
 ```
 
-If no JINJA chat template is provided, then the default chat template located [here](default.jinja) will be loaded. Please copy this file to the directory where you will be `./mistralrs-server`.
+If no JINJA chat template is provided, then the default chat template located [here](default.jinja) will be loaded. It is reccommended to copy this file to the working directory where `./mistralrs-server` will be run.
 
-Some models do not provide a `tokenizer.json` file although mistral.rs expects one. To solve this, please run [this](examples/get_tokenizers_json.py) script. It will output the `tokenizer.json` file for your specific model. This may be uploaded to HF hub or a manually specified tokenizer path can be specified by passing the `--tokenizer_json` flag after the model architecture has been selected. For example:
+Some models do not provide a `tokenizer.json` file although mistral.rs expects one. To solve this, please run [this](examples/get_tokenizers_json.py) script. It will output the `tokenizer.json` file for your specific model. This may be uploaded to HF hub or a manually specified tokenizer path can be specified by passing the `--tokenizer-json` flag after the model architecture has been selected. For example:
 
 ```bash
 $ python3 examples/get_tokenizers_json.py
 Enter model ID: microsoft/Orca-2-13b
-$ ./mistralrs-server --port 1234 --log output.log llama --tokenizer_json tokenizer.json
+$ ./mistralrs-server --port 1234 --log output.log llama --tokenizer-json tokenizer.json
 ```
 
 ## Run
