@@ -1,18 +1,26 @@
 # Mistral.rs PyO3 Bindings: `mistralrs`
 
-To use, activate a Python virtual environment and ensure that `maturin` is installed, for example:
+`mistralrs` is a Python package which provides an API for `mistral.rs`.
 
-```bash
-python3 -m venv myenv
-source myenv/bin/activate
-pip install maturin
-```
+## Installation
+1) `cd` into mistralrs-pyo3.
 
-And then install `mistralrs` by executing the following in this directory where [features](../README.md#building-for-gpu-metal-or-enabling-other-features) such as `cuda` or `flash-attn` may be specified with the `--features` argument.
+2) Activate a Python environment. For example:
 
-```bash
-maturin develop -r --features ...
-```
+    ```bash
+    python3 -m venv myenv
+    source myenv/bin/activate
+    pip install maturin
+    ```
+
+3) Activate a Python virtual environment and install `maturin` with `pip install maturin`.
+
+4) Install `mistralrs`
+    Install `mistralrs` by executing the following in this directory where [features](../README.md#building-for-gpu-metal-or-enabling-other-features) such as `cuda` or `flash-attn` may be specified with the `--features` argument.
+
+    ```bash
+    maturin develop -r --features ...
+    ```
 
 Please find [API docs here](API.md).
 
