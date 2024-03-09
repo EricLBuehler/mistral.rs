@@ -49,7 +49,7 @@ impl MixtralLoader {
         model_id: String,
         kind: Py<ModelKind>,
         no_kv_cache: bool,
-        mut use_flash_attn: bool,
+        use_flash_attn: Option<bool>,
         repeat_last_n: usize,
         _gqa: Option<usize>,
         order_file: Option<String>,
@@ -59,6 +59,7 @@ impl MixtralLoader {
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
     ) -> PyResult<Self> {
+        let mut use_flash_attn = use_flash_attn.unwrap_or(false);
         use_flash_attn &= cfg!(feature = "flash-attn");
         let order = if let Some(ref order_file) = order_file {
             let f = File::open(order_file);
