@@ -177,7 +177,7 @@ impl Loader for MixtralLoader {
         ));
 
         let tokenizer_filename = if let Some(ref p) = self.tokenizer_json {
-            eprintln!("Using tokenizer.json at `{p}`");
+            println!("Using tokenizer.json at `{p}`");
             PathBuf::from_str(p)?
         } else {
             api.get("tokenizer.json")?
@@ -251,7 +251,7 @@ impl Loader for MixtralLoader {
             DType::F32
         };
 
-        eprintln!("Loading model on {device:?}...");
+        println!("Loading model on {device:?}...");
         let model = match self.kind {
             ModelKind::QuantizedGGUF => {
                 let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
@@ -333,7 +333,7 @@ impl Loader for MixtralLoader {
             }
             ModelKind::XLoraGGML => unreachable!(),
         };
-        eprintln!("Model loaded.");
+        println!("Model loaded.");
 
         let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
