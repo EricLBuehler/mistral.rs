@@ -142,7 +142,13 @@ The JINJA chat template may use `messages`, `add_generation_prompt`, `bos_token`
 
 If no JINJA chat template is provided, then the default chat template located [here](default_chat_template.jinja) will be loaded.
 
-Some models do not provide a `tokenizer.json` file although mistral.rs expects one. To solve this, please run [this](examples/get_tokenizers_json.py) script. It will output the `tokenizer.json` file for your specific model. This may be uploaded to HF hub or a manually specified tokenizer path can be specified by passing the 
+Some models do not provide a `tokenizer.json` file although mistral.rs expects one. To solve this, please run [this](examples/get_tokenizers_json.py) script. It will output the `tokenizer.json` file for your specific model. This may be uploaded to HF hub or a manually specified tokenizer path can be specified by passing the `--tokenizer_json` flag after the model architecture has been selected. For example:
+
+```bash
+$ python3 examples/get_tokenizers_json.py
+Enter model ID: microsoft/Orca-2-13b
+$ ./mistralrs-server --port 1234 --log output.log llama --tokenizer_json tokenizer.json
+```
 
 ## Run
 
