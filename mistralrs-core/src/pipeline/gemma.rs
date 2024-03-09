@@ -5,7 +5,7 @@ use super::{
 use crate::models::Cache;
 use crate::pipeline::ChatTemplate;
 use crate::xlora_models::{XLoraConfig, XLoraGemma};
-use crate::{deref_mut_refcell, deref_refcell};
+use crate::{deref_mut_refcell, deref_refcell, deserialize_chat_template};
 use crate::{
     models::gemma::{Config, Model as NormalModel},
     sequence::Sequence,
@@ -291,27 +291,7 @@ impl Loader for GemmaLoader {
         let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
 
-        let chat_template: ChatTemplate = match serde_json::from_str(&fs::read_to_string(
-            paths.get_template_filename(),
-        )?) {
-            Ok(template) => template,
-            Err(e) => {
-                println!("Deserializing chat template failed with `{e:?}`, attempting to use specified JINJA template");
-                let mut deser: HashMap<String, Value> =
-                    serde_json::from_str(&fs::read_to_string(paths.get_template_filename())?)
-                        .unwrap();
-                deser.insert(
-                    "chat_template".to_string(),
-                    Value::String(
-                        self.chat_template
-                            .clone()
-                            .expect("Please specify a manual chat template."),
-                    ),
-                );
-                let ser = serde_json::to_string_pretty(&deser).unwrap();
-                serde_json::from_str(&ser).unwrap()
-            }
-        };
+        let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
 
         Ok(Box::new(Mutex::new(GemmaPipeline {
             model,

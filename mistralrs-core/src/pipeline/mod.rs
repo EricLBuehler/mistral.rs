@@ -369,3 +369,30 @@ fn get_model_paths(
         }
     }
 }
+
+#[macro_export]
+macro_rules! deserialize_chat_template {
+    ($paths:expr, $this:ident) => {
+        match serde_json::from_str(&fs::read_to_string(
+            $paths.get_template_filename(),
+        )?) {
+            Ok(template) => template,
+            Err(_) => {
+                println!("Deserializing chat template failed, attempting to use specified JINJA template");
+                let mut deser: HashMap<String, Value> =
+                    serde_json::from_str(&fs::read_to_string($paths.get_template_filename())?)
+                        .unwrap();
+                deser.insert(
+                    "chat_template".to_string(),
+                    Value::String(
+                        $this.chat_template
+                            .clone()
+                            .expect("Please specify a manual chat template."),
+                    ),
+                );
+                let ser = serde_json::to_string_pretty(&deser).unwrap();
+                serde_json::from_str(&ser).unwrap()
+            }
+        }
+    };
+}
