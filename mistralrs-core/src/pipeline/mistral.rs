@@ -17,6 +17,7 @@ use candle_core::quantized::gguf_file;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Activation;
 use candle_sampling::logits_processor::Logprobs;
+use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
 use serde::Deserialize;
@@ -441,11 +442,15 @@ impl Pipeline for MistralPipeline {
         self.tokenizer.clone()
     }
     fn eos_tok(&self) -> u32 {
+        let eos_tok = match self.get_chat_template().eos_token {
+            Either::Left(ref lit) => lit,
+            Either::Right(ref added) => &added.content,
+        };
         self.tokenizer
             .get_vocab(true)
-            .get("</s>")
+            .get(eos_tok)
             .copied()
-            .expect("Unable to extract `</s>` EOS token.")
+            .expect(&format!("Unable to extract `{eos_tok}` EOS token."))
     }
     fn name(&self) -> &'static str {
         "mistral"
