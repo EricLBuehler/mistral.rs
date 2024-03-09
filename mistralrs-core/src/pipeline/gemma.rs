@@ -300,6 +300,7 @@ impl Loader for GemmaLoader {
                 let mut deser: HashMap<String, Value> =
                     serde_json::from_str(&fs::read_to_string(paths.get_template_filename())?)
                         .unwrap();
+                dbg!(deser)
                 deser.insert(
                     "chat_template".to_string(),
                     Value::String(
