@@ -444,6 +444,7 @@
 <a href="#443" id="443">443</a>
 <a href="#444" id="444">444</a>
 <a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -828,9 +829,10 @@
 <span class="attr">#[macro_export]
 </span><span class="macro">macro_rules! </span>deserialize_chat_template {
     (<span class="macro-nonterminal">$paths</span>:expr, <span class="macro-nonterminal">$this</span>:ident) =&gt; {{
-        <span class="macro">dbg!</span>(fs::read_to_string(
-            <span class="macro-nonterminal">$paths</span>.get_template_filename(),
-        )<span class="question-mark">?</span>);
+        <span class="kw">let </span>deser: HashMap&lt;String, Value&gt; =
+            serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(<span class="macro-nonterminal">$paths</span>.get_template_filename())<span class="question-mark">?</span>)
+                .unwrap();
+        <span class="macro">dbg!</span>(deser);
         <span class="kw">let </span>template: ChatTemplate = serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(
             <span class="macro-nonterminal">$paths</span>.get_template_filename(),
         )<span class="question-mark">?</span>).unwrap();
