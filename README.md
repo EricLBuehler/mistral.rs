@@ -7,12 +7,12 @@ Mistral.rs is a LLM inference platform written in pure, safe Rust.
 - Falcon
 
 ## Description
+- Fast performance with per-sequence and catch-up KV cache management technique.
+- 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit quantization for faster inference and optimized memory usage.
+- First X-LoRA inference platform with first class support.
+- Continuous batching.
 - Lightweight OpenAI API compatible HTTP server.
 - Python API.
-- Fast performance with per-sequence and catch-up KV cache management technique.
-- Continuous batching.
-- First X-LoRA inference platform with first class support.
-- 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit quantization for faster inference and optimized memory usage.
 - Apple silicon support with the Metal framework.
 
 **Supported models:**
@@ -30,7 +30,7 @@ Mistral.rs is a LLM inference platform written in pure, safe Rust.
 
 **Note when using quantized derivative models**
 
-Please note that when using a derivative model with a quantized architecture, it is important to specify the corresponding model ID for the tokenizer with `-t` as failing to do so will result in a incorrect prompt templating:
+Please note that when using a derivative model with a quantized architecture, it is important to specify the corresponding model ID for the tokenizer with `-t`.
 
 `./mistralrs-server --port 1234 --log output.txt mistral-gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf`
 
@@ -84,13 +84,15 @@ The Huggingface token should be provided in `~/.cache/huggingface/token`.
 
     If Rust is installed and the Huggingface token is set, then one may build mistral.rs by executing the build command.
     `cargo build --release`.
-The build process will output a binary `misralrs-server` at `./target/release/mistralrs-server`.
+
+
+The build process will output a binary `misralrs-server` at `./target/release/mistralrs-server` which may be copied into the working directory with `cp ./target/release/mistralrs-server .`.
 ### Building for GPU, Metal or enabling other features
 Rust uses a feature flag system during build to implement compile-time build options. As such, the following is a list of features
 which may be specified using the `--features` command.
 1) `cuda`
-2) `metal`
-3) `flash-attn`
+2) `metal` (mutally excl. to `cuda`)
+3) `flash-attn` (mutally excl. to `metal`)
 
 ### X-LoRA
 **Preparing the X-LoRA Ordering File**
@@ -106,9 +108,11 @@ adapters = {
 }
 ```
 
-The specified order would be `["math", "reasoning", "biology"]`
+The specified order would be `["math", "reasoning", "biology"]`.
 
-For convenience, a script `generate.py` in `xlora-orderings` is provided which prompts the user for a comma delimited list of numbers and then writes the file. If the X-LoRA config contains a mapping of adapters defining the order, it is not necessary to use this script. However, for both cases, it is recommended to copy the modified ordering file from `xlora-orderings.json` to the directory where the server will be run for convenience. For example:
+For convenience, a script [`generate.py`](xlora-orderings/generate.py) is provided which prompts the user for a comma delimited list of adapter names and then writes the file. If the X-LoRA config contains a mapping of adapters defining the order, it is not necessary to use this script.
+
+Regardless of whether a new X-LoRA ordering file was created with `generate.py`, it is recommended to copy the ordering file from `xlora-orderings` to the directory where the server will be run for convenience. For example:
 
 `cp ./xlora-orderings/mistral-ordering.json ordering.json`
 

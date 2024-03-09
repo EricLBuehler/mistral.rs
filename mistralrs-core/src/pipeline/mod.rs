@@ -294,7 +294,7 @@ fn get_xlora_paths(
         let mut adapters_configs = Vec::new();
         let mut adapters_safetensors = Vec::new();
         let adapter_order = if let Some(ref a) = xlora_config.adapters {
-            a.keys().cloned().collect::<Vec<_>>()
+            a.clone()
         } else {
             if xlora_order.as_ref().unwrap().adapters.is_none() {
                 return Err(anyhow::Error::msg(

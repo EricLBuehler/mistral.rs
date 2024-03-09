@@ -1,5 +1,3 @@
-use indexmap::IndexMap;
-
 use serde::Deserialize;
 
 fn true_default() -> bool {
@@ -29,7 +27,7 @@ fn default_0f64() -> f64 {
 #[derive(Clone, Debug, Deserialize)]
 pub struct XLoraConfig {
     pub hidden_size: usize,
-    pub adapters: Option<IndexMap<String, String>>,
+    pub adapters: Option<Vec<String>>,
     #[serde(default = "false_default")]
     pub layerwise_scalings: bool,
     #[serde(default = "false_default")]
