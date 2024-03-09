@@ -473,13 +473,6 @@
 <a href="#472" id="472">472</a>
 <a href="#473" id="473">473</a>
 <a href="#474" id="474">474</a>
-<a href="#475" id="475">475</a>
-<a href="#476" id="476">476</a>
-<a href="#477" id="477">477</a>
-<a href="#478" id="478">478</a>
-<a href="#479" id="479">479</a>
-<a href="#480" id="480">480</a>
-<a href="#481" id="481">481</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     get_completion_input, get_model_paths, get_prompt_input, get_xlora_paths, ChatTemplate, Loader,
     ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
@@ -884,13 +877,6 @@
                 <span class="macro">panic!</span>(<span class="string">"Model failed with error `{e}`. Please raise an issue."</span>);
             }
         }
-    }
-    <span class="kw">fn </span>tokenize_prompt(<span class="kw-2">&amp;</span><span class="self">self</span>, prompt: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u32&gt;&gt; {
-        <span class="kw">let </span>encoding = <span class="self">self
-            </span>.tokenizer
-            .encode(prompt, <span class="bool-val">false</span>)
-            .map_err(|e| anyhow::Error::msg(e.to_string()))<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(encoding.get_ids().to_vec())
     }
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {
         <span class="kw">match </span><span class="self">self</span>.model {

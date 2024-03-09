@@ -397,6 +397,12 @@
 <a href="#396" id="396">396</a>
 <a href="#397" id="397">397</a>
 <a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
+<a href="#400" id="400">400</a>
+<a href="#401" id="401">401</a>
+<a href="#402" id="402">402</a>
+<a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -527,7 +533,13 @@
 
 <span class="kw">pub trait </span>Pipeline: Send + Sync {
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;mut </span><span class="self">self</span>, input_toks: Box&lt;[Rc&lt;RefCell&lt;Sequence&gt;&gt;]&gt;, is_prompt: bool) -&gt; Tensor;
-    <span class="kw">fn </span>tokenize_prompt(<span class="kw-2">&amp;</span><span class="self">self</span>, prompt: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u32&gt;&gt;;
+    <span class="kw">fn </span>tokenize_prompt(<span class="kw-2">&amp;</span><span class="self">self</span>, prompt: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u32&gt;&gt; {
+        <span class="kw">let </span>encoding = <span class="self">self
+            </span>.tokenizer()
+            .encode(prompt, <span class="bool-val">false</span>)
+            .map_err(|e| anyhow::Error::msg(e.to_string()))<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(encoding.get_ids().to_vec())
+    }
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device;
     <span class="kw">fn </span>num_hidden_layers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache;
