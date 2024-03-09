@@ -391,13 +391,6 @@ impl Pipeline for MistralPipeline {
             }
         }
     }
-    fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
-        let encoding = self
-            .tokenizer
-            .encode(prompt, false)
-            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
-        Ok(encoding.get_ids().to_vec())
-    }
     fn device(&self) -> &Device {
         match self.model {
             Model::Normal(ref model) => &model.device,

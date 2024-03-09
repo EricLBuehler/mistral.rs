@@ -128,7 +128,13 @@ pub trait Loader {
 
 pub trait Pipeline: Send + Sync {
     fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor;
-    fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>>;
+    fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
+        let encoding = self
+            .tokenizer()
+            .encode(prompt, false)
+            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
+        Ok(encoding.get_ids().to_vec())
+    }
     fn device(&self) -> &Device;
     fn num_hidden_layers(&self) -> usize;
     fn cache(&self) -> &Cache;
