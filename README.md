@@ -127,6 +127,15 @@ using a high quantization level (eg., 4-bit) can distort the signal and prevent 
 - model.layers.{layer_idx}.mlp.down_proj
 - model.layers.{layer_idx}.mlp.gate_proj
 
+### Chat Templates
+Mistral.rs attempts to automatically load a chat template from the `tokenizer_config.json` file. This enables high flexibility accross instruction-tuned models and ensures accurate chat templating. However, if the `chat_template` field is missing, then a manual JINJA template will be used:
+
+```bash
+./mitralrs-server --port 1234 --log output.log --chat-template ... llama
+```
+
+The JINJA chat template may use `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs. For example, for an [`Orca 2 13B`](https://huggingface.co/microsoft/Orca-2-13b) model, one may use the chat template `<|im_start|>system\n{system_message}<|im_end|>\n<|im_start|>user\n{user_message}<|im_end|>\n<|im_start|>assistant`.
+
 ## Run
 
 To start a server serving Mistral on `localhost:1234`, 
