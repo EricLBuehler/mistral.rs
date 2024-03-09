@@ -128,7 +128,7 @@ using a high quantization level (eg., 4-bit) can distort the signal and prevent 
 - model.layers.{layer_idx}.mlp.gate_proj
 
 ### Chat Templates and Tokenizer
-Mistral.rs attempts to automatically load a chat template from the `tokenizer_config.json` file. This enables high flexibility accross instruction-tuned models and ensures accurate chat templating. However, if the `chat_template` field is missing, then a manual JINJA template will be used:
+Mistral.rs attempts to automatically load a chat template from the `tokenizer_config.json` file. This enables high flexibility across instruction-tuned models and ensures accurate chat templating. However, if the `chat_template` field is missing, then a manual JINJA template will be used:
 
 ```bash
 ./mitralrs-server --port 1234 --log output.log --chat-template ... llama
@@ -140,7 +140,7 @@ The JINJA chat template may use `messages`, `add_generation_prompt`, `bos_token`
 ./mitralrs-server --port 1234 --log output.log --chat-template ./chat_templates/chatml.jinja llama
 ```
 
-If no JINJA chat template is provided, then the default chat template located [here](default.jinja) will be loaded. It is reccommended to copy this file to the working directory where `./mistralrs-server` will be run.
+If no JINJA chat template is provided, then the default chat template located [here](default.jinja) will be loaded. It is recommended to copy this file to the working directory where `./mistralrs-server` will be run.
 
 Some models do not provide a `tokenizer.json` file although mistral.rs expects one. To solve this, please run [this](examples/get_tokenizers_json.py) script. It will output the `tokenizer.json` file for your specific model. This may be uploaded to HF hub or a manually specified tokenizer path can be specified by passing the `--tokenizer-json` flag after the model architecture has been selected. For example:
 
