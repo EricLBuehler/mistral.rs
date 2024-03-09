@@ -62,7 +62,7 @@ pub struct ChatTemplate {
     additional_special_tokens: Option<Vec<String>>,
     #[serde(with = "either::serde_untagged")]
     bos_token: Either<String, AddedTokensDecoder>,
-    chat_template: String,
+    chat_template: Option<String>,
     clean_up_tokenization_spaces: bool,
     device_map: Option<String>,
     #[serde(with = "either::serde_untagged")]
@@ -151,7 +151,10 @@ pub trait Pipeline: Send + Sync {
         add_generation_prompt: bool,
     ) -> Result<String> {
         let mut env = Environment::new();
-        env.add_template("chat_template", &self.get_chat_template().chat_template)?;
+        env.add_template(
+            "chat_template",
+            self.get_chat_template().chat_template.as_ref().unwrap(),
+        )?;
         let tmpl = env.get_template("chat_template").unwrap();
         let bos_tok = match self.get_chat_template().bos_token {
             Either::Left(ref lit) => lit,
@@ -378,37 +381,62 @@ fn get_model_paths(
 
 #[macro_export]
 macro_rules! deserialize_chat_template {
-    ($paths:expr, $this:ident) => {
-        match serde_json::from_str(&fs::read_to_string(
+    ($paths:expr, $this:ident) => {{
+        let template: ChatTemplate = serde_json::from_str(&fs::read_to_string(
             $paths.get_template_filename(),
-        )?) {
-            Ok(template) => template,
-            Err(_) => {
-                println!("Deserializing chat template failed, attempting to use specified JINJA template");
+        )?).unwrap();
+        #[derive(Debug, serde::Deserialize)]
+        struct SpecifiedTemplate {
+            chat_template: String,
+            bos_token: Option<String>,
+            eos_token: Option<String>,
+        }
+        match template.chat_template {
+            Some(_) => template,
+            None => {
+                println!("Chat template does not contain a tokenizer, attempting to use specified JINJA template");
                 let mut deser: HashMap<String, Value> =
                     serde_json::from_str(&fs::read_to_string($paths.get_template_filename())?)
                         .unwrap();
-                let template = match $this.chat_template.clone() {
+                match $this.chat_template.clone() {
                     Some(t) => {
-                        if t.ends_with(".jinja") {
-                            println!("Loading specified loading JINJA chat template at `{t}`");
-                            fs::read_to_string(t)?
+                        if t.ends_with(".json") {
+                            println!("Loading specified loading chat template file at `{t}`");
+                            let templ: SpecifiedTemplate = serde_json::from_str(&fs::read_to_string(t)?).unwrap();
+                            deser.insert(
+                                "chat_template".to_string(),
+                                Value::String(templ.chat_template),
+                            );
+                            if templ.bos_token.is_some() {
+                                deser.insert(
+                                    "bos_token".to_string(),
+                                    Value::String(templ.bos_token.unwrap()),
+                                );
+                            }
+                            if templ.eos_token.is_some() {
+                                deser.insert(
+                                    "eos_token".to_string(),
+                                    Value::String(templ.eos_token.unwrap()),
+                                );
+                            }
                         } else {
-                            t
+                            deser.insert(
+                                "chat_template".to_string(),
+                                Value::String(t),
+                            );
                         }
                     },
                     None => {
-                        println!("No specified JINJA template, loading default chat template at ./default.jinja");
-                        fs::read_to_string("./default.jinja")?
+                        println!("No specified JINJA template, loading default chat template at ./default.json");
+                        deser.insert(
+                            "chat_template".to_string(),
+                            Value::String(fs::read_to_string("./default.json")?),
+                        );
                     }
                 };
-                deser.insert(
-                    "chat_template".to_string(),
-                    Value::String(template),
-                );
                 let ser = serde_json::to_string_pretty(&deser).unwrap();
                 serde_json::from_str(&ser).unwrap()
             }
         }
-    };
+    }};
 }

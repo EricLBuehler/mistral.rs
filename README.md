@@ -137,10 +137,10 @@ Mistral.rs attempts to automatically load a chat template from the `tokenizer_co
 The JINJA chat template may use `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs. Some default chat templates are provided [here](chat_templates). For example, if one wanted to use an Orca model where the first message is always the system prompt and the second is always the user's message, the following may be used: 
 
 ```bash
-./mitralrs-server --port 1234 --log output.log --chat-template ./chat_templates/chatml.jinja llama
+./mitralrs-server --port 1234 --log output.log --chat-template ./chat_templates/chatml.json llama
 ```
 
-If no JINJA chat template is provided, then the default chat template located [here](default.jinja) will be loaded. It is recommended to copy this file to the working directory where `./mistralrs-server` will be run.
+If no JINJA chat template is provided, then the default chat template located [here](default.json) will be loaded. It is recommended to copy this file to the working directory where `./mistralrs-server` will be run.
 
 Some models do not provide a `tokenizer.json` file although mistral.rs expects one. To solve this, please run [this](examples/get_tokenizers_json.py) script. It will output the `tokenizer.json` file for your specific model. This may be uploaded to HF hub or a manually specified tokenizer path can be specified by passing the `--tokenizer-json` flag after the model architecture has been selected. For example:
 
