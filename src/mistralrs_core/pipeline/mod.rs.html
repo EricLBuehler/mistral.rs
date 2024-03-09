@@ -506,7 +506,7 @@
 </span><span class="kw">pub struct </span>ChatTemplate {
     add_bos_token: bool,
     add_eos_token: bool,
-    added_tokens_decoder: HashMap&lt;String, AddedTokensDecoder&gt;,
+    added_tokens_decoder: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, AddedTokensDecoder&gt;&gt;,
     additional_special_tokens: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
     <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)]
     </span>bos_token: Either&lt;String, AddedTokensDecoder&gt;,
