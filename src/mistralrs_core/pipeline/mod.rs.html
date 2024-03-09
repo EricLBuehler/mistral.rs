@@ -353,11 +353,26 @@
 <a href="#352" id="352">352</a>
 <a href="#353" id="353">353</a>
 <a href="#354" id="354">354</a>
+<a href="#355" id="355">355</a>
+<a href="#356" id="356">356</a>
+<a href="#357" id="357">357</a>
+<a href="#358" id="358">358</a>
+<a href="#359" id="359">359</a>
+<a href="#360" id="360">360</a>
+<a href="#361" id="361">361</a>
+<a href="#362" id="362">362</a>
+<a href="#363" id="363">363</a>
+<a href="#364" id="364">364</a>
+<a href="#365" id="365">365</a>
+<a href="#366" id="366">366</a>
+<a href="#367" id="367">367</a>
+<a href="#368" id="368">368</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
 <span class="kw">mod </span>mixtral;
 <span class="kw">use </span>candle_sampling::logits_processor::Logprobs;
+<span class="kw">use </span>either::Either;
 <span class="kw">pub use </span>gemma::{GemmaLoader, GemmaSpecificConfig};
 <span class="kw">use </span>hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
@@ -398,6 +413,7 @@
 <span class="attr">#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 </span><span class="kw">pub struct </span>AddedTokensDecoder {
+    __type: <span class="prelude-ty">Option</span>&lt;String&gt;,
     content: String,
     lstrip: bool,
     normalized: bool,
@@ -413,19 +429,19 @@
     add_eos_token: bool,
     added_tokens_decoder: HashMap&lt;String, AddedTokensDecoder&gt;,
     additional_special_tokens: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
-    bos_token: String,
+    bos_token: Either&lt;String, AddedTokensDecoder&gt;,
     chat_template: String,
     clean_up_tokenization_spaces: bool,
     device_map: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    eos_token: String,
-    legacy: bool,
+    eos_token: Either&lt;String, AddedTokensDecoder&gt;,
+    legacy: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     model_max_length: f64,
     pad_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
     sp_model_kwargs: HashMap&lt;String, String&gt;,
     spaces_between_special_tokens: bool,
     tokenizer_class: String,
     truncation_size: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    unk_token: String,
+    unk_token: Either&lt;String, AddedTokensDecoder&gt;,
     use_default_system_prompt: bool,
 }
 
@@ -497,12 +513,24 @@
         <span class="kw">let </span><span class="kw-2">mut </span>env = Environment::new();
         env.add_template(<span class="string">"chat_template"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.get_chat_template().chat_template)<span class="question-mark">?</span>;
         <span class="kw">let </span>tmpl = env.get_template(<span class="string">"chat_template"</span>).unwrap();
+        <span class="kw">let </span>bos_tok = <span class="kw">match </span><span class="self">self</span>.get_chat_template().bos_token {
+            Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit,
+            Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="kw-2">&amp;</span>added.content,
+        };
+        <span class="kw">let </span>eos_tok = <span class="kw">match </span><span class="self">self</span>.get_chat_template().eos_token {
+            Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit,
+            Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="kw-2">&amp;</span>added.content,
+        };
+        <span class="kw">let </span>unk_tok = <span class="kw">match </span><span class="self">self</span>.get_chat_template().unk_token {
+            Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit,
+            Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="kw-2">&amp;</span>added.content,
+        };
         <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context! </span>{
             messages =&gt; messages,
             add_generation_prompt =&gt; add_generation_prompt,
-            bos_token =&gt; <span class="self">self</span>.get_chat_template().bos_token,
-            eos_token =&gt; <span class="self">self</span>.get_chat_template().eos_token,
-            unk_token =&gt; <span class="self">self</span>.get_chat_template().unk_token
+            bos_token =&gt; bos_tok,
+            eos_token =&gt; eos_tok,
+            unk_token =&gt; unk_tok,
         })<span class="question-mark">?</span>)
     }
     <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ChatTemplate;

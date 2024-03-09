@@ -476,6 +476,30 @@
 <a href="#475" id="475">475</a>
 <a href="#476" id="476">476</a>
 <a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
+<a href="#479" id="479">479</a>
+<a href="#480" id="480">480</a>
+<a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a>
+<a href="#491" id="491">491</a>
+<a href="#492" id="492">492</a>
+<a href="#493" id="493">493</a>
+<a href="#494" id="494">494</a>
+<a href="#495" id="495">495</a>
+<a href="#496" id="496">496</a>
+<a href="#497" id="497">497</a>
+<a href="#498" id="498">498</a>
+<a href="#499" id="499">499</a>
+<a href="#500" id="500">500</a>
+<a href="#501" id="501">501</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     get_completion_input, get_model_paths, get_prompt_input, get_xlora_paths, ChatTemplate, Loader,
     ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
@@ -496,7 +520,9 @@
 <span class="kw">use </span>candle_sampling::logits_processor::Logprobs;
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
+<span class="kw">use </span>serde_json::Value;
 <span class="kw">use </span>std::cell::RefCell;
+<span class="kw">use </span>std::collections::HashMap;
 <span class="kw">use </span>std::fs;
 <span class="kw">use </span>std::path::PathBuf;
 <span class="kw">use </span>std::{rc::Rc, sync::Mutex};
@@ -569,6 +595,7 @@
     kind: ModelKind,
     xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
     no_kv_cache: bool,
+    chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
 <span class="attr">#[derive(Clone, Copy)]
@@ -595,6 +622,7 @@
         kind: ModelKind,
         xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
         no_kv_cache: bool,
+        chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             model_id,
@@ -605,6 +633,7 @@
             kind,
             xlora_order,
             no_kv_cache,
+            chat_template,
         }
     }
 }
@@ -809,8 +838,27 @@
         <span class="kw">let </span>tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
             .map_err(|e| TokenizerError::Error(e.to_string()))<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>chat_template: ChatTemplate =
-            serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(paths.get_template_filename())<span class="question-mark">?</span>).unwrap();
+        <span class="kw">let </span>chat_template: ChatTemplate = <span class="kw">match </span>serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(
+            paths.get_template_filename(),
+        )<span class="question-mark">?</span>) {
+            <span class="prelude-val">Ok</span>(template) =&gt; template,
+            <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; {
+                <span class="macro">println!</span>(<span class="string">"Deserializing chat template failed, attempting to use specified JINJA template"</span>);
+                <span class="kw">let </span><span class="kw-2">mut </span>deser: HashMap&lt;String, Value&gt; =
+                    serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(paths.get_template_filename())<span class="question-mark">?</span>)
+                        .unwrap();
+                deser.insert(
+                    <span class="string">"chat_template"</span>.to_string(),
+                    Value::String(
+                        <span class="self">self</span>.chat_template
+                            .clone()
+                            .expect(<span class="string">"Please specify a manual chat template."</span>),
+                    ),
+                );
+                <span class="kw">let </span>ser = serde_json::to_string_pretty(<span class="kw-2">&amp;</span>deser).unwrap();
+                serde_json::from_str(<span class="kw-2">&amp;</span>ser).unwrap()
+            }
+        };
 
         <span class="prelude-val">Ok</span>(Box::new(Mutex::new(LlamaPipeline {
             model,
