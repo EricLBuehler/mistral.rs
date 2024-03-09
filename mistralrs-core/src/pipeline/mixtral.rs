@@ -20,7 +20,9 @@ use candle_sampling::logits_processor::Logprobs;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
 use serde::Deserialize;
+use serde_json::Value;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::{rc::Rc, sync::Mutex};
@@ -93,6 +95,7 @@ pub struct MixtralLoader {
     kind: ModelKind,
     xlora_order: Option<Ordering>,
     no_kv_cache: bool,
+    chat_template: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -135,6 +138,7 @@ impl MixtralLoader {
         kind: ModelKind,
         xlora_order: Option<Ordering>,
         no_kv_cache: bool,
+        chat_template: Option<String>,
     ) -> Self {
         Self {
             model_id,
@@ -145,6 +149,7 @@ impl MixtralLoader {
             kind,
             xlora_order,
             no_kv_cache,
+            chat_template,
         }
     }
 }
@@ -323,8 +328,27 @@ impl Loader for MixtralLoader {
         let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
 
-        let chat_template: ChatTemplate =
-            serde_json::from_str(&fs::read_to_string(paths.get_template_filename())?).unwrap();
+        let chat_template: ChatTemplate = match serde_json::from_str(&fs::read_to_string(
+            paths.get_template_filename(),
+        )?) {
+            Ok(template) => template,
+            Err(_) => {
+                println!("Deserializing chat template failed, attempting to use specified JINJA template");
+                let mut deser: HashMap<String, Value> =
+                    serde_json::from_str(&fs::read_to_string(paths.get_template_filename())?)
+                        .unwrap();
+                deser.insert(
+                    "chat_template".to_string(),
+                    Value::String(
+                        self.chat_template
+                            .clone()
+                            .expect("Please specify a manual chat template."),
+                    ),
+                );
+                let ser = serde_json::to_string_pretty(&deser).unwrap();
+                serde_json::from_str(&ser).unwrap()
+            }
+        };
 
         Ok(Box::new(Mutex::new(MixtralPipeline {
             model,

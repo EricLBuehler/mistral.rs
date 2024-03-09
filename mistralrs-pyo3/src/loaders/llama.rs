@@ -18,7 +18,7 @@ pub struct LlamaLoader {
 #[pymethods]
 impl LlamaLoader {
     #[new]
-    #[pyo3(signature = (model_id, kind, no_kv_cache=false, use_flash_attn=cfg!(feature="flash-attn"), repeat_last_n=64, gqa=1, order_file=None, quantized_model_id=None,quantized_filename=None,xlora_model_id=None))]
+    #[pyo3(signature = (model_id, kind, no_kv_cache=false, use_flash_attn=cfg!(feature="flash-attn"), repeat_last_n=64, gqa=1, order_file=None, quantized_model_id=None,quantized_filename=None,xlora_model_id=None,chat_template=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         model_id: String,
@@ -31,6 +31,7 @@ impl LlamaLoader {
         quantized_model_id: Option<String>,
         quantized_filename: Option<String>,
         xlora_model_id: Option<String>,
+        chat_template: Option<String>,
     ) -> PyResult<Self> {
         use_flash_attn &= cfg!(feature = "flash-attn");
         let order = if let Some(ref order_file) = order_file {
@@ -99,6 +100,7 @@ impl LlamaLoader {
                 kind,
                 order,
                 no_kv_cache,
+                chat_template,
             ),
             no_kv_cache,
         })

@@ -387,6 +387,11 @@ struct Args {
     /// Use no KV cache.
     #[arg(long, default_value_t = false)]
     no_kv_cache: bool,
+
+    /// JINJA chat template with `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
+    /// Used if the automatic deserialization fails.
+    #[arg(short, long)]
+    chat_template: Option<String>,
 }
 
 async fn chatcompletions(
@@ -473,6 +478,7 @@ async fn main() -> Result<()> {
             ModelKind::Normal,
             None,
             args.no_kv_cache,
+            args.chat_template,
         )),
         ModelSelected::MistralGGUF {
             tok_model_id,
@@ -491,6 +497,7 @@ async fn main() -> Result<()> {
             ModelKind::QuantizedGGUF,
             None,
             args.no_kv_cache,
+            args.chat_template,
         )),
         ModelSelected::XLoraMistral {
             model_id,
@@ -509,6 +516,7 @@ async fn main() -> Result<()> {
             ModelKind::XLoraNormal,
             Some(serde_json::from_reader(File::open(order)?)?),
             args.no_kv_cache,
+            args.chat_template,
         )),
         ModelSelected::Gemma {
             model_id,
@@ -522,6 +530,7 @@ async fn main() -> Result<()> {
             ModelKind::Normal,
             None,
             args.no_kv_cache,
+            args.chat_template,
         )),
         ModelSelected::XLoraGemma {
             model_id,
@@ -537,6 +546,7 @@ async fn main() -> Result<()> {
             ModelKind::Normal,
             Some(serde_json::from_reader(File::open(order)?)?),
             args.no_kv_cache,
+            args.chat_template,
         )),
         ModelSelected::Llama {
             model_id,
@@ -554,6 +564,7 @@ async fn main() -> Result<()> {
             ModelKind::Normal,
             None,
             args.no_kv_cache,
+            args.chat_template,
         )),
         ModelSelected::LlamaGGUF {
             tok_model_id,
@@ -573,6 +584,7 @@ async fn main() -> Result<()> {
             ModelKind::QuantizedGGUF,
             None,
             args.no_kv_cache,
+            args.chat_template,
         )),
         ModelSelected::LlamaGGML {
             tok_model_id,
@@ -593,6 +605,7 @@ async fn main() -> Result<()> {
             ModelKind::QuantizedGGML,
             None,
             args.no_kv_cache,
+            args.chat_template,
         )),
         ModelSelected::XLoraLlama {
             model_id,
@@ -612,6 +625,7 @@ async fn main() -> Result<()> {
             ModelKind::QuantizedGGML,
             Some(serde_json::from_reader(File::open(order)?)?),
             args.no_kv_cache,
+            args.chat_template,
         )),
         ModelSelected::Mixtral {
             model_id,
@@ -628,6 +642,7 @@ async fn main() -> Result<()> {
             ModelKind::Normal,
             None,
             args.no_kv_cache,
+            args.chat_template,
         )),
         ModelSelected::MixtralGGUF {
             tok_model_id,
@@ -646,6 +661,7 @@ async fn main() -> Result<()> {
             ModelKind::QuantizedGGUF,
             None,
             args.no_kv_cache,
+            args.chat_template,
         )),
         ModelSelected::XLoraMixtral {
             model_id,
@@ -664,6 +680,7 @@ async fn main() -> Result<()> {
             ModelKind::XLoraNormal,
             Some(serde_json::from_reader(File::open(order)?)?),
             args.no_kv_cache,
+            args.chat_template,
         )),
         ModelSelected::XLoraMistralGGUF {
             tok_model_id,
@@ -684,6 +701,7 @@ async fn main() -> Result<()> {
             ModelKind::XLoraGGUF,
             Some(serde_json::from_reader(File::open(order)?)?),
             args.no_kv_cache,
+            args.chat_template,
         )),
         ModelSelected::XLoraMixtralGGUF {
             tok_model_id,
@@ -704,6 +722,7 @@ async fn main() -> Result<()> {
             ModelKind::XLoraGGUF,
             Some(serde_json::from_reader(File::open(order)?)?),
             args.no_kv_cache,
+            args.chat_template,
         )),
         ModelSelected::XLoraLlamaGGUF {
             tok_model_id,
@@ -725,6 +744,7 @@ async fn main() -> Result<()> {
             ModelKind::XLoraGGUF,
             Some(serde_json::from_reader(File::open(order)?)?),
             args.no_kv_cache,
+            args.chat_template,
         )),
         ModelSelected::XLoraLlamaGGML {
             tok_model_id,
@@ -747,6 +767,7 @@ async fn main() -> Result<()> {
             ModelKind::XLoraGGML,
             Some(serde_json::from_reader(File::open(order)?)?),
             args.no_kv_cache,
+            args.chat_template,
         )),
     };
 
