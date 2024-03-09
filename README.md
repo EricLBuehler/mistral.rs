@@ -60,34 +60,74 @@ To get started see [this](README.md#run) section, and [this file](examples/serve
 - 42.3 tok/s
 
 ## Usage
-### Build
-To build mistral.rs, one should ensure they have Rust installed by following [this](https://rustup.rs/) link.
-The Huggingface token should be provided in `~/.cache/huggingface/token`. 
-- Using a script
+### Installation and Build
+To install mistral.rs, one should ensure they have Rust installed by following [this](https://rustup.rs/) link. Additionally, the Huggingface token should be provided in `~/.cache/huggingface/token` when using the server to enable automatic download of gated models.
 
-    For an easy quickstart, the script below will 
-    download an setup Rust and then build mistral.rs to run on the CPU.
+**Easy quickstart**
+For an easy quickstart, the script below will 
+download an setup Rust and then build mistral.rs to run with CUDA.
+```bash
+sudo apt update -y
+sudo apt install libssl-dev -y
+sudo apt install pkg-config -y
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env
+
+git clone https://github.com/EricLBuehler/mistral.rs.git
+cd mistral.rs
+mkdir ~/.cache/huggingface
+touch ~/.cache/huggingface/token
+echo <HF_TOKEN_HERE> > ~/.cache/huggingface/token
+cargo build --release --features cuda
+```
+
+**Detailed guide**
+
+1) Install required packages
+    - `libssl` (ex., `sudo apt install libssl-dev`)
+    - `pkg-config` (ex., `sudo apt install pkg-config`)
+
+2) Install Rust
     ```bash
-    sudo apt update -y
-    sudo apt install libssl-dev -y
-    sudo apt install pkg-config -y
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     source $HOME/.cargo/env
+    ```
 
-    git clone https://github.com/EricLBuehler/mistral.rs.git
-    cd mistral.rs
+3) Set HF token correctly (skip if already done)
+    ```bash
     mkdir ~/.cache/huggingface
     touch ~/.cache/huggingface/token
     echo <HF_TOKEN_HERE> > ~/.cache/huggingface/token
-    cargo build --release
     ```
-- Manual build
 
-    If Rust is installed and the Huggingface token is set, then one may build mistral.rs by executing the build command.
-    `cargo build --release`.
+4) Download the code
+    ```bash
+    git clone https://github.com/EricLBuehler/mistral.rs.git
+    cd mistral.rs
+    ```
+
+5) Build
+    ```bash
+    cargo build --release --features cuda
+    ```
 
 
 The build process will output a binary `misralrs-server` at `./target/release/mistralrs-server` which may be copied into the working directory with `cp ./target/release/mistralrs-server .`.
+
+### Run
+
+To start a server serving Mistral on `localhost:1234`, 
+```bash
+./mistralrs-server --port 1234 --log output.log mistral
+```
+
+Mistral.rs uses subcommands to control the model type. They are of format `<XLORA>-<ARCHITECTURE>-<QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
+
+To start an X-LoRA server with the default weights and ordering (exactly as presented in [the paper](https://arxiv.org/abs/2402.07148)):
+
+`./mistralrs-server --port 1234 x-lora-mistral -o x-lora-orderings/default-ordering.json`
+
+
 ### Building for GPU, Metal or enabling other features
 Rust uses a feature flag system during build to implement compile-time build options. As such, the following is a list of features
 which may be specified using the `--features` command.
@@ -165,16 +205,3 @@ Putting it all together, to run, for example, an [Orca](https://huggingface.co/m
 1) Generate the `tokenizer.json` by running the script at `scripts/get_tokenizers_json.py`. This will output some files including `tokenizer.json` in the working directory.
 2) Find and copy the correct chat template from `chat-templates` to the working directory (eg., `cp chat_templates/chatml.json .`)
 3) Run `mistralrs-server`, specifying the tokenizer and chat template: `cargo run --release --features cuda -- --port 1234 --log output.txt --chat-template chatml.json llama -m microsoft/Orca-2-13b -t tokenizer.json`
-
-## Run
-
-To start a server serving Mistral on `localhost:1234`, 
-```bash
-./mistralrs-server --port 1234 --log output.log mistral
-```
-
-Mistral.rs uses subcommands to control the model type. They are of format `<XLORA>-<ARCHITECTURE>-<QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
-
-To start an X-LoRA server with the default weights, run the following after creating the ordering file as described [here](README.md#x-lora).
-
-`./mistralrs-server --port 1234 x-lora-mistral -o ordering.json`
