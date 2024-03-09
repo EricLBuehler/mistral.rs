@@ -105,7 +105,6 @@ Additionally, the following four ergonomic classes provide a more streamlined me
 - `NormalLoader`
     - `class`: Loader class.
     - `model_id`: Base model ID, or tokenizer ID if quantized model type.
-    - `kind`: Model kind
     - `no_kv_cache=False`: Disable kv cache.
     - `use_flash_attn=None`: Use flash attn, only used if feature is enabled.
     - `repeat_last_n=64`: Repeat last n context window.

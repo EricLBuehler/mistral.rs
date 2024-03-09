@@ -1,9 +1,9 @@
-from mistralrs import ModelKind, MistralLoader, Request
+from mistralrs import MistralLoader, QuantizedLoader, Request
 
-kind = ModelKind.QuantizedGGUF
-loader = MistralLoader(
+loader = QuantizedLoader(
+    MistralLoader,
+    is_gguf=True,
     model_id="mistralai/Mistral-7B-Instruct-v0.1",
-    kind=kind,
     no_kv_cache=False,
     repeat_last_n=64,
     quantized_model_id="TheBloke/Mistral-7B-Instruct-v0.1-GGUF",
