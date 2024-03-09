@@ -28,6 +28,10 @@ pub enum ModelSelected {
         #[arg(short, long, default_value = "mistralai/Mistral-7B-Instruct-v0.1")]
         model_id: String,
 
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(short, long)]
+        tokenizer_json: Option<String>,
+
         /// Control the application of repeat penalty for the last n tokens
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
@@ -38,6 +42,10 @@ pub enum ModelSelected {
         /// Model ID to load the tokenizer from
         #[arg(short, long, default_value = "mistralai/Mistral-7B-Instruct-v0.1")]
         tok_model_id: String,
+
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(long)]
+        tokenizer_json: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
         /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
@@ -67,6 +75,10 @@ pub enum ModelSelected {
         #[arg(short, long, default_value = "HuggingFaceH4/zephyr-7b-beta")]
         model_id: String,
 
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(short, long)]
+        tokenizer_json: Option<String>,
+
         /// Model ID to load Xlora from
         #[arg(short, long, default_value = "lamm-mit/x-lora")]
         xlora_model_id: String,
@@ -86,6 +98,10 @@ pub enum ModelSelected {
         #[arg(short, long, default_value = "google/gemma-7b-it")]
         model_id: String,
 
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(short, long)]
+        tokenizer_json: Option<String>,
+
         /// Control the application of repeat penalty for the last n tokens
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
@@ -96,6 +112,10 @@ pub enum ModelSelected {
         /// Model ID to load from
         #[arg(short, long)]
         model_id: String,
+
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(short, long)]
+        tokenizer_json: Option<String>,
 
         /// Model ID to load Xlora from
         #[arg(short, long)]
@@ -116,6 +136,10 @@ pub enum ModelSelected {
         #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
         model_id: String,
 
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(short, long)]
+        tokenizer_json: Option<String>,
+
         /// Control the application of repeat penalty for the last n tokens
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
@@ -126,6 +150,10 @@ pub enum ModelSelected {
         /// Model ID to load the tokenizer from
         #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
         tok_model_id: String,
+
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(long)]
+        tokenizer_json: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
         /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
@@ -146,6 +174,10 @@ pub enum ModelSelected {
         /// Model ID to load the tokenizer from
         #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
         tok_model_id: String,
+
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(long)]
+        tokenizer_json: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
         /// If it is set to an empty string then the quantized filename will be used as a path to the GGML file.
@@ -175,6 +207,10 @@ pub enum ModelSelected {
         #[arg(short, long)]
         model_id: String,
 
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(short, long)]
+        tokenizer_json: Option<String>,
+
         /// Model ID to load Xlora from
         #[arg(short, long)]
         xlora_model_id: String,
@@ -194,6 +230,10 @@ pub enum ModelSelected {
         #[arg(short, long, default_value = "mistralai/Mixtral-8x7B-Instruct-v0.1")]
         model_id: String,
 
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(short, long)]
+        tokenizer_json: Option<String>,
+
         /// Control the application of repeat penalty for the last n tokens
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
@@ -204,6 +244,10 @@ pub enum ModelSelected {
         /// Model ID to load the tokenizer from
         #[arg(short, long, default_value = "mistralai/Mixtral-8x7B-Instruct-v0.1")]
         tok_model_id: String,
+
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(long)]
+        tokenizer_json: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
         /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
@@ -225,6 +269,10 @@ pub enum ModelSelected {
         #[arg(short, long)]
         model_id: String,
 
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(short, long)]
+        tokenizer_json: Option<String>,
+
         /// Model ID to load Xlora from
         #[arg(short, long)]
         xlora_model_id: String,
@@ -243,6 +291,10 @@ pub enum ModelSelected {
         /// Model ID to load the tokenizer from
         #[arg(short, long, default_value = "HuggingFaceH4/zephyr-7b-beta")]
         tok_model_id: String,
+
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(long)]
+        tokenizer_json: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
         /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
@@ -272,6 +324,10 @@ pub enum ModelSelected {
         #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
         tok_model_id: String,
 
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(long)]
+        tokenizer_json: Option<String>,
+
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
         /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         #[arg(short = 'm', long, default_value = "TheBloke/Llama-2-13B-chat-GGUF")]
@@ -299,6 +355,10 @@ pub enum ModelSelected {
         /// Model ID to load the tokenizer from
         #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
         tok_model_id: String,
+
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(long)]
+        tokenizer_json: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
         /// If it is set to an empty string then the quantized filename will be used as a path to the GGML file.
@@ -335,6 +395,10 @@ pub enum ModelSelected {
         /// Model ID to load the tokenizer from
         #[arg(short, long, default_value = "mistralai/Mixtral-8x7B-Instruct-v0.1")]
         tok_model_id: String,
+
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(long)]
+        tokenizer_json: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
         /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
@@ -466,6 +530,7 @@ async fn main() -> Result<()> {
         ModelSelected::Mistral {
             model_id,
             repeat_last_n,
+            tokenizer_json,
         } => Box::new(MistralLoader::new(
             model_id,
             MistralSpecificConfig {
@@ -479,12 +544,14 @@ async fn main() -> Result<()> {
             None,
             args.no_kv_cache,
             args.chat_template,
+            tokenizer_json,
         )),
         ModelSelected::MistralGGUF {
             tok_model_id,
             quantized_model_id,
             quantized_filename,
             repeat_last_n,
+            tokenizer_json,
         } => Box::new(MistralLoader::new(
             tok_model_id,
             MistralSpecificConfig {
@@ -498,12 +565,14 @@ async fn main() -> Result<()> {
             None,
             args.no_kv_cache,
             args.chat_template,
+            tokenizer_json,
         )),
         ModelSelected::XLoraMistral {
             model_id,
             xlora_model_id,
             repeat_last_n,
             order,
+            tokenizer_json,
         } => Box::new(MistralLoader::new(
             model_id,
             MistralSpecificConfig {
@@ -517,10 +586,12 @@ async fn main() -> Result<()> {
             Some(serde_json::from_reader(File::open(order)?)?),
             args.no_kv_cache,
             args.chat_template,
+            tokenizer_json,
         )),
         ModelSelected::Gemma {
             model_id,
             repeat_last_n,
+            tokenizer_json,
         } => Box::new(GemmaLoader::new(
             model_id,
             GemmaSpecificConfig { repeat_last_n },
@@ -531,12 +602,14 @@ async fn main() -> Result<()> {
             None,
             args.no_kv_cache,
             args.chat_template,
+            tokenizer_json,
         )),
         ModelSelected::XLoraGemma {
             model_id,
             xlora_model_id,
             repeat_last_n,
             order,
+            tokenizer_json,
         } => Box::new(GemmaLoader::new(
             model_id,
             GemmaSpecificConfig { repeat_last_n },
@@ -547,10 +620,12 @@ async fn main() -> Result<()> {
             Some(serde_json::from_reader(File::open(order)?)?),
             args.no_kv_cache,
             args.chat_template,
+            tokenizer_json,
         )),
         ModelSelected::Llama {
             model_id,
             repeat_last_n,
+            tokenizer_json,
         } => Box::new(LlamaLoader::new(
             model_id,
             LlamaSpecificConfig {
@@ -565,12 +640,14 @@ async fn main() -> Result<()> {
             None,
             args.no_kv_cache,
             args.chat_template,
+            tokenizer_json,
         )),
         ModelSelected::LlamaGGUF {
             tok_model_id,
             quantized_model_id,
             quantized_filename,
             repeat_last_n,
+            tokenizer_json,
         } => Box::new(LlamaLoader::new(
             tok_model_id,
             LlamaSpecificConfig {
@@ -585,6 +662,7 @@ async fn main() -> Result<()> {
             None,
             args.no_kv_cache,
             args.chat_template,
+            tokenizer_json,
         )),
         ModelSelected::LlamaGGML {
             tok_model_id,
@@ -592,6 +670,7 @@ async fn main() -> Result<()> {
             quantized_filename,
             repeat_last_n,
             gqa,
+            tokenizer_json,
         } => Box::new(LlamaLoader::new(
             tok_model_id,
             LlamaSpecificConfig {
@@ -606,12 +685,14 @@ async fn main() -> Result<()> {
             None,
             args.no_kv_cache,
             args.chat_template,
+            tokenizer_json,
         )),
         ModelSelected::XLoraLlama {
             model_id,
             xlora_model_id,
             repeat_last_n,
             order,
+            tokenizer_json,
         } => Box::new(LlamaLoader::new(
             model_id,
             LlamaSpecificConfig {
@@ -626,10 +707,12 @@ async fn main() -> Result<()> {
             Some(serde_json::from_reader(File::open(order)?)?),
             args.no_kv_cache,
             args.chat_template,
+            tokenizer_json,
         )),
         ModelSelected::Mixtral {
             model_id,
             repeat_last_n,
+            tokenizer_json,
         } => Box::new(MixtralLoader::new(
             model_id,
             MixtralSpecificConfig {
@@ -643,12 +726,14 @@ async fn main() -> Result<()> {
             None,
             args.no_kv_cache,
             args.chat_template,
+            tokenizer_json,
         )),
         ModelSelected::MixtralGGUF {
             tok_model_id,
             quantized_model_id,
             quantized_filename,
             repeat_last_n,
+            tokenizer_json,
         } => Box::new(MixtralLoader::new(
             tok_model_id,
             MixtralSpecificConfig {
@@ -662,12 +747,14 @@ async fn main() -> Result<()> {
             None,
             args.no_kv_cache,
             args.chat_template,
+            tokenizer_json,
         )),
         ModelSelected::XLoraMixtral {
             model_id,
             xlora_model_id,
             repeat_last_n,
             order,
+            tokenizer_json,
         } => Box::new(MixtralLoader::new(
             model_id,
             MixtralSpecificConfig {
@@ -681,6 +768,7 @@ async fn main() -> Result<()> {
             Some(serde_json::from_reader(File::open(order)?)?),
             args.no_kv_cache,
             args.chat_template,
+            tokenizer_json,
         )),
         ModelSelected::XLoraMistralGGUF {
             tok_model_id,
@@ -689,6 +777,7 @@ async fn main() -> Result<()> {
             repeat_last_n,
             xlora_model_id,
             order,
+            tokenizer_json,
         } => Box::new(MistralLoader::new(
             tok_model_id,
             MistralSpecificConfig {
@@ -702,6 +791,7 @@ async fn main() -> Result<()> {
             Some(serde_json::from_reader(File::open(order)?)?),
             args.no_kv_cache,
             args.chat_template,
+            tokenizer_json,
         )),
         ModelSelected::XLoraMixtralGGUF {
             tok_model_id,
@@ -710,6 +800,7 @@ async fn main() -> Result<()> {
             repeat_last_n,
             xlora_model_id,
             order,
+            tokenizer_json,
         } => Box::new(MixtralLoader::new(
             tok_model_id,
             MixtralSpecificConfig {
@@ -723,6 +814,7 @@ async fn main() -> Result<()> {
             Some(serde_json::from_reader(File::open(order)?)?),
             args.no_kv_cache,
             args.chat_template,
+            tokenizer_json,
         )),
         ModelSelected::XLoraLlamaGGUF {
             tok_model_id,
@@ -731,6 +823,7 @@ async fn main() -> Result<()> {
             repeat_last_n,
             xlora_model_id,
             order,
+            tokenizer_json,
         } => Box::new(LlamaLoader::new(
             tok_model_id,
             LlamaSpecificConfig {
@@ -745,6 +838,7 @@ async fn main() -> Result<()> {
             Some(serde_json::from_reader(File::open(order)?)?),
             args.no_kv_cache,
             args.chat_template,
+            tokenizer_json,
         )),
         ModelSelected::XLoraLlamaGGML {
             tok_model_id,
@@ -754,6 +848,7 @@ async fn main() -> Result<()> {
             xlora_model_id,
             order,
             gqa,
+            tokenizer_json,
         } => Box::new(LlamaLoader::new(
             tok_model_id,
             LlamaSpecificConfig {
@@ -768,6 +863,7 @@ async fn main() -> Result<()> {
             Some(serde_json::from_reader(File::open(order)?)?),
             args.no_kv_cache,
             args.chat_template,
+            tokenizer_json,
         )),
     };
 

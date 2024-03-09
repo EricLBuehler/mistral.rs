@@ -22,6 +22,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::{rc::Rc, sync::Mutex};
 use thiserror::Error;
 use tokenizers::Tokenizer;
@@ -91,6 +92,7 @@ pub struct GemmaLoader {
     xlora_order: Option<Ordering>,
     no_kv_cache: bool,
     chat_template: Option<String>,
+    tokenizer_json: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -138,6 +140,7 @@ impl GemmaLoader {
         xlora_order: Option<Ordering>,
         no_kv_cache: bool,
         chat_template: Option<String>,
+        tokenizer_json: Option<String>,
     ) -> Self {
         Self {
             model_id,
@@ -149,6 +152,7 @@ impl GemmaLoader {
             xlora_order,
             no_kv_cache,
             chat_template,
+            tokenizer_json,
         }
     }
 }
@@ -170,7 +174,12 @@ impl Loader for GemmaLoader {
             revision.clone(),
         ));
 
-        let tokenizer_filename = api.get("tokenizer.json")?;
+        let tokenizer_filename = if let Some(ref p) = self.tokenizer_json {
+            println!("Using tokenizer.json at `{p}`");
+            PathBuf::from_str(p)?
+        } else {
+            api.get("tokenizer.json")?
+        };
 
         let config_filename = api.get("config.json")?;
 

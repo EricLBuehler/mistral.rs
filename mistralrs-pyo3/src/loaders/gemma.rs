@@ -18,7 +18,18 @@ pub struct GemmaLoader {
 #[pymethods]
 impl GemmaLoader {
     #[new]
-    #[pyo3(signature = (model_id, kind, no_kv_cache=false, repeat_last_n=64, order_file=None, quantized_model_id=None,quantized_filename=None,xlora_model_id=None,chat_template=None))]
+    #[pyo3(signature = (
+        model_id,
+        kind,
+        no_kv_cache=false,
+        repeat_last_n=64,
+        order_file=None,
+        quantized_model_id=None,
+        quantized_filename=None,
+        xlora_model_id=None,
+        chat_template=None,
+        tokenizer_json=None,
+    ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         model_id: String,
@@ -30,6 +41,7 @@ impl GemmaLoader {
         quantized_filename: Option<String>,
         xlora_model_id: Option<String>,
         chat_template: Option<String>,
+        tokenizer_json: Option<String>,
     ) -> PyResult<Self> {
         let order = if let Some(ref order_file) = order_file {
             let f = File::open(order_file);
@@ -94,6 +106,7 @@ impl GemmaLoader {
                 order,
                 no_kv_cache,
                 chat_template,
+                tokenizer_json,
             ),
             no_kv_cache,
         })
