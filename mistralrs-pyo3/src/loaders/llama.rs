@@ -96,20 +96,19 @@ impl LlamaLoader {
                 || xlora_model_id.is_none())
         {
             return Err(PyValueError::new_err("Expected an order file and xlora model id but no quantized model id and no quantized filename."));
-        } else if matches!(kind, _ModelKind::QuantizedGGUF)
-            || matches!(kind, _ModelKind::QuantizedGGML)
-                && (order_file.is_some()
-                    || quantized_model_id.is_none()
-                    || quantized_filename.is_none()
-                    || xlora_model_id.is_some())
+        } else if (matches!(kind, _ModelKind::QuantizedGGUF)
+            || matches!(kind, _ModelKind::QuantizedGGML))
+            && (order_file.is_some()
+                || quantized_model_id.is_none()
+                || quantized_filename.is_none()
+                || xlora_model_id.is_some())
         {
             return Err(PyValueError::new_err("Expected a quantized model id and quantized filename but no order file and no xlora model id."));
-        } else if matches!(kind, _ModelKind::XLoraGGUF)
-            || matches!(kind, _ModelKind::XLoraGGML)
-                && (order_file.is_none()
-                    || quantized_model_id.is_none()
-                    || quantized_filename.is_none()
-                    || xlora_model_id.is_none())
+        } else if (matches!(kind, _ModelKind::XLoraGGUF) || matches!(kind, _ModelKind::XLoraGGML))
+            && (order_file.is_none()
+                || quantized_model_id.is_none()
+                || quantized_filename.is_none()
+                || xlora_model_id.is_none())
         {
             return Err(PyValueError::new_err("Expected a quantized model id and quantized filename and order file and xlora model id."));
         }
