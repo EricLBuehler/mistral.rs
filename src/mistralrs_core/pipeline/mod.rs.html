@@ -413,6 +413,34 @@
 <a href="#412" id="412">412</a>
 <a href="#413" id="413">413</a>
 <a href="#414" id="414">414</a>
+<a href="#415" id="415">415</a>
+<a href="#416" id="416">416</a>
+<a href="#417" id="417">417</a>
+<a href="#418" id="418">418</a>
+<a href="#419" id="419">419</a>
+<a href="#420" id="420">420</a>
+<a href="#421" id="421">421</a>
+<a href="#422" id="422">422</a>
+<a href="#423" id="423">423</a>
+<a href="#424" id="424">424</a>
+<a href="#425" id="425">425</a>
+<a href="#426" id="426">426</a>
+<a href="#427" id="427">427</a>
+<a href="#428" id="428">428</a>
+<a href="#429" id="429">429</a>
+<a href="#430" id="430">430</a>
+<a href="#431" id="431">431</a>
+<a href="#432" id="432">432</a>
+<a href="#433" id="433">433</a>
+<a href="#434" id="434">434</a>
+<a href="#435" id="435">435</a>
+<a href="#436" id="436">436</a>
+<a href="#437" id="437">437</a>
+<a href="#438" id="438">438</a>
+<a href="#439" id="439">439</a>
+<a href="#440" id="440">440</a>
+<a href="#441" id="441">441</a>
+<a href="#442" id="442">442</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -477,7 +505,7 @@
     additional_special_tokens: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
     <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)]
     </span>bos_token: Either&lt;String, AddedTokensDecoder&gt;,
-    chat_template: String,
+    chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     clean_up_tokenization_spaces: bool,
     device_map: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)]
@@ -566,7 +594,10 @@
         add_generation_prompt: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>env = Environment::new();
-        env.add_template(<span class="string">"chat_template"</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.get_chat_template().chat_template)<span class="question-mark">?</span>;
+        env.add_template(
+            <span class="string">"chat_template"</span>,
+            <span class="self">self</span>.get_chat_template().chat_template.as_ref().unwrap(),
+        )<span class="question-mark">?</span>;
         <span class="kw">let </span>tmpl = env.get_template(<span class="string">"chat_template"</span>).unwrap();
         <span class="kw">let </span>bos_tok = <span class="kw">match </span><span class="self">self</span>.get_chat_template().bos_token {
             Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit,
@@ -793,38 +824,63 @@
 
 <span class="attr">#[macro_export]
 </span><span class="macro">macro_rules! </span>deserialize_chat_template {
-    (<span class="macro-nonterminal">$paths</span>:expr, <span class="macro-nonterminal">$this</span>:ident) =&gt; {
-        <span class="kw">match </span>serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(
+    (<span class="macro-nonterminal">$paths</span>:expr, <span class="macro-nonterminal">$this</span>:ident) =&gt; {{
+        <span class="kw">let </span>template: ChatTemplate = serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(
             <span class="macro-nonterminal">$paths</span>.get_template_filename(),
-        )<span class="question-mark">?</span>) {
-            <span class="prelude-val">Ok</span>(template) =&gt; template,
-            <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; {
-                <span class="macro">println!</span>(<span class="string">"Deserializing chat template failed, attempting to use specified JINJA template"</span>);
+        )<span class="question-mark">?</span>).unwrap();
+        <span class="attr">#[derive(Debug, serde::Deserialize)]
+        </span><span class="kw">struct </span>SpecifiedTemplate {
+            chat_template: String,
+            bos_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
+            eos_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
+        }
+        <span class="kw">match </span>template.chat_template {
+            <span class="prelude-val">Some</span>(<span class="kw">_</span>) =&gt; template,
+            <span class="prelude-val">None </span>=&gt; {
+                <span class="macro">println!</span>(<span class="string">"Chat template does not contain a tokenizer, attempting to use specified JINJA template"</span>);
                 <span class="kw">let </span><span class="kw-2">mut </span>deser: HashMap&lt;String, Value&gt; =
                     serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(<span class="macro-nonterminal">$paths</span>.get_template_filename())<span class="question-mark">?</span>)
                         .unwrap();
-                <span class="kw">let </span>template = <span class="kw">match </span><span class="macro-nonterminal">$this</span>.chat_template.clone() {
+                <span class="kw">match </span><span class="macro-nonterminal">$this</span>.chat_template.clone() {
                     <span class="prelude-val">Some</span>(t) =&gt; {
-                        <span class="kw">if </span>t.ends_with(<span class="string">".jinja"</span>) {
-                            <span class="macro">println!</span>(<span class="string">"Loading specified loading JINJA chat template at `{t}`"</span>);
-                            fs::read_to_string(t)<span class="question-mark">?
-                        </span>} <span class="kw">else </span>{
-                            t
+                        <span class="kw">if </span>t.ends_with(<span class="string">".json"</span>) {
+                            <span class="macro">println!</span>(<span class="string">"Loading specified loading chat template file at `{t}`"</span>);
+                            <span class="kw">let </span>templ: SpecifiedTemplate = serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(t)<span class="question-mark">?</span>).unwrap();
+                            deser.insert(
+                                <span class="string">"chat_template"</span>.to_string(),
+                                Value::String(templ.chat_template),
+                            );
+                            <span class="kw">if </span>templ.bos_token.is_some() {
+                                deser.insert(
+                                    <span class="string">"bos_token"</span>.to_string(),
+                                    Value::String(templ.bos_token.unwrap()),
+                                );
+                            }
+                            <span class="kw">if </span>templ.eos_token.is_some() {
+                                deser.insert(
+                                    <span class="string">"eos_token"</span>.to_string(),
+                                    Value::String(templ.eos_token.unwrap()),
+                                );
+                            }
+                        } <span class="kw">else </span>{
+                            deser.insert(
+                                <span class="string">"chat_template"</span>.to_string(),
+                                Value::String(t),
+                            );
                         }
                     },
                     <span class="prelude-val">None </span>=&gt; {
-                        <span class="macro">println!</span>(<span class="string">"No specified JINJA template, loading default chat template at ./default.jinja"</span>);
-                        fs::read_to_string(<span class="string">"./default.jinja"</span>)<span class="question-mark">?
-                    </span>}
+                        <span class="macro">println!</span>(<span class="string">"No specified JINJA template, loading default chat template at ./default.json"</span>);
+                        deser.insert(
+                            <span class="string">"chat_template"</span>.to_string(),
+                            Value::String(fs::read_to_string(<span class="string">"./default.json"</span>)<span class="question-mark">?</span>),
+                        );
+                    }
                 };
-                deser.insert(
-                    <span class="string">"chat_template"</span>.to_string(),
-                    Value::String(template),
-                );
                 <span class="kw">let </span>ser = serde_json::to_string_pretty(<span class="kw-2">&amp;</span>deser).unwrap();
                 serde_json::from_str(<span class="kw-2">&amp;</span>ser).unwrap()
             }
         }
-    };
+    }};
 }
 </code></pre></div></section></main></body></html>
