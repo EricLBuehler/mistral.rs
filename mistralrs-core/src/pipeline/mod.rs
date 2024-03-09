@@ -60,10 +60,12 @@ pub struct ChatTemplate {
     add_eos_token: bool,
     added_tokens_decoder: HashMap<String, AddedTokensDecoder>,
     additional_special_tokens: Option<Vec<String>>,
+    #[serde(with = "either::serde_untagged")]
     bos_token: Either<String, AddedTokensDecoder>,
     chat_template: String,
     clean_up_tokenization_spaces: bool,
     device_map: Option<String>,
+    #[serde(with = "either::serde_untagged")]
     eos_token: Either<String, AddedTokensDecoder>,
     legacy: Option<bool>,
     model_max_length: f64,
@@ -72,6 +74,7 @@ pub struct ChatTemplate {
     spaces_between_special_tokens: bool,
     tokenizer_class: String,
     truncation_size: Option<String>,
+    #[serde(with = "either::serde_untagged")]
     unk_token: Either<String, AddedTokensDecoder>,
     use_default_system_prompt: bool,
 }
