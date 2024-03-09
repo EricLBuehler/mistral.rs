@@ -389,6 +389,7 @@ macro_rules! deserialize_chat_template {
         let template: ChatTemplate = serde_json::from_str(&fs::read_to_string(
             $paths.get_template_filename(),
         )?).unwrap();
+        dbg!(&template);
         #[derive(Debug, serde::Deserialize)]
         struct SpecifiedTemplate {
             chat_template: String,
