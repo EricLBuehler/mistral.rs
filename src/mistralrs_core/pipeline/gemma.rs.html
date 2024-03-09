@@ -423,26 +423,6 @@
 <a href="#422" id="422">422</a>
 <a href="#423" id="423">423</a>
 <a href="#424" id="424">424</a>
-<a href="#425" id="425">425</a>
-<a href="#426" id="426">426</a>
-<a href="#427" id="427">427</a>
-<a href="#428" id="428">428</a>
-<a href="#429" id="429">429</a>
-<a href="#430" id="430">430</a>
-<a href="#431" id="431">431</a>
-<a href="#432" id="432">432</a>
-<a href="#433" id="433">433</a>
-<a href="#434" id="434">434</a>
-<a href="#435" id="435">435</a>
-<a href="#436" id="436">436</a>
-<a href="#437" id="437">437</a>
-<a href="#438" id="438">438</a>
-<a href="#439" id="439">439</a>
-<a href="#440" id="440">440</a>
-<a href="#441" id="441">441</a>
-<a href="#442" id="442">442</a>
-<a href="#443" id="443">443</a>
-<a href="#444" id="444">444</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     get_completion_input, get_model_paths, get_prompt_input, get_xlora_paths, Loader, ModelKind,
     ModelPaths, Pipeline, TokenSource, XLoraPaths,
@@ -450,7 +430,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::models::Cache;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::{XLoraConfig, XLoraGemma};
-<span class="kw">use crate</span>::{deref_mut_refcell, deref_refcell};
+<span class="kw">use crate</span>::{deref_mut_refcell, deref_refcell, deserialize_chat_template};
 <span class="kw">use crate</span>::{
     models::gemma::{Config, Model <span class="kw">as </span>NormalModel},
     sequence::Sequence,
@@ -736,27 +716,7 @@
         <span class="kw">let </span>tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
             .map_err(|e| TokenizerError::Error(e.to_string()))<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>chat_template: ChatTemplate = <span class="kw">match </span>serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(
-            paths.get_template_filename(),
-        )<span class="question-mark">?</span>) {
-            <span class="prelude-val">Ok</span>(template) =&gt; template,
-            <span class="prelude-val">Err</span>(e) =&gt; {
-                <span class="macro">println!</span>(<span class="string">"Deserializing chat template failed with `{e:?}`, attempting to use specified JINJA template"</span>);
-                <span class="kw">let </span><span class="kw-2">mut </span>deser: HashMap&lt;String, Value&gt; =
-                    serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(paths.get_template_filename())<span class="question-mark">?</span>)
-                        .unwrap();
-                deser.insert(
-                    <span class="string">"chat_template"</span>.to_string(),
-                    Value::String(
-                        <span class="self">self</span>.chat_template
-                            .clone()
-                            .expect(<span class="string">"Please specify a manual chat template."</span>),
-                    ),
-                );
-                <span class="kw">let </span>ser = serde_json::to_string_pretty(<span class="kw-2">&amp;</span>deser).unwrap();
-                serde_json::from_str(<span class="kw-2">&amp;</span>ser).unwrap()
-            }
-        };
+        <span class="kw">let </span>chat_template: ChatTemplate = <span class="macro">deserialize_chat_template!</span>(paths, <span class="self">self</span>);
 
         <span class="prelude-val">Ok</span>(Box::new(Mutex::new(GemmaPipeline {
             model,

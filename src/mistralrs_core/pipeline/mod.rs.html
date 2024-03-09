@@ -370,6 +370,33 @@
 <a href="#369" id="369">369</a>
 <a href="#370" id="370">370</a>
 <a href="#371" id="371">371</a>
+<a href="#372" id="372">372</a>
+<a href="#373" id="373">373</a>
+<a href="#374" id="374">374</a>
+<a href="#375" id="375">375</a>
+<a href="#376" id="376">376</a>
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a>
+<a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a>
+<a href="#382" id="382">382</a>
+<a href="#383" id="383">383</a>
+<a href="#384" id="384">384</a>
+<a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a>
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
+<a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
+<a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -740,5 +767,32 @@
             <span class="prelude-val">Ok</span>(filenames)
         }
     }
+}
+
+<span class="attr">#[macro_export]
+</span><span class="macro">macro_rules! </span>deserialize_chat_template {
+    (<span class="macro-nonterminal">$paths</span>:expr, <span class="macro-nonterminal">$this</span>:ident) =&gt; {
+        <span class="kw">match </span>serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(
+            <span class="macro-nonterminal">$paths</span>.get_template_filename(),
+        )<span class="question-mark">?</span>) {
+            <span class="prelude-val">Ok</span>(template) =&gt; template,
+            <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; {
+                <span class="macro">println!</span>(<span class="string">"Deserializing chat template failed, attempting to use specified JINJA template"</span>);
+                <span class="kw">let </span><span class="kw-2">mut </span>deser: HashMap&lt;String, Value&gt; =
+                    serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(<span class="macro-nonterminal">$paths</span>.get_template_filename())<span class="question-mark">?</span>)
+                        .unwrap();
+                deser.insert(
+                    <span class="string">"chat_template"</span>.to_string(),
+                    Value::String(
+                        <span class="macro-nonterminal">$this</span>.chat_template
+                            .clone()
+                            .expect(<span class="string">"Please specify a manual chat template."</span>),
+                    ),
+                );
+                <span class="kw">let </span>ser = serde_json::to_string_pretty(<span class="kw-2">&amp;</span>deser).unwrap();
+                serde_json::from_str(<span class="kw-2">&amp;</span>ser).unwrap()
+            }
+        }
+    };
 }
 </code></pre></div></section></main></body></html>
