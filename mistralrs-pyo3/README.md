@@ -13,7 +13,7 @@
     pip install maturin
     ```
 
-3) Activate a Python virtual environment and install `maturin` with `pip install maturin`.
+3) Install `maturin` with `pip install maturin`.
 
 4) Install `mistralrs`
     Install `mistralrs` by executing the following in this directory where [features](../README.md#building-for-gpu-metal-or-enabling-other-features) such as `cuda` or `flash-attn` may be specified with the `--features` argument.
