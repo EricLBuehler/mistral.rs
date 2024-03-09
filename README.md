@@ -4,7 +4,8 @@
 Mistral.rs is a LLM inference platform written in pure, safe Rust.
 
 ## Upcoming features
-- Falcon
+- Support `n_choices`.
+- Support `logit_bias` in sampling.
 
 ## Description
 - Fast performance with per-sequence and catch-up KV cache management technique.
