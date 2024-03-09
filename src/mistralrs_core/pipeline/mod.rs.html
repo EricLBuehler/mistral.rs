@@ -840,14 +840,14 @@
         <span class="kw">match </span>template.chat_template {
             <span class="prelude-val">Some</span>(<span class="kw">_</span>) =&gt; template,
             <span class="prelude-val">None </span>=&gt; {
-                <span class="macro">eprintln!</span>(<span class="string">"`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template."</span>);
+                <span class="macro">println!</span>(<span class="string">"`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template."</span>);
                 <span class="kw">let </span><span class="kw-2">mut </span>deser: HashMap&lt;String, Value&gt; =
                     serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(<span class="macro-nonterminal">$paths</span>.get_template_filename())<span class="question-mark">?</span>)
                         .unwrap();
                 <span class="kw">match </span><span class="macro-nonterminal">$this</span>.chat_template.clone() {
                     <span class="prelude-val">Some</span>(t) =&gt; {
                         <span class="kw">if </span>t.ends_with(<span class="string">".json"</span>) {
-                            <span class="macro">eprintln!</span>(<span class="string">"Loading specified loading chat template file at `{t}`."</span>);
+                            <span class="macro">println!</span>(<span class="string">"Loading specified loading chat template file at `{t}`."</span>);
                             <span class="kw">let </span>templ: SpecifiedTemplate = serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(t.clone())<span class="question-mark">?</span>).unwrap();
                             deser.insert(
                                 <span class="string">"chat_template"</span>.to_string(),
@@ -865,22 +865,22 @@
                                     Value::String(templ.eos_token.unwrap()),
                                 );
                             }
-                            <span class="macro">eprintln!</span>(<span class="string">"Loaded chat template file."</span>);
+                            <span class="macro">println!</span>(<span class="string">"Loaded chat template file."</span>);
                         } <span class="kw">else </span>{
                             deser.insert(
                                 <span class="string">"chat_template"</span>.to_string(),
                                 Value::String(t),
                             );
-                            <span class="macro">eprintln!</span>(<span class="string">"Loaded specified literal chat template."</span>);
+                            <span class="macro">println!</span>(<span class="string">"Loaded specified literal chat template."</span>);
                         }
                     },
                     <span class="prelude-val">None </span>=&gt; {
-                        <span class="macro">eprintln!</span>(<span class="string">"No specified chat template, loading default chat template at `./default.json`."</span>);
+                        <span class="macro">println!</span>(<span class="string">"No specified chat template, loading default chat template at `./default.json`."</span>);
                         deser.insert(
                             <span class="string">"chat_template"</span>.to_string(),
                             Value::String(fs::read_to_string(<span class="string">"./default.json"</span>)<span class="question-mark">?</span>),
                         );
-                        <span class="macro">eprintln!</span>(<span class="string">"Default chat template loaded."</span>);
+                        <span class="macro">println!</span>(<span class="string">"Default chat template loaded."</span>);
                     }
                 };
                 <span class="kw">let </span>ser = serde_json::to_string_pretty(<span class="kw-2">&amp;</span>deser).unwrap();
