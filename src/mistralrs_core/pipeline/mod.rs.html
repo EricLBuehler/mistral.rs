@@ -406,6 +406,13 @@
 <a href="#405" id="405">405</a>
 <a href="#406" id="406">406</a>
 <a href="#407" id="407">407</a>
+<a href="#408" id="408">408</a>
+<a href="#409" id="409">409</a>
+<a href="#410" id="410">410</a>
+<a href="#411" id="411">411</a>
+<a href="#412" id="412">412</a>
+<a href="#413" id="413">413</a>
+<a href="#414" id="414">414</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -797,10 +804,17 @@
                     serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(<span class="macro-nonterminal">$paths</span>.get_template_filename())<span class="question-mark">?</span>)
                         .unwrap();
                 <span class="kw">let </span>template = <span class="kw">match </span><span class="macro-nonterminal">$this</span>.chat_template.clone() {
-                    <span class="prelude-val">Some</span>(t) =&gt; t,
+                    <span class="prelude-val">Some</span>(t) =&gt; {
+                        <span class="kw">if </span>t.ends_with(<span class="string">".jinja"</span>) {
+                            <span class="macro">println!</span>(<span class="string">"Loading specified loading JINJA chat template at `{t}`"</span>);
+                            fs::read_to_string(t)<span class="question-mark">?
+                        </span>} <span class="kw">else </span>{
+                            t
+                        }
+                    },
                     <span class="prelude-val">None </span>=&gt; {
-                        <span class="macro">println!</span>(<span class="string">"No specified JINJA template, loading default chat template at ./default_chat_template.jinja"</span>);
-                        fs::read_to_string(<span class="string">"./default_chat_template.jinja"</span>)<span class="question-mark">?
+                        <span class="macro">println!</span>(<span class="string">"No specified JINJA template, loading default chat template at ./default.jinja"</span>);
+                        fs::read_to_string(<span class="string">"./default.jinja"</span>)<span class="question-mark">?
                     </span>}
                 };
                 deser.insert(
