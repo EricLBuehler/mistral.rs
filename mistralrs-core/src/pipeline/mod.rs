@@ -3,6 +3,7 @@ mod llama;
 mod mistral;
 mod mixtral;
 use candle_sampling::logits_processor::Logprobs;
+use either::Either;
 pub use gemma::{GemmaLoader, GemmaSpecificConfig};
 use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
@@ -43,6 +44,7 @@ pub trait ModelPaths {
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct AddedTokensDecoder {
+    __type: Option<String>,
     content: String,
     lstrip: bool,
     normalized: bool,
@@ -58,19 +60,19 @@ pub struct ChatTemplate {
     add_eos_token: bool,
     added_tokens_decoder: HashMap<String, AddedTokensDecoder>,
     additional_special_tokens: Option<Vec<String>>,
-    bos_token: String,
+    bos_token: Either<String, AddedTokensDecoder>,
     chat_template: String,
     clean_up_tokenization_spaces: bool,
     device_map: Option<String>,
-    eos_token: String,
-    legacy: bool,
+    eos_token: Either<String, AddedTokensDecoder>,
+    legacy: Option<bool>,
     model_max_length: f64,
     pad_token: Option<String>,
     sp_model_kwargs: HashMap<String, String>,
     spaces_between_special_tokens: bool,
     tokenizer_class: String,
     truncation_size: Option<String>,
-    unk_token: String,
+    unk_token: Either<String, AddedTokensDecoder>,
     use_default_system_prompt: bool,
 }
 
@@ -142,12 +144,24 @@ pub trait Pipeline: Send + Sync {
         let mut env = Environment::new();
         env.add_template("chat_template", &self.get_chat_template().chat_template)?;
         let tmpl = env.get_template("chat_template").unwrap();
+        let bos_tok = match self.get_chat_template().bos_token {
+            Either::Left(ref lit) => lit,
+            Either::Right(ref added) => &added.content,
+        };
+        let eos_tok = match self.get_chat_template().eos_token {
+            Either::Left(ref lit) => lit,
+            Either::Right(ref added) => &added.content,
+        };
+        let unk_tok = match self.get_chat_template().unk_token {
+            Either::Left(ref lit) => lit,
+            Either::Right(ref added) => &added.content,
+        };
         Ok(tmpl.render(context! {
             messages => messages,
             add_generation_prompt => add_generation_prompt,
-            bos_token => self.get_chat_template().bos_token,
-            eos_token => self.get_chat_template().eos_token,
-            unk_token => self.get_chat_template().unk_token
+            bos_token => bos_tok,
+            eos_token => eos_tok,
+            unk_token => unk_tok,
         })?)
     }
     fn get_chat_template(&self) -> &ChatTemplate;
