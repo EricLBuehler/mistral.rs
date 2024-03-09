@@ -406,8 +406,6 @@
 <a href="#405" id="405">405</a>
 <a href="#406" id="406">406</a>
 <a href="#407" id="407">407</a>
-<a href="#408" id="408">408</a>
-<a href="#409" id="409">409</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -794,8 +792,6 @@
         )<span class="question-mark">?</span>) {
             <span class="prelude-val">Ok</span>(template) =&gt; template,
             <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; {
-                <span class="kw">const </span>DEFAULT_CHAT_TEMPLATE: <span class="kw-2">&amp;</span>str = <span class="string">"{% if messages[0]['role'] == 'system' %}{% set loop_messages = messages[1:] %}{% set system_message = messages[0]['content'] %}{% elif true == true and not '&lt;&lt;SYS&gt;&gt;' in messages[0]['content'] %}{% set loop_messages = messages %}{% set system_message = 'You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.\\n\\nIf a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don\\'t know the answer to a question, please don\\'t share false information.' %}{% else %}{% set loop_messages = messages %}{% set system_message = false %}{% endif %}{% for message in loop_messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if loop.index0 == 0 and system_message != false %}{% set content = '&lt;&lt;SYS&gt;&gt;\\n' + system_message + '\\n&lt;&lt;/SYS&gt;&gt;\\n\\n' + message['content'] %}{% else %}{% set content = message['content'] %}{% endif %}{% if message['role'] == 'user' %}{{ bos_token + '[INST] ' + content.strip() + ' [/INST]' }}{% elif message['role'] == 'system' %}{{ '&lt;&lt;SYS&gt;&gt;\\n' + content.strip() + '\\n&lt;&lt;/SYS&gt;&gt;\\n\\n' }}{% elif message['role'] == 'assistant' %}{{ ' '  + content.strip() + ' ' + eos_token }}{% endif %}{% endfor %}"</span>;
-
                 <span class="macro">println!</span>(<span class="string">"Deserializing chat template failed, attempting to use specified JINJA template"</span>);
                 <span class="kw">let </span><span class="kw-2">mut </span>deser: HashMap&lt;String, Value&gt; =
                     serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(<span class="macro-nonterminal">$paths</span>.get_template_filename())<span class="question-mark">?</span>)
@@ -803,9 +799,9 @@
                 <span class="kw">let </span>template = <span class="kw">match </span><span class="macro-nonterminal">$this</span>.chat_template.clone() {
                     <span class="prelude-val">Some</span>(t) =&gt; t,
                     <span class="prelude-val">None </span>=&gt; {
-                        <span class="macro">println!</span>(<span class="string">"No specified JINJA template, using default chat template"</span>);
-                        DEFAULT_CHAT_TEMPLATE.to_string()
-                    }
+                        <span class="macro">println!</span>(<span class="string">"No specified JINJA template, loading default chat template at ./default_chat_template.jinja"</span>);
+                        fs::read_to_string(<span class="string">"./default_chat_template.jinja"</span>)<span class="question-mark">?
+                    </span>}
                 };
                 deser.insert(
                     <span class="string">"chat_template"</span>.to_string(),

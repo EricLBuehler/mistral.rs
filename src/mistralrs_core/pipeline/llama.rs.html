@@ -473,6 +473,15 @@
 <a href="#472" id="472">472</a>
 <a href="#473" id="473">473</a>
 <a href="#474" id="474">474</a>
+<a href="#475" id="475">475</a>
+<a href="#476" id="476">476</a>
+<a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
+<a href="#479" id="479">479</a>
+<a href="#480" id="480">480</a>
+<a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     get_completion_input, get_model_paths, get_prompt_input, get_xlora_paths, ChatTemplate, Loader,
     ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
@@ -498,6 +507,7 @@
 <span class="kw">use </span>std::collections::HashMap;
 <span class="kw">use </span>std::fs;
 <span class="kw">use </span>std::path::PathBuf;
+<span class="kw">use </span>std::str::FromStr;
 <span class="kw">use </span>std::{rc::Rc, sync::Mutex};
 <span class="kw">use </span>thiserror::Error;
 <span class="kw">use </span>tokenizers::Tokenizer;
@@ -569,6 +579,7 @@
     xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
     no_kv_cache: bool,
     chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
 <span class="attr">#[derive(Clone, Copy)]
@@ -596,6 +607,7 @@
         xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
         no_kv_cache: bool,
         chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
+        tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             model_id,
@@ -607,6 +619,7 @@
             xlora_order,
             no_kv_cache,
             chat_template,
+            tokenizer_json,
         }
     }
 }
@@ -628,7 +641,12 @@
             revision.clone(),
         ));
 
-        <span class="kw">let </span>tokenizer_filename = api.get(<span class="string">"tokenizer.json"</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>tokenizer_filename = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>p) = <span class="self">self</span>.tokenizer_json {
+            <span class="macro">println!</span>(<span class="string">"Using tokenizer.json at `{p}`"</span>);
+            PathBuf::from_str(p)<span class="question-mark">?
+        </span>} <span class="kw">else </span>{
+            api.get(<span class="string">"tokenizer.json"</span>)<span class="question-mark">?
+        </span>};
 
         <span class="kw">let </span>config_filename = api.get(<span class="string">"config.json"</span>)<span class="question-mark">?</span>;
 
