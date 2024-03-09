@@ -40,13 +40,13 @@ Rust multithreaded API for easy integration into any application: [docs](https:/
 
 **Python API**
 
-A Python API is provided. Please see [these docs](mistralrs-pyo3/README.md) for getting started, and [this file](examples/python_api.py) for a use case.
+A Python API is provided. Please see [these docs](mistralrs-pyo3/README.md) for getting started, and [this file](examples/python/python_api.py) for a use case.
 
 **HTTP Server**
 
 Mistral.rs provides an OpenAI API compatible API server, documentation [here](examples/http.md).
 
-To get started see [this](README.md#run) section, and [this file](examples/chat.py) for an example of a simple chat program.
+To get started see [this](README.md#run) section, and [this file](examples/server/chat.py) for an example of a simple chat program.
 
 ## Benchmarks
 **A6000** X-LoRA Mistral GGUF + CUDA (8-bit quantization, prompt tokens = 27, completion tokens = 64)
@@ -96,7 +96,7 @@ which may be specified using the `--features` command.
 
 ### X-LoRA
 **Preparing the X-LoRA Ordering File**
-The X-LoRA ordering file is necessary to prepare before inference with an X-LoRA model. However, it is easy with a provided [`script`](xlora-orderings/create_ordering.py)!
+The X-LoRA ordering file is necessary to prepare before inference with an X-LoRA model. However, it is easy with a provided [`script`](scripts/create_ordering.py)!
 
 The X-LoRA ordering JSON file contains 2 parts. The first is the order of the adapters and the second, the layer ordering. The layer ordering has been automatically generated and should not be manipulated as it controls the application of scalings. However the order of adapter should be an array of strings which are the adapter names corresponding to the order the adapters were specified during training. For example, if the adapters were specified as a dictionary:
 
@@ -114,13 +114,13 @@ There are 2 scripts to prepare the ordering file. The ordering file is specific 
 
 1) From scratch: No ordering file for the architecture and target modules
 
-    A script [`create_ordering.py`](xlora-orderings/create_ordering.py) is provided which prompts the user for the model ID, target modules, and adapter names. The user is prompted for an output file location, relative to the working directory.
+    A script [`create_ordering.py`](scripts/create_ordering.py) is provided which prompts the user for the model ID, target modules, and adapter names. The user is prompted for an output file location, relative to the working directory.
 
 2) Create a new ordering file from an existing ordering file for an architecture and target modules
 
-    A script [`modify_names.py`](xlora-orderings/modify_names.py) is provided which prompts the user for the adapter names and the old ordering file. The user is prompted for an output file location, relative to the working directory.
+    A script [`modify_names.py`](scripts/modify_names.py) is provided which prompts the user for the adapter names and the old ordering file. The user is prompted for an output file location, relative to the working directory.
 
-A provide a [default ordering file](xlora-orderings/default-ordering.json) which contains the ordering for the X-LoRA model associated with [the paper](https://arxiv.org/abs/2402.07148) and the Huggingface repository: https://huggingface.co/lamm-mit/x-lora.
+A provide a [default ordering file](scripts/default-ordering.json) which contains the ordering for the X-LoRA model associated with [the paper](https://arxiv.org/abs/2402.07148) and the Huggingface repository: https://huggingface.co/lamm-mit/x-lora.
 
 ---
 
@@ -152,16 +152,16 @@ If no JINJA chat template is provided, then the default chat template located [h
 
 **Tokenizer**
 
-Some models do not provide a `tokenizer.json` file although mistral.rs expects one. To solve this, please run [this](examples/get_tokenizers_json.py) script. It will output the `tokenizer.json` file for your specific model. This may be used by passing the `--tokenizer-json` flag *after* the model architecture. For example:
+Some models do not provide a `tokenizer.json` file although mistral.rs expects one. To solve this, please run [this](scripts/get_tokenizers_json.py) script. It will output the `tokenizer.json` file for your specific model. This may be used by passing the `--tokenizer-json` flag *after* the model architecture. For example:
 
 ```bash
-$ python3 examples/get_tokenizers_json.py
+$ python3 scripts/get_tokenizers_json.py
 Enter model ID: microsoft/Orca-2-13b
 $ ./mistralrs-server --port 1234 --log output.log llama --tokenizer-json tokenizer.json
 ```
 
 Putting it all together, to run, for example, an [Orca](https://huggingface.co/microsoft/Orca-2-13b) model (which does not come with a `tokenizer.json` or chat template):
-1) Generate the `tokenizer.json` by running the script at `examples/get_tokenizers_json.py`. This will output some files including `tokenizer.json` in the working directory.
+1) Generate the `tokenizer.json` by running the script at `scripts/get_tokenizers_json.py`. This will output some files including `tokenizer.json` in the working directory.
 2) Find and copy the correct chat template from `chat-templates` to the working directory (eg., `cp chat_templates/chatml.json .`)
 3) Run `mistralrs-server`, specifying the tokenizer and chat template: `cargo run --release --features cuda -- --port 1234 --log output.txt --chat-template chatml.json llama -m microsoft/Orca-2-13b -t tokenizer.json`
 

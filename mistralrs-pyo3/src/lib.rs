@@ -59,7 +59,10 @@ struct Runner {
 #[pymethods]
 impl Runner {
     /// Send an OpenAI API compatible request, returning raw JSON.
-    fn send_chat_completion_request(&mut self, request: Py<Request>) -> PyResult<String> {
+    fn send_chat_completion_request(
+        &mut self,
+        request: Py<ChatCompletionRequest>,
+    ) -> PyResult<String> {
         let (tx, rx) = channel();
         Python::with_gil(|py| {
             let request = request.as_ref(py).borrow();
@@ -102,7 +105,7 @@ impl Runner {
 #[pyclass]
 #[derive(Debug)]
 /// An OpenAI API compatible chat completion request.
-struct Request {
+struct ChatCompletionRequest {
     messages: Vec<HashMap<String, String>>,
     _model: String,
     _logit_bias: Option<HashMap<u32, f64>>,
@@ -119,7 +122,7 @@ struct Request {
 }
 
 #[pymethods]
-impl Request {
+impl ChatCompletionRequest {
     #[new]
     #[pyo3(signature = (messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, repetition_penalty = None, stop_token_ids = None, temperature = None, top_p = None, top_k = None))]
     #[allow(clippy::too_many_arguments)]
@@ -164,7 +167,7 @@ fn mistralrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<GemmaLoader>()?;
     m.add_class::<LlamaLoader>()?;
     m.add_class::<ModelKind>()?;
-    m.add_class::<Request>()?;
+    m.add_class::<ChatCompletionRequest>()?;
     m.add_class::<NormalLoader>()?;
     m.add_class::<XLoraLoader>()?;
     m.add_class::<QuantizedLoader>()?;
