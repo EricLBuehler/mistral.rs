@@ -176,7 +176,7 @@ impl Loader for GemmaLoader {
         ));
 
         let tokenizer_filename = if let Some(ref p) = self.tokenizer_json {
-            println!("Using tokenizer.json at `{p}`");
+            eprintln!("Using tokenizer.json at `{p}`");
             PathBuf::from_str(p)?
         } else {
             api.get("tokenizer.json")?
@@ -248,7 +248,7 @@ impl Loader for GemmaLoader {
             DType::F32
         };
 
-        println!("Loading model on {device:?}...");
+        eprintln!("Loading model on {device:?}...");
         let model = match self.kind {
             ModelKind::QuantizedGGUF => unreachable!(),
             ModelKind::QuantizedGGML => unreachable!(),
@@ -296,7 +296,7 @@ impl Loader for GemmaLoader {
             ModelKind::XLoraGGUF => unreachable!(),
             ModelKind::XLoraGGML => unreachable!(),
         };
-        println!("Model loaded.");
+        eprintln!("Model loaded.");
 
         let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
