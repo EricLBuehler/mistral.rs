@@ -367,6 +367,9 @@
 <a href="#366" id="366">366</a>
 <a href="#367" id="367">367</a>
 <a href="#368" id="368">368</a>
+<a href="#369" id="369">369</a>
+<a href="#370" id="370">370</a>
+<a href="#371" id="371">371</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -429,11 +432,13 @@
     add_eos_token: bool,
     added_tokens_decoder: HashMap&lt;String, AddedTokensDecoder&gt;,
     additional_special_tokens: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
-    bos_token: Either&lt;String, AddedTokensDecoder&gt;,
+    <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)]
+    </span>bos_token: Either&lt;String, AddedTokensDecoder&gt;,
     chat_template: String,
     clean_up_tokenization_spaces: bool,
     device_map: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    eos_token: Either&lt;String, AddedTokensDecoder&gt;,
+    <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)]
+    </span>eos_token: Either&lt;String, AddedTokensDecoder&gt;,
     legacy: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     model_max_length: f64,
     pad_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -441,7 +446,8 @@
     spaces_between_special_tokens: bool,
     tokenizer_class: String,
     truncation_size: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    unk_token: Either&lt;String, AddedTokensDecoder&gt;,
+    <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)]
+    </span>unk_token: Either&lt;String, AddedTokensDecoder&gt;,
     use_default_system_prompt: bool,
 }
 
