@@ -61,18 +61,10 @@ struct Mlp {
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        eprintln!("a");
         let w1 = self.feed_forward_w1.forward(xs)?;
-        eprintln!("b");
         let w3 = self.feed_forward_w3.forward(xs)?;
-        eprintln!("c");
-        dbg!(&w1);
-        let silu  = candle_nn::ops::silu(&w1)?;
-        eprintln!("d");
-        let xs = &(silu * w3)?;
-        eprintln!("e");
         self.feed_forward_w2
-            .forward(xs)
+            .forward(&(candle_nn::ops::silu(&w1)? * w3)?)
     }
 }
 
