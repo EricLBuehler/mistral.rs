@@ -444,6 +444,12 @@
 <a href="#443" id="443">443</a>
 <a href="#444" id="444">444</a>
 <a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a>
+<a href="#450" id="450">450</a>
+<a href="#451" id="451">451</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -455,8 +461,9 @@
     api::sync::{ApiBuilder, ApiRepo},
     Repo, RepoType,
 };
+<span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">pub use </span>llama::{LlamaLoader, LlamaSpecificConfig};
-<span class="kw">use </span>minijinja::{context, Environment};
+<span class="kw">use </span>minijinja::{context, Environment, ErrorKind};
 <span class="kw">pub use </span>mistral::{MistralLoader, MistralSpecificConfig};
 <span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
 <span class="kw">pub use </span>mixtral::{MixtralLoader, MixtralSpecificConfig};
@@ -572,6 +579,10 @@
     }
 }
 
+<span class="kw">fn </span>raise_exception(msg: String) -&gt; <span class="prelude-ty">Result</span>&lt;String, minijinja::Error&gt; {
+    <span class="prelude-val">Err</span>(minijinja::Error::new(ErrorKind::InvalidOperation, msg))
+}
+
 <span class="kw">pub trait </span>Pipeline: Send + Sync {
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;mut </span><span class="self">self</span>, input_toks: Box&lt;[Rc&lt;RefCell&lt;Sequence&gt;&gt;]&gt;, is_prompt: bool) -&gt; Tensor;
     <span class="kw">fn </span>tokenize_prompt(<span class="kw-2">&amp;</span><span class="self">self</span>, prompt: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u32&gt;&gt; {
@@ -593,14 +604,15 @@
     <span class="kw">fn </span>has_no_kv_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
     <span class="kw">fn </span>apply_chat_template(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
-        messages: Vec&lt;HashMap&lt;String, String&gt;&gt;,
+        messages: Vec&lt;IndexMap&lt;String, String&gt;&gt;,
         add_generation_prompt: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>env = Environment::new();
         env.add_template(
             <span class="string">"chat_template"</span>,
             <span class="self">self</span>.get_chat_template().chat_template.as_ref().unwrap(),
-        ).unwrap();
+        )<span class="question-mark">?</span>;
+        env.add_function(<span class="string">"raise_exception"</span>, raise_exception);
         <span class="kw">let </span>tmpl = env.get_template(<span class="string">"chat_template"</span>).unwrap();
         <span class="kw">let </span>bos_tok = <span class="kw">match </span><span class="self">self</span>.get_chat_template().bos_token {
             Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit,
@@ -620,7 +632,7 @@
             bos_token =&gt; bos_tok,
             eos_token =&gt; eos_tok,
             unk_token =&gt; unk_tok,
-        }).unwrap())
+        })<span class="question-mark">?</span>)
     }
     <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ChatTemplate;
 }

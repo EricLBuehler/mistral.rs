@@ -891,7 +891,6 @@
 <a href="#890" id="890">890</a>
 <a href="#891" id="891">891</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
-    collections::HashMap,
     fs::File,
     sync::{mpsc::channel, Arc},
 };
@@ -904,6 +903,7 @@
 };
 <span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::{Parser, Subcommand};
+<span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_core::{
     GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader, MistralLoader,
     MistralRs, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind, Request,
@@ -1365,7 +1365,7 @@
     };
     <span class="kw">let </span><span class="kw-2">mut </span>messages = Vec::new();
     <span class="kw">for </span>message <span class="kw">in </span>oairequest.messages {
-        <span class="kw">let </span><span class="kw-2">mut </span>message_map = HashMap::new();
+        <span class="kw">let </span><span class="kw-2">mut </span>message_map = IndexMap::new();
         message_map.insert(<span class="string">"role"</span>.to_string(), message.role);
         message_map.insert(<span class="string">"content"</span>.to_string(), message.content);
         messages.push(message_map);

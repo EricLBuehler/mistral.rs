@@ -18,11 +18,15 @@
 <a href="#17" id="17">17</a>
 <a href="#18" id="18">18</a>
 <a href="#19" id="19">19</a>
-</pre></div><pre class="rust"><code><span class="kw">use crate</span>::{response::Response, sampling::SamplingParams};
-<span class="kw">use </span>std::{collections::HashMap, fmt::Debug, sync::mpsc::Sender};
+<a href="#20" id="20">20</a>
+<a href="#21" id="21">21</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>indexmap::IndexMap;
+
+<span class="kw">use crate</span>::{response::Response, sampling::SamplingParams};
+<span class="kw">use </span>std::{fmt::Debug, sync::mpsc::Sender};
 
 <span class="kw">pub struct </span>Request {
-    <span class="kw">pub </span>messages: Vec&lt;HashMap&lt;String, String&gt;&gt;,
+    <span class="kw">pub </span>messages: Vec&lt;IndexMap&lt;String, String&gt;&gt;,
     <span class="kw">pub </span>sampling_params: SamplingParams,
     <span class="kw">pub </span>response: Sender&lt;Response&gt;,
     <span class="kw">pub </span>return_logprobs: bool,
