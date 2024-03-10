@@ -204,6 +204,7 @@ impl LayerWeights {
             let y1 = (x0.broadcast_mul(&sin)? + x1.broadcast_mul(&cos)?)?;
             let rope = Tensor::cat(&[y0, y1], D::Minus1)?;
             let rope = rope.flatten_from(D::Minus2)?;
+            dbg!(&rope);
             ropes.push(rope);
         }
         Tensor::cat(&ropes, 0)
