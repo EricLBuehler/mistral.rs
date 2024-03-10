@@ -66,8 +66,10 @@ impl Module for Mlp {
         eprintln!("b");
         let w3 = self.feed_forward_w3.forward(xs)?;
         eprintln!("c");
-        let xs = &(candle_nn::ops::silu(&w1)? * w3)?;
+        let silu  = candle_nn::ops::silu(&w1)?;
         eprintln!("d");
+        let xs = &(silu * w3)?;
+        eprintln!("e");
         self.feed_forward_w2
             .forward(xs)
     }
