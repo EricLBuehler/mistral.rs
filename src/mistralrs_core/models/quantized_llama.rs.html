@@ -531,6 +531,9 @@
 <a href="#530" id="530">530</a>
 <a href="#531" id="531">531</a>
 <a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -594,8 +597,11 @@
 
 <span class="kw">impl </span>Module <span class="kw">for </span>Mlp {
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="macro">eprintln!</span>(<span class="string">"a"</span>);
         <span class="kw">let </span>w1 = <span class="self">self</span>.feed_forward_w1.forward(xs)<span class="question-mark">?</span>;
+        <span class="macro">eprintln!</span>(<span class="string">"b"</span>);
         <span class="kw">let </span>w3 = <span class="self">self</span>.feed_forward_w3.forward(xs)<span class="question-mark">?</span>;
+        <span class="macro">eprintln!</span>(<span class="string">"c"</span>);
         <span class="self">self</span>.feed_forward_w2
             .forward(<span class="kw-2">&amp;</span>(candle_nn::ops::silu(<span class="kw-2">&amp;</span>w1)<span class="question-mark">? </span>* w3)<span class="question-mark">?</span>)
     }
