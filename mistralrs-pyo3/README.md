@@ -1,4 +1,4 @@
-# Mistral.rs PyO3 Bindings: `mistralrs`
+# mistral.rs PyO3 Bindings: `mistralrs`
 
 `mistralrs` is a Python package which provides an API for `mistral.rs`.
 

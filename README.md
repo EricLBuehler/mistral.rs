@@ -38,17 +38,25 @@ Please note that when using a derivative model with a quantized architecture, it
 
 **Rust Library API**
 
-Rust multithreaded API for easy integration into any application: [docs](https://ericlbuehler.github.io/mistral.rs/mistralrs/). To use, add `mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }` to the Cargo.toml.
+Rust multithreaded API for easy integration into any application.
+
+- [Docs](https://ericlbuehler.github.io/mistral.rs/mistralrs/)
+- To install: Add `mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }`
 
 **Python API**
 
-A Python API is provided. Please see [these docs](mistralrs-pyo3/README.md) for getting started, and [this file](examples/python/python_api.py) for a use case.
+Python API for mistral.rs.
+
+- [Docs](mistralrs-pyo3/README.md)
+- [Example](examples/python/python_api.py)
 
 **HTTP Server**
 
-Mistral.rs provides an OpenAI API compatible API server, documentation [here](examples/http.md).
+OpenAI API compatible API server
 
-To get started see [this](README.md#run) section, and [this file](examples/server/chat.py) for an example of a simple chat program.
+- [Docs](examples/http.md).
+- [Running](README.md#run)
+- [Example](examples/server/chat.py)
 
 ## Benchmarks
 **A6000** X-LoRA Mistral GGUF + CUDA (8-bit quantization, prompt tokens = 27, completion tokens = 64)
