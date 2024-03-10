@@ -537,6 +537,8 @@
 <a href="#536" id="536">536</a>
 <a href="#537" id="537">537</a>
 <a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -772,6 +774,8 @@
             .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 
+            <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>k);
+            <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>v);
         <span class="kw">let </span>q = <span class="self">self</span>.apply_rotary_emb(<span class="kw-2">&amp;</span>q, start_offsets)<span class="question-mark">?</span>;
         <span class="kw">let </span>k = <span class="self">self</span>.apply_rotary_emb(<span class="kw-2">&amp;</span>k, start_offsets)<span class="question-mark">?</span>;
 
