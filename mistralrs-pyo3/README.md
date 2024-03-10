@@ -10,7 +10,7 @@
     ```bash
     python3 -m venv myenv
     source myenv/bin/activate
-    pip install maturin
+    pip install maturin[patchelf]
     ```
 
 3) Install `maturin` with `pip install maturin[patchelf]`.
