@@ -66,6 +66,7 @@ impl Module for Mlp {
         eprintln!("b");
         let w3 = self.feed_forward_w3.forward(xs)?;
         eprintln!("c");
+        dbg!(&w1);
         //let silu  = candle_nn::ops::silu(&w1)?;
         let mut silus = Vec::new();
         for b in 0..w1.dims()[0] {
