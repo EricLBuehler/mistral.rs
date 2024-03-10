@@ -126,6 +126,8 @@ If `max_tokens` is not specified in the request, space for 10 tokens will be res
 
 - `token_source_value`: Value of token source value for `token_source`
 
+- `dtype=None`: Datatype to load the model into, only applicable for non-quantized models.
+
 ## `Runner`
 
 Runner has no constructor and is created by calling `load` on a loader class.
@@ -151,3 +153,20 @@ Request is a class with a constructor which accepts the following arguments. It 
 - `top_k: usize | None`
 
 `ChatCompletionRequest(messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, repetition_penalty = None, stop_token_ids = None, temperature = None, top_p = None, top_k = None)`
+
+## `ModelKind`
+- Normal
+- XLoraNormal
+- XLoraGGUF
+- XLoraGGML
+- QuantizedGGUF
+- QuantizedGGML
+
+## `DType`
+- U8
+- U32
+- I64
+- BF16
+- F16
+- F32
+- F64

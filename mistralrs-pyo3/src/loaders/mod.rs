@@ -4,7 +4,7 @@ use pyo3::{
     IntoPy, Py, PyAny, PyResult, Python,
 };
 
-use crate::ModelKind;
+use crate::{DType, ModelKind};
 
 pub mod gemma;
 pub mod llama;
@@ -95,7 +95,10 @@ impl NormalLoader {
     /// - `revision=None`: HF revision.
     ///
     /// - `token_source_value=None`: Value of token source value for `token_source`
-    #[pyo3(signature = (token_source = "cache", max_seqs = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None))]
+    ///
+    /// - `dtype=None`: Datatype to load the model into, only applicable for non-quantized models.
+    #[pyo3(signature = (token_source = "cache", max_seqs = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None, dtype = None))]
+    #[allow(clippy::too_many_arguments)]
     fn load(
         &mut self,
         token_source: &str,
@@ -104,6 +107,7 @@ impl NormalLoader {
         logfile: Option<String>,
         revision: Option<String>,
         token_source_value: Option<String>,
+        dtype: Option<DType>,
     ) -> PyResult<Py<PyAny>> {
         Python::with_gil(|py| {
             let elems: &[Py<PyAny>] = &[
@@ -113,6 +117,7 @@ impl NormalLoader {
                 logfile.into_py(py),
                 revision.into_py(py),
                 token_source_value.into_py(py),
+                dtype.into_py(py),
             ];
             let args = PyTuple::new(py, elems);
 
@@ -211,7 +216,10 @@ impl XLoraLoader {
     /// - `revision=None`: HF revision.
     ///
     /// - `token_source_value=None`: Value of token source value for `token_source`
-    #[pyo3(signature = (token_source = "cache", max_seqs = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None))]
+    ///
+    /// - `dtype=None`: Datatype to load the model into, only applicable for non-quantized models.
+    #[pyo3(signature = (token_source = "cache", max_seqs = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None, dtype = None))]
+    #[allow(clippy::too_many_arguments)]
     fn load(
         &mut self,
         token_source: &str,
@@ -220,6 +228,7 @@ impl XLoraLoader {
         logfile: Option<String>,
         revision: Option<String>,
         token_source_value: Option<String>,
+        dtype: Option<DType>,
     ) -> PyResult<Py<PyAny>> {
         Python::with_gil(|py| {
             let elems: &[Py<PyAny>] = &[
@@ -229,6 +238,7 @@ impl XLoraLoader {
                 logfile.into_py(py),
                 revision.into_py(py),
                 token_source_value.into_py(py),
+                dtype.into_py(py),
             ];
             let args = PyTuple::new(py, elems);
 
@@ -334,7 +344,10 @@ impl QuantizedLoader {
     /// - `revision=None`: HF revision.
     ///
     /// - `token_source_value=None`: Value of token source value for `token_source`
-    #[pyo3(signature = (token_source = "cache", max_seqs = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None))]
+    ///
+    /// - `dtype=None`: Datatype to load the model into, only applicable for non-quantized models.
+    #[pyo3(signature = (token_source = "cache", max_seqs = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None, dtype = None))]
+    #[allow(clippy::too_many_arguments)]
     fn load(
         &mut self,
         token_source: &str,
@@ -343,6 +356,7 @@ impl QuantizedLoader {
         logfile: Option<String>,
         revision: Option<String>,
         token_source_value: Option<String>,
+        dtype: Option<DType>,
     ) -> PyResult<Py<PyAny>> {
         Python::with_gil(|py| {
             let elems: &[Py<PyAny>] = &[
@@ -352,6 +366,7 @@ impl QuantizedLoader {
                 logfile.into_py(py),
                 revision.into_py(py),
                 token_source_value.into_py(py),
+                dtype.into_py(py),
             ];
             let args = PyTuple::new(py, elems);
 
@@ -462,7 +477,10 @@ impl XLoraQuantizedLoader {
     /// - `revision=None`: HF revision.
     ///
     /// - `token_source_value=None`: Value of token source value for `token_source`
-    #[pyo3(signature = (token_source = "cache", max_seqs = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None))]
+    ///
+    /// - `dtype=None`: Datatype to load the model into, only applicable for non-quantized models.
+    #[pyo3(signature = (token_source = "cache", max_seqs = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None, dtype = None))]
+    #[allow(clippy::too_many_arguments)]
     fn load(
         &mut self,
         token_source: &str,
@@ -471,6 +489,7 @@ impl XLoraQuantizedLoader {
         logfile: Option<String>,
         revision: Option<String>,
         token_source_value: Option<String>,
+        dtype: Option<DType>,
     ) -> PyResult<Py<PyAny>> {
         Python::with_gil(|py| {
             let elems: &[Py<PyAny>] = &[
@@ -480,6 +499,7 @@ impl XLoraQuantizedLoader {
                 logfile.into_py(py),
                 revision.into_py(py),
                 token_source_value.into_py(py),
+                dtype.into_py(py),
             ];
             let args = PyTuple::new(py, elems);
 

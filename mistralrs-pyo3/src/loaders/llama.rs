@@ -1,12 +1,12 @@
-use std::fs::File;
-
+use candle_core::DType as _DType;
 use mistralrs::{
     LlamaLoader as _LlamaLoader, LlamaSpecificConfig, Loader, MistralRs, ModelKind as _ModelKind,
     SchedulerMethod, TokenSource,
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
+use std::fs::File;
 
-use crate::{get_device, ModelKind, Runner};
+use crate::{get_device, DType, ModelKind, Runner};
 
 #[pyclass]
 /// A loader for a Runner.
@@ -154,7 +154,10 @@ impl LlamaLoader {
     /// - `revision=None`: HF revision.
     ///
     /// - `token_source_value=None`: Value of token source value for `token_source`
-    #[pyo3(signature = (token_source = "cache", max_seqs = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None))]
+    ///
+    /// - `dtype=None`: Datatype to load the model into, only applicable for non-quantized models.
+    #[pyo3(signature = (token_source = "cache", max_seqs = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None, dtype = None))]
+    #[allow(clippy::too_many_arguments)]
     fn load(
         &mut self,
         token_source: &str,
@@ -163,6 +166,7 @@ impl LlamaLoader {
         logfile: Option<String>,
         revision: Option<String>,
         token_source_value: Option<String>,
+        dtype: Option<DType>,
     ) -> PyResult<Runner> {
         let device = get_device();
         let device = match device {
@@ -182,7 +186,17 @@ impl LlamaLoader {
             }
         };
 
-        let res = self.loader.load_model(revision, source, None, &device);
+        let dtype = dtype.map(|dtype| match dtype {
+            DType::BF16 => _DType::BF16,
+            DType::F16 => _DType::F16,
+            DType::F32 => _DType::F32,
+            DType::F64 => _DType::F64,
+            DType::U8 => _DType::U8,
+            DType::U32 => _DType::U32,
+            DType::I64 => _DType::I64,
+        });
+
+        let res = self.loader.load_model(revision, source, dtype, &device);
         let pipeline = match res {
             Ok(x) => x,
             Err(y) => return Err(PyValueError::new_err(y.to_string())),

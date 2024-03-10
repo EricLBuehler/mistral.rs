@@ -29,6 +29,25 @@ enum ModelKind {
     QuantizedGGML,
 }
 
+#[pyclass]
+#[derive(Clone)]
+enum DType {
+    // Unsigned 8 bits integer.
+    U8,
+    // Unsigned 32 bits integer.
+    U32,
+    // Signed 64 bits integer.
+    I64,
+    // Brain floating-point using half precision (16 bits).
+    BF16,
+    // Floating-point using half precision (16 bits).
+    F16,
+    // Floating-point using single precision (32 bits).
+    F32,
+    // Floating-point using double precision (64 bits).
+    F64,
+}
+
 #[cfg(not(feature = "metal"))]
 static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
 #[cfg(feature = "metal")]
@@ -201,5 +220,6 @@ fn mistralrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<XLoraLoader>()?;
     m.add_class::<QuantizedLoader>()?;
     m.add_class::<XLoraQuantizedLoader>()?;
+    m.add_class::<DType>()?;
     Ok(())
 }
