@@ -540,6 +540,7 @@
 <a href="#539" id="539">539</a>
 <a href="#540" id="540">540</a>
 <a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -749,6 +750,7 @@
             <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>rope);
             ropes.push(rope);
         }
+        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>ropes);
         Tensor::cat(<span class="kw-2">&amp;</span>ropes, <span class="number">0</span>)
     }
 
