@@ -16,5 +16,6 @@ mistralrs-core = { version = "0.1.0", path = "../mistralrs-core" }
 
 [features]
 cuda = ["mistralrs-core/cuda"]
+cudnn = ["mistralrs-core/cudnn"]
 metal = ["mistralrs-core/metal"]
 flash-attn = ["cuda", "mistralrs-core/flash-attn"]
