@@ -154,7 +154,7 @@ pub trait Pipeline: Send + Sync {
         env.add_template(
             "chat_template",
             self.get_chat_template().chat_template.as_ref().unwrap(),
-        )?;
+        ).unwrap();
         let tmpl = env.get_template("chat_template").unwrap();
         let bos_tok = match self.get_chat_template().bos_token {
             Either::Left(ref lit) => lit,
@@ -174,7 +174,7 @@ pub trait Pipeline: Send + Sync {
             bos_token => bos_tok,
             eos_token => eos_tok,
             unk_token => unk_tok,
-        })?)
+        }).unwrap())
     }
     fn get_chat_template(&self) -> &ChatTemplate;
 }
