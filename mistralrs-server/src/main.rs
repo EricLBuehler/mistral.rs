@@ -426,6 +426,10 @@ pub enum ModelSelected {
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
+    /// IP to serve on. Defaults to "0.0.0.0"
+    #[arg(long)]
+    serve_ip: Option<String>,
+
     /// Port to serve on.
     #[arg(short, long)]
     port: String,
@@ -885,8 +889,13 @@ async fn main() -> Result<()> {
 
     let app = get_router(mistralrs);
 
-    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", args.port)).await?;
-    println!("Serving on http://127.0.0.1:{}.", args.port);
+    let ip = if let Some(ref ip) = args.serve_ip {
+        ip.to_string()
+    } else {
+        "0.0.0.0".to_string()
+    };
+    let listener = tokio::net::TcpListener::bind(format!("{ip}:{}", args.port)).await?;
+    println!("Serving on http://{ip}:{}.", args.port);
     axum::serve(listener, app).await?;
 
     Ok(())
