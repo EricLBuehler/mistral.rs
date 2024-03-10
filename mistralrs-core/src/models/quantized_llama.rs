@@ -238,7 +238,7 @@ impl LayerWeights {
 
         dbg!(&k);
         dbg!(&v);
-        dbg!(kv_cache);
+        dbg!(&kv_cache);
 
         let (k, v) = match &*kv_cache {
             None => (k, v),
