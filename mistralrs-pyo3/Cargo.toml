@@ -24,7 +24,7 @@ candle-core.workspace = true
 indexmap.workspace = true
 
 [features]
-cuda = ["candle-core/cuda", "candle-core/cudnn", "mistralrs/cuda"]
+cuda = ["candle-core/cuda", "mistralrs/cuda"]
 cudnn = ["candle-core/cudnn", "mistralrs/cudnn"]
 metal = ["candle-core/metal", "mistralrs/metal"]
 flash-attn = ["cuda", "mistralrs/flash-attn"]
