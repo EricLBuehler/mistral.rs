@@ -17,4 +17,5 @@ pub struct SamplingParams {
     pub stop_toks: Option<StopTokens>,
     pub max_len: Option<usize>,
     pub logits_bias: Option<HashMap<u32, f32>>,
+    pub n_choices: usize,
 }

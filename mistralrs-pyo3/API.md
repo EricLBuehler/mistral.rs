@@ -103,7 +103,7 @@ Additionally, the following ergonomic classes provide a more streamlined method 
     - `tokenizer_json=None`: Tokenizer json file.
 
 Each class has one method:
-### `load(self, token_source: str = "cache", max_seqs: int = 2, truncate_sequence: bool = false, logfile: str | None = None, revision: str | None = None, token_source_value: str | None = None) -> Runner`
+### `load(self, token_source: str = "cache", max_seqs: int = 16, truncate_sequence: bool = false, logfile: str | None = None, revision: str | None = None, token_source_value: str | None = None) -> Runner`
 Load a model.
 
 - `token_source`

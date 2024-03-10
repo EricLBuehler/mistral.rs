@@ -445,7 +445,7 @@ struct Args {
     model: ModelSelected,
 
     /// Maximum running sequences at any time
-    #[arg(long, default_value_t = 2)]
+    #[arg(long, default_value_t = 16)]
     max_seqs: usize,
 
     /// Use no KV cache.
@@ -490,6 +490,7 @@ async fn chatcompletions(
             max_len: oairequest.max_tokens,
             stop_toks,
             logits_bias: oairequest.logit_bias,
+            n_choices: oairequest.n_choices,
         },
         response: tx,
         return_logprobs: oairequest.logprobs,

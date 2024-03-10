@@ -142,7 +142,7 @@ impl LlamaLoader {
     /// "envvar" -> str
     /// "path" -> str
     ///
-    /// - `max_seqs=2`: Maximum running sequences at any time.
+    /// - `max_seqs=16`: Maximum running sequences at any time.
     ///
     /// - `truncate_sequence=False`:
     /// If a sequence is larger than the maximum model length, truncate the number
@@ -154,7 +154,7 @@ impl LlamaLoader {
     /// - `revision=None`: HF revision.
     ///
     /// - `token_source_value=None`: Value of token source value for `token_source`
-    #[pyo3(signature = (token_source = "cache", max_seqs = 2, truncate_sequence = false, logfile = None, revision = None, token_source_value = None))]
+    #[pyo3(signature = (token_source = "cache", max_seqs = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None))]
     fn load(
         &mut self,
         token_source: &str,
