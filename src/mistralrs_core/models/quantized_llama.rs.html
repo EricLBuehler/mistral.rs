@@ -531,15 +531,6 @@
 <a href="#530" id="530">530</a>
 <a href="#531" id="531">531</a>
 <a href="#532" id="532">532</a>
-<a href="#533" id="533">533</a>
-<a href="#534" id="534">534</a>
-<a href="#535" id="535">535</a>
-<a href="#536" id="536">536</a>
-<a href="#537" id="537">537</a>
-<a href="#538" id="538">538</a>
-<a href="#539" id="539">539</a>
-<a href="#540" id="540">540</a>
-<a href="#541" id="541">541</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -748,7 +739,6 @@
             <span class="kw">let </span>rope = rope.flatten_from(D::Minus2)<span class="question-mark">?</span>;
             ropes.push(rope);
         }
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>ropes);
         Tensor::cat(<span class="kw-2">&amp;</span>ropes, <span class="number">0</span>)
     }
 
@@ -776,14 +766,8 @@
             .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 
-            <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>k);
-            <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>v);
         <span class="kw">let </span>q = <span class="self">self</span>.apply_rotary_emb(<span class="kw-2">&amp;</span>q, start_offsets)<span class="question-mark">?</span>;
         <span class="kw">let </span>k = <span class="self">self</span>.apply_rotary_emb(<span class="kw-2">&amp;</span>k, start_offsets)<span class="question-mark">?</span>;
-
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>k);
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>v);
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>kv_cache);
 
         <span class="kw">let </span>(k, v) = <span class="kw">match </span><span class="kw-2">&amp;*</span>kv_cache {
             <span class="prelude-val">None </span>=&gt; (k, v),
@@ -1053,13 +1037,11 @@
     }
 
     <span class="kw">pub fn </span>forward(<span class="kw-2">&amp;mut </span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor, start_offsets: <span class="kw-2">&amp;</span>[usize]) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>start_offsets);
         <span class="kw">let </span>(_b_sz, seq_len) = x.dims2()<span class="question-mark">?</span>;
         <span class="kw">let </span>mask = <span class="self">self</span>.mask(seq_len, x.device())<span class="question-mark">?</span>;
         <span class="kw">let </span>_enter = <span class="self">self</span>.span.enter();
         <span class="kw">let </span><span class="kw-2">mut </span>layer_in = <span class="self">self</span>.tok_embeddings.forward(x)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>layer_in);
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
             <span class="kw">let </span>x = layer_in;
             <span class="kw">let </span>residual = <span class="kw-2">&amp;</span>x;

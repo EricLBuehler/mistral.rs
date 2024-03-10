@@ -477,7 +477,6 @@
 <a href="#476" id="476">476</a>
 <a href="#477" id="477">477</a>
 <a href="#478" id="478">478</a>
-<a href="#479" id="479">479</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     get_completion_input, get_model_paths, get_prompt_input, get_xlora_paths, Loader, ModelKind,
     ModelPaths, Pipeline, TokenSource, XLoraPaths,
@@ -856,7 +855,6 @@
                     get_completion_input(<span class="kw-2">&amp;</span>input_toks, <span class="self">self</span>.device(), <span class="self">self</span>.no_kv_cache);
                 (input_ids, <span class="prelude-val">None</span>, seqlen_offsets, <span class="prelude-val">None</span>)
             };
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>input_ids);
         <span class="kw">let </span>result = <span class="kw">match </span><span class="self">self</span>.model {
             Model::Normal(<span class="kw-2">ref mut </span>model) =&gt; model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets),
             Model::Quantized(<span class="kw-2">ref mut </span>model) =&gt; model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets),
