@@ -207,7 +207,7 @@ impl LayerWeights {
             dbg!(&rope);
             ropes.push(rope);
         }
-        dbg!(ropes);
+        dbg!(&ropes);
         Tensor::cat(&ropes, 0)
     }
 
