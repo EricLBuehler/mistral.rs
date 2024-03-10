@@ -56,14 +56,14 @@ pub struct AddedTokensDecoder {
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct ChatTemplate {
-    add_bos_token: bool,
-    add_eos_token: bool,
+    add_bos_token: Option<bool>,
+    add_eos_token: Option<bool>,
     added_tokens_decoder: Option<HashMap<String, AddedTokensDecoder>>,
     additional_special_tokens: Option<Vec<String>>,
     #[serde(with = "either::serde_untagged")]
     bos_token: Either<String, AddedTokensDecoder>,
     chat_template: Option<String>,
-    clean_up_tokenization_spaces: bool,
+    clean_up_tokenization_spaces: Option<bool>,
     device_map: Option<String>,
     #[serde(with = "either::serde_untagged")]
     eos_token: Either<String, AddedTokensDecoder>,
@@ -71,7 +71,7 @@ pub struct ChatTemplate {
     model_max_length: f64,
     pad_token: Option<String>,
     sp_model_kwargs: HashMap<String, String>,
-    spaces_between_special_tokens: bool,
+    spaces_between_special_tokens: Option<bool>,
     tokenizer_class: String,
     truncation_size: Option<String>,
     #[serde(with = "either::serde_untagged")]
