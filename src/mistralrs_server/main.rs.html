@@ -891,6 +891,7 @@
 <a href="#890" id="890">890</a>
 <a href="#891" id="891">891</a>
 <a href="#892" id="892">892</a>
+<a href="#893" id="893">893</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fs::File,
     sync::{mpsc::channel, Arc},
@@ -1338,7 +1339,7 @@
     </span>model: ModelSelected,
 
     <span class="doccomment">/// Maximum running sequences at any time
-    </span><span class="attr">#[arg(long, default_value_t = <span class="number">2</span>)]
+    </span><span class="attr">#[arg(long, default_value_t = <span class="number">16</span>)]
     </span>max_seqs: usize,
 
     <span class="doccomment">/// Use no KV cache.
@@ -1383,6 +1384,7 @@
             max_len: oairequest.max_tokens,
             stop_toks,
             logits_bias: oairequest.logit_bias,
+            n_choices: oairequest.n_choices,
         },
         response: tx,
         return_logprobs: oairequest.logprobs,

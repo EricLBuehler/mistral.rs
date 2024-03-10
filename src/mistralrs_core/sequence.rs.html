@@ -174,12 +174,62 @@
 <a href="#173" id="173">173</a>
 <a href="#174" id="174">174</a>
 <a href="#175" id="175">175</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::{cell::Cell, sync::mpsc::Sender};
+<a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a>
+<a href="#178" id="178">178</a>
+<a href="#179" id="179">179</a>
+<a href="#180" id="180">180</a>
+<a href="#181" id="181">181</a>
+<a href="#182" id="182">182</a>
+<a href="#183" id="183">183</a>
+<a href="#184" id="184">184</a>
+<a href="#185" id="185">185</a>
+<a href="#186" id="186">186</a>
+<a href="#187" id="187">187</a>
+<a href="#188" id="188">188</a>
+<a href="#189" id="189">189</a>
+<a href="#190" id="190">190</a>
+<a href="#191" id="191">191</a>
+<a href="#192" id="192">192</a>
+<a href="#193" id="193">193</a>
+<a href="#194" id="194">194</a>
+<a href="#195" id="195">195</a>
+<a href="#196" id="196">196</a>
+<a href="#197" id="197">197</a>
+<a href="#198" id="198">198</a>
+<a href="#199" id="199">199</a>
+<a href="#200" id="200">200</a>
+<a href="#201" id="201">201</a>
+<a href="#202" id="202">202</a>
+<a href="#203" id="203">203</a>
+<a href="#204" id="204">204</a>
+<a href="#205" id="205">205</a>
+<a href="#206" id="206">206</a>
+<a href="#207" id="207">207</a>
+<a href="#208" id="208">208</a>
+<a href="#209" id="209">209</a>
+<a href="#210" id="210">210</a>
+<a href="#211" id="211">211</a>
+<a href="#212" id="212">212</a>
+<a href="#213" id="213">213</a>
+<a href="#214" id="214">214</a>
+<a href="#215" id="215">215</a>
+<a href="#216" id="216">216</a>
+<a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+    cell::{Cell, Ref, RefCell},
+    rc::Rc,
+    sync::mpsc::Sender,
+};
 
 <span class="kw">use </span>candle_core::Tensor;
 <span class="kw">use </span>candle_sampling::logits_processor::{LogitsProcessor, Logprobs};
 
-<span class="kw">use </span><span class="kw">crate</span>::response::Response;
+<span class="kw">use crate</span>::{
+    deref_mut_refcell, deref_refcell,
+    response::{Choice, Response},
+};
 
 <span class="attr">#[derive(Clone, Copy, PartialEq, Debug)]
 </span><span class="kw">pub enum </span>StopReason {
@@ -214,6 +264,7 @@
     return_logprobs: bool,
     <span class="kw">pub </span>prompt_tok_per_sec: f32,
     <span class="kw">pub </span>prompt_timestamp: <span class="prelude-ty">Option</span>&lt;u128&gt;,
+    group: Rc&lt;RefCell&lt;SequenceGroup&gt;&gt;,
 }
 
 <span class="kw">impl </span>Sequence {
@@ -229,6 +280,7 @@
         max_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
         return_logprobs: bool,
         is_xlora: bool,
+        group: Rc&lt;RefCell&lt;SequenceGroup&gt;&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>prompt_len = tokens.len();
         <span class="self">Self </span>{
@@ -251,6 +303,7 @@
             return_logprobs,
             prompt_tok_per_sec: <span class="number">0.</span>,
             prompt_timestamp: <span class="prelude-val">None</span>,
+            group,
         }
     }
 
@@ -347,6 +400,39 @@
 
     <span class="kw">pub fn </span>prompt_timestamp(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;u128&gt; {
         <span class="self">self</span>.prompt_timestamp
+    }
+
+    <span class="kw">pub fn </span>add_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, choice: Choice) {
+        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).done_count += <span class="number">1</span>;
+        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).choices.push(choice);
+    }
+
+    <span class="kw">pub fn </span>get_group(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Ref&lt;<span class="lifetime">'_</span>, SequenceGroup&gt; {
+        <span class="macro">deref_refcell!</span>(<span class="self">self</span>.group)
+    }
+}
+
+<span class="kw">pub struct </span>SequenceGroup {
+    done_count: usize,
+    n_choices: usize,
+    choices: Vec&lt;Choice&gt;,
+}
+
+<span class="kw">impl </span>SequenceGroup {
+    <span class="kw">pub fn </span>new(n_choices: usize) -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{
+            done_count: <span class="number">0</span>,
+            choices: Vec::new(),
+            n_choices,
+        }
+    }
+
+    <span class="kw">pub fn </span>is_done(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="self">self</span>.done_count == <span class="self">self</span>.n_choices
+    }
+
+    <span class="kw">pub fn </span>get_choices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[Choice] {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.choices
     }
 }
 </code></pre></div></section></main></body></html>

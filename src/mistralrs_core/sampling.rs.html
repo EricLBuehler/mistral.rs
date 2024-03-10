@@ -19,6 +19,7 @@
 <a href="#18" id="18">18</a>
 <a href="#19" id="19">19</a>
 <a href="#20" id="20">20</a>
+<a href="#21" id="21">21</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="attr">#[derive(Clone, Debug)]
@@ -38,5 +39,6 @@
     <span class="kw">pub </span>stop_toks: <span class="prelude-ty">Option</span>&lt;StopTokens&gt;,
     <span class="kw">pub </span>max_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="kw">pub </span>logits_bias: <span class="prelude-ty">Option</span>&lt;HashMap&lt;u32, f32&gt;&gt;,
+    <span class="kw">pub </span>n_choices: usize,
 }
 </code></pre></div></section></main></body></html>
