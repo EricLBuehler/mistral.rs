@@ -133,7 +133,7 @@ which may be specified using the `--features` command.
 1) `cuda`
 2) `cudnn` (if installed, to be used with `cuda`)
 2) `metal` (mutally excl. to `cuda`)
-3) `flash-attn` (mutally excl. to `metal`)
+3) `flash-attn` (mutally excl. to `metal`, only has an affect on non-quantized models)
 
 ### X-LoRA
 **Preparing the X-LoRA Ordering File**
