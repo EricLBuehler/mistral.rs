@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 #[derive(Clone, Debug)]
 pub enum StopTokens {
     Seqs(Vec<String>),
@@ -14,4 +16,5 @@ pub struct SamplingParams {
     pub presence_penalty: Option<f32>,
     pub stop_toks: Option<StopTokens>,
     pub max_len: Option<usize>,
+    pub logits_bias: Option<HashMap<u32, f32>>,
 }

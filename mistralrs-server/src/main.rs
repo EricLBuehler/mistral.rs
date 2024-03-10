@@ -489,6 +489,7 @@ async fn chatcompletions(
             presence_penalty: oairequest.presence_penalty,
             max_len: oairequest.max_tokens,
             stop_toks,
+            logits_bias: oairequest.logit_bias,
         },
         response: tx,
         return_logprobs: oairequest.logprobs,

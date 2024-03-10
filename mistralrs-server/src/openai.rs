@@ -30,7 +30,7 @@ fn default_1usize() -> usize {
 pub struct ChatCompletionRequest {
     pub messages: Vec<Message>,
     pub model: String,
-    pub logit_bias: Option<HashMap<u32, f64>>,
+    pub logit_bias: Option<HashMap<u32, f32>>,
     #[serde(default = "default_false")]
     pub logprobs: bool,
     pub top_logprobs: Option<usize>,
