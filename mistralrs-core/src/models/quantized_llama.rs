@@ -509,6 +509,7 @@ impl ModelWeights {
         let _enter = self.span.enter();
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();
+        dbg!(&layer_in);
         for (i, layer) in self.layers.iter_mut().enumerate() {
             let x = layer_in;
             let residual = &x;
