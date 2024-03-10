@@ -502,14 +502,14 @@
 <span class="attr">#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 </span><span class="kw">pub struct </span>ChatTemplate {
-    add_bos_token: bool,
-    add_eos_token: bool,
+    add_bos_token: <span class="prelude-ty">Option</span>&lt;bool&gt;,
+    add_eos_token: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     added_tokens_decoder: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, AddedTokensDecoder&gt;&gt;,
     additional_special_tokens: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
     <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)]
     </span>bos_token: Either&lt;String, AddedTokensDecoder&gt;,
     chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    clean_up_tokenization_spaces: bool,
+    clean_up_tokenization_spaces: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     device_map: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)]
     </span>eos_token: Either&lt;String, AddedTokensDecoder&gt;,
@@ -517,7 +517,7 @@
     model_max_length: f64,
     pad_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
     sp_model_kwargs: HashMap&lt;String, String&gt;,
-    spaces_between_special_tokens: bool,
+    spaces_between_special_tokens: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     tokenizer_class: String,
     truncation_size: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)]
