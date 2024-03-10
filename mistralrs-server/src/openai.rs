@@ -42,7 +42,7 @@ pub struct ChatCompletionRequest {
     #[serde(rename = "frequency_penalty")]
     pub repetition_penalty: Option<f32>,
     #[serde(rename = "stop")]
-    pub stop_seqs: Option<StopTokens>, // TODO(EricLBuehler): We only support single tokens.
+    pub stop_seqs: Option<StopTokens>,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
 

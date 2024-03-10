@@ -113,7 +113,7 @@ pub trait Loader {
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>>;
 
     /// If `revision` is None, then it defaults to `main`.
-    /// If `dtype` is None, then it defaults to the model default (usually F32). TODO(EricLBuehler): refine
+    /// If `dtype` is None, then it defaults to the model default (usually F32).
     #[allow(clippy::type_complexity)]
     fn load_model(
         &self,
