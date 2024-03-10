@@ -538,6 +538,11 @@
 <a href="#537" id="537">537</a>
 <a href="#538" id="538">538</a>
 <a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -606,7 +611,12 @@
         <span class="macro">eprintln!</span>(<span class="string">"b"</span>);
         <span class="kw">let </span>w3 = <span class="self">self</span>.feed_forward_w3.forward(xs)<span class="question-mark">?</span>;
         <span class="macro">eprintln!</span>(<span class="string">"c"</span>);
-        <span class="kw">let </span>silu  = candle_nn::ops::silu(<span class="kw-2">&amp;</span>w1)<span class="question-mark">?</span>;
+        <span class="comment">//let silu  = candle_nn::ops::silu(&amp;w1)?;
+        </span><span class="kw">let </span><span class="kw-2">mut </span>silus = Vec::new();
+        <span class="kw">for </span>b <span class="kw">in </span><span class="number">0</span>..w1.dims()[<span class="number">0</span>] {
+            silus.push(candle_nn::ops::silu(<span class="kw-2">&amp;</span>w1.i(b)<span class="question-mark">?</span>)<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>);
+        }
+        <span class="kw">let </span>silu = Tensor::cat(<span class="kw-2">&amp;</span>silus, <span class="number">0</span>);
         <span class="macro">eprintln!</span>(<span class="string">"d"</span>);
         <span class="kw">let </span>xs = <span class="kw-2">&amp;</span>(silu * w3)<span class="question-mark">?</span>;
         <span class="macro">eprintln!</span>(<span class="string">"e"</span>);
