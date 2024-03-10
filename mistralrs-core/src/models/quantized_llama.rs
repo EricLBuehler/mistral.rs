@@ -508,6 +508,7 @@ impl ModelWeights {
     }
 
     pub fn forward(&mut self, x: &Tensor, start_offsets: &[usize]) -> Result<Tensor> {
+        dbg!(&start_offsets);
         let (_b_sz, seq_len) = x.dims2()?;
         let mask = self.mask(seq_len, x.device())?;
         let _enter = self.span.enter();
