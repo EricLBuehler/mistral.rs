@@ -206,7 +206,6 @@ impl LayerWeights {
             let rope = rope.flatten_from(D::Minus2)?;
             ropes.push(rope);
         }
-        dbg!(&ropes);
         Tensor::cat(&ropes, 0)
     }
 
@@ -234,14 +233,8 @@ impl LayerWeights {
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
             .transpose(1, 2)?;
 
-            dbg!(&k);
-            dbg!(&v);
         let q = self.apply_rotary_emb(&q, start_offsets)?;
         let k = self.apply_rotary_emb(&k, start_offsets)?;
-
-        dbg!(&k);
-        dbg!(&v);
-        dbg!(&kv_cache);
 
         let (k, v) = match &*kv_cache {
             None => (k, v),
@@ -511,13 +504,11 @@ impl ModelWeights {
     }
 
     pub fn forward(&mut self, x: &Tensor, start_offsets: &[usize]) -> Result<Tensor> {
-        dbg!(&start_offsets);
         let (_b_sz, seq_len) = x.dims2()?;
         let mask = self.mask(seq_len, x.device())?;
         let _enter = self.span.enter();
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();
-        dbg!(&layer_in);
         for (i, layer) in self.layers.iter_mut().enumerate() {
             let x = layer_in;
             let residual = &x;

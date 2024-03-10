@@ -376,7 +376,6 @@ impl Pipeline for MistralPipeline {
                     get_completion_input(&input_toks, self.device(), self.no_kv_cache);
                 (input_ids, None, seqlen_offsets, None)
             };
-        dbg!(&input_ids);
         let result = match self.model {
             Model::Normal(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
             Model::Quantized(ref mut model) => model.forward(&input_ids, &seqlen_offsets),

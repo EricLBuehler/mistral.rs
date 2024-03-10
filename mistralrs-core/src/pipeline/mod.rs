@@ -186,8 +186,6 @@ pub trait Pipeline: Send + Sync {
 }
 
 fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>], device: &Device) -> (Tensor, Vec<usize>) {
-    dbg!(input_toks.len());
-    
     // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
     let max_len = input_toks
         .iter()
@@ -207,7 +205,6 @@ fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>], device: &Device) -> (T
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
     }
-    dbg!(&seqs_tensors);
     // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
     (Tensor::cat(&seqs_tensors, 0).unwrap(), seqlen_offsets)
 }
@@ -220,8 +217,6 @@ fn get_completion_input(
     if no_kv_cache {
         return get_prompt_input(input_toks, device);
     }
-    dbg!(input_toks.len());
-
     // Pad each sequence by the padding token to the max len.
     let mut seqs_tensors = Vec::new();
     let mut seqlen_offsets = Vec::new();
@@ -233,7 +228,6 @@ fn get_completion_input(
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
     }
-    dbg!(&seqs_tensors);
     // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
     (Tensor::cat(&seqs_tensors, 0).unwrap(), seqlen_offsets)
 }

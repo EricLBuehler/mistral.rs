@@ -184,8 +184,8 @@ impl LayerWeights {
                 self.sin
                     .narrow(0, *seqlen_offset, seq_len)?
                     .reshape((seq_len, n_embd / 2, 1))?;
-            let cos = cos.broadcast_as((b_sz, 1, seq_len, n_embd / 2, 1))?;
-            let sin = sin.broadcast_as((b_sz, 1, seq_len, n_embd / 2, 1))?;
+            let cos = cos.broadcast_as((1, 1, seq_len, n_embd / 2, 1))?;
+            let sin = sin.broadcast_as((1, 1, seq_len, n_embd / 2, 1))?;
             // This mimics the llama.cpp behavior.
             // https://github.com/ggerganov/llama.cpp/blob/1f0bccb27929e261744c979bc75114955da49e98/ggml.c#L12104-L12105
             // The x0 and x1 value are interleaved on the n_embd (= head_dim) dimension.
