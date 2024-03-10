@@ -66,7 +66,12 @@ impl Module for Mlp {
         eprintln!("b");
         let w3 = self.feed_forward_w3.forward(xs)?;
         eprintln!("c");
-        let silu  = candle_nn::ops::silu(&w1)?;
+        //let silu  = candle_nn::ops::silu(&w1)?;
+        let mut silus = Vec::new();
+        for b in 0..w1.dims()[0] {
+            silus.push(candle_nn::ops::silu(&w1.i(b)?)?.unsqueeze(0)?);
+        }
+        let silu = Tensor::cat(&silus, 0);
         eprintln!("d");
         let xs = &(silu * w3)?;
         eprintln!("e");
