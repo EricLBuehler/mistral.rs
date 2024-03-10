@@ -20,7 +20,7 @@ use crate::{
         ResponseMessage,
     },
     scheduler::{Scheduler, SchedulerMethod},
-    sequence::{Sequence, SequenceState, StopReason},
+    sequence::{Sequence, SequenceGroup, SequenceState, StopReason},
     StopTokens,
 };
 
@@ -118,84 +118,94 @@ impl Engine {
                 get_mut_arcmutex!(self.pipeline).get_max_seq_len(),
             );
             if let Some(reason) = is_done {
-                deref_mut_refcell!(seq).set_state(SequenceState::Done(reason));
-
-                let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer().clone();
-                let mut logprobs = Vec::new();
-                for logprob in deref_refcell!(seq).logprobs() {
-                    let resp_logprob = ResponseLogprob {
-                        token: handle_seq_error!(
-                            tokenizer.decode(&[logprob.token], false),
-                            deref_refcell!(seq).responder()
-                        ),
-                        bytes: logprob.bytes.clone().into_bytes(),
-                        logprob: logprob.logprob,
-                        top_logprobs: logprob.top_logprobs.clone(),
-                    };
-                    logprobs.push(resp_logprob);
-                }
-
-                let res = handle_seq_error!(
-                    get_mut_arcmutex!(self.pipeline).tokenizer().decode(
-                        &deref_refcell!(seq).get_toks()[deref_refcell!(seq).prompt_tokens()..],
-                        false
-                    ),
-                    deref_refcell!(seq).responder()
-                );
-
-                let choice = Choice {
-                    stopreason: match reason {
-                        StopReason::Eos => "stop".to_string(),
-                        StopReason::Length(_) | StopReason::ModelLength(_) => "length".to_string(),
-                        StopReason::StopTok(_) => "stop".to_string(),
-                    },
-                    index: 0,
-                    message: ResponseMessage {
-                        content: res,
-                        role: "assistant".to_string(),
-                    },
-                    logprobs: if deref_refcell!(seq).return_logprobs() {
-                        Some(Logprobs {
-                            content: Some(logprobs),
-                        })
-                    } else {
-                        None
-                    },
-                };
-
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Time travel has occurred!")
-                    .as_millis();
-                #[allow(clippy::cast_precision_loss)]
-                let total_tok_per_sec = deref_refcell!(seq).len() as f32
-                    / (now - deref_refcell!(seq).timestamp()) as f32;
-                #[allow(clippy::cast_precision_loss)]
-                let compl_tok_per_sec = deref_refcell!(seq).len() as f32
-                    / (now - deref_refcell!(seq).prompt_timestamp().unwrap()) as f32;
-
-                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                deref_refcell!(seq)
-                    .responder()
-                    .send(Response::Done(ChatCompletionResponse {
-                        id: deref_refcell!(seq).id().to_string(),
-                        choices: vec![choice],
-                        created: deref_refcell!(seq).timestamp(),
-                        model: get_mut_arcmutex!(self.pipeline).name(),
-                        system_fingerprint: "local".to_string(),
-                        object: "chat.completion".to_string(),
-                        usage: ChatCompletionUsage {
-                            completion_tokens: deref_refcell!(seq).logprobs().len(),
-                            prompt_tokens: deref_refcell!(seq).prompt_tokens(),
-                            total_tokens: deref_refcell!(seq).len(),
-                            total_tok_per_sec: total_tok_per_sec * 1000.,
-                            compl_tok_per_sec: compl_tok_per_sec * 1000.,
-                            prompt_tok_per_sec: deref_refcell!(seq).prompt_tok_per_sec,
-                        },
-                    }))
-                    .unwrap();
+                self.finish_seq(seq, reason);
             }
         }
+    }
+
+    fn finish_seq(&self, seq: &Rc<RefCell<Sequence>>, reason: StopReason) {
+        deref_mut_refcell!(seq).set_state(SequenceState::Done(reason));
+
+        let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer().clone();
+        let mut logprobs = Vec::new();
+        for logprob in deref_refcell!(seq).logprobs() {
+            let resp_logprob = ResponseLogprob {
+                token: handle_seq_error!(
+                    tokenizer.decode(&[logprob.token], false),
+                    deref_refcell!(seq).responder()
+                ),
+                bytes: logprob.bytes.clone().into_bytes(),
+                logprob: logprob.logprob,
+                top_logprobs: logprob.top_logprobs.clone(),
+            };
+            logprobs.push(resp_logprob);
+        }
+
+        let res = handle_seq_error!(
+            get_mut_arcmutex!(self.pipeline).tokenizer().decode(
+                &deref_refcell!(seq).get_toks()[deref_refcell!(seq).prompt_tokens()..],
+                false
+            ),
+            deref_refcell!(seq).responder()
+        );
+
+        let choice = Choice {
+            stopreason: match reason {
+                StopReason::Eos => "stop".to_string(),
+                StopReason::Length(_) | StopReason::ModelLength(_) => "length".to_string(),
+                StopReason::StopTok(_) => "stop".to_string(),
+            },
+            index: 0,
+            message: ResponseMessage {
+                content: res,
+                role: "assistant".to_string(),
+            },
+            logprobs: if deref_refcell!(seq).return_logprobs() {
+                Some(Logprobs {
+                    content: Some(logprobs),
+                })
+            } else {
+                None
+            },
+        };
+        deref_mut_refcell!(seq).add_choice_to_group(choice);
+
+        // Is the group done?
+        if !deref_refcell!(seq).get_group().is_done() {
+            return;
+        }
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time travel has occurred!")
+            .as_millis();
+        #[allow(clippy::cast_precision_loss)]
+        let total_tok_per_sec =
+            deref_refcell!(seq).len() as f32 / (now - deref_refcell!(seq).timestamp()) as f32;
+        #[allow(clippy::cast_precision_loss)]
+        let compl_tok_per_sec = deref_refcell!(seq).len() as f32
+            / (now - deref_refcell!(seq).prompt_timestamp().unwrap()) as f32;
+
+        // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
+        deref_refcell!(seq)
+            .responder()
+            .send(Response::Done(ChatCompletionResponse {
+                id: deref_refcell!(seq).id().to_string(),
+                choices: deref_refcell!(seq).get_group().get_choices().to_vec(),
+                created: deref_refcell!(seq).timestamp(),
+                model: get_mut_arcmutex!(self.pipeline).name(),
+                system_fingerprint: "local".to_string(),
+                object: "chat.completion".to_string(),
+                usage: ChatCompletionUsage {
+                    completion_tokens: deref_refcell!(seq).logprobs().len(),
+                    prompt_tokens: deref_refcell!(seq).prompt_tokens(),
+                    total_tokens: deref_refcell!(seq).len(),
+                    total_tok_per_sec: total_tok_per_sec * 1000.,
+                    compl_tok_per_sec: compl_tok_per_sec * 1000.,
+                    prompt_tok_per_sec: deref_refcell!(seq).prompt_tok_per_sec,
+                },
+            }))
+            .unwrap();
     }
 
     /// Clone the cache FROM the sequences' cache TO the model cache. Only used for completion seqs.
@@ -410,32 +420,38 @@ impl Engine {
             }
         };
 
-        let seq = Sequence::new_waiting(
-            prompt,
-            self.id,
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("Time travel has occurred!")
-                .as_millis(),
-            num_hidden_layers,
-            request.response.clone(),
-            LogitsProcessor::new(
-                SEED,
-                request.sampling_params.temperature,
-                sampling_method,
-                request.sampling_params.top_n_logprobs,
-                tokenizer,
-                request.sampling_params.repeat_penalty,
-                request.sampling_params.presence_penalty,
-                request.sampling_params.logits_bias,
-            ),
-            stop_toks,
-            request.sampling_params.max_len,
-            request.return_logprobs,
-            get_mut_arcmutex!(self.pipeline).is_xlora(),
-        );
-        self.id += 1;
-
-        self.scheduler.add_seq(seq);
+        let group = Rc::new(RefCell::new(SequenceGroup::new(
+            request.sampling_params.n_choices,
+        )));
+        // Add sequences
+        for _ in 0..request.sampling_params.n_choices {
+            let seq = Sequence::new_waiting(
+                prompt.clone(),
+                self.id,
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("Time travel has occurred!")
+                    .as_millis(),
+                num_hidden_layers,
+                request.response.clone(),
+                LogitsProcessor::new(
+                    SEED,
+                    request.sampling_params.temperature,
+                    sampling_method.clone(),
+                    request.sampling_params.top_n_logprobs,
+                    tokenizer.clone(),
+                    request.sampling_params.repeat_penalty,
+                    request.sampling_params.presence_penalty,
+                    request.sampling_params.logits_bias.clone(),
+                ),
+                stop_toks.clone(),
+                request.sampling_params.max_len,
+                request.return_logprobs,
+                get_mut_arcmutex!(self.pipeline).is_xlora(),
+                group.clone(),
+            );
+            self.id += 1;
+            self.scheduler.add_seq(seq);
+        }
     }
 }

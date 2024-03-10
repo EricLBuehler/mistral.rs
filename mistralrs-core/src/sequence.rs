@@ -1,9 +1,16 @@
-use std::{cell::Cell, sync::mpsc::Sender};
+use std::{
+    cell::{Cell, Ref, RefCell},
+    rc::Rc,
+    sync::mpsc::Sender,
+};
 
 use candle_core::Tensor;
 use candle_sampling::logits_processor::{LogitsProcessor, Logprobs};
 
-use crate::response::Response;
+use crate::{
+    deref_mut_refcell, deref_refcell,
+    response::{Choice, Response},
+};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum StopReason {
@@ -38,6 +45,7 @@ pub struct Sequence {
     return_logprobs: bool,
     pub prompt_tok_per_sec: f32,
     pub prompt_timestamp: Option<u128>,
+    group: Rc<RefCell<SequenceGroup>>,
 }
 
 impl Sequence {
@@ -53,6 +61,7 @@ impl Sequence {
         max_len: Option<usize>,
         return_logprobs: bool,
         is_xlora: bool,
+        group: Rc<RefCell<SequenceGroup>>,
     ) -> Self {
         let prompt_len = tokens.len();
         Self {
@@ -75,6 +84,7 @@ impl Sequence {
             return_logprobs,
             prompt_tok_per_sec: 0.,
             prompt_timestamp: None,
+            group,
         }
     }
 
@@ -171,5 +181,38 @@ impl Sequence {
 
     pub fn prompt_timestamp(&self) -> Option<u128> {
         self.prompt_timestamp
+    }
+
+    pub fn add_choice_to_group(&self, choice: Choice) {
+        deref_mut_refcell!(self.group).done_count += 1;
+        deref_mut_refcell!(self.group).choices.push(choice);
+    }
+
+    pub fn get_group(&self) -> Ref<'_, SequenceGroup> {
+        deref_refcell!(self.group)
+    }
+}
+
+pub struct SequenceGroup {
+    done_count: usize,
+    n_choices: usize,
+    choices: Vec<Choice>,
+}
+
+impl SequenceGroup {
+    pub fn new(n_choices: usize) -> Self {
+        Self {
+            done_count: 0,
+            choices: Vec::new(),
+            n_choices,
+        }
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.done_count == self.n_choices
+    }
+
+    pub fn get_choices(&self) -> &[Choice] {
+        &self.choices
     }
 }

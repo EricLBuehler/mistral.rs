@@ -47,8 +47,8 @@ pub enum SchedulerMethod {
 }
 
 pub struct Scheduler<Backer: FcfsBacker> {
-    pub waiting: Backer,
-    pub running: Vec<Rc<RefCell<Sequence>>>,
+    waiting: Backer,
+    running: Vec<Rc<RefCell<Sequence>>>,
     method: SchedulerMethod,
 }
 
