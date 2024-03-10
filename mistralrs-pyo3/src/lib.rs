@@ -1,4 +1,5 @@
 use candle_core::Result;
+use indexmap::IndexMap;
 use std::{
     collections::HashMap,
     fmt::Debug,
@@ -11,7 +12,11 @@ use loaders::{
     gemma::GemmaLoader, llama::LlamaLoader, mistral::MistralLoader, mixtral::MixtralLoader,
     NormalLoader, QuantizedLoader, XLoraLoader, XLoraQuantizedLoader,
 };
-use pyo3::{exceptions::PyValueError, prelude::*};
+use pyo3::{
+    exceptions::PyValueError,
+    prelude::*,
+    types::{PyDict, PyString},
+};
 mod loaders;
 
 #[pyclass]
@@ -106,7 +111,7 @@ impl Runner {
 #[derive(Debug)]
 /// An OpenAI API compatible chat completion request.
 struct ChatCompletionRequest {
-    messages: Vec<HashMap<String, String>>,
+    messages: Vec<IndexMap<String, String>>,
     _model: String,
     _logit_bias: Option<HashMap<u32, f64>>,
     logprobs: bool,
@@ -127,7 +132,7 @@ impl ChatCompletionRequest {
     #[pyo3(signature = (messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, repetition_penalty = None, stop_token_ids = None, temperature = None, top_p = None, top_k = None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
-        messages: Vec<HashMap<String, String>>,
+        messages: Vec<Py<PyDict>>,
         model: String,
         logprobs: bool,
         n_choices: usize,
@@ -140,9 +145,31 @@ impl ChatCompletionRequest {
         temperature: Option<f64>,
         top_p: Option<f64>,
         top_k: Option<usize>,
-    ) -> Self {
-        Self {
-            messages,
+    ) -> PyResult<Self> {
+        let mut messages_vec = Vec::new();
+        for message in messages {
+            let messages_map = Python::with_gil(|py| {
+                let mapping = message.as_ref(py).as_mapping();
+                let mut messages_map = IndexMap::new();
+                for i in 0..mapping.len()? {
+                    let k = mapping
+                        .keys()?
+                        .get_item(i)?
+                        .downcast::<PyString>()?
+                        .extract::<String>()?;
+                    let v = mapping
+                        .values()?
+                        .get_item(i)?
+                        .downcast::<PyString>()?
+                        .extract::<String>()?;
+                    messages_map.insert(k, v);
+                }
+                Ok::<IndexMap<std::string::String, std::string::String>, PyErr>(messages_map)
+            })?;
+            messages_vec.push(messages_map);
+        }
+        Ok(Self {
+            messages: messages_vec,
             _model: model,
             _logit_bias: logit_bias,
             logprobs,
@@ -155,7 +182,7 @@ impl ChatCompletionRequest {
             temperature,
             top_p,
             top_k,
-        }
+        })
     }
 }
 

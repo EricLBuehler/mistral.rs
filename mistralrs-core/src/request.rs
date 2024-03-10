@@ -1,8 +1,10 @@
+use indexmap::IndexMap;
+
 use crate::{response::Response, sampling::SamplingParams};
-use std::{collections::HashMap, fmt::Debug, sync::mpsc::Sender};
+use std::{fmt::Debug, sync::mpsc::Sender};
 
 pub struct Request {
-    pub messages: Vec<HashMap<String, String>>,
+    pub messages: Vec<IndexMap<String, String>>,
     pub sampling_params: SamplingParams,
     pub response: Sender<Response>,
     pub return_logprobs: bool,

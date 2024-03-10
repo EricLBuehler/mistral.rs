@@ -9,8 +9,9 @@ use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
     Repo, RepoType,
 };
+use indexmap::IndexMap;
 pub use llama::{LlamaLoader, LlamaSpecificConfig};
-use minijinja::{context, Environment};
+use minijinja::{context, Environment, ErrorKind};
 pub use mistral::{MistralLoader, MistralSpecificConfig};
 use mistralrs_lora::{LoraConfig, Ordering};
 pub use mixtral::{MixtralLoader, MixtralSpecificConfig};
@@ -126,6 +127,10 @@ pub trait Loader {
     }
 }
 
+fn raise_exception(msg: String) -> Result<String, minijinja::Error> {
+    Err(minijinja::Error::new(ErrorKind::InvalidOperation, msg))
+}
+
 pub trait Pipeline: Send + Sync {
     fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor;
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
@@ -147,14 +152,15 @@ pub trait Pipeline: Send + Sync {
     fn has_no_kv_cache(&self) -> bool;
     fn apply_chat_template(
         &self,
-        messages: Vec<HashMap<String, String>>,
+        messages: Vec<IndexMap<String, String>>,
         add_generation_prompt: bool,
     ) -> Result<String> {
         let mut env = Environment::new();
         env.add_template(
             "chat_template",
             self.get_chat_template().chat_template.as_ref().unwrap(),
-        ).unwrap();
+        )?;
+        env.add_function("raise_exception", raise_exception);
         let tmpl = env.get_template("chat_template").unwrap();
         let bos_tok = match self.get_chat_template().bos_token {
             Either::Left(ref lit) => lit,
@@ -174,7 +180,7 @@ pub trait Pipeline: Send + Sync {
             bos_token => bos_tok,
             eos_token => eos_tok,
             unk_token => unk_tok,
-        }).unwrap())
+        })?)
     }
     fn get_chat_template(&self) -> &ChatTemplate;
 }

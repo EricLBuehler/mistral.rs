@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     fs::File,
     sync::{mpsc::channel, Arc},
 };
@@ -12,6 +11,7 @@ use axum::{
 };
 use candle_core::Device;
 use clap::{Parser, Subcommand};
+use indexmap::IndexMap;
 use mistralrs_core::{
     GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader, MistralLoader,
     MistralRs, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind, Request,
@@ -473,7 +473,7 @@ async fn chatcompletions(
     };
     let mut messages = Vec::new();
     for message in oairequest.messages {
-        let mut message_map = HashMap::new();
+        let mut message_map = IndexMap::new();
         message_map.insert("role".to_string(), message.role);
         message_map.insert("content".to_string(), message.content);
         messages.push(message_map);

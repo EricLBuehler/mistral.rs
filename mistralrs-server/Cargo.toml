@@ -21,3 +21,4 @@ clap = { version = "4.5.1", features = ["derive"] }
 mistralrs-core = { version = "0.1.0", path = "../mistralrs-core" }
 tokio = { version = "1.36.0", features = ["rt-multi-thread"] }
 dyn-fmt = "0.4.0"
+indexmap.workspace = true

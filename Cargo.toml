@@ -24,3 +24,4 @@ candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.
 candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.4.0" }
 serde = "1.0.197"
 serde_json = "1.0.114"
+indexmap = { version = "2.2.5", features = ["serde"] }
