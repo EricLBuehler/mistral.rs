@@ -236,6 +236,10 @@ impl LayerWeights {
         let q = self.apply_rotary_emb(&q, start_offsets)?;
         let k = self.apply_rotary_emb(&k, start_offsets)?;
 
+        dbg!(&k);
+        dbg!(&v);
+        dbg!(kv_cache);
+
         let (k, v) = match &*kv_cache {
             None => (k, v),
             Some((k_cache, v_cache)) => {
