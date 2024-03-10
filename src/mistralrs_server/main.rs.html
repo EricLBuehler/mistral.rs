@@ -892,6 +892,15 @@
 <a href="#891" id="891">891</a>
 <a href="#892" id="892">892</a>
 <a href="#893" id="893">893</a>
+<a href="#894" id="894">894</a>
+<a href="#895" id="895">895</a>
+<a href="#896" id="896">896</a>
+<a href="#897" id="897">897</a>
+<a href="#898" id="898">898</a>
+<a href="#899" id="899">899</a>
+<a href="#900" id="900">900</a>
+<a href="#901" id="901">901</a>
+<a href="#902" id="902">902</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fs::File,
     sync::{mpsc::channel, Arc},
@@ -1320,6 +1329,10 @@
 <span class="attr">#[derive(Parser)]
 #[command(version, about, long_about = <span class="prelude-val">None</span>)]
 </span><span class="kw">struct </span>Args {
+    <span class="doccomment">/// IP to serve on. Defaults to "0.0.0.0"
+    </span><span class="attr">#[arg(long)]
+    </span>serve_ip: <span class="prelude-ty">Option</span>&lt;String&gt;,
+
     <span class="doccomment">/// Port to serve on.
     </span><span class="attr">#[arg(short, long)]
     </span>port: String,
@@ -1779,8 +1792,13 @@
 
     <span class="kw">let </span>app = get_router(mistralrs);
 
-    <span class="kw">let </span>listener = tokio::net::TcpListener::bind(<span class="macro">format!</span>(<span class="string">"127.0.0.1:{}"</span>, args.port)).<span class="kw">await</span><span class="question-mark">?</span>;
-    <span class="macro">println!</span>(<span class="string">"Serving on http://127.0.0.1:{}."</span>, args.port);
+    <span class="kw">let </span>ip = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>ip) = args.serve_ip {
+        ip.to_string()
+    } <span class="kw">else </span>{
+        <span class="string">"0.0.0.0"</span>.to_string()
+    };
+    <span class="kw">let </span>listener = tokio::net::TcpListener::bind(<span class="macro">format!</span>(<span class="string">"{ip}:{}"</span>, args.port)).<span class="kw">await</span><span class="question-mark">?</span>;
+    <span class="macro">println!</span>(<span class="string">"Serving on http://{ip}:{}."</span>, args.port);
     axum::serve(listener, app).<span class="kw">await</span><span class="question-mark">?</span>;
 
     <span class="prelude-val">Ok</span>(())
