@@ -439,6 +439,7 @@
 <a href="#438" id="438">438</a>
 <a href="#439" id="439">439</a>
 <a href="#440" id="440">440</a>
+<a href="#441" id="441">441</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -868,6 +869,7 @@
                 tokenizer,
                 request.sampling_params.repeat_penalty,
                 request.sampling_params.presence_penalty,
+                request.sampling_params.logits_bias,
             ),
             stop_toks,
             request.sampling_params.max_len,

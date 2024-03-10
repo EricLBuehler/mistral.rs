@@ -82,7 +82,7 @@
 </span><span class="kw">pub struct </span>ChatCompletionRequest {
     <span class="kw">pub </span>messages: Vec&lt;Message&gt;,
     <span class="kw">pub </span>model: String,
-    <span class="kw">pub </span>logit_bias: <span class="prelude-ty">Option</span>&lt;HashMap&lt;u32, f64&gt;&gt;,
+    <span class="kw">pub </span>logit_bias: <span class="prelude-ty">Option</span>&lt;HashMap&lt;u32, f32&gt;&gt;,
     <span class="attr">#[serde(default = <span class="string">"default_false"</span>)]
     </span><span class="kw">pub </span>logprobs: bool,
     <span class="kw">pub </span>top_logprobs: <span class="prelude-ty">Option</span>&lt;usize&gt;,

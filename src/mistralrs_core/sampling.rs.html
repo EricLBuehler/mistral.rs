@@ -16,7 +16,12 @@
 <a href="#15" id="15">15</a>
 <a href="#16" id="16">16</a>
 <a href="#17" id="17">17</a>
-</pre></div><pre class="rust"><code><span class="attr">#[derive(Clone, Debug)]
+<a href="#18" id="18">18</a>
+<a href="#19" id="19">19</a>
+<a href="#20" id="20">20</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
+
+<span class="attr">#[derive(Clone, Debug)]
 </span><span class="kw">pub enum </span>StopTokens {
     Seqs(Vec&lt;String&gt;),
     Ids(Vec&lt;u32&gt;),
@@ -32,5 +37,6 @@
     <span class="kw">pub </span>presence_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
     <span class="kw">pub </span>stop_toks: <span class="prelude-ty">Option</span>&lt;StopTokens&gt;,
     <span class="kw">pub </span>max_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    <span class="kw">pub </span>logits_bias: <span class="prelude-ty">Option</span>&lt;HashMap&lt;u32, f32&gt;&gt;,
 }
 </code></pre></div></section></main></body></html>

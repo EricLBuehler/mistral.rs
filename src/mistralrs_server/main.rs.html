@@ -890,6 +890,7 @@
 <a href="#889" id="889">889</a>
 <a href="#890" id="890">890</a>
 <a href="#891" id="891">891</a>
+<a href="#892" id="892">892</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fs::File,
     sync::{mpsc::channel, Arc},
@@ -1381,6 +1382,7 @@
             presence_penalty: oairequest.presence_penalty,
             max_len: oairequest.max_tokens,
             stop_toks,
+            logits_bias: oairequest.logit_bias,
         },
         response: tx,
         return_logprobs: oairequest.logprobs,
