@@ -600,7 +600,7 @@
         env.add_template(
             <span class="string">"chat_template"</span>,
             <span class="self">self</span>.get_chat_template().chat_template.as_ref().unwrap(),
-        )<span class="question-mark">?</span>;
+        ).unwrap();
         <span class="kw">let </span>tmpl = env.get_template(<span class="string">"chat_template"</span>).unwrap();
         <span class="kw">let </span>bos_tok = <span class="kw">match </span><span class="self">self</span>.get_chat_template().bos_token {
             Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit,
@@ -620,7 +620,7 @@
             bos_token =&gt; bos_tok,
             eos_token =&gt; eos_tok,
             unk_token =&gt; unk_tok,
-        })<span class="question-mark">?</span>)
+        }).unwrap())
     }
     <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ChatTemplate;
 }
