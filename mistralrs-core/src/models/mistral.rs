@@ -417,6 +417,7 @@ impl Model {
             Some(mask)
         };
         let mut xs = self.embed_tokens.forward(input_ids)?;
+        dbg!(&xs);
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
             xs = layer.forward(
