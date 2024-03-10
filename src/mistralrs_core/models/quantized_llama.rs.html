@@ -539,6 +539,7 @@
 <a href="#538" id="538">538</a>
 <a href="#539" id="539">539</a>
 <a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -745,6 +746,7 @@
             <span class="kw">let </span>y1 = (x0.broadcast_mul(<span class="kw-2">&amp;</span>sin)<span class="question-mark">? </span>+ x1.broadcast_mul(<span class="kw-2">&amp;</span>cos)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
             <span class="kw">let </span>rope = Tensor::cat(<span class="kw-2">&amp;</span>[y0, y1], D::Minus1)<span class="question-mark">?</span>;
             <span class="kw">let </span>rope = rope.flatten_from(D::Minus2)<span class="question-mark">?</span>;
+            <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>rope);
             ropes.push(rope);
         }
         Tensor::cat(<span class="kw-2">&amp;</span>ropes, <span class="number">0</span>)
