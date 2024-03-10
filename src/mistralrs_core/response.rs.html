@@ -95,9 +95,9 @@
     <span class="kw">pub </span>completion_tokens: usize,
     <span class="kw">pub </span>prompt_tokens: usize,
     <span class="kw">pub </span>total_tokens: usize,
-    <span class="kw">pub </span>total_tok_per_sec: f32,
-    <span class="kw">pub </span>prompt_tok_per_sec: f32,
-    <span class="kw">pub </span>compl_tok_per_sec: f32,
+    <span class="kw">pub </span>avg_tok_per_sec: f32,
+    <span class="kw">pub </span>avg_prompt_tok_per_sec: f32,
+    <span class="kw">pub </span>avg_compl_tok_per_sec: f32,
 }
 
 <span class="attr">#[derive(Debug, Clone, Serialize)]

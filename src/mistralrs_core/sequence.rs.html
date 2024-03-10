@@ -217,10 +217,51 @@
 <a href="#216" id="216">216</a>
 <a href="#217" id="217">217</a>
 <a href="#218" id="218">218</a>
+<a href="#219" id="219">219</a>
+<a href="#220" id="220">220</a>
+<a href="#221" id="221">221</a>
+<a href="#222" id="222">222</a>
+<a href="#223" id="223">223</a>
+<a href="#224" id="224">224</a>
+<a href="#225" id="225">225</a>
+<a href="#226" id="226">226</a>
+<a href="#227" id="227">227</a>
+<a href="#228" id="228">228</a>
+<a href="#229" id="229">229</a>
+<a href="#230" id="230">230</a>
+<a href="#231" id="231">231</a>
+<a href="#232" id="232">232</a>
+<a href="#233" id="233">233</a>
+<a href="#234" id="234">234</a>
+<a href="#235" id="235">235</a>
+<a href="#236" id="236">236</a>
+<a href="#237" id="237">237</a>
+<a href="#238" id="238">238</a>
+<a href="#239" id="239">239</a>
+<a href="#240" id="240">240</a>
+<a href="#241" id="241">241</a>
+<a href="#242" id="242">242</a>
+<a href="#243" id="243">243</a>
+<a href="#244" id="244">244</a>
+<a href="#245" id="245">245</a>
+<a href="#246" id="246">246</a>
+<a href="#247" id="247">247</a>
+<a href="#248" id="248">248</a>
+<a href="#249" id="249">249</a>
+<a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
+<a href="#253" id="253">253</a>
+<a href="#254" id="254">254</a>
+<a href="#255" id="255">255</a>
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::{Cell, Ref, RefCell},
     rc::Rc,
     sync::mpsc::Sender,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 <span class="kw">use </span>candle_core::Tensor;
@@ -229,6 +270,7 @@
 <span class="kw">use crate</span>::{
     deref_mut_refcell, deref_refcell,
     response::{Choice, Response},
+    ChatCompletionUsage,
 };
 
 <span class="attr">#[derive(Clone, Copy, PartialEq, Debug)]
@@ -405,6 +447,19 @@
     <span class="kw">pub fn </span>add_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, choice: Choice) {
         <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).done_count += <span class="number">1</span>;
         <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).choices.push(choice);
+
+        <span class="kw">let </span>now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect(<span class="string">"Time travel has occurred!"</span>)
+            .as_millis();
+
+        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).total_comple_time += now - <span class="self">self</span>.prompt_timestamp.unwrap();
+        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).total_prompt_time +=
+            <span class="self">self</span>.prompt_timestamp.unwrap() - <span class="self">self</span>.timestamp;
+        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).total_time += now - <span class="self">self</span>.timestamp;
+
+        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).total_prompt_toks += <span class="self">self</span>.prompt_len;
+        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).total_toks += <span class="self">self</span>.len();
     }
 
     <span class="kw">pub fn </span>get_group(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Ref&lt;<span class="lifetime">'_</span>, SequenceGroup&gt; {
@@ -415,6 +470,11 @@
 <span class="kw">pub struct </span>SequenceGroup {
     done_count: usize,
     n_choices: usize,
+    <span class="kw">pub </span>total_prompt_toks: usize,
+    <span class="kw">pub </span>total_toks: usize,
+    <span class="kw">pub </span>total_prompt_time: u128,
+    <span class="kw">pub </span>total_time: u128,
+    <span class="kw">pub </span>total_comple_time: u128,
     choices: Vec&lt;Choice&gt;,
 }
 
@@ -424,6 +484,11 @@
             done_count: <span class="number">0</span>,
             choices: Vec::new(),
             n_choices,
+            total_prompt_toks: <span class="number">0</span>,
+            total_toks: <span class="number">0</span>,
+            total_prompt_time: <span class="number">0</span>,
+            total_time: <span class="number">0</span>,
+            total_comple_time: <span class="number">0</span>,
         }
     }
 
@@ -433,6 +498,21 @@
 
     <span class="kw">pub fn </span>get_choices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[Choice] {
         <span class="kw-2">&amp;</span><span class="self">self</span>.choices
+    }
+
+    <span class="kw">pub fn </span>get_usage(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ChatCompletionUsage {
+        <span class="attr">#[allow(clippy::cast_precision_loss)]
+        </span>ChatCompletionUsage {
+            completion_tokens: <span class="self">self</span>.total_toks - <span class="self">self</span>.total_prompt_toks,
+            prompt_tokens: <span class="self">self</span>.total_prompt_toks,
+            total_tokens: <span class="self">self</span>.total_toks,
+            avg_tok_per_sec: (<span class="self">self</span>.total_toks <span class="kw">as </span>f32 / <span class="self">self</span>.total_time <span class="kw">as </span>f32) * <span class="number">1000.</span>,
+            avg_prompt_tok_per_sec: (<span class="self">self</span>.total_prompt_toks <span class="kw">as </span>f32 / <span class="self">self</span>.total_prompt_time <span class="kw">as </span>f32)
+                * <span class="number">1000.</span>,
+            avg_compl_tok_per_sec: ((<span class="self">self</span>.total_toks - <span class="self">self</span>.total_prompt_toks) <span class="kw">as </span>f32
+                / <span class="self">self</span>.total_comple_time <span class="kw">as </span>f32)
+                * <span class="number">1000.</span>,
+        }
     }
 }
 </code></pre></div></section></main></body></html>
