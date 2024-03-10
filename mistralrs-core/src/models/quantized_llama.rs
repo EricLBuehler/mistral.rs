@@ -233,6 +233,8 @@ impl LayerWeights {
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
             .transpose(1, 2)?;
 
+            dbg!(&k);
+            dbg!(&v);
         let q = self.apply_rotary_emb(&q, start_offsets)?;
         let k = self.apply_rotary_emb(&k, start_offsets)?;
 
