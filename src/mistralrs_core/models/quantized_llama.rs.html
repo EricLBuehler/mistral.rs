@@ -536,6 +536,7 @@
 <a href="#535" id="535">535</a>
 <a href="#536" id="536">536</a>
 <a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -1046,6 +1047,7 @@
     }
 
     <span class="kw">pub fn </span>forward(<span class="kw-2">&amp;mut </span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor, start_offsets: <span class="kw-2">&amp;</span>[usize]) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>start_offsets);
         <span class="kw">let </span>(_b_sz, seq_len) = x.dims2()<span class="question-mark">?</span>;
         <span class="kw">let </span>mask = <span class="self">self</span>.mask(seq_len, x.device())<span class="question-mark">?</span>;
         <span class="kw">let </span>_enter = <span class="self">self</span>.span.enter();
