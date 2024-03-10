@@ -536,6 +536,8 @@
 <a href="#535" id="535">535</a>
 <a href="#536" id="536">536</a>
 <a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -604,8 +606,10 @@
         <span class="macro">eprintln!</span>(<span class="string">"b"</span>);
         <span class="kw">let </span>w3 = <span class="self">self</span>.feed_forward_w3.forward(xs)<span class="question-mark">?</span>;
         <span class="macro">eprintln!</span>(<span class="string">"c"</span>);
-        <span class="kw">let </span>xs = <span class="kw-2">&amp;</span>(candle_nn::ops::silu(<span class="kw-2">&amp;</span>w1)<span class="question-mark">? </span>* w3)<span class="question-mark">?</span>;
+        <span class="kw">let </span>silu  = candle_nn::ops::silu(<span class="kw-2">&amp;</span>w1)<span class="question-mark">?</span>;
         <span class="macro">eprintln!</span>(<span class="string">"d"</span>);
+        <span class="kw">let </span>xs = <span class="kw-2">&amp;</span>(silu * w3)<span class="question-mark">?</span>;
+        <span class="macro">eprintln!</span>(<span class="string">"e"</span>);
         <span class="self">self</span>.feed_forward_w2
             .forward(xs)
     }
