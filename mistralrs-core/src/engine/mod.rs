@@ -106,17 +106,9 @@ impl Engine {
         let logits_seq = logits.chunk(seqs_len, 0).unwrap();
         debug_assert_eq!(logits_seq.len(), seqs_len);
         let eos_tok = get_mut_arcmutex!(self.pipeline).eos_tok();
+        dbg!(seqs.len());
         for (logits_per_seq, seq) in zip(logits_seq, seqs.iter()) {
-            let start =  SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time travel has occurred!")
-            .as_millis();
             let sampled = get_mut_arcmutex!(self.pipeline).sample(logits_per_seq, seq.clone());
-            let end =  SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time travel has occurred!")
-            .as_millis();
-            println!("sample {} ms", end-start);
             let next_token = handle_seq_error_stateaware!(sampled, seq);
             let next_token_id = next_token.token;
             deref_mut_refcell!(seq).add_token(next_token);
