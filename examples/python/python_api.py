@@ -1,4 +1,4 @@
-from mistralrs import MistralLoader, QuantizedLoader, Request
+from mistralrs import MistralLoader, QuantizedLoader, ChatCompletionRequest
 
 loader = QuantizedLoader(
     MistralLoader,
@@ -11,7 +11,7 @@ loader = QuantizedLoader(
 )
 runner = loader.load()
 res = runner.send_chat_completion_request(
-    Request(
+    ChatCompletionRequest(
         model="mistral",
         messages=[
             {"role": "user", "content": "Tell me a story about the Rust type system."}

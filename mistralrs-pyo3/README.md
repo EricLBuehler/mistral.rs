@@ -26,7 +26,7 @@ Please find [API docs here](API.md).
 
 ## Example
 ```python
-from mistralrs import ModelKind, MistralLoader, Request
+from mistralrs import ModelKind, MistralLoader, ChatCompletionRequest
 
 kind = ModelKind.QuantizedGGUF
 loader = MistralLoader(
@@ -39,7 +39,7 @@ loader = MistralLoader(
 )
 runner = loader.load()
 res = runner.send_chat_completion_request(
-    Request(
+    ChatCompletionRequest(
         model="mistral",
         messages=[
             {"role": "user", "content": "Tell me a story about the Rust type system."}
