@@ -2,6 +2,7 @@ use std::{
     cell::{Cell, Ref, RefCell},
     rc::Rc,
     sync::mpsc::Sender,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use candle_core::Tensor;
@@ -10,6 +11,7 @@ use candle_sampling::logits_processor::{LogitsProcessor, Logprobs};
 use crate::{
     deref_mut_refcell, deref_refcell,
     response::{Choice, Response},
+    ChatCompletionUsage,
 };
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -186,6 +188,19 @@ impl Sequence {
     pub fn add_choice_to_group(&self, choice: Choice) {
         deref_mut_refcell!(self.group).done_count += 1;
         deref_mut_refcell!(self.group).choices.push(choice);
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time travel has occurred!")
+            .as_millis();
+
+        deref_mut_refcell!(self.group).total_comple_time += now - self.prompt_timestamp.unwrap();
+        deref_mut_refcell!(self.group).total_prompt_time +=
+            self.prompt_timestamp.unwrap() - self.timestamp;
+        deref_mut_refcell!(self.group).total_time += now - self.timestamp;
+
+        deref_mut_refcell!(self.group).total_prompt_toks += self.prompt_len;
+        deref_mut_refcell!(self.group).total_toks += self.len();
     }
 
     pub fn get_group(&self) -> Ref<'_, SequenceGroup> {
@@ -196,6 +211,11 @@ impl Sequence {
 pub struct SequenceGroup {
     done_count: usize,
     n_choices: usize,
+    pub total_prompt_toks: usize,
+    pub total_toks: usize,
+    pub total_prompt_time: u128,
+    pub total_time: u128,
+    pub total_comple_time: u128,
     choices: Vec<Choice>,
 }
 
@@ -205,6 +225,11 @@ impl SequenceGroup {
             done_count: 0,
             choices: Vec::new(),
             n_choices,
+            total_prompt_toks: 0,
+            total_toks: 0,
+            total_prompt_time: 0,
+            total_time: 0,
+            total_comple_time: 0,
         }
     }
 
@@ -214,5 +239,20 @@ impl SequenceGroup {
 
     pub fn get_choices(&self) -> &[Choice] {
         &self.choices
+    }
+
+    pub fn get_usage(&self) -> ChatCompletionUsage {
+        #[allow(clippy::cast_precision_loss)]
+        ChatCompletionUsage {
+            completion_tokens: self.total_toks - self.total_prompt_toks,
+            prompt_tokens: self.total_prompt_toks,
+            total_tokens: self.total_toks,
+            avg_tok_per_sec: (self.total_toks as f32 / self.total_time as f32) * 1000.,
+            avg_prompt_tok_per_sec: (self.total_prompt_toks as f32 / self.total_prompt_time as f32)
+                * 1000.,
+            avg_compl_tok_per_sec: ((self.total_toks - self.total_prompt_toks) as f32
+                / self.total_comple_time as f32)
+                * 1000.,
+        }
     }
 }

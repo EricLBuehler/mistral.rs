@@ -16,8 +16,7 @@ use crate::{
     pipeline::Pipeline,
     request::Request,
     response::{
-        ChatCompletionResponse, ChatCompletionUsage, Choice, Logprobs, Response, ResponseLogprob,
-        ResponseMessage,
+        ChatCompletionResponse, Choice, Logprobs, Response, ResponseLogprob, ResponseMessage,
     },
     scheduler::{Scheduler, SchedulerMethod},
     sequence::{Sequence, SequenceGroup, SequenceState, StopReason},
@@ -175,17 +174,6 @@ impl Engine {
             return;
         }
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time travel has occurred!")
-            .as_millis();
-        #[allow(clippy::cast_precision_loss)]
-        let total_tok_per_sec =
-            deref_refcell!(seq).len() as f32 / (now - deref_refcell!(seq).timestamp()) as f32;
-        #[allow(clippy::cast_precision_loss)]
-        let compl_tok_per_sec = deref_refcell!(seq).len() as f32
-            / (now - deref_refcell!(seq).prompt_timestamp().unwrap()) as f32;
-
         // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
         deref_refcell!(seq)
             .responder()
@@ -196,14 +184,7 @@ impl Engine {
                 model: get_mut_arcmutex!(self.pipeline).name(),
                 system_fingerprint: "local".to_string(),
                 object: "chat.completion".to_string(),
-                usage: ChatCompletionUsage {
-                    completion_tokens: deref_refcell!(seq).logprobs().len(),
-                    prompt_tokens: deref_refcell!(seq).prompt_tokens(),
-                    total_tokens: deref_refcell!(seq).len(),
-                    total_tok_per_sec: total_tok_per_sec * 1000.,
-                    compl_tok_per_sec: compl_tok_per_sec * 1000.,
-                    prompt_tok_per_sec: deref_refcell!(seq).prompt_tok_per_sec,
-                },
+                usage: deref_refcell!(seq).get_group().get_usage(),
             }))
             .unwrap();
     }
