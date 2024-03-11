@@ -106,7 +106,6 @@ impl Engine {
         let logits_seq = logits.chunk(seqs_len, 0).unwrap();
         debug_assert_eq!(logits_seq.len(), seqs_len);
         let eos_tok = get_mut_arcmutex!(self.pipeline).eos_tok();
-        dbg!(seqs.len());
         for (logits_per_seq, seq) in zip(logits_seq, seqs.iter()) {
             let sampled = get_mut_arcmutex!(self.pipeline).sample(logits_per_seq, seq.clone());
             let next_token = handle_seq_error_stateaware!(sampled, seq);
