@@ -87,7 +87,7 @@
 </span><span class="kw">pub struct </span>XLoraConfig {
     <span class="kw">pub </span>hidden_size: usize,
     <span class="attr">#[serde(rename = <span class="string">"base_model_id"</span>)]
-    </span><span class="kw">pub </span>_base_model_id: String,
+    </span><span class="kw">pub </span>_base_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub </span>adapters: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
     <span class="attr">#[serde(default = <span class="string">"false_default"</span>)]
     </span><span class="kw">pub </span>layerwise_scalings: bool,
