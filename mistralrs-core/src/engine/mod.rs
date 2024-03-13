@@ -64,17 +64,8 @@ impl Engine {
                 if !self.no_kv_cache {
                     self.clone_in_cache(&scheduled.completion);
                 }
-                let start = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Time travel has occurred!")
-                    .as_millis();
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
-                let end = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Time travel has occurred!")
-                    .as_millis();
-                println!("{}ms", end - start);
                 self.sample_seqs(&scheduled.completion, logits);
                 if !self.no_kv_cache {
                     self.clone_out_cache(&scheduled.completion);
