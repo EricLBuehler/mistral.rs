@@ -115,10 +115,15 @@ cargo build --release --features cuda
     cd mistral.rs
     ```
 
-5) Build
-    ```bash
-    cargo build --release --features cuda
-    ```
+5) Build or install
+    - Build
+        ```bash
+        cargo build --release --features cuda
+        ```
+    - Install with `cargo install` for easy command line usage
+        ```bash
+        cargo build --path mistralrs-server --features cuda
+        ```
 
 
 The build process will output a binary `misralrs-server` at `./target/release/mistralrs-server` which may be copied into the working directory with `cp ./target/release/mistralrs-server .`.
