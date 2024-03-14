@@ -125,7 +125,7 @@ cargo build --release --features cuda
         ```
     - Install with `cargo install` for easy command line usage
         ```bash
-        cargo build --path mistralrs-server --features cuda
+        cargo install --path mistralrs-server --features cuda
         ```
 
 
