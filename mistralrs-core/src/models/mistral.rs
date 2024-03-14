@@ -160,10 +160,10 @@ impl Attention {
         let key_states = self.k_proj.forward(xs)?;
         let value_states = self.v_proj.forward(xs)?;
 
-        let query_states = query_states
+        let mut query_states = query_states
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
-        let key_states = key_states
+        let mut key_states = key_states
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
         let value_states = value_states
@@ -171,7 +171,7 @@ impl Attention {
             .transpose(1, 2)?;
 
         self.rotary_emb
-            .forward(seqlen_offsets, &query_states, &key_states, false)?;
+            .forward(seqlen_offsets, &mut query_states, &mut key_states, false)?;
 
         let (key_states, value_states) = match &*kv_cache {
             None => (key_states, value_states),
