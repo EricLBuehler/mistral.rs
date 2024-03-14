@@ -209,8 +209,8 @@ impl Attention {
         let (key_states, value_states) = match &*kv_cache {
             None => (key_states, value_states),
             Some((prev_k, prev_v)) => {
-                let key_states = Tensor::cat(&[prev_k, &key_states], 2)?;
-                let value_states = Tensor::cat(&[prev_v, &value_states], 2)?;
+                let key_states = candle_nn::ops::kvconcat(&prev_k, &key_states, 2)?;
+                let value_states = candle_nn::ops::kvconcat(&prev_v, &value_states, 2)?;
                 (key_states, value_states)
             }
         };
