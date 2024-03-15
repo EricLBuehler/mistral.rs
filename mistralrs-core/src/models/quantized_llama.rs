@@ -219,7 +219,9 @@ impl LayerWeights {
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
 
+        dbg!(k.shape());
         let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
+        dbg!(att.shape());
         let mask = mask.broadcast_as(att.shape())?;
         let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
         let att = candle_nn::ops::softmax_last_dim(&att)?;
