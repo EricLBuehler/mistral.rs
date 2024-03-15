@@ -186,7 +186,7 @@ impl LayerWeights {
         let k = self.attention_wk.forward(x)?;
         let v = self.attention_wv.forward(x)?;
 
-        
+        dbg!(q.mean_all()?);
         let mut q = q
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
             .transpose(1, 2)?.contiguous()?;
@@ -196,6 +196,8 @@ impl LayerWeights {
         let v = v
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
             .transpose(1, 2)?.contiguous()?;
+
+        dbg!(q.mean_all()?);
 
         self.rotary.forward(start_offsets, &mut q, &mut k, false)?;
 
