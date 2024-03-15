@@ -191,7 +191,9 @@ impl LayerWeights {
         let mut k = k
             .reshape((b_sz, seq_len, self.n_kv_head*self.head_dim))?;
 
+        dbg!(q.shape());
         self.rotary.forward(start_offsets, &mut q, &mut k, false)?;
+        dbg!(k.shape());
 
         let q = q
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
@@ -202,8 +204,6 @@ impl LayerWeights {
         let v = v
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
             .transpose(1, 2)?.contiguous()?;
-
-        //self.rotary.forward(start_offsets, &mut q, &mut k, false)?;
 
         let (k, v) = match &*kv_cache {
             None => (k, v),
