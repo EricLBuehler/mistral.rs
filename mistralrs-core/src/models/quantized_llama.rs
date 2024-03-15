@@ -205,7 +205,7 @@ impl LayerWeights {
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
             .transpose(1, 2)?;
 
-        self.rotary.forward(start_offsets, &mut q, &mut k, false)?;
+        //self.rotary.forward(start_offsets, &mut q, &mut k, false)?;
 
         let (k, v) = match &*kv_cache {
             None => (k, v),
