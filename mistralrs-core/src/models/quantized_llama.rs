@@ -220,7 +220,7 @@ impl LayerWeights {
         let v = self.repeat_kv(v)?;
 
         dbg!(k.shape());
-        dbg!(q.matmul(&k.t()?)?);
+        dbg!(q.matmul(&k.t()?)? + 1.);
         let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
         dbg!(att.shape());
         let mask = mask.broadcast_as(att.shape())?;
