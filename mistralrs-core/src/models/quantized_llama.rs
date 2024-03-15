@@ -193,7 +193,7 @@ impl LayerWeights {
 
         dbg!(q.shape());
         self.rotary.forward(start_offsets, &mut q, &mut k, false)?;
-        dbg!(k.shape());
+        dbg!(q.shape());
 
         let q = q
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
