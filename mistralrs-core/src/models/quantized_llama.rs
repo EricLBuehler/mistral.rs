@@ -187,6 +187,15 @@ impl LayerWeights {
         let v = self.attention_wv.forward(x)?;
 
         let mut q = q
+            .reshape((b_sz, seq_len, self.n_head*self.head_dim))?;
+        let mut k = k
+            .reshape((b_sz, seq_len, self.n_kv_head*self.head_dim))?;
+        let v = v
+            .reshape((b_sz, seq_len, self.n_kv_head*self.head_dim))?;
+
+        self.rotary.forward(start_offsets, &mut q, &mut k, false)?;
+
+        let mut q = q
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
             .transpose(1, 2)?;
         let mut k = k
