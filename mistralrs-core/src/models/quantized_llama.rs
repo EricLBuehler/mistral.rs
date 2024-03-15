@@ -222,8 +222,7 @@ impl LayerWeights {
         dbg!(k.shape());
         let something = q.matmul(&k.t()?)?;
         dbg!(&something);
-        let cpy = something.clone();
-        dbg!(&cpy);
+        dbg!(&something + 1.);
         let att = (something / (self.head_dim as f64).sqrt())?;
         dbg!(att.shape());
         let mask = mask.broadcast_as(att.shape())?;
