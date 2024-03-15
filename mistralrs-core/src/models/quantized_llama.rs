@@ -186,14 +186,10 @@ impl LayerWeights {
         let k = self.attention_wk.forward(x)?;
         let v = self.attention_wv.forward(x)?;
 
-        /*let mut q = q
-            .reshape((b_sz, seq_len, self.n_head*self.head_dim))?;
-        let mut k = k
-            .reshape((b_sz, seq_len, self.n_kv_head*self.head_dim))?;*/
         
         let mut q = q
-        .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-        .transpose(1, 2)?.contiguous()?;
+            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+            .transpose(1, 2)?.contiguous()?;
         let mut k = k
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
             .transpose(1, 2)?.contiguous()?;
@@ -201,20 +197,7 @@ impl LayerWeights {
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
             .transpose(1, 2)?.contiguous()?;
 
-
-        dbg!(q.shape());
         self.rotary.forward(start_offsets, &mut q, &mut k, false)?;
-        dbg!(q.shape());
-
-        let q = q
-            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-            .transpose(1, 2)?.contiguous()?;
-        let k = k
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?.contiguous()?;
-        let v = v
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?.contiguous()?;
 
         let (k, v) = match &*kv_cache {
             None => (k, v),
@@ -230,12 +213,8 @@ impl LayerWeights {
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
 
-        dbg!(k.shape());
         let something = q.matmul(&k.t()?)?;
-        dbg!(&something);
-        dbg!(&something + 1.);
         let att = (something / (self.head_dim as f64).sqrt())?;
-        dbg!(att.shape());
         let mask = mask.broadcast_as(att.shape())?;
         let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
         let att = candle_nn::ops::softmax_last_dim(&att)?;
@@ -489,6 +468,8 @@ impl ModelWeights {
         let x = self.norm.forward(&layer_in)?;
         let x = x.i((.., seq_len - 1, ..))?;
         let _enter = self.span_output.enter();
-        self.output.forward(&x)
+        let out = self.output.forward(&x);
+        dbg!(out.as_ref().unwrap().mean_all());
+        out
     }
 }
