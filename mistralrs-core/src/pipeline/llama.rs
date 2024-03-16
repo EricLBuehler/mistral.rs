@@ -245,7 +245,6 @@ impl Loader for LlamaLoader {
                 let model = NormalModel::load(
                     vb,
                     &basic_config.into_config(self.config.use_flash_attn),
-                    dtype.unwrap_or(default_dtype),
                     device,
                     self.no_kv_cache,
                 )?;
