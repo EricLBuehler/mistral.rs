@@ -200,8 +200,8 @@ impl LayerWeights {
         self.rotary
             .forward(start_offsets, start_offsets_kernel, &mut q, &mut k)?;
 
-        let q = q.transpose(1, 2)?;
-        let k = k.transpose(1, 2)?;
+        let q = q.transpose(1, 2)?.contiguous()?;
+        let k = k.transpose(1, 2)?.contiguous()?;
 
         let (k, v) = match &*kv_cache {
             None => (k, v),
