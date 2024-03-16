@@ -376,17 +376,17 @@ impl Pipeline for LlamaPipeline {
         );
         let result = match self.model {
             Model::Normal(ref mut model) => {
-                model.forward(&input_ids, &seqlen_offsets, &seqlen_offsets_kernel)
+                model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)
             }
             Model::Quantized(ref mut model) => {
-                model.forward(&input_ids, &seqlen_offsets, &seqlen_offsets_kernel)
+                model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)
             }
             Model::XLoraNormal(ref mut model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap(),
                 &seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap(),
-                &seqlen_offsets_kernel,
+                seqlen_offsets_kernel,
                 seqlen_offsets_full_kernel.unwrap(),
                 self.no_kv_cache,
             ),
@@ -395,7 +395,7 @@ impl Pipeline for LlamaPipeline {
                 input_ids_full.as_ref().unwrap(),
                 &seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap(),
-                &seqlen_offsets_kernel,
+                seqlen_offsets_kernel,
                 seqlen_offsets_full_kernel.unwrap(),
                 self.no_kv_cache,
             ),

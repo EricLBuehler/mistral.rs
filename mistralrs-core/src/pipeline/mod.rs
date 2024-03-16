@@ -188,7 +188,7 @@ pub trait Pipeline: Send + Sync {
 struct InputMetadata {
     input: Tensor,
     positions: Vec<usize>,
-    positions_kernel: Vec<Vec<usize>>, // [bs, seq len]
+    positions_kernel: Vec<Vec<i64>>, // [bs, seq len]
 }
 
 fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>], device: &Device) -> InputMetadata {
@@ -216,7 +216,7 @@ fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>], device: &Device) -> In
         input: Tensor::cat(&seqs_tensors, 0).unwrap(),
         positions: seqlen_offsets,
         positions_kernel: (0..seqs_tensors.len())
-            .map(|_| (0..max_len).collect::<Vec<_>>())
+            .map(|_| (0..max_len).map(|x| x as i64).collect::<Vec<_>>())
             .collect::<Vec<_>>(),
     }
 }
@@ -245,7 +245,7 @@ fn get_completion_input(
         input: Tensor::cat(&seqs_tensors, 0).unwrap(),
         positions: seqlen_offsets,
         positions_kernel: (0..seqs_tensors.len())
-            .map(|i| vec![*seqlen_offsets.get(i).unwrap()])
+            .map(|i| vec![*seqlen_offsets.get(i).unwrap() as i64])
             .collect::<Vec<_>>(),
     }
 }
@@ -261,8 +261,8 @@ fn calculate_inputs(
     Option<Tensor>,
     Vec<usize>,
     Option<Vec<usize>>,
-    Vec<Vec<usize>>,
-    Option<Vec<Vec<usize>>>,
+    Vec<Vec<i64>>,
+    Option<Vec<Vec<i64>>>,
 ) {
     if is_xlora && !is_prompt {
         let InputMetadata {
