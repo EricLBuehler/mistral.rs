@@ -518,7 +518,7 @@ impl XLoraModel {
             let res = self.inner_forward(
                 input_ids_full,
                 seqlen_offsets_full,
-                start_offsets_kernel_full,
+                start_offsets_kernel_full.clone(),
                 dummy_scalings,
                 true,
                 no_kv_cache,
@@ -538,7 +538,7 @@ impl XLoraModel {
             self.inner_forward(
                 input_ids,
                 seqlen_offsets,
-                start_offsets_kernel,
+                start_offsets_kernel.clone(),
                 dummy_scalings,
                 false,
                 no_kv_cache,
