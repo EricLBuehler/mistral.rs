@@ -113,7 +113,6 @@ struct CausalSelfAttention {
     head_dim: usize,
     use_flash_attn: bool,
     span: tracing::Span,
-    span_rot: tracing::Span,
     rotary_emb: Arc<RotaryEmbedding>,
 }
 
@@ -225,7 +224,6 @@ impl CausalSelfAttention {
 
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "attn");
-        let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
@@ -250,7 +248,6 @@ impl CausalSelfAttention {
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             use_flash_attn: cfg.use_flash_attn,
             span,
-            span_rot,
             rotary_emb,
         })
     }
@@ -386,13 +383,7 @@ impl Llama {
         logits.to_dtype(DType::F32)
     }
 
-    pub fn load(
-        vb: VarBuilder,
-        cfg: &Config,
-        dtype: DType,
-        device: &Device,
-        no_kv_cache: bool,
-    ) -> Result<Self> {
+    pub fn load(vb: VarBuilder, cfg: &Config, device: &Device, no_kv_cache: bool) -> Result<Self> {
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         let ln_f = RmsNorm::load(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;

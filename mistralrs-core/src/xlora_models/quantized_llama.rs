@@ -155,7 +155,6 @@ struct LayerWeights {
     n_kv_head: usize,
     head_dim: usize,
     span_attn: tracing::Span,
-    span_rot: tracing::Span,
     span_mlp: tracing::Span,
     rotary: RotaryEmbedding,
 }
@@ -323,7 +322,6 @@ impl ModelWeights {
             let attention_norm = ct.remove(&format!("{prefix}.attention_norm.weight"))?;
             let ffn_norm = ct.remove(&format!("{prefix}.ffn_norm.weight"))?;
             let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
-            let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
             let span_mlp = tracing::span!(tracing::Level::TRACE, "attn-mlp");
             let cfgq = get_lora_cfg(&attention_wq);
             let cfgk = get_lora_cfg(&attention_wk);
@@ -373,7 +371,6 @@ impl ModelWeights {
                 n_kv_head: ct.hparams.n_head as usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
                 span_attn,
-                span_rot,
                 span_mlp,
                 rotary: rotary.clone(),
             })
@@ -541,7 +538,6 @@ impl ModelWeights {
                 ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?;
             let ffn_norm = ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?;
             let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
-            let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
             let span_mlp = tracing::span!(tracing::Level::TRACE, "attn-mlp");
             let cfgq = get_lora_cfg(&attention_wq);
             let cfgk = get_lora_cfg(&attention_wk);
@@ -591,7 +587,6 @@ impl ModelWeights {
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
                 span_attn,
-                span_rot,
                 span_mlp,
                 rotary: rotary.clone(),
             })
