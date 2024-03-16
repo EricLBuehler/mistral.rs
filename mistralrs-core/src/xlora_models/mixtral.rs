@@ -594,7 +594,7 @@ impl XLoraModel {
                 &xs,
                 attention_mask.as_ref(),
                 seqlen_offsets,
-                start_offsets_kernel,
+                start_offsets_kernel.clone(),
                 cache.get_mut(i).unwrap(),
                 scalings.clone(),
                 self.xlora_classifier.get_global_scaling_weight(),

@@ -241,12 +241,13 @@ fn get_completion_input(
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
     }
     // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
+    let positions_kernel = (0..seqs_tensors.len())
+        .map(|i| vec![*seqlen_offsets.get(i).unwrap() as i64])
+        .collect::<Vec<_>>();
     InputMetadata {
         input: Tensor::cat(&seqs_tensors, 0).unwrap(),
         positions: seqlen_offsets,
-        positions_kernel: (0..seqs_tensors.len())
-            .map(|i| vec![*seqlen_offsets.get(i).unwrap() as i64])
-            .collect::<Vec<_>>(),
+        positions_kernel,
     }
 }
 
@@ -294,7 +295,7 @@ fn calculate_inputs(
             Some(input_ids),
             seqlen_offsets.clone(),
             Some(seqlen_offsets),
-            seqlen_offsets_kernel,
+            seqlen_offsets_kernel.clone(),
             Some(seqlen_offsets_kernel),
         )
     } else if is_prompt {

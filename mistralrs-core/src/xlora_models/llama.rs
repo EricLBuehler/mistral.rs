@@ -21,7 +21,7 @@ pub struct Cache {
 }
 
 impl Cache {
-    pub fn new(use_kv_cache: bool, dtype: DType, config: &Config, device: &Device) -> Result<Self> {
+    pub fn new(use_kv_cache: bool, device: &Device) -> Result<Self> {
         Ok(Self {
             masks: HashMap::new(),
             use_kv_cache,
@@ -394,7 +394,7 @@ impl XLoraLlama {
             x = block.forward(
                 &x,
                 seqlen_offsets,
-                start_offsets_kernel,
+                start_offsets_kernel.clone(),
                 block_idx,
                 &mut cache,
                 &mut self.cache,
@@ -518,7 +518,7 @@ impl XLoraLlama {
             blocks,
             ln_f,
             lm_head,
-            cache: Cache::new(!no_kv_cache, dtype, cfg, device)?,
+            cache: Cache::new(!no_kv_cache, device)?,
             kv_cache: models::Cache::new(cfg.num_hidden_layers, true),
             device: device.clone(),
             xlora_classifier: XLoraClassifier::new(

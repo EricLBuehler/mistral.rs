@@ -470,7 +470,7 @@ impl Model {
                 &xs,
                 attention_mask.as_ref(),
                 seqlen_offsets,
-                start_offsets_kernel,
+                start_offsets_kernel.clone(),
                 cache.get_mut(i).unwrap(),
             )?
         }

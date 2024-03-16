@@ -1,6 +1,6 @@
 use super::{
-    calculate_inputs, get_completion_input, get_model_paths, get_prompt_input, get_xlora_paths,
-    Loader, ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
+    calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelKind, ModelPaths, Pipeline,
+    TokenSource, XLoraPaths,
 };
 use crate::models::Cache;
 use crate::pipeline::ChatTemplate;

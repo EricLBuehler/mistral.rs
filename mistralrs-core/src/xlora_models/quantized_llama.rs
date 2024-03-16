@@ -375,7 +375,7 @@ impl ModelWeights {
                 span_attn,
                 span_rot,
                 span_mlp,
-                rotary,
+                rotary: rotary.clone(),
             })
         }
         let span = tracing::span!(tracing::Level::TRACE, "model");
@@ -430,7 +430,6 @@ impl ModelWeights {
         let rope_freq_base = md_get("llama.rope.freq_base")
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
-        let head_dim = embedding_length / head_count;
         let rotary = RotaryEmbedding::new(rope_freq_base, rope_dim, MAX_SEQ_LEN as usize, device)?;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
@@ -594,7 +593,7 @@ impl ModelWeights {
                 span_attn,
                 span_rot,
                 span_mlp,
-                rotary,
+                rotary: rotary.clone(),
             })
         }
         let span = tracing::span!(tracing::Level::TRACE, "model");
@@ -664,7 +663,7 @@ impl ModelWeights {
                 &x,
                 &mask,
                 start_offsets,
-                start_offsets_kernel,
+                start_offsets_kernel.clone(),
                 cache.get_mut(i).unwrap(),
                 scalings.clone(),
                 self.xlora_classifier.get_global_scaling_weight(),

@@ -466,7 +466,7 @@ impl ModelWeights {
                 &x,
                 &mask,
                 start_offsets,
-                start_offsets_kernel,
+                start_offsets_kernel.clone(),
                 cache.get_mut(i).unwrap(),
             )?;
             let x = (attn + residual)?;
