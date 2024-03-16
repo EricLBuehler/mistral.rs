@@ -188,15 +188,15 @@ impl LayerWeights {
 
         let mut q = q
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-            .transpose(1, 2)?
+            //.transpose(1, 2)?
             .contiguous()?;
         let mut k = k
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?
+            //.transpose(1, 2)?
             .contiguous()?;
         let v = v
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?
+            //.transpose(1, 2)?
             .contiguous()?;
 
         self.rotary
