@@ -1,12 +1,11 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use std::collections::HashMap;
-use std::iter::zip;
 
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::quantized::{QMatMul, QTensor};
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{Embedding, Module, VarBuilder};
+use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Ordering, QLoraLinear};
 
 use crate::models::Cache;
@@ -155,11 +154,10 @@ struct LayerWeights {
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
-    cos: Tensor,
-    sin: Tensor,
     span_attn: tracing::Span,
     span_rot: tracing::Span,
     span_mlp: tracing::Span,
+    rotary: RotaryEmbedding,
 }
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
@@ -170,45 +168,12 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 }
 
 impl LayerWeights {
-    fn apply_rotary_emb(&self, x: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
-        let _enter = self.span_rot.enter();
-        let (b_sz, n_head, seq_len, n_embd) = x.dims4()?;
-        let mut ropes = Vec::new();
-        let x = x.reshape((b_sz, n_head, seq_len, n_embd / 2, 2))?;
-        for (b, seqlen_offset) in zip(0..b_sz, seqlen_offsets) {
-            let cos =
-                self.cos
-                    .narrow(0, *seqlen_offset, seq_len)?
-                    .reshape((seq_len, n_embd / 2, 1))?;
-            let sin =
-                self.sin
-                    .narrow(0, *seqlen_offset, seq_len)?
-                    .reshape((seq_len, n_embd / 2, 1))?;
-            let cos = cos.broadcast_as((1, 1, seq_len, n_embd / 2, 1))?;
-            let sin = sin.broadcast_as((1, 1, seq_len, n_embd / 2, 1))?;
-            // This mimics the llama.cpp behavior.
-            // https://github.com/ggerganov/llama.cpp/blob/1f0bccb27929e261744c979bc75114955da49e98/ggml.c#L12104-L12105
-            // The x0 and x1 value are interleaved on the n_embd (= head_dim) dimension.
-            // The resulting y0 and y1 are also interleaved with:
-            //   y0 = x0*cos - x1*sin
-            //   y1 = x0*sin + x1*cos
-            let x_b = x.i(b)?.unsqueeze(0)?;
-            let x0 = x_b.narrow(D::Minus1, 0, 1)?;
-            let x1 = x_b.narrow(D::Minus1, 1, 1)?;
-            let y0 = (x0.broadcast_mul(&cos)? - x1.broadcast_mul(&sin)?)?;
-            let y1 = (x0.broadcast_mul(&sin)? + x1.broadcast_mul(&cos)?)?;
-            let rope = Tensor::cat(&[y0, y1], D::Minus1)?;
-            let rope = rope.flatten_from(D::Minus2)?;
-            ropes.push(rope);
-        }
-        Tensor::cat(&ropes, 0)
-    }
-
     fn forward_attn(
         &mut self,
         x: &Tensor,
         mask: &Tensor,
         start_offsets: &[usize],
+        start_offsets_kernel: Vec<Vec<i64>>,
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Tensor,
         global_scaling_weight: f64,
@@ -225,18 +190,21 @@ impl LayerWeights {
             .attention_wv
             .lora_forward(x, scalings.clone(), global_scaling_weight)?;
 
-        let q = q
+        let mut q = q
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-            .transpose(1, 2)?;
-        let k = k
+            .transpose(1, 2)?
+            .contiguous()?;
+        let mut k = k
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
         let v = v
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
 
-        let q = self.apply_rotary_emb(&q, start_offsets)?;
-        let k = self.apply_rotary_emb(&k, start_offsets)?;
+        self.rotary
+            .forward(start_offsets, start_offsets_kernel, &mut q, &mut k)?;
 
         let (k, v) = match &*kv_cache {
             None => (k, v),
@@ -292,25 +260,6 @@ pub struct ModelWeights {
     xlora_classifier: XLoraClassifier,
 }
 
-fn precomput_freqs_cis(
-    head_dim: usize,
-    freq_base: f32,
-    device: &Device,
-) -> Result<(Tensor, Tensor)> {
-    let theta: Vec<_> = (0..head_dim)
-        .step_by(2)
-        .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))
-        .collect();
-    let theta = Tensor::new(theta.as_slice(), device)?;
-    let idx_theta = Tensor::arange(0, MAX_SEQ_LEN, device)?
-        .to_dtype(DType::F32)?
-        .reshape((MAX_SEQ_LEN as usize, 1))?
-        .matmul(&theta.reshape((1, theta.elem_count()))?)?;
-    let cos = idx_theta.cos()?;
-    let sin = idx_theta.sin()?;
-    Ok((cos, sin))
-}
-
 impl ModelWeights {
     pub fn from_ggml(
         mut ct: ggml_file::Content,
@@ -321,7 +270,7 @@ impl ModelWeights {
         xlora_config: XLoraConfig,
     ) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
-        let (cos, sin) = precomput_freqs_cis(head_dim, 10000., &ct.device)?;
+        let rotary = RotaryEmbedding::new(10000., head_dim, MAX_SEQ_LEN as usize, &ct.device)?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(&ct.device)?;
         let norm = RmsNorm::new(ct.remove("norm.weight")?, 1e-5)?;
@@ -423,11 +372,10 @@ impl ModelWeights {
                 n_head: ct.hparams.n_head as usize,
                 n_kv_head: ct.hparams.n_head as usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
-                cos: cos.clone(),
-                sin: sin.clone(),
                 span_attn,
                 span_rot,
                 span_mlp,
+                rotary,
             })
         }
         let span = tracing::span!(tracing::Level::TRACE, "model");
@@ -482,7 +430,8 @@ impl ModelWeights {
         let rope_freq_base = md_get("llama.rope.freq_base")
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
-        let (cos, sin) = precomput_freqs_cis(rope_dim, rope_freq_base, device)?;
+        let head_dim = embedding_length / head_count;
+        let rotary = RotaryEmbedding::new(rope_freq_base, rope_dim, MAX_SEQ_LEN as usize, device)?;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
@@ -642,11 +591,10 @@ impl ModelWeights {
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
-                cos: cos.clone(),
-                sin: sin.clone(),
                 span_attn,
                 span_rot,
                 span_mlp,
+                rotary,
             })
         }
         let span = tracing::span!(tracing::Level::TRACE, "model");
@@ -686,6 +634,7 @@ impl ModelWeights {
         &mut self,
         x: &Tensor,
         start_offsets: &[usize],
+        start_offsets_kernel: Vec<Vec<i64>>,
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,
@@ -715,6 +664,7 @@ impl ModelWeights {
                 &x,
                 &mask,
                 start_offsets,
+                start_offsets_kernel,
                 cache.get_mut(i).unwrap(),
                 scalings.clone(),
                 self.xlora_classifier.get_global_scaling_weight(),
@@ -742,6 +692,8 @@ impl ModelWeights {
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
         seqlen_offsets_full: &[usize],
+        start_offsets_kernel: Vec<Vec<i64>>,
+        start_offsets_kernel_full: Vec<Vec<i64>>,
         no_kv_cache: bool,
     ) -> Result<Tensor> {
         let (b_size, seq_len_full) = input_ids_full.dims2()?;
@@ -758,6 +710,7 @@ impl ModelWeights {
             let res = self.inner_forward(
                 input_ids_full,
                 seqlen_offsets_full,
+                start_offsets_kernel_full,
                 dummy_scalings,
                 true,
                 no_kv_cache,
@@ -777,6 +730,7 @@ impl ModelWeights {
             self.inner_forward(
                 input_ids,
                 seqlen_offsets,
+                start_offsets_kernel,
                 dummy_scalings,
                 false,
                 no_kv_cache,
@@ -789,6 +743,7 @@ impl ModelWeights {
             self.inner_forward(
                 input_ids_full,
                 seqlen_offsets_full,
+                start_offsets_kernel_full,
                 scalings,
                 true,
                 no_kv_cache,
@@ -797,9 +752,16 @@ impl ModelWeights {
             .i((.., seq_len_full - 1, ..))
         } else {
             // is_full_pass=true is ok because no_kv_cache=false
-            self.inner_forward(input_ids, seqlen_offsets, scalings, true, no_kv_cache)?
-                .apply(&self.output)?
-                .i((.., seq_len - 1, ..))
+            self.inner_forward(
+                input_ids,
+                seqlen_offsets,
+                start_offsets_kernel_full,
+                scalings,
+                true,
+                no_kv_cache,
+            )?
+            .apply(&self.output)?
+            .i((.., seq_len - 1, ..))
         }
     }
 }

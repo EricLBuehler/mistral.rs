@@ -185,7 +185,13 @@ pub trait Pipeline: Send + Sync {
     fn get_chat_template(&self) -> &ChatTemplate;
 }
 
-fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>], device: &Device) -> (Tensor, Vec<usize>) {
+struct InputMetadata {
+    input: Tensor,
+    positions: Vec<usize>,
+    positions_kernel: Vec<Vec<usize>>, // [bs, seq len]
+}
+
+fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>], device: &Device) -> InputMetadata {
     // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
     let max_len = input_toks
         .iter()
@@ -206,14 +212,20 @@ fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>], device: &Device) -> (T
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
     }
     // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
-    (Tensor::cat(&seqs_tensors, 0).unwrap(), seqlen_offsets)
+    InputMetadata {
+        input: Tensor::cat(&seqs_tensors, 0).unwrap(),
+        positions: seqlen_offsets,
+        positions_kernel: (0..seqs_tensors.len())
+            .map(|_| (0..max_len).collect::<Vec<_>>())
+            .collect::<Vec<_>>(),
+    }
 }
 
 fn get_completion_input(
     input_toks: &[Rc<RefCell<Sequence>>],
     device: &Device,
     no_kv_cache: bool,
-) -> (Tensor, Vec<usize>) {
+) -> InputMetadata {
     if no_kv_cache {
         return get_prompt_input(input_toks, device);
     }
@@ -229,7 +241,91 @@ fn get_completion_input(
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
     }
     // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
-    (Tensor::cat(&seqs_tensors, 0).unwrap(), seqlen_offsets)
+    InputMetadata {
+        input: Tensor::cat(&seqs_tensors, 0).unwrap(),
+        positions: seqlen_offsets,
+        positions_kernel: (0..seqs_tensors.len())
+            .map(|i| vec![*seqlen_offsets.get(i).unwrap()])
+            .collect::<Vec<_>>(),
+    }
+}
+
+fn calculate_inputs(
+    input_toks: Box<[Rc<RefCell<Sequence>>]>,
+    is_prompt: bool,
+    is_xlora: bool,
+    device: &Device,
+    no_kv_cache: bool,
+) -> (
+    Tensor,
+    Option<Tensor>,
+    Vec<usize>,
+    Option<Vec<usize>>,
+    Vec<Vec<usize>>,
+    Option<Vec<Vec<usize>>>,
+) {
+    if is_xlora && !is_prompt {
+        let InputMetadata {
+            input: input_ids_full,
+            positions: seqlen_offsets_full,
+            positions_kernel: seqlen_offsets_kernel_full,
+        } = get_prompt_input(&input_toks, device);
+        let InputMetadata {
+            input: input_ids,
+            positions: seqlen_offsets,
+            positions_kernel: seqlen_offsets_kernel,
+        } = get_completion_input(&input_toks, device, no_kv_cache);
+        (
+            input_ids,
+            Some(input_ids_full),
+            seqlen_offsets,
+            Some(seqlen_offsets_full),
+            seqlen_offsets_kernel,
+            Some(seqlen_offsets_kernel_full),
+        )
+    } else if is_xlora && is_prompt {
+        let InputMetadata {
+            input: input_ids,
+            positions: seqlen_offsets,
+            positions_kernel: seqlen_offsets_kernel,
+        } = get_prompt_input(&input_toks, device);
+        (
+            input_ids.clone(),
+            Some(input_ids),
+            seqlen_offsets.clone(),
+            Some(seqlen_offsets),
+            seqlen_offsets_kernel,
+            Some(seqlen_offsets_kernel),
+        )
+    } else if is_prompt {
+        let InputMetadata {
+            input: input_ids,
+            positions: seqlen_offsets,
+            positions_kernel: seqlen_offsets_kernel,
+        } = get_prompt_input(&input_toks, device);
+        (
+            input_ids,
+            None,
+            seqlen_offsets,
+            None,
+            seqlen_offsets_kernel,
+            None,
+        )
+    } else {
+        let InputMetadata {
+            input: input_ids,
+            positions: seqlen_offsets,
+            positions_kernel: seqlen_offsets_kernel,
+        } = get_completion_input(&input_toks, device, no_kv_cache);
+        (
+            input_ids,
+            None,
+            seqlen_offsets,
+            None,
+            seqlen_offsets_kernel,
+            None,
+        )
+    }
 }
 
 struct XLoraPaths {

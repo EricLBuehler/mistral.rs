@@ -1,9 +1,9 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{embedding, Embedding, Module, VarBuilder};
+use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
 use candle_transformers::models::with_tracing::{linear_no_bias as linear, Linear};
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 pub const MAX_SEQ_LEN: usize = 4096;
 
@@ -57,35 +57,15 @@ pub struct Config {
 pub struct Cache {
     masks: HashMap<usize, Tensor>,
     pub use_kv_cache: bool,
-    cos: Tensor,
-    sin: Tensor,
     device: Device,
 }
 
 impl Cache {
     pub fn new(use_kv_cache: bool, dtype: DType, config: &Config, device: &Device) -> Result<Self> {
-        // precompute freqs_cis
-        let n_elem = config.hidden_size / config.num_attention_heads;
-        let theta: Vec<_> = (0..n_elem)
-            .step_by(2)
-            .map(|i| 1f32 / config.rope_theta.powf(i as f32 / n_elem as f32))
-            .collect();
-        let theta = Tensor::new(theta.as_slice(), device)?;
-        let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, device)?
-            .to_dtype(DType::F32)?
-            .reshape((MAX_SEQ_LEN, 1))?
-            .matmul(&theta.reshape((1, theta.elem_count()))?)?;
-        // This is different from the paper, see:
-        // https://github.com/huggingface/transformers/blob/6112b1c6442aaf7affd2b0676a1cd4eee30c45cf/src/transformers/models/llama/modeling_llama.py#L112
-        let idx_theta = Tensor::cat(&[&idx_theta, &idx_theta], D::Minus1)?;
-        let cos = idx_theta.cos()?.to_dtype(dtype)?;
-        let sin = idx_theta.sin()?.to_dtype(dtype)?;
         Ok(Self {
             masks: HashMap::new(),
             use_kv_cache,
             device: device.clone(),
-            cos,
-            sin,
         })
     }
 
@@ -134,6 +114,7 @@ struct CausalSelfAttention {
     use_flash_attn: bool,
     span: tracing::Span,
     span_rot: tracing::Span,
+    rotary_emb: Arc<RotaryEmbedding>,
 }
 
 #[cfg(feature = "flash-attn")]
@@ -153,34 +134,11 @@ fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Ten
 }
 
 impl CausalSelfAttention {
-    fn apply_rotary_emb(
-        &self,
-        x: &Tensor,
-        seqlen_offsets: &[usize],
-        cache: &Cache,
-    ) -> Result<Tensor> {
-        let _enter = self.span_rot.enter();
-        let (_b_sz, _, seq_len, hidden_size) = x.dims4()?;
-        let mut ropes = Vec::new();
-        for (b, offset) in seqlen_offsets.iter().enumerate() {
-            let cos = cache.cos.narrow(0, *offset, seq_len)?;
-            let sin = cache.sin.narrow(0, *offset, seq_len)?;
-            let cos = cos.broadcast_as((1, 1, seq_len, hidden_size))?;
-            let sin = sin.broadcast_as((1, 1, seq_len, hidden_size))?;
-            let x_b = x.i(b)?.unsqueeze(0)?;
-            let x1 = x_b.narrow(D::Minus1, 0, hidden_size / 2)?;
-            let x2 = x_b.narrow(D::Minus1, hidden_size / 2, hidden_size / 2)?;
-            let rotate_x = Tensor::cat(&[&x2.neg()?, &x1], D::Minus1)?;
-            let rope = (x_b.broadcast_mul(&cos)? + rotate_x.broadcast_mul(&sin)?)?;
-            ropes.push(rope);
-        }
-        Tensor::cat(&ropes, 0)
-    }
-
     fn forward(
         &self,
         x: &Tensor,
         seqlen_offsets: &[usize],
+        start_offsets_kernel: Vec<Vec<i64>>,
         block_idx: usize,
         kv_cache: &mut super::LayerCaches,
         cache: &mut Cache,
@@ -191,18 +149,18 @@ impl CausalSelfAttention {
         let k = self.k_proj.forward(x)?;
         let v = self.v_proj.forward(x)?;
 
-        let q = q
+        let mut q = q
             .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
             .transpose(1, 2)?;
-        let k = k
+        let mut k = k
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
         let mut v = v
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let q = self.apply_rotary_emb(&q, seqlen_offsets, cache)?;
-        let mut k = self.apply_rotary_emb(&k, seqlen_offsets, cache)?;
+        self.rotary_emb
+            .forward(seqlen_offsets, start_offsets_kernel, &mut q, &mut k)?;
 
         if cache.use_kv_cache {
             if let Some((cache_k, cache_v)) = &kv_cache[block_idx] {
@@ -275,6 +233,13 @@ impl CausalSelfAttention {
         let k_proj = linear(size_in, size_kv, vb.pp("k_proj"))?;
         let v_proj = linear(size_in, size_kv, vb.pp("v_proj"))?;
         let o_proj = linear(size_q, size_in, vb.pp("o_proj"))?;
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        let rotary_emb = Arc::new(RotaryEmbedding::new(
+            cfg.rope_theta,
+            head_dim,
+            MAX_SEQ_LEN,
+            vb.device(),
+        )?);
         Ok(Self {
             q_proj,
             k_proj,
@@ -286,6 +251,7 @@ impl CausalSelfAttention {
             use_flash_attn: cfg.use_flash_attn,
             span,
             span_rot,
+            rotary_emb,
         })
     }
 }
@@ -342,6 +308,7 @@ impl Block {
         &self,
         x: &Tensor,
         seqlen_offsets: &[usize],
+        start_offsets_kernel: Vec<Vec<i64>>,
         block_idx: usize,
         kv_cache: &mut super::LayerCaches,
         cache: &mut Cache,
@@ -349,10 +316,14 @@ impl Block {
         let _enter = self.span.enter();
         let residual = x;
         let x = self.rms_1.forward(x)?;
-        let x = (self
-            .attn
-            .forward(&x, seqlen_offsets, block_idx, kv_cache, cache)?
-            + residual)?;
+        let x = (self.attn.forward(
+            &x,
+            seqlen_offsets,
+            start_offsets_kernel,
+            block_idx,
+            kv_cache,
+            cache,
+        )? + residual)?;
         let residual = &x;
         let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
         Ok(x)
@@ -390,12 +361,24 @@ pub struct Llama {
 }
 
 impl Llama {
-    pub fn forward(&mut self, x: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
+    pub fn forward(
+        &mut self,
+        x: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Vec<Vec<i64>>,
+    ) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
         let mut x = self.wte.forward(x)?;
         let mut cache = self.kv_cache.lock();
         for (block_idx, block) in self.blocks.iter().enumerate() {
-            x = block.forward(&x, seqlen_offsets, block_idx, &mut cache, &mut self.cache)?;
+            x = block.forward(
+                &x,
+                seqlen_offsets,
+                start_offsets_kernel,
+                block_idx,
+                &mut cache,
+                &mut self.cache,
+            )?;
         }
         let x = self.ln_f.forward(&x)?;
         let x = x.i((.., seq_len - 1, ..))?;

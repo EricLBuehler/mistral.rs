@@ -1,6 +1,6 @@
 use super::{
-    get_completion_input, get_model_paths, get_prompt_input, get_xlora_paths, Loader, ModelKind,
-    ModelPaths, Pipeline, TokenSource, XLoraPaths,
+    calculate_inputs, get_completion_input, get_model_paths, get_prompt_input, get_xlora_paths,
+    Loader, ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
 };
 use crate::models::{quantized_llama, Cache};
 use crate::pipeline::ChatTemplate;
@@ -352,42 +352,34 @@ impl Loader for MixtralLoader {
 
 impl Pipeline for MixtralPipeline {
     fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor {
-        let (input_ids, input_ids_full, seqlen_offsets, seqlen_offsets_full) =
-            if self.is_xlora() && !is_prompt {
-                let (input_ids_full, seqlen_offsets_full) =
-                    get_prompt_input(&input_toks, self.device());
-                let (input_ids, seqlen_offsets) =
-                    get_completion_input(&input_toks, self.device(), self.no_kv_cache);
-                (
-                    input_ids,
-                    Some(input_ids_full),
-                    seqlen_offsets,
-                    Some(seqlen_offsets_full),
-                )
-            } else if self.is_xlora() && is_prompt {
-                let (input_ids_full, seqlen_offsets) = get_prompt_input(&input_toks, self.device());
-                (
-                    input_ids_full.clone(),
-                    Some(input_ids_full),
-                    seqlen_offsets.clone(),
-                    Some(seqlen_offsets),
-                )
-            } else if is_prompt {
-                let (input_ids, seqlen_offsets) = get_prompt_input(&input_toks, self.device());
-                (input_ids, None, seqlen_offsets, None)
-            } else {
-                let (input_ids, seqlen_offsets) =
-                    get_completion_input(&input_toks, self.device(), self.no_kv_cache);
-                (input_ids, None, seqlen_offsets, None)
-            };
+        let (
+            input_ids,
+            input_ids_full,
+            seqlen_offsets,
+            seqlen_offsets_full,
+            seqlen_offsets_kernel,
+            seqlen_offsets_full_kernel,
+        ) = calculate_inputs(
+            input_toks,
+            is_prompt,
+            self.is_xlora(),
+            self.device(),
+            self.no_kv_cache,
+        );
         let result = match self.model {
-            Model::Normal(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
-            Model::Quantized(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
+            Model::Normal(ref mut model) => {
+                model.forward(&input_ids, &seqlen_offsets, &seqlen_offsets_kernel)
+            }
+            Model::Quantized(ref mut model) => {
+                model.forward(&input_ids, &seqlen_offsets, &seqlen_offsets_kernel)
+            }
             Model::XLoraNormal(ref mut model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap(),
                 &seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap(),
+                &seqlen_offsets_kernel,
+                seqlen_offsets_full_kernel.unwrap(),
                 self.no_kv_cache,
             ),
             Model::XLoraQuantized(ref mut model) => model.forward(
@@ -395,6 +387,8 @@ impl Pipeline for MixtralPipeline {
                 input_ids_full.as_ref().unwrap(),
                 &seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap(),
+                &seqlen_offsets_kernel,
+                seqlen_offsets_full_kernel.unwrap(),
                 self.no_kv_cache,
             ),
         };

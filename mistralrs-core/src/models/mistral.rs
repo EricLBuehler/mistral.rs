@@ -152,6 +152,7 @@ impl Attention {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
+        start_offsets_kernel: Vec<Vec<i64>>,
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
@@ -170,8 +171,12 @@ impl Attention {
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        self.rotary_emb
-            .forward(seqlen_offsets, &mut query_states, &mut key_states, false)?;
+        self.rotary_emb.forward(
+            seqlen_offsets,
+            start_offsets_kernel,
+            &mut query_states,
+            &mut key_states,
+        )?;
 
         let (key_states, value_states) = match &*kv_cache {
             None => (key_states, value_states),
@@ -243,13 +248,18 @@ impl DecoderLayer {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
+        start_offsets_kernel: Vec<Vec<i64>>,
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self
-            .self_attn
-            .forward(&xs, attention_mask, seqlen_offsets, kv_cache)?;
+        let xs = self.self_attn.forward(
+            &xs,
+            attention_mask,
+            seqlen_offsets,
+            start_offsets_kernel,
+            kv_cache,
+        )?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = xs.apply(&self.post_attention_layernorm)?.apply(&self.mlp)?;
@@ -277,7 +287,7 @@ impl Model {
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let rotary_emb = Arc::new(RotaryEmbedding::new(
-            10000.,
+            cfg.rope_theta as f32,
             head_dim,
             cfg.max_position_embeddings,
             vb.device(),
@@ -348,7 +358,12 @@ impl Model {
         }
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
+    pub fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Vec<Vec<i64>>,
+    ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
         if seqlen_offsets.len() > b_size {
             candle_core::bail!("Expected seqlen offsets have length equal to batch size.")
@@ -369,6 +384,7 @@ impl Model {
                 &xs,
                 attention_mask.as_ref(),
                 seqlen_offsets,
+                start_offsets_kernel,
                 cache.get_mut(i).unwrap(),
             )?
         }

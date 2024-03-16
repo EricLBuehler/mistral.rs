@@ -177,7 +177,7 @@ impl LayerWeights {
         x: &Tensor,
         mask: &Tensor,
         start_offsets: &[usize],
-
+        start_offsets_kernel: Vec<Vec<i64>>,
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let _enter = self.span_attn.enter();
@@ -188,15 +188,19 @@ impl LayerWeights {
 
         let mut q = q
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-            .transpose(1, 2)?.contiguous()?;
+            .transpose(1, 2)?
+            .contiguous()?;
         let mut k = k
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?.contiguous()?;
+            .transpose(1, 2)?
+            .contiguous()?;
         let v = v
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?.contiguous()?;
+            .transpose(1, 2)?
+            .contiguous()?;
 
-        self.rotary.forward(start_offsets, &mut q, &mut k, false)?;
+        self.rotary
+            .forward(start_offsets, start_offsets_kernel, &mut q, &mut k)?;
 
         let (k, v) = match &*kv_cache {
             None => (k, v),
@@ -443,7 +447,12 @@ impl ModelWeights {
         }
     }
 
-    pub fn forward(&mut self, x: &Tensor, start_offsets: &[usize]) -> Result<Tensor> {
+    pub fn forward(
+        &mut self,
+        x: &Tensor,
+        start_offsets: &[usize],
+        start_offsets_kernel: Vec<Vec<i64>>,
+    ) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
         let mask = self.mask(seq_len, x.device())?;
         let _enter = self.span.enter();
@@ -453,7 +462,13 @@ impl ModelWeights {
             let x = layer_in;
             let residual = &x;
             let x = layer.attention_norm.forward(&x)?;
-            let attn = layer.forward_attn(&x, &mask, start_offsets, cache.get_mut(i).unwrap())?;
+            let attn = layer.forward_attn(
+                &x,
+                &mask,
+                start_offsets,
+                start_offsets_kernel,
+                cache.get_mut(i).unwrap(),
+            )?;
             let x = (attn + residual)?;
 
             // MLP
