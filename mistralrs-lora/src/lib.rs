@@ -198,6 +198,7 @@ fn bmm(input: &Tensor, a: &Tensor) -> Result<Tensor> {
     dbg!(&input);
     dbg!(&a);
     let res = input.matmul(&a.transpose(1, 2)?)?;
+    dbg!(&res);
 
     res.reshape(&[input.dim(0)?, input.dim(1)?, *a.dims().last().unwrap()])
 }

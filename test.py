@@ -6,6 +6,7 @@ def bmm(input, a):
     print("inp",input.shape)
     print("a",a.shape)
     result_reshaped = input @ a #torch.matmul(input_reshaped, a_reshaped)
+    print(result_reshaped.shape)
 
     # Reshape the result back to the original shape
     result = result_reshaped.reshape(input.size(0), input.size(1), a.size(-1))
