@@ -196,7 +196,12 @@ pub fn get_lora_cfg(tensor: &QTensor) -> LoraLinearConfig {
 /// a = `[n_adapters, out, in]`
 fn bmm(input: &Tensor, a: &Tensor) -> Result<Tensor> {
     let input_reshaped = input.t()?;
-    let a_reshaped = a.t()?;
+    //let a_reshaped = a.t()?;
+    let a_reshaped = match *input.dims() {
+        [b1, b2, _, _] => a.broadcast_left((b1, b2))?.t()?,
+        [bsize, _, _] => a.broadcast_left(bsize)?.t()?,
+        _ => a.t()?,
+    };
 
     let res = input_reshaped.matmul(&a_reshaped)?;
 
