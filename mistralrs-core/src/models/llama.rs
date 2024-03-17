@@ -137,7 +137,7 @@ impl CausalSelfAttention {
         &self,
         x: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Vec<Vec<i64>>,
+        start_offsets_kernel: Tensor,
         block_idx: usize,
         kv_cache: &mut super::LayerCaches,
         cache: &mut Cache,
@@ -148,7 +148,13 @@ impl CausalSelfAttention {
         let k = self.k_proj.forward(x)?;
         let v = self.v_proj.forward(x)?;
 
-        let mut q = q
+        let mut q = q.reshape((b_sz, seq_len, self.num_attention_heads * self.head_dim))?;
+        let mut k = k.reshape((b_sz, seq_len, self.num_key_value_heads * self.head_dim))?;
+
+        self.rotary_emb
+            .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k)?;
+
+        let q = q
             .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
             .transpose(1, 2)?;
         let mut k = k
@@ -158,13 +164,10 @@ impl CausalSelfAttention {
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        self.rotary_emb
-            .forward(seqlen_offsets, start_offsets_kernel, &mut q, &mut k)?;
-
         if cache.use_kv_cache {
             if let Some((cache_k, cache_v)) = &kv_cache[block_idx] {
-                k = candle_nn::ops::kvconcat(&cache_k, &k, 2)?.contiguous()?;
-                v = candle_nn::ops::kvconcat(&cache_v, &v, 2)?.contiguous()?;
+                k = candle_nn::ops::kvconcat(cache_k, &k, 2)?.contiguous()?;
+                v = candle_nn::ops::kvconcat(cache_v, &v, 2)?.contiguous()?;
                 let k_seq_len = k.dims()[1];
                 if k_seq_len > MAX_SEQ_LEN {
                     k = k
@@ -305,7 +308,7 @@ impl Block {
         &self,
         x: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Vec<Vec<i64>>,
+        start_offsets_kernel: Tensor,
         block_idx: usize,
         kv_cache: &mut super::LayerCaches,
         cache: &mut Cache,
@@ -362,7 +365,7 @@ impl Llama {
         &mut self,
         x: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Vec<Vec<i64>>,
+        start_offsets_kernel: Tensor,
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
         let mut x = self.wte.forward(x)?;

@@ -188,10 +188,13 @@ pub trait Pipeline: Send + Sync {
 struct InputMetadata {
     input: Tensor,
     positions: Vec<usize>,
-    positions_kernel: Vec<Vec<i64>>, // [bs, seq len]
+    positions_kernel: Tensor, // [bs, seq len]
 }
 
-fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>], device: &Device) -> InputMetadata {
+fn get_prompt_input(
+    input_toks: &[Rc<RefCell<Sequence>>],
+    device: &Device,
+) -> Result<InputMetadata> {
     // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
     let max_len = input_toks
         .iter()
@@ -211,21 +214,28 @@ fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>], device: &Device) -> In
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
     }
+
+    let mut tmp = Vec::new();
+    for pos in (0..seqs_tensors.len())
+        .map(|_| (0..max_len).map(|x| x as i64).collect::<Vec<_>>())
+        .collect::<Vec<_>>()
+    {
+        tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
+    }
+    let positions_kernel = Tensor::cat(&tmp, 0)?;
     // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
-    InputMetadata {
+    Ok(InputMetadata {
         input: Tensor::cat(&seqs_tensors, 0).unwrap(),
         positions: seqlen_offsets,
-        positions_kernel: (0..seqs_tensors.len())
-            .map(|_| (0..max_len).map(|x| x as i64).collect::<Vec<_>>())
-            .collect::<Vec<_>>(),
-    }
+        positions_kernel,
+    })
 }
 
 fn get_completion_input(
     input_toks: &[Rc<RefCell<Sequence>>],
     device: &Device,
     no_kv_cache: bool,
-) -> InputMetadata {
+) -> Result<InputMetadata> {
     if no_kv_cache {
         return get_prompt_input(input_toks, device);
     }
@@ -241,14 +251,28 @@ fn get_completion_input(
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
     }
     // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
-    let positions_kernel = (0..seqs_tensors.len())
+    let mut tmp = Vec::new();
+    for pos in (0..seqs_tensors.len())
         .map(|i| vec![*seqlen_offsets.get(i).unwrap() as i64])
-        .collect::<Vec<_>>();
-    InputMetadata {
+        .collect::<Vec<_>>()
+    {
+        tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
+    }
+    let positions_kernel = Tensor::cat(&tmp, 0)?;
+    Ok(InputMetadata {
         input: Tensor::cat(&seqs_tensors, 0).unwrap(),
         positions: seqlen_offsets,
         positions_kernel,
-    }
+    })
+}
+
+struct ModelInputs {
+    input_ids: Tensor,
+    input_ids_full: Option<Tensor>,
+    seqlen_offsets: Vec<usize>,
+    seqlen_offsets_full: Option<Vec<usize>>,
+    seqlen_offsets_kernel: Tensor,
+    seqlen_offsets_kernel_full: Option<Tensor>,
 }
 
 fn calculate_inputs(
@@ -257,75 +281,68 @@ fn calculate_inputs(
     is_xlora: bool,
     device: &Device,
     no_kv_cache: bool,
-) -> (
-    Tensor,
-    Option<Tensor>,
-    Vec<usize>,
-    Option<Vec<usize>>,
-    Vec<Vec<i64>>,
-    Option<Vec<Vec<i64>>>,
-) {
+) -> Result<ModelInputs> {
     if is_xlora && !is_prompt {
         let InputMetadata {
             input: input_ids_full,
             positions: seqlen_offsets_full,
             positions_kernel: seqlen_offsets_kernel_full,
-        } = get_prompt_input(&input_toks, device);
+        } = get_prompt_input(&input_toks, device)?;
         let InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_completion_input(&input_toks, device, no_kv_cache);
-        (
+        } = get_completion_input(&input_toks, device, no_kv_cache)?;
+        Ok(ModelInputs {
             input_ids,
-            Some(input_ids_full),
+            input_ids_full: Some(input_ids_full),
             seqlen_offsets,
-            Some(seqlen_offsets_full),
+            seqlen_offsets_full: Some(seqlen_offsets_full),
             seqlen_offsets_kernel,
-            Some(seqlen_offsets_kernel_full),
-        )
+            seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel_full),
+        })
     } else if is_xlora && is_prompt {
         let InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_prompt_input(&input_toks, device);
-        (
-            input_ids.clone(),
-            Some(input_ids),
-            seqlen_offsets.clone(),
-            Some(seqlen_offsets),
-            seqlen_offsets_kernel.clone(),
-            Some(seqlen_offsets_kernel),
-        )
+        } = get_prompt_input(&input_toks, device)?;
+        Ok(ModelInputs {
+            input_ids: input_ids.clone(),
+            input_ids_full: Some(input_ids),
+            seqlen_offsets: seqlen_offsets.clone(),
+            seqlen_offsets_full: Some(seqlen_offsets),
+            seqlen_offsets_kernel: seqlen_offsets_kernel.clone(),
+            seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel),
+        })
     } else if is_prompt {
         let InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_prompt_input(&input_toks, device);
-        (
+        } = get_prompt_input(&input_toks, device)?;
+        Ok(ModelInputs {
             input_ids,
-            None,
+            input_ids_full: None,
             seqlen_offsets,
-            None,
+            seqlen_offsets_full: None,
             seqlen_offsets_kernel,
-            None,
-        )
+            seqlen_offsets_kernel_full: None,
+        })
     } else {
         let InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_completion_input(&input_toks, device, no_kv_cache);
-        (
+        } = get_completion_input(&input_toks, device, no_kv_cache)?;
+        Ok(ModelInputs {
             input_ids,
-            None,
+            input_ids_full: None,
             seqlen_offsets,
-            None,
+            seqlen_offsets_full: None,
             seqlen_offsets_kernel,
-            None,
-        )
+            seqlen_offsets_kernel_full: None,
+        })
     }
 }
 

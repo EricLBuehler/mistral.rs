@@ -1,6 +1,6 @@
 use super::{
-    calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelKind, ModelPaths, Pipeline,
-    TokenSource, XLoraPaths,
+    calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
+    Pipeline, TokenSource, XLoraPaths,
 };
 use crate::models::{quantized_llama, Cache};
 use crate::pipeline::ChatTemplate;
@@ -352,20 +352,21 @@ impl Loader for MixtralLoader {
 
 impl Pipeline for MixtralPipeline {
     fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor {
-        let (
+        let ModelInputs {
             input_ids,
             input_ids_full,
             seqlen_offsets,
             seqlen_offsets_full,
             seqlen_offsets_kernel,
-            seqlen_offsets_full_kernel,
-        ) = calculate_inputs(
+            seqlen_offsets_kernel_full,
+        } = calculate_inputs(
             input_toks,
             is_prompt,
             self.is_xlora(),
             self.device(),
             self.no_kv_cache,
-        );
+        )
+        .unwrap();
         let result = match self.model {
             Model::Normal(ref mut model) => {
                 model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)
@@ -379,7 +380,7 @@ impl Pipeline for MixtralPipeline {
                 &seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap(),
                 seqlen_offsets_kernel,
-                seqlen_offsets_full_kernel.unwrap(),
+                seqlen_offsets_kernel_full.unwrap(),
                 self.no_kv_cache,
             ),
             Model::XLoraQuantized(ref mut model) => model.forward(
@@ -388,7 +389,7 @@ impl Pipeline for MixtralPipeline {
                 &seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap(),
                 seqlen_offsets_kernel,
-                seqlen_offsets_full_kernel.unwrap(),
+                seqlen_offsets_kernel_full.unwrap(),
                 self.no_kv_cache,
             ),
         };

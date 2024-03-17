@@ -200,12 +200,13 @@ impl Attention {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &mut self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Vec<Vec<i64>>,
+        start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Tensor,
         global_scaling_weight: f64,
@@ -222,28 +223,33 @@ impl Attention {
             .v_proj
             .lora_forward(xs, scalings.clone(), global_scaling_weight)?;
 
-        let mut query_states = query_states
+        let mut query_states =
+            query_states.reshape((b_sz, q_len, self.num_heads * self.head_dim))?;
+        let mut key_states =
+            key_states.reshape((b_sz, q_len, self.num_kv_heads * self.head_dim))?;
+
+        self.rotary_emb.forward(
+            seqlen_offsets,
+            &start_offsets_kernel,
+            &mut query_states,
+            &mut key_states,
+        )?;
+
+        let query_states = query_states
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
-        let mut key_states = key_states
+        let key_states = key_states
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
         let value_states = value_states
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        self.rotary_emb.forward(
-            seqlen_offsets,
-            start_offsets_kernel,
-            &mut query_states,
-            &mut key_states,
-        )?;
-
         let (key_states, value_states) = match &*kv_cache {
             None => (key_states, value_states),
             Some((prev_k, prev_v)) => {
-                let key_states = candle_nn::ops::kvconcat(&prev_k, &key_states, 2)?;
-                let value_states = candle_nn::ops::kvconcat(&prev_v, &value_states, 2)?;
+                let key_states = candle_nn::ops::kvconcat(prev_k, &key_states, 2)?;
+                let value_states = candle_nn::ops::kvconcat(prev_v, &value_states, 2)?;
                 (key_states, value_states)
             }
         };
@@ -306,12 +312,13 @@ impl DecoderLayer {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &mut self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Vec<Vec<i64>>,
+        start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Tensor,
         global_scaling_weight: f64,
@@ -446,7 +453,7 @@ impl XLoraModel {
         &mut self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Vec<Vec<i64>>,
+        start_offsets_kernel: Tensor,
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,
@@ -494,14 +501,15 @@ impl XLoraModel {
         xs.apply(&self.norm)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &mut self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
         seqlen_offsets_full: &[usize],
-        start_offsets_kernel: Vec<Vec<i64>>,
-        start_offsets_kernel_full: Vec<Vec<i64>>,
+        start_offsets_kernel: Tensor,
+        start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
     ) -> Result<Tensor> {
         let (b_size, seq_len_full) = input_ids_full.dims2()?;

@@ -98,7 +98,7 @@ impl CausalSelfAttention {
         &self,
         x: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Vec<Vec<i64>>,
+        start_offsets_kernel: Tensor,
         block_idx: usize,
         kv_cache: &mut LayerCaches,
         cache: &mut Cache,
@@ -117,7 +117,13 @@ impl CausalSelfAttention {
             .v_proj
             .lora_forward(x, scalings.clone(), global_scaling_weight)?;
 
-        let mut q = q
+        let mut q = q.reshape((b_sz, seq_len, self.num_attention_heads * self.head_dim))?;
+        let mut k = k.reshape((b_sz, seq_len, self.num_key_value_heads * self.head_dim))?;
+
+        self.rotary_emb
+            .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k)?;
+
+        let q = q
             .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
             .transpose(1, 2)?;
         let mut k = k
@@ -127,13 +133,10 @@ impl CausalSelfAttention {
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        self.rotary_emb
-            .forward(seqlen_offsets, start_offsets_kernel, &mut q, &mut k)?;
-
         if cache.use_kv_cache {
             if let Some((cache_k, cache_v)) = &kv_cache[block_idx] {
-                k = candle_nn::ops::kvconcat(&cache_k, &k, 2)?.contiguous()?;
-                v = candle_nn::ops::kvconcat(&cache_v, &v, 2)?.contiguous()?;
+                k = candle_nn::ops::kvconcat(cache_k, &k, 2)?.contiguous()?;
+                v = candle_nn::ops::kvconcat(cache_v, &v, 2)?.contiguous()?;
                 let k_seq_len = k.dims()[1];
                 if k_seq_len > MAX_SEQ_LEN {
                     k = k
@@ -296,7 +299,7 @@ impl Block {
         &self,
         x: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Vec<Vec<i64>>,
+        start_offsets_kernel: Tensor,
         block_idx: usize,
         kv_cache: &mut LayerCaches,
         cache: &mut Cache,
@@ -368,7 +371,7 @@ impl XLoraLlama {
         &mut self,
         x: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Vec<Vec<i64>>,
+        start_offsets_kernel: Tensor,
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,
@@ -402,14 +405,15 @@ impl XLoraLlama {
         self.ln_f.forward(&x)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &mut self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
         seqlen_offsets_full: &[usize],
-        start_offsets_kernel: Vec<Vec<i64>>,
-        start_offsets_kernel_full: Vec<Vec<i64>>,
+        start_offsets_kernel: Tensor,
+        start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
     ) -> Result<Tensor> {
         let (b_size, seq_len_full) = input_ids_full.dims2()?;

@@ -167,12 +167,13 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 }
 
 impl LayerWeights {
+    #[allow(clippy::too_many_arguments)]
     fn forward_attn(
         &mut self,
         x: &Tensor,
         mask: &Tensor,
         start_offsets: &[usize],
-        start_offsets_kernel: Vec<Vec<i64>>,
+        start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Tensor,
         global_scaling_weight: f64,
@@ -189,11 +190,17 @@ impl LayerWeights {
             .attention_wv
             .lora_forward(x, scalings.clone(), global_scaling_weight)?;
 
-        let mut q = q
+        let mut q = q.reshape((b_sz, seq_len, self.n_head * self.head_dim))?;
+        let mut k = k.reshape((b_sz, seq_len, self.n_kv_head * self.head_dim))?;
+
+        self.rotary
+            .forward(start_offsets, &start_offsets_kernel, &mut q, &mut k)?;
+
+        let q = q
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
-        let mut k = k
+        let k = k
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
@@ -202,14 +209,11 @@ impl LayerWeights {
             .transpose(1, 2)?
             .contiguous()?;
 
-        self.rotary
-            .forward(start_offsets, start_offsets_kernel, &mut q, &mut k)?;
-
         let (k, v) = match &*kv_cache {
             None => (k, v),
             Some((k_cache, v_cache)) => {
-                let k = candle_nn::ops::kvconcat(&k_cache, &k, 2)?.contiguous()?;
-                let v = candle_nn::ops::kvconcat(&v_cache, &v, 2)?.contiguous()?;
+                let k = candle_nn::ops::kvconcat(k_cache, &k, 2)?.contiguous()?;
+                let v = candle_nn::ops::kvconcat(v_cache, &v, 2)?.contiguous()?;
                 (k, v)
             }
         };
@@ -628,7 +632,7 @@ impl ModelWeights {
         &mut self,
         x: &Tensor,
         start_offsets: &[usize],
-        start_offsets_kernel: Vec<Vec<i64>>,
+        start_offsets_kernel: Tensor,
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,
@@ -680,14 +684,15 @@ impl ModelWeights {
         self.norm.forward(&layer_in)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &mut self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
         seqlen_offsets_full: &[usize],
-        start_offsets_kernel: Vec<Vec<i64>>,
-        start_offsets_kernel_full: Vec<Vec<i64>>,
+        start_offsets_kernel: Tensor,
+        start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
     ) -> Result<Tensor> {
         let (b_size, seq_len_full) = input_ids_full.dims2()?;

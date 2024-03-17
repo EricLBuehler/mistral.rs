@@ -177,7 +177,7 @@ impl LayerWeights {
         x: &Tensor,
         mask: &Tensor,
         start_offsets: &[usize],
-        start_offsets_kernel: Vec<Vec<i64>>,
+        start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let _enter = self.span_attn.enter();
@@ -186,21 +186,17 @@ impl LayerWeights {
         let k = self.attention_wk.forward(x)?;
         let v = self.attention_wv.forward(x)?;
 
-        let mut q = q
-            .reshape((b_sz, seq_len, self.n_head*self.head_dim))?
-            .contiguous()?;
-        let mut k = k
-            .reshape((b_sz, seq_len, self.n_kv_head*self.head_dim))?
-            .contiguous()?;
-        
-        self.rotary
-            .forward(start_offsets, start_offsets_kernel, &mut q, &mut k)?;
+        let mut q = q.reshape((b_sz, seq_len, self.n_head * self.head_dim))?;
+        let mut k = k.reshape((b_sz, seq_len, self.n_kv_head * self.head_dim))?;
 
-        let mut q = q
+        self.rotary
+            .forward(start_offsets, &start_offsets_kernel, &mut q, &mut k)?;
+
+        let q = q
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
-        let mut k = k
+        let k = k
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
@@ -209,12 +205,11 @@ impl LayerWeights {
             .transpose(1, 2)?
             .contiguous()?;
 
-
         let (k, v) = match &*kv_cache {
             None => (k, v),
             Some((k_cache, v_cache)) => {
-                let k = candle_nn::ops::kvconcat(&k_cache, &k, 2)?.contiguous()?;
-                let v = candle_nn::ops::kvconcat(&v_cache, &v, 2)?.contiguous()?;
+                let k = candle_nn::ops::kvconcat(k_cache, &k, 2)?.contiguous()?;
+                let v = candle_nn::ops::kvconcat(v_cache, &v, 2)?.contiguous()?;
                 (k, v)
             }
         };
@@ -459,7 +454,7 @@ impl ModelWeights {
         &mut self,
         x: &Tensor,
         start_offsets: &[usize],
-        start_offsets_kernel: Vec<Vec<i64>>,
+        start_offsets_kernel: Tensor,
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
         let mask = self.mask(seq_len, x.device())?;
@@ -490,7 +485,6 @@ impl ModelWeights {
         let x = self.norm.forward(&layer_in)?;
         let x = x.i((.., seq_len - 1, ..))?;
         let _enter = self.span_output.enter();
-        let out = self.output.forward(&x);
-        out
+        self.output.forward(&x)
     }
 }
