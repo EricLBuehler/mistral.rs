@@ -260,9 +260,15 @@ pub struct ModelWeights {
 }
 
 impl ModelWeights {
-    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
+    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize, is_gpt_neox: bool) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
-        let rotary = RotaryEmbedding::new(10000., head_dim, MAX_SEQ_LEN as usize, &ct.device)?;
+        let rotary = RotaryEmbedding::new(
+            10000.,
+            head_dim,
+            MAX_SEQ_LEN as usize,
+            &ct.device,
+            is_gpt_neox,
+        )?;
 
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(&ct.device)?;
@@ -324,6 +330,7 @@ impl ModelWeights {
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
+        is_gpt_neox: bool,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle_core::bail!("cannot find {s} in metadata"),
@@ -349,7 +356,13 @@ impl ModelWeights {
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
         let head_dim = embedding_length / head_count;
-        let rotary = RotaryEmbedding::new(rope_freq_base, rope_dim, MAX_SEQ_LEN as usize, device)?;
+        let rotary = RotaryEmbedding::new(
+            rope_freq_base,
+            rope_dim,
+            MAX_SEQ_LEN as usize,
+            device,
+            is_gpt_neox,
+        )?;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;

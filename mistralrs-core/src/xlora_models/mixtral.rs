@@ -8,7 +8,10 @@ use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 use std::sync::Arc;
 
-use crate::models::{mixtral::Config, Cache};
+use crate::{
+    models::{mixtral::Config, Cache},
+    pipeline::MIXTRAL_IS_GPTX,
+};
 
 use super::{classifier::XLoraClassifier, XLoraConfig};
 
@@ -482,6 +485,7 @@ impl XLoraModel {
             head_dim,
             cfg.max_position_embeddings,
             vb_m.device(),
+            MIXTRAL_IS_GPTX,
         )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");

@@ -37,6 +37,7 @@ enum Model {
     XLoraQuantized(XLoraModelWeights),
     XLoraNormal(XLoraMistral),
 }
+pub const MISTRAL_IS_GPTX: bool = false;
 
 pub struct MistralModelPaths<P> {
     tokenizer_filename: P,
@@ -253,7 +254,7 @@ impl Loader for MistralLoader {
                 let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
                 let model = gguf_file::Content::read(&mut file)
                     .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
-                let model = QModelWeights::from_gguf(model, &mut file, device)?;
+                let model = QModelWeights::from_gguf(model, &mut file, device, MISTRAL_IS_GPTX)?;
                 Model::Quantized(model)
             }
             ModelKind::QuantizedGGML => unreachable!(),
@@ -324,6 +325,7 @@ impl Loader for MistralLoader {
                     &vb,
                     paths.get_ordering().as_ref().unwrap(),
                     paths.get_classifier_config().as_ref().unwrap().clone(),
+                    MISTRAL_IS_GPTX,
                 )?;
                 Model::XLoraQuantized(model)
             }

@@ -35,6 +35,7 @@ enum Model {
     XLoraNormal(XLoraLlama),
     XLoraQuantized(XLoraModelWeights),
 }
+pub const LLAMA_IS_GPTX: bool = false;
 
 pub struct LlamaModelPaths<P> {
     tokenizer_filename: P,
@@ -223,14 +224,14 @@ impl Loader for LlamaLoader {
                 let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
                 let model = gguf_file::Content::read(&mut file)
                     .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
-                let model = QModelWeights::from_gguf(model, &mut file, device)?;
+                let model = QModelWeights::from_gguf(model, &mut file, device, LLAMA_IS_GPTX)?;
                 Model::Quantized(model)
             }
             ModelKind::QuantizedGGML => {
                 let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
                 let model = ggml_file::Content::read(&mut file, device)
                     .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
-                let model = QModelWeights::from_ggml(model, self.config.gqa)?;
+                let model = QModelWeights::from_ggml(model, self.config.gqa, LLAMA_IS_GPTX)?;
                 Model::Quantized(model)
             }
             ModelKind::Normal => {
@@ -307,6 +308,7 @@ impl Loader for LlamaLoader {
                     &vb,
                     paths.get_ordering().as_ref().unwrap(),
                     paths.get_classifier_config().as_ref().unwrap().clone(),
+                    LLAMA_IS_GPTX,
                 )?;
                 Model::XLoraQuantized(model)
             }
@@ -336,6 +338,7 @@ impl Loader for LlamaLoader {
                     &vb,
                     paths.get_ordering().as_ref().unwrap(),
                     paths.get_classifier_config().as_ref().unwrap().clone(),
+                    LLAMA_IS_GPTX,
                 )?;
                 Model::XLoraQuantized(model)
             }

@@ -9,6 +9,8 @@ use candle_transformers::models::with_tracing::{linear_no_bias, Linear};
 use serde::Deserialize;
 use std::sync::Arc;
 
+use crate::pipeline::MIXTRAL_IS_GPTX;
+
 use super::Cache;
 
 /// https://github.com/huggingface/transformers/blob/1a585c1222a56bcaecc070966d558d4a9d862e83/src/transformers/models/mixtral/configuration_mixtral.py#L113
@@ -386,6 +388,7 @@ impl Model {
             head_dim,
             cfg.max_position_embeddings,
             vb_m.device(),
+            MIXTRAL_IS_GPTX,
         )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");

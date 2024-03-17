@@ -5,6 +5,8 @@ use std::sync::Arc;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{linear_b as linear, Linear, RotaryEmbedding, VarBuilder};
 
+use crate::pipeline::GEMMA_IS_GPTX;
+
 use super::Cache;
 
 fn default_max_position_embeddings() -> usize {
@@ -283,6 +285,7 @@ impl Model {
             cfg.head_dim,
             cfg.max_position_embeddings,
             vb.device(),
+            GEMMA_IS_GPTX,
         )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");

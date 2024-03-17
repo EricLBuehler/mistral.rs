@@ -37,6 +37,7 @@ enum Model {
     XLoraNormal(XLoraMixtral),
     XLoraQuantized(XLoraModelWeights),
 }
+pub const MIXTRAL_IS_GPTX: bool = true;
 
 pub struct MixtralModelPaths<P> {
     tokenizer_filename: P,
@@ -257,7 +258,7 @@ impl Loader for MixtralLoader {
                 let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
                 let model = gguf_file::Content::read(&mut file)
                     .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
-                let model = QModelWeights::from_gguf(model, &mut file, device)?;
+                let model = QModelWeights::from_gguf(model, &mut file, device, MIXTRAL_IS_GPTX)?;
                 Model::Quantized(model)
             }
             ModelKind::QuantizedGGML => unreachable!(),
@@ -328,6 +329,7 @@ impl Loader for MixtralLoader {
                     &vb,
                     paths.get_ordering().as_ref().unwrap(),
                     paths.get_classifier_config().as_ref().unwrap().clone(),
+                    MIXTRAL_IS_GPTX,
                 )?;
                 Model::XLoraQuantized(model)
             }

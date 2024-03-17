@@ -4,17 +4,17 @@ mod mistral;
 mod mixtral;
 use candle_sampling::logits_processor::Logprobs;
 use either::Either;
-pub use gemma::{GemmaLoader, GemmaSpecificConfig};
+pub use gemma::{GemmaLoader, GemmaSpecificConfig, GEMMA_IS_GPTX};
 use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
     Repo, RepoType,
 };
 use indexmap::IndexMap;
-pub use llama::{LlamaLoader, LlamaSpecificConfig};
+pub use llama::{LlamaLoader, LlamaSpecificConfig, LLAMA_IS_GPTX};
 use minijinja::{context, Environment, ErrorKind};
-pub use mistral::{MistralLoader, MistralSpecificConfig};
+pub use mistral::{MistralLoader, MistralSpecificConfig, MISTRAL_IS_GPTX};
 use mistralrs_lora::{LoraConfig, Ordering};
-pub use mixtral::{MixtralLoader, MixtralSpecificConfig};
+pub use mixtral::{MixtralLoader, MixtralSpecificConfig, MIXTRAL_IS_GPTX};
 use serde::Deserialize;
 use std::{
     cell::RefCell, collections::HashMap, fs, iter::repeat, path::PathBuf, rc::Rc, str::FromStr,

@@ -6,7 +6,10 @@ use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_b as linear, LinearLayerLike, LoraConfig, Ordering};
 
-use crate::models::{gemma::Config, Cache};
+use crate::{
+    models::{gemma::Config, Cache},
+    pipeline::GEMMA_IS_GPTX,
+};
 
 use super::{classifier::XLoraClassifier, XLoraConfig};
 
@@ -374,6 +377,7 @@ impl XLoraModel {
             cfg.head_dim,
             cfg.max_position_embeddings,
             vb.device(),
+            GEMMA_IS_GPTX,
         )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");

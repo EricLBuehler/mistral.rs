@@ -6,6 +6,8 @@ use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 use candle_transformers::models::with_tracing::{linear_no_bias, Linear};
 use std::sync::Arc;
 
+use crate::pipeline::MISTRAL_IS_GPTX;
+
 use super::Cache;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -296,6 +298,7 @@ impl Model {
             head_dim,
             cfg.max_position_embeddings,
             vb.device(),
+            MISTRAL_IS_GPTX,
         )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");

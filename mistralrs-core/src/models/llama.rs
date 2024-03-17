@@ -5,6 +5,8 @@ use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
 use candle_transformers::models::with_tracing::{linear_no_bias as linear, Linear};
 use std::{collections::HashMap, sync::Arc};
 
+use crate::pipeline::LLAMA_IS_GPTX;
+
 pub const MAX_SEQ_LEN: usize = 4096;
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -240,6 +242,7 @@ impl CausalSelfAttention {
             head_dim,
             MAX_SEQ_LEN,
             vb.device(),
+            LLAMA_IS_GPTX,
         )?);
         Ok(Self {
             q_proj,

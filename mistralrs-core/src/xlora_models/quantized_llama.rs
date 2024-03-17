@@ -271,9 +271,16 @@ impl ModelWeights {
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: XLoraConfig,
+        is_gpt_neox: bool,
     ) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
-        let rotary = RotaryEmbedding::new(10000., head_dim, MAX_SEQ_LEN as usize, &ct.device)?;
+        let rotary = RotaryEmbedding::new(
+            10000.,
+            head_dim,
+            MAX_SEQ_LEN as usize,
+            &ct.device,
+            is_gpt_neox,
+        )?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(&ct.device)?;
         let norm = RmsNorm::new(ct.remove("norm.weight")?, 1e-5)?;
@@ -399,6 +406,7 @@ impl ModelWeights {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: gguf_file::Content,
         reader: &mut R,
@@ -407,6 +415,7 @@ impl ModelWeights {
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: XLoraConfig,
+        is_gpt_neox: bool,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle_core::bail!("cannot find {s} in metadata"),
@@ -431,7 +440,13 @@ impl ModelWeights {
         let rope_freq_base = md_get("llama.rope.freq_base")
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
-        let rotary = RotaryEmbedding::new(rope_freq_base, rope_dim, MAX_SEQ_LEN as usize, device)?;
+        let rotary = RotaryEmbedding::new(
+            rope_freq_base,
+            rope_dim,
+            MAX_SEQ_LEN as usize,
+            device,
+            is_gpt_neox,
+        )?;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;

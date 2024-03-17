@@ -33,6 +33,8 @@ enum Model {
     XLoraNormal(XLoraGemma),
 }
 
+pub const GEMMA_IS_GPTX: bool = true;
+
 pub struct GemmaModelPaths<P> {
     tokenizer_filename: P,
     config_filename: P,

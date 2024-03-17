@@ -5,10 +5,13 @@ use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering};
 use std::{collections::HashMap, sync::Arc};
 
-use crate::models::{
-    self,
-    llama::{Config, MAX_SEQ_LEN},
-    LayerCaches,
+use crate::{
+    models::{
+        self,
+        llama::{Config, MAX_SEQ_LEN},
+        LayerCaches,
+    },
+    pipeline::LLAMA_IS_GPTX,
 };
 
 use super::{classifier::XLoraClassifier, XLoraConfig};
@@ -217,6 +220,7 @@ impl CausalSelfAttention {
             head_dim,
             MAX_SEQ_LEN,
             vb.device(),
+            LLAMA_IS_GPTX,
         )?);
         Ok(Self {
             q_proj,
