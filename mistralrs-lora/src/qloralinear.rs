@@ -214,7 +214,7 @@ impl LinearLayerLike for QLoraLinear {
                     input_new.clone()
                 };
 
-                inputs.push(input_new.mul(*scale)?.mul(global_scaling_weight)?);
+                inputs.push(input_new.mul(*scale)?.mul(global_scaling_weight)?.unsqueeze(0)?);
             }
             let input = Tensor::cat(&inputs, 0)?;
             dbg!(input.shape());
