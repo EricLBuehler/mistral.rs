@@ -227,7 +227,7 @@ impl LinearLayerLike for QLoraLinear {
             dbg!(out.shape());
             let out = bmm(&out, adapter_b)?;
             dbg!(out.shape());
-            let out = out.reshape((n_adapters, bs, seqlen, h))?;
+            let out = out.reshape((n_adapters, bs, seqlen, *out.dims().last().unwrap()))?;
             dbg!(out.shape());
             let out = out.sum(0)?;
             Ok(out)
