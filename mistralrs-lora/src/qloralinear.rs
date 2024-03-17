@@ -218,7 +218,7 @@ impl LinearLayerLike for QLoraLinear {
             let adapter_a = adapter_a.broadcast_mul(&scalings)?;
 
             dbg!(&adapter_a);
-            let out = /*Linear::new(adapter_a, None)*/adapter_a.matmul(input)?;
+            let out = /*Linear::new(adapter_a, None)*/adapter_a.t()?.matmul(input)?;
             dbg!(&out);
             let out = adapter_b.forward(&out)?;
             dbg!(&out);
