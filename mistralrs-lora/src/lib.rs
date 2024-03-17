@@ -195,7 +195,7 @@ pub fn get_lora_cfg(tensor: &QTensor) -> LoraLinearConfig {
 ///
 /// a = `[n_adapters, out, in]`
 fn bmm(input: &Tensor, a: &Tensor) -> Result<Tensor> {
-    let res = input.mul(&a)?;
+    let res = input.mul(&a.transpose(1, 2)?)?;
 
     res.reshape(&[input.dim(0)?, input.dim(1)?, *a.dims().last().unwrap()])
 }
