@@ -216,8 +216,8 @@ impl LinearLayerLike for QLoraLinear {
 
                 inputs.push(
                     input_new
-                        .mul(*scale)?
-                        .mul(global_scaling_weight)?
+                        //.mul(*scale)?
+                        //.mul(global_scaling_weight)?
                         .unsqueeze(0)?,
                 );
             }
