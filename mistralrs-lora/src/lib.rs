@@ -198,7 +198,7 @@ fn bmm(input: &Tensor, a: &Tensor) -> Result<Tensor> {
     let input_reshaped = input.t()?;
     let a_reshaped = a.t()?;
 
-    let res = input_reshaped.broadcast_matmul(&a_reshaped)?;
+    let res = a_reshaped.broadcast_matmul(&input_reshaped)?;
 
     res.reshape(&[input.dim(0)?, input.dim(1)?, *a.dims().last().unwrap()])
 }
