@@ -101,16 +101,29 @@ impl MLP {
         })
     }
 
-    fn forward(&self, xs: &Tensor, scalings: Tensor, global_scaling_weight: f64) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor,
+        scalings: Tensor,
+        global_scaling_weight: f64,
+        is_scaling_pass: Option<f64>,
+    ) -> Result<Tensor> {
         let lhs = self
             .gate_proj
-            .lora_forward(xs, scalings.clone(), global_scaling_weight)?
+            .lora_forward(xs, scalings.clone(), global_scaling_weight, is_scaling_pass)?
             .apply(&self.act_fn)?;
-        let rhs = self
-            .up_proj
-            .lora_forward(xs, scalings.clone(), global_scaling_weight)?;
-        self.down_proj
-            .lora_forward(&(lhs * rhs)?, scalings, global_scaling_weight)
+        let rhs = self.up_proj.lora_forward(
+            xs,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )?;
+        self.down_proj.lora_forward(
+            &(lhs * rhs)?,
+            scalings,
+            global_scaling_weight,
+            is_scaling_pass,
+        )
     }
 }
 
@@ -213,18 +226,28 @@ impl Attention {
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Tensor,
         global_scaling_weight: f64,
+        is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let query_states = self
-            .q_proj
-            .lora_forward(xs, scalings.clone(), global_scaling_weight)?;
-        let key_states = self
-            .k_proj
-            .lora_forward(xs, scalings.clone(), global_scaling_weight)?;
-        let value_states = self
-            .v_proj
-            .lora_forward(xs, scalings.clone(), global_scaling_weight)?;
+        let query_states = self.q_proj.lora_forward(
+            xs,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )?;
+        let key_states = self.k_proj.lora_forward(
+            xs,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )?;
+        let value_states = self.v_proj.lora_forward(
+            xs,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )?;
 
         let mut query_states =
             query_states.reshape((b_sz, q_len, self.num_heads * self.head_dim))?;
@@ -276,6 +299,7 @@ impl Attention {
             &attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?,
             scalings.clone(),
             global_scaling_weight,
+            is_scaling_pass,
         )
     }
 }
@@ -325,6 +349,7 @@ impl DecoderLayer {
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Tensor,
         global_scaling_weight: f64,
+        is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
@@ -336,6 +361,7 @@ impl DecoderLayer {
             kv_cache,
             scalings.clone(),
             global_scaling_weight,
+            is_scaling_pass,
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
@@ -343,6 +369,7 @@ impl DecoderLayer {
             &xs.apply(&self.post_attention_layernorm)?,
             scalings.clone(),
             global_scaling_weight,
+            is_scaling_pass,
         )?;
         residual + xs
     }
@@ -453,6 +480,7 @@ impl XLoraModel {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn inner_forward(
         &mut self,
         input_ids: &Tensor,
@@ -461,6 +489,7 @@ impl XLoraModel {
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,
+        is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
         if seqlen_offsets.len() > b_size {
@@ -500,6 +529,7 @@ impl XLoraModel {
                 cache.get_mut(i).unwrap(),
                 scalings.clone(),
                 self.xlora_classifier.get_global_scaling_weight(),
+                is_scaling_pass,
             )?
         }
         xs.apply(&self.norm)
@@ -534,6 +564,7 @@ impl XLoraModel {
                 dummy_scalings,
                 true,
                 no_kv_cache,
+                Some(self.xlora_classifier.config.scaling_pass_value),
             )?;
 
             let mut new_cache = Vec::new();
@@ -554,6 +585,7 @@ impl XLoraModel {
                 dummy_scalings,
                 false,
                 no_kv_cache,
+                Some(self.xlora_classifier.config.scaling_pass_value),
             )?
         };
 
@@ -567,6 +599,7 @@ impl XLoraModel {
                 scalings,
                 true,
                 no_kv_cache,
+                None,
             )?
             .apply(&self.lm_head)?
             .narrow(1, seq_len_full - 1, 1)
@@ -579,6 +612,7 @@ impl XLoraModel {
                 scalings,
                 true,
                 no_kv_cache,
+                None,
             )?
             .apply(&self.lm_head)?
             .narrow(1, seq_len - 1, 1)

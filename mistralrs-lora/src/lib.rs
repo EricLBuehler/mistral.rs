@@ -78,6 +78,7 @@ pub trait LinearLayerLike: Debug {
         x: &Tensor,
         scalings_layer: Tensor,
         global_scaling_weight: f64,
+        is_scaling_pass: Option<f64>,
     ) -> Result<Tensor>;
 }
 
@@ -96,6 +97,7 @@ impl LinearLayerLike for Linear {
         x: &Tensor,
         _scalings_layer: Tensor,
         _global_scaling_weight: f64,
+        _is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         self.forward(x)
     }

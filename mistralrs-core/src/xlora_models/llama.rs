@@ -107,18 +107,28 @@ impl CausalSelfAttention {
         cache: &mut Cache,
         scalings: Tensor,
         global_scaling_weight: f64,
+        is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         let _enter = self.span.enter();
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
-        let q = self
-            .q_proj
-            .lora_forward(x, scalings.clone(), global_scaling_weight)?;
-        let k = self
-            .k_proj
-            .lora_forward(x, scalings.clone(), global_scaling_weight)?;
-        let v = self
-            .v_proj
-            .lora_forward(x, scalings.clone(), global_scaling_weight)?;
+        let q = self.q_proj.lora_forward(
+            x,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )?;
+        let k = self.k_proj.lora_forward(
+            x,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )?;
+        let v = self.v_proj.lora_forward(
+            x,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )?;
 
         let mut q = q.reshape((b_sz, seq_len, self.num_attention_heads * self.head_dim))?;
         let mut k = k.reshape((b_sz, seq_len, self.num_key_value_heads * self.head_dim))?;
@@ -179,9 +189,12 @@ impl CausalSelfAttention {
             att.matmul(&v.contiguous()?)?.to_dtype(in_dtype)?
         };
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
-        let y = self
-            .o_proj
-            .lora_forward(&y, scalings.clone(), global_scaling_weight)?;
+        let y = self.o_proj.lora_forward(
+            &y,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )?;
         Ok(y)
     }
 
@@ -253,17 +266,27 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn forward(&self, x: &Tensor, scalings: Tensor, global_scaling_weight: f64) -> Result<Tensor> {
+    fn forward(
+        &self,
+        x: &Tensor,
+        scalings: Tensor,
+        global_scaling_weight: f64,
+        is_scaling_pass: Option<f64>,
+    ) -> Result<Tensor> {
         let _enter = self.span.enter();
         let x = (candle_nn::ops::silu(&self.c_fc1.lora_forward(
             x,
             scalings.clone(),
             global_scaling_weight,
-        )?)? * self
-            .c_fc2
-            .lora_forward(x, scalings.clone(), global_scaling_weight)?)?;
+            is_scaling_pass,
+        )?)? * self.c_fc2.lora_forward(
+            x,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )?)?;
         self.c_proj
-            .lora_forward(&x, scalings.clone(), global_scaling_weight)
+            .lora_forward(&x, scalings.clone(), global_scaling_weight, is_scaling_pass)
     }
 
     fn load(
@@ -309,6 +332,7 @@ impl Block {
         cache: &mut Cache,
         scalings: Tensor,
         global_scaling_weight: f64,
+        is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         let _enter = self.span.enter();
         let residual = x;
@@ -322,12 +346,15 @@ impl Block {
             cache,
             scalings.clone(),
             global_scaling_weight,
+            is_scaling_pass,
         )? + residual)?;
         let residual = &x;
-        let x = (self
-            .mlp
-            .forward(&self.rms_2.forward(&x)?, scalings, global_scaling_weight)?
-            + residual)?;
+        let x = (self.mlp.forward(
+            &self.rms_2.forward(&x)?,
+            scalings,
+            global_scaling_weight,
+            is_scaling_pass,
+        )? + residual)?;
         Ok(x)
     }
 
@@ -379,6 +406,7 @@ impl XLoraLlama {
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,
+        is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         let mut x = self.wte.forward(x)?;
         let mut cache = if is_full_pass {
@@ -404,6 +432,7 @@ impl XLoraLlama {
                 &mut self.cache,
                 scalings.clone(),
                 self.xlora_classifier.get_global_scaling_weight(),
+                is_scaling_pass,
             )?;
         }
         self.ln_f.forward(&x)
@@ -438,6 +467,7 @@ impl XLoraLlama {
                 dummy_scalings,
                 true,
                 no_kv_cache,
+                Some(self.xlora_classifier.config.scaling_pass_value),
             )?;
 
             let mut new_cache = Vec::new();
@@ -458,6 +488,7 @@ impl XLoraLlama {
                 dummy_scalings,
                 false,
                 no_kv_cache,
+                Some(self.xlora_classifier.config.scaling_pass_value),
             )?
         };
 
@@ -471,6 +502,7 @@ impl XLoraLlama {
                 scalings,
                 true,
                 no_kv_cache,
+                None,
             )?
             .apply(&self.lm_head)?
             .i((.., seq_len_full - 1, ..))?
@@ -483,6 +515,7 @@ impl XLoraLlama {
                 scalings,
                 true,
                 no_kv_cache,
+                None,
             )?
             .apply(&self.lm_head)?
             .i((.., seq_len - 1, ..))?

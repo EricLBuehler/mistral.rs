@@ -80,10 +80,16 @@ impl LinearLayerLike for LoraLinear {
         input: &Tensor,
         scalings: Tensor,
         global_scaling_weight: f64,
+        is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
+        let mut result = self.old.forward(input)?;
+
+        if is_scaling_pass.is_some_and(|x| x == 0.) {
+            return Ok(result);
+        }
+
         let scalings = get_maybe_topk_scalings(scalings, self.layer_n)?;
         //No fan_in_fan_out so no weight.transpose(0,1)
-        let mut result = self.old.forward(input)?;
         for (i, (adapter_a, (adapter_b, (adapter_scale, adapter_dropout)))) in zip(
             &self.a_adapters,
             zip(

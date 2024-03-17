@@ -43,17 +43,30 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn forward(&self, xs: &Tensor, scalings: Tensor, global_scaling_weight: f64) -> Result<Tensor> {
-        let w1 = self
-            .feed_forward_w1
-            .lora_forward(xs, scalings.clone(), global_scaling_weight)?;
-        let w3 = self
-            .feed_forward_w3
-            .lora_forward(xs, scalings.clone(), global_scaling_weight)?;
+    fn forward(
+        &self,
+        xs: &Tensor,
+        scalings: Tensor,
+        global_scaling_weight: f64,
+        is_scaling_pass: Option<f64>,
+    ) -> Result<Tensor> {
+        let w1 = self.feed_forward_w1.lora_forward(
+            xs,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )?;
+        let w3 = self.feed_forward_w3.lora_forward(
+            xs,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )?;
         self.feed_forward_w2.lora_forward(
             &(candle_nn::ops::silu(&w1)? * w3)?,
             scalings.clone(),
             global_scaling_weight,
+            is_scaling_pass,
         )
     }
 }
@@ -69,7 +82,13 @@ enum MlpOrMoe {
 }
 
 impl MlpOrMoe {
-    fn forward(&self, xs: &Tensor, scalings: Tensor, global_scaling_weight: f64) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor,
+        scalings: Tensor,
+        global_scaling_weight: f64,
+        is_scaling_pass: Option<f64>,
+    ) -> Result<Tensor> {
         match self {
             Self::MoE {
                 feed_forward_gate_inp,
@@ -128,6 +147,7 @@ impl MlpOrMoe {
                         &current_state,
                         scalings.clone(),
                         global_scaling_weight,
+                        is_scaling_pass,
                     )?;
                     let current_hidden_states =
                         current_hidden_states.broadcast_mul(&selected_rws)?;
@@ -137,7 +157,9 @@ impl MlpOrMoe {
                 let ys = ys.reshape((b_size, seq_len, hidden_dim))?;
                 Ok(ys)
             }
-            Self::Mlp(mlp) => mlp.forward(xs, scalings.clone(), global_scaling_weight),
+            Self::Mlp(mlp) => {
+                mlp.forward(xs, scalings.clone(), global_scaling_weight, is_scaling_pass)
+            }
         }
     }
 }
@@ -177,18 +199,28 @@ impl LayerWeights {
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Tensor,
         global_scaling_weight: f64,
+        is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         let _enter = self.span_attn.enter();
         let (b_sz, seq_len, n_embd) = x.dims3()?;
-        let q = self
-            .attention_wq
-            .lora_forward(x, scalings.clone(), global_scaling_weight)?;
-        let k = self
-            .attention_wk
-            .lora_forward(x, scalings.clone(), global_scaling_weight)?;
-        let v = self
-            .attention_wv
-            .lora_forward(x, scalings.clone(), global_scaling_weight)?;
+        let q = self.attention_wq.lora_forward(
+            x,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )?;
+        let k = self.attention_wk.lora_forward(
+            x,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )?;
+        let v = self.attention_wv.lora_forward(
+            x,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )?;
 
         let mut q = q.reshape((b_sz, seq_len, self.n_head * self.head_dim))?;
         let mut k = k.reshape((b_sz, seq_len, self.n_kv_head * self.head_dim))?;
@@ -230,9 +262,12 @@ impl LayerWeights {
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = att.matmul(&v.contiguous()?)?;
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
-        let y = self
-            .attention_wo
-            .lora_forward(&y, scalings.clone(), global_scaling_weight)?;
+        let y = self.attention_wo.lora_forward(
+            &y,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )?;
         Ok(y)
     }
 
@@ -643,6 +678,7 @@ impl ModelWeights {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn inner_forward(
         &mut self,
         x: &Tensor,
@@ -651,6 +687,7 @@ impl ModelWeights {
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,
+        is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
         let mask = self.mask(seq_len, x.device())?;
@@ -681,6 +718,7 @@ impl ModelWeights {
                 cache.get_mut(i).unwrap(),
                 scalings.clone(),
                 self.xlora_classifier.get_global_scaling_weight(),
+                is_scaling_pass,
             )?;
             let x = (attn + residual)?;
 
@@ -692,6 +730,7 @@ impl ModelWeights {
                 &x,
                 scalings.clone(),
                 self.xlora_classifier.get_global_scaling_weight(),
+                is_scaling_pass,
             )?;
             let x = (x + residual)?;
             layer_in = x
@@ -728,6 +767,7 @@ impl ModelWeights {
                 dummy_scalings,
                 true,
                 no_kv_cache,
+                Some(self.xlora_classifier.config.scaling_pass_value),
             )?;
 
             let mut new_cache = Vec::new();
@@ -748,6 +788,7 @@ impl ModelWeights {
                 dummy_scalings,
                 false,
                 no_kv_cache,
+                Some(self.xlora_classifier.config.scaling_pass_value),
             )?
         };
 
@@ -761,6 +802,7 @@ impl ModelWeights {
                 scalings,
                 true,
                 no_kv_cache,
+                None,
             )?
             .apply(&self.output)?
             .i((.., seq_len_full - 1, ..))
@@ -773,6 +815,7 @@ impl ModelWeights {
                 scalings,
                 true,
                 no_kv_cache,
+                None,
             )?
             .apply(&self.output)?
             .i((.., seq_len - 1, ..))

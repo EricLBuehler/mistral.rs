@@ -108,11 +108,11 @@ impl LinearLayerLike for QLoraLinear {
         input: &Tensor,
         scalings: Tensor,
         global_scaling_weight: f64,
+        is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         //No fan_in_fan_out so no weight.transpose(0,1)
         let mut result = self.old.forward(input)?;
-        return Ok(result);
-        if self.a_adapters.is_empty() {
+        if self.a_adapters.is_empty() || (is_scaling_pass.is_some_and(|x| x == 0.)) {
             return Ok(result);
         }
         let scalings = get_maybe_topk_scalings(scalings, self.layer_n)?;

@@ -42,6 +42,7 @@ impl LinearLayerLike for FrozenLinear {
         x: &Tensor,
         _scalings_layer: Tensor,
         _global_scaling_weight: f64,
+        _is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         self.linear.forward(x)
     }

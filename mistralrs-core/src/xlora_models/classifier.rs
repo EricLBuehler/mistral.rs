@@ -24,7 +24,7 @@ pub struct XLoraClassifier {
     scaling_pass_value: f64,
     model_layers: usize,
     n_classes: usize,
-    config: XLoraConfig,
+    pub config: XLoraConfig,
 }
 
 impl XLoraClassifier {
