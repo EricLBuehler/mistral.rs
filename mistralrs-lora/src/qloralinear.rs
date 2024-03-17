@@ -185,10 +185,7 @@ impl LinearLayerLike for QLoraLinear {
                 a_adapters,
                 zip(
                     b_adapters,
-                    zip(
-                        &self.scale_adapters,
-                        self.dropout_adapters.iter(),
-                    ),
+                    zip(&self.scale_adapters, self.dropout_adapters.iter()),
                 ),
             )
             .enumerate()
@@ -212,8 +209,14 @@ impl LinearLayerLike for QLoraLinear {
             let adapter_b = &self.b_adapters.as_ref().unwrap_right().0;
             let adapter_scales = &self.scale_adapters;
             let dropout = &self.dropout_adapters[0];
-            let adapter_a = adapter_a.broadcast_mul(&scalings.squeeze(0)?.squeeze(0)?)?;
-            
+            let scalings = scalings
+                .squeeze(0)?
+                .squeeze(0)?
+                .unsqueeze(1)?
+                .unsqueeze(1)?;
+            dbg!(&scalings);
+            let adapter_a = adapter_a.broadcast_mul(&scalings)?;
+
             dbg!(&adapter_a);
             let out = Linear::new(adapter_a, None).forward(input)?;
             dbg!(&out);
