@@ -191,7 +191,7 @@ pub fn get_lora_cfg(tensor: &QTensor) -> LoraLinearConfig {
 
 /// Batch matrix multiplication.
 ///
-/// input = `[n_adapters*bs, seqlen, in]`
+/// input = `[n_adapters, bs*seqlen, in]`
 ///
 /// a = `[n_adapters, out, in]`
 fn bmm(input: &Tensor, a: &Tensor) -> Result<Tensor> {

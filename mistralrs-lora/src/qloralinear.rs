@@ -5,7 +5,8 @@ use candle_nn::{init, Dropout, Linear, VarBuilder};
 use either::Either;
 
 use crate::{
-    apply_scalings_to_x, bmm, get_maybe_topk_scalings, LinearLayerLike, LoraConfig, LoraLinearConfig, Ordering
+    apply_scalings_to_x, bmm, get_maybe_topk_scalings, LinearLayerLike, LoraConfig,
+    LoraLinearConfig, Ordering,
 };
 
 #[derive(Debug)]
@@ -171,7 +172,6 @@ impl LinearLayerLike for QLoraLinear {
             return Ok(result);
         }
         let scalings = get_maybe_topk_scalings(scalings, self.layer_n)?;
-        dbg!(&self.a_adapters);
         if self.a_adapters.is_left() {
             for (i, (adapter_a, (adapter_b, (adapter_scale, adapter_dropout)))) in zip(
                 self.a_adapters.as_ref().unwrap_left().iter(),
@@ -214,21 +214,20 @@ impl LinearLayerLike for QLoraLinear {
                     input_new.clone()
                 };
 
-                inputs.push(input_new.mul(*scale)?.mul(global_scaling_weight)?.unsqueeze(0)?);
+                inputs.push(
+                    input_new
+                        .mul(*scale)?
+                        .mul(global_scaling_weight)?
+                        .unsqueeze(0)?,
+                );
             }
             let input = Tensor::cat(&inputs, 0)?;
-            dbg!(input.shape());
             let (n_adapters, bs, seqlen, h) = input.dims4()?;
             let input = input.reshape((n_adapters, bs * seqlen, h))?;
 
-            dbg!(adapter_a.shape());
-            dbg!(adapter_b.shape());
             let out = bmm(&input, adapter_a)?;
-            dbg!(out.shape());
             let out = bmm(&out, adapter_b)?;
-            dbg!(out.shape());
             let out = out.reshape((n_adapters, bs, seqlen, *out.dims().last().unwrap()))?;
-            dbg!(out.shape());
             let out = out.sum(0)?;
             Ok(out)
         }
