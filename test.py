@@ -3,6 +3,8 @@ import time
 
 def bmm(input, a):
     # Perform batch matrix multiplication
+    print("a",a.shape)
+    print("inp",input.shape)
     result_reshaped = input @ a #torch.matmul(input_reshaped, a_reshaped)
 
     # Reshape the result back to the original shape

@@ -112,16 +112,14 @@ impl QLoraLinear {
                     .map(|x| x.weight().unsqueeze(0))
                     .collect::<Result<Vec<_>>>()?,
                 0,
-            )?
-            .permute((0, 2, 1))?;
+            )?;
             let b_adapters = Tensor::cat(
                 &b_adapters
                     .iter()
                     .map(|x| x.weight().unsqueeze(0))
                     .collect::<Result<Vec<_>>>()?,
                 0,
-            )?
-            .permute((0, 2, 1))?;
+            )?;
             Ok(QLoraLinear {
                 old,
                 a_adapters: Either::Right(a_adapters),
