@@ -538,6 +538,39 @@
 <a href="#537" id="537">537</a>
 <a href="#538" id="538">538</a>
 <a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
+<a href="#551" id="551">551</a>
+<a href="#552" id="552">552</a>
+<a href="#553" id="553">553</a>
+<a href="#554" id="554">554</a>
+<a href="#555" id="555">555</a>
+<a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -647,18 +680,28 @@
         cache: <span class="kw-2">&amp;mut </span>Cache,
         scalings: Tensor,
         global_scaling_weight: f64,
+        is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>_enter = <span class="self">self</span>.span.enter();
         <span class="kw">let </span>(b_sz, seq_len, hidden_size) = x.dims3()<span class="question-mark">?</span>;
-        <span class="kw">let </span>q = <span class="self">self
-            </span>.q_proj
-            .lora_forward(x, scalings.clone(), global_scaling_weight)<span class="question-mark">?</span>;
-        <span class="kw">let </span>k = <span class="self">self
-            </span>.k_proj
-            .lora_forward(x, scalings.clone(), global_scaling_weight)<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = <span class="self">self
-            </span>.v_proj
-            .lora_forward(x, scalings.clone(), global_scaling_weight)<span class="question-mark">?</span>;
+        <span class="kw">let </span>q = <span class="self">self</span>.q_proj.lora_forward(
+            x,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )<span class="question-mark">?</span>;
+        <span class="kw">let </span>k = <span class="self">self</span>.k_proj.lora_forward(
+            x,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = <span class="self">self</span>.v_proj.lora_forward(
+            x,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )<span class="question-mark">?</span>;
 
         <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz, seq_len, <span class="self">self</span>.num_attention_heads * <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz, seq_len, <span class="self">self</span>.num_key_value_heads * <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
@@ -719,9 +762,12 @@
             </span>att.matmul(<span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?</span>.to_dtype(in_dtype)<span class="question-mark">?
         </span>};
         <span class="kw">let </span>y = y.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>.reshape(<span class="kw-2">&amp;</span>[b_sz, seq_len, hidden_size])<span class="question-mark">?</span>;
-        <span class="kw">let </span>y = <span class="self">self
-            </span>.o_proj
-            .lora_forward(<span class="kw-2">&amp;</span>y, scalings.clone(), global_scaling_weight)<span class="question-mark">?</span>;
+        <span class="kw">let </span>y = <span class="self">self</span>.o_proj.lora_forward(
+            <span class="kw-2">&amp;</span>y,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(y)
     }
 
@@ -793,17 +839,27 @@
 }
 
 <span class="kw">impl </span>Mlp {
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor, scalings: Tensor, global_scaling_weight: f64) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+    <span class="kw">fn </span>forward(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        x: <span class="kw-2">&amp;</span>Tensor,
+        scalings: Tensor,
+        global_scaling_weight: f64,
+        is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>_enter = <span class="self">self</span>.span.enter();
         <span class="kw">let </span>x = (candle_nn::ops::silu(<span class="kw-2">&amp;</span><span class="self">self</span>.c_fc1.lora_forward(
             x,
             scalings.clone(),
             global_scaling_weight,
-        )<span class="question-mark">?</span>)<span class="question-mark">? </span>* <span class="self">self
-            </span>.c_fc2
-            .lora_forward(x, scalings.clone(), global_scaling_weight)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+            is_scaling_pass,
+        )<span class="question-mark">?</span>)<span class="question-mark">? </span>* <span class="self">self</span>.c_fc2.lora_forward(
+            x,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )<span class="question-mark">?</span>)<span class="question-mark">?</span>;
         <span class="self">self</span>.c_proj
-            .lora_forward(<span class="kw-2">&amp;</span>x, scalings.clone(), global_scaling_weight)
+            .lora_forward(<span class="kw-2">&amp;</span>x, scalings.clone(), global_scaling_weight, is_scaling_pass)
     }
 
     <span class="kw">fn </span>load(
@@ -849,6 +905,7 @@
         cache: <span class="kw-2">&amp;mut </span>Cache,
         scalings: Tensor,
         global_scaling_weight: f64,
+        is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>_enter = <span class="self">self</span>.span.enter();
         <span class="kw">let </span>residual = x;
@@ -862,12 +919,15 @@
             cache,
             scalings.clone(),
             global_scaling_weight,
+            is_scaling_pass,
         )<span class="question-mark">? </span>+ residual)<span class="question-mark">?</span>;
         <span class="kw">let </span>residual = <span class="kw-2">&amp;</span>x;
-        <span class="kw">let </span>x = (<span class="self">self
-            </span>.mlp
-            .forward(<span class="kw-2">&amp;</span><span class="self">self</span>.rms_2.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>, scalings, global_scaling_weight)<span class="question-mark">?
-            </span>+ residual)<span class="question-mark">?</span>;
+        <span class="kw">let </span>x = (<span class="self">self</span>.mlp.forward(
+            <span class="kw-2">&amp;</span><span class="self">self</span>.rms_2.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>,
+            scalings,
+            global_scaling_weight,
+            is_scaling_pass,
+        )<span class="question-mark">? </span>+ residual)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(x)
     }
 
@@ -919,6 +979,7 @@
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,
+        is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>x = <span class="self">self</span>.wte.forward(x)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="kw">if </span>is_full_pass {
@@ -944,6 +1005,7 @@
                 <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache,
                 scalings.clone(),
                 <span class="self">self</span>.xlora_classifier.get_global_scaling_weight(),
+                is_scaling_pass,
             )<span class="question-mark">?</span>;
         }
         <span class="self">self</span>.ln_f.forward(<span class="kw-2">&amp;</span>x)
@@ -978,6 +1040,7 @@
                 dummy_scalings,
                 <span class="bool-val">true</span>,
                 no_kv_cache,
+                <span class="prelude-val">Some</span>(<span class="self">self</span>.xlora_classifier.config.scaling_pass_value),
             )<span class="question-mark">?</span>;
 
             <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
@@ -998,6 +1061,7 @@
                 dummy_scalings,
                 <span class="bool-val">false</span>,
                 no_kv_cache,
+                <span class="prelude-val">Some</span>(<span class="self">self</span>.xlora_classifier.config.scaling_pass_value),
             )<span class="question-mark">?
         </span>};
 
@@ -1011,6 +1075,7 @@
                 scalings,
                 <span class="bool-val">true</span>,
                 no_kv_cache,
+                <span class="prelude-val">None</span>,
             )<span class="question-mark">?
             </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?
             </span>.i((.., seq_len_full - <span class="number">1</span>, ..))<span class="question-mark">?
@@ -1023,6 +1088,7 @@
                 scalings,
                 <span class="bool-val">true</span>,
                 no_kv_cache,
+                <span class="prelude-val">None</span>,
             )<span class="question-mark">?
             </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?
             </span>.i((.., seq_len - <span class="number">1</span>, ..))<span class="question-mark">?

@@ -112,6 +112,12 @@
 <a href="#111" id="111">111</a>
 <a href="#112" id="112">112</a>
 <a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+<a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{iter::zip, ops::Mul};
 
 <span class="kw">use </span>candle_core::{Module, <span class="prelude-ty">Result</span>, Shape, Tensor};
@@ -194,11 +200,17 @@
         input: <span class="kw-2">&amp;</span>Tensor,
         scalings: Tensor,
         global_scaling_weight: f64,
+        is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>result = <span class="self">self</span>.old.forward(input)<span class="question-mark">?</span>;
+
+        <span class="kw">if </span>is_scaling_pass.is_some_and(|x| x == <span class="number">0.</span>) {
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(result);
+        }
+
         <span class="kw">let </span>scalings = get_maybe_topk_scalings(scalings, <span class="self">self</span>.layer_n)<span class="question-mark">?</span>;
         <span class="comment">//No fan_in_fan_out so no weight.transpose(0,1)
-        </span><span class="kw">let </span><span class="kw-2">mut </span>result = <span class="self">self</span>.old.forward(input)<span class="question-mark">?</span>;
-        <span class="kw">for </span>(i, (adapter_a, (adapter_b, (adapter_scale, adapter_dropout)))) <span class="kw">in </span>zip(
+        </span><span class="kw">for </span>(i, (adapter_a, (adapter_b, (adapter_scale, adapter_dropout)))) <span class="kw">in </span>zip(
             <span class="kw-2">&amp;</span><span class="self">self</span>.a_adapters,
             zip(
                 <span class="kw-2">&amp;</span><span class="self">self</span>.b_adapters,
