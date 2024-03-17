@@ -171,7 +171,7 @@ impl LinearLayerLike for QLoraLinear {
             return Ok(result);
         }
         let scalings = get_maybe_topk_scalings(scalings, self.layer_n)?;
-
+        dbg!(&self.a_adapters);
         if self.a_adapters.is_left() {
             for (i, (adapter_a, (adapter_b, (adapter_scale, adapter_dropout)))) in zip(
                 self.a_adapters.as_ref().unwrap_left().iter(),
