@@ -2,12 +2,8 @@ import torch
 import time
 
 def bmm(input, a):
-    # Reshape input and a to prepare for batch matrix multiplication
-    input_reshaped = input.reshape(-1, input.size(-2), input.size(-1))
-    a_reshaped = a.reshape(-1, a.size(-2), a.size(-1))
-
     # Perform batch matrix multiplication
-    result_reshaped = input_reshaped @ a_reshaped #torch.matmul(input_reshaped, a_reshaped)
+    result_reshaped = input @ a #torch.matmul(input_reshaped, a_reshaped)
 
     # Reshape the result back to the original shape
     result = result_reshaped.reshape(input.size(0), input.size(1), a.size(-1))
