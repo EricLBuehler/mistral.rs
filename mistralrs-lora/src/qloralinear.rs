@@ -2,19 +2,19 @@ use std::{iter::zip, ops::Mul};
 
 use candle_core::{quantized::QMatMul, DType, Module, Result, Shape, Tensor};
 use candle_nn::{init, Dropout, Linear, VarBuilder};
+use either::Either;
 
 use crate::{
-    apply_scalings_to_x, get_maybe_topk_scalings, LinearLayerLike, LoraConfig, LoraLinearConfig,
-    Ordering,
+    apply_scalings_to_x, bmm, get_maybe_topk_scalings, LinearLayerLike, LoraConfig, LoraLinearConfig, Ordering
 };
 
 #[derive(Debug)]
 pub struct QLoraLinear {
     old: QMatMul,
-    a_adapters: Vec<Linear>,
-    b_adapters: Vec<Linear>,
+    a_adapters: Either<Vec<Linear>, Tensor>,
+    b_adapters: Either<Vec<Linear>, Tensor>,
     scale_adapters: Vec<f64>,
-    dropout_adapters: Vec<Option<Dropout>>,
+    dropout_adapters: Either<Vec<Option<Dropout>>, Option<Dropout>>,
     layer_n: usize,
 }
 
@@ -39,10 +39,10 @@ impl QLoraLinear {
         if !target_modules.contains(module) {
             return Ok(Self {
                 old,
-                a_adapters: vec![],
-                b_adapters: vec![],
+                a_adapters: Either::Left(vec![]),
+                b_adapters: Either::Left(vec![]),
                 scale_adapters: vec![],
-                dropout_adapters: vec![],
+                dropout_adapters: Either::Left(vec![]),
                 layer_n: usize::MAX,
             });
         }
@@ -56,6 +56,8 @@ impl QLoraLinear {
         let vb = vb.pp(prefix.clone());
         let a_vb = vb.pp("lora_A".to_string());
         let b_vb = vb.pp("lora_B".to_string());
+        let mut state = None;
+        let mut all_same = true;
         for (name, cfg) in config.iter() {
             let a_pp = a_vb.pp(name);
             assert!(a_pp.contains_tensor("weight"));
@@ -79,17 +81,64 @@ impl QLoraLinear {
                 1.0
             });
             dropout_adapters.push(cfg.dropout.map(Dropout::new));
+            if state.is_some_and(|x| {
+                x == (
+                    cfg.rank,
+                    linear_config.in_features,
+                    linear_config.out_features,
+                    cfg.alpha,
+                    cfg.dropout,
+                )
+            }) || state.is_none()
+            {
+                state = Some((
+                    cfg.rank,
+                    linear_config.in_features,
+                    linear_config.out_features,
+                    cfg.alpha,
+                    cfg.dropout,
+                ));
+            } else {
+                all_same = false;
+            }
         }
         let layer = *ordering.layers.get(&prefix).unwrap();
 
-        Ok(QLoraLinear {
-            old,
-            a_adapters,
-            b_adapters,
-            scale_adapters,
-            dropout_adapters,
-            layer_n: layer,
-        })
+        if all_same {
+            let a_adapters = Tensor::cat(
+                &a_adapters
+                    .iter()
+                    .map(|x| x.weight().unsqueeze(0))
+                    .collect::<Result<Vec<_>>>()?,
+                0,
+            )?
+            .permute((0, 2, 1))?;
+            let b_adapters = Tensor::cat(
+                &b_adapters
+                    .iter()
+                    .map(|x| x.weight().unsqueeze(0))
+                    .collect::<Result<Vec<_>>>()?,
+                0,
+            )?
+            .permute((0, 2, 1))?;
+            Ok(QLoraLinear {
+                old,
+                a_adapters: Either::Right(a_adapters),
+                b_adapters: Either::Right(b_adapters),
+                scale_adapters,
+                dropout_adapters: Either::Right(dropout_adapters[0].clone()),
+                layer_n: layer,
+            })
+        } else {
+            Ok(QLoraLinear {
+                old,
+                a_adapters: Either::Left(a_adapters),
+                b_adapters: Either::Left(b_adapters),
+                scale_adapters,
+                dropout_adapters: Either::Left(dropout_adapters),
+                layer_n: layer,
+            })
+        }
     }
 }
 
@@ -112,33 +161,75 @@ impl LinearLayerLike for QLoraLinear {
     ) -> Result<Tensor> {
         //No fan_in_fan_out so no weight.transpose(0,1)
         let mut result = self.old.forward(input)?;
-        if self.a_adapters.is_empty() || (is_scaling_pass.is_some_and(|x| x == 0.)) {
+        if self
+            .a_adapters
+            .as_ref()
+            .left()
+            .is_some_and(|x| x.is_empty())
+            || (is_scaling_pass.is_some_and(|x| x == 0.))
+        {
             return Ok(result);
         }
         let scalings = get_maybe_topk_scalings(scalings, self.layer_n)?;
 
-        for (i, (adapter_a, (adapter_b, (adapter_scale, adapter_dropout)))) in zip(
-            &self.a_adapters,
-            zip(
-                &self.b_adapters,
-                zip(&self.scale_adapters, &self.dropout_adapters),
-            ),
-        )
-        .enumerate()
-        {
-            let mut input_new = apply_scalings_to_x(input.clone(), &scalings, i)?;
+        if self.a_adapters.is_left() {
+            for (i, (adapter_a, (adapter_b, (adapter_scale, adapter_dropout)))) in zip(
+                self.a_adapters.as_ref().unwrap_left().iter(),
+                zip(
+                    self.b_adapters.as_ref().unwrap_left().iter(),
+                    zip(
+                        &self.scale_adapters,
+                        self.dropout_adapters.as_ref().unwrap_left().iter(),
+                    ),
+                ),
+            )
+            .enumerate()
+            {
+                let mut input_new = apply_scalings_to_x(input.clone(), &scalings, i)?;
 
-            input_new = if let Some(ref dropout) = adapter_dropout {
-                dropout.forward(&input_new, true)?
-            } else {
-                input_new.clone()
-            };
-            let res = adapter_b
-                .forward(&adapter_a.forward(&input_new)?)?
-                .mul(*adapter_scale)?
-                .mul(global_scaling_weight)?;
-            result = (result + res)?;
+                input_new = if let Some(ref dropout) = adapter_dropout {
+                    dropout.forward(&input_new, true)?
+                } else {
+                    input_new.clone()
+                };
+                let res = adapter_b
+                    .forward(&adapter_a.forward(&input_new)?)?
+                    .mul(*adapter_scale)?
+                    .mul(global_scaling_weight)?;
+                result = (result + res)?;
+            }
+            Ok(result)
+        } else {
+            let adapter_a = self.a_adapters.as_ref().unwrap_right();
+            let adapter_b = self.b_adapters.as_ref().unwrap_right();
+            let adapter_scales = &self.scale_adapters;
+            let dropout = self.dropout_adapters.as_ref().unwrap_right();
+            let mut inputs = Vec::new();
+            for (i, scale) in adapter_scales.iter().enumerate() {
+                let mut input_new = apply_scalings_to_x(input.clone(), &scalings, i)?;
+
+                input_new = if let Some(ref dropout) = dropout {
+                    dropout.forward(&input_new, true)?
+                } else {
+                    input_new.clone()
+                };
+
+                inputs.push(input_new.mul(*scale)?.mul(global_scaling_weight)?);
+            }
+            let input = Tensor::cat(&inputs, 0)?;
+            let (n_adapters, bs, seqlen, h) = input.dims4()?;
+            let input = input.reshape((n_adapters, bs * seqlen, h))?;
+
+            dbg!(adapter_a.shape());
+            dbg!(adapter_b.shape());
+            let out = bmm(&input, adapter_a)?;
+            dbg!(out.shape());
+            let out = bmm(&out, adapter_b)?;
+            dbg!(out.shape());
+            let out = out.reshape((n_adapters, bs, seqlen, h))?;
+            dbg!(out.shape());
+            let out = out.sum(0)?;
+            Ok(out)
         }
-        Ok(result)
     }
 }

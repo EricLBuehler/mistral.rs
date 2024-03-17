@@ -189,9 +189,11 @@ pub fn get_lora_cfg(tensor: &QTensor) -> LoraLinearConfig {
     LoraLinearConfig::new(tensor.shape().dims()[1], tensor.shape().dims()[0])
 }
 
-/// input = [n_adapters*bs, seqlen, in]
-/// a = [n_adapters, out, in]
-/// Batch matrix multiplication
+/// Batch matrix multiplication.
+///
+/// input = `[n_adapters*bs, seqlen, in]`
+///
+/// a = `[n_adapters, out, in]`
 fn bmm(input: &Tensor, a: &Tensor) -> Result<Tensor> {
     let input_reshaped = input.t()?;
     let a_reshaped = a.t()?;
