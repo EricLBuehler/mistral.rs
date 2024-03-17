@@ -27,6 +27,12 @@
 <a href="#26" id="26">26</a>
 <a href="#27" id="27">27</a>
 <a href="#28" id="28">28</a>
+<a href="#29" id="29">29</a>
+<a href="#30" id="30">30</a>
+<a href="#31" id="31">31</a>
+<a href="#32" id="32">32</a>
+<a href="#33" id="33">33</a>
+<a href="#34" id="34">34</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{env, fs};
 <span class="kw">use </span>thiserror::Error;
 
@@ -43,14 +49,20 @@
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_token(source: <span class="kw-2">&amp;</span>TokenSource) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
     <span class="prelude-val">Ok</span>(<span class="kw">match </span>source {
         TokenSource::Literal(data) =&gt; data.clone(),
-        TokenSource::EnvVar(envvar) =&gt; env::var(envvar)<span class="question-mark">?</span>,
-        TokenSource::Path(path) =&gt; fs::read_to_string(path)<span class="question-mark">?</span>,
-        TokenSource::CacheToken =&gt; fs::read_to_string(<span class="macro">format!</span>(
-            <span class="string">"{}/.cache/huggingface/token"</span>,
-            dirs::home_dir()
-                .ok_or(TokenRetrievalError::HomeDirectoryMissing)<span class="question-mark">?
-                </span>.display()
-        ))<span class="question-mark">?</span>,
+        TokenSource::EnvVar(envvar) =&gt; env::var(envvar)
+            .map_err(|<span class="kw">_</span>| anyhow::Error::msg(<span class="macro">format!</span>(<span class="string">"Could not load env var `{envvar}`"</span>)))<span class="question-mark">?</span>,
+        TokenSource::Path(path) =&gt; fs::read_to_string(path)
+            .map_err(|<span class="kw">_</span>| anyhow::Error::msg(<span class="macro">format!</span>(<span class="string">"Could not load token at `{path}`"</span>)))<span class="question-mark">?</span>,
+        TokenSource::CacheToken =&gt; {
+            <span class="kw">let </span>home = <span class="macro">format!</span>(
+                <span class="string">"{}/.cache/huggingface/token"</span>,
+                dirs::home_dir()
+                    .ok_or(TokenRetrievalError::HomeDirectoryMissing)<span class="question-mark">?
+                    </span>.display()
+            );
+            fs::read_to_string(home.clone())
+                .map_err(|<span class="kw">_</span>| anyhow::Error::msg(<span class="macro">format!</span>(<span class="string">"Could not load token at `{home}`"</span>)))<span class="question-mark">?
+        </span>}
     }
     .trim()
     .to_string())
