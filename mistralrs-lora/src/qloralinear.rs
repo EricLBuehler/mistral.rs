@@ -13,7 +13,7 @@ use crate::{
 pub struct QLoraLinear {
     old: QMatMul,
     a_adapters: Either<Vec<Linear>, Tensor>,
-    b_adapters: Either<Vec<Linear>, Tensor>,
+    b_adapters: Either<Vec<Linear>, Linear>,
     scale_adapters: Vec<f64>,
     dropout_adapters: Either<Vec<Option<Dropout>>, Option<Dropout>>,
     layer_n: usize,
@@ -123,7 +123,7 @@ impl QLoraLinear {
             Ok(QLoraLinear {
                 old,
                 a_adapters: Either::Right(a_adapters),
-                b_adapters: Either::Right(b_adapters),
+                b_adapters: Either::Right(Linear::new(b_adapters, None)),
                 scale_adapters,
                 dropout_adapters: Either::Right(dropout_adapters[0].clone()),
                 layer_n: layer,
@@ -202,30 +202,10 @@ impl LinearLayerLike for QLoraLinear {
             let adapter_b = self.b_adapters.as_ref().unwrap_right();
             let adapter_scales = &self.scale_adapters;
             let dropout = self.dropout_adapters.as_ref().unwrap_right();
-            let mut inputs = Vec::new();
-            for (i, scale) in adapter_scales.iter().enumerate() {
-                let mut input_new = apply_scalings_to_x(input.clone(), &scalings, i)?;
-
-                input_new = if let Some(ref dropout) = dropout {
-                    dropout.forward(&input_new, true)?
-                } else {
-                    input_new.clone()
-                };
-
-                inputs.push(
-                    input_new
-                        //.mul(*scale)?
-                        //.mul(global_scaling_weight)?
-                        .unsqueeze(0)?,
-                );
-            }
-            let input = Tensor::cat(&inputs, 0)?;
-            let (n_adapters, bs, seqlen, h) = input.dims4()?;
-            let input = input.reshape((n_adapters, bs * seqlen, h))?;
-
-            let out = bmm(&input, adapter_a)?;
-            let out = bmm(&out, adapter_b)?;
-            let out = out.reshape((n_adapters, bs, seqlen, *out.dims().last().unwrap()))?;
+            let adapter_a = adapter_a.broadcast_mul(&scalings)?;
+            
+            let out = Linear::new(adapter_a, None).forward(input)?;
+            let out = adapter_b.forward(&out)?;
             let out = out.sum(0)?;
             Ok(out)
         }
