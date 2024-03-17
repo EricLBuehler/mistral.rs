@@ -209,9 +209,13 @@ impl LinearLayerLike for QLoraLinear {
             let dropout = &self.dropout_adapters[0];
             let adapter_a = adapter_a.broadcast_mul(&scalings)?;
             
+            dbg!(&adapter_a);
             let out = Linear::new(adapter_a, None).forward(input)?;
+            dbg!(&out);
             let out = adapter_b.forward(&out)?;
+            dbg!(&out);
             let out = out.sum(0)?;
+            dbg!(&out);
             Ok(out)
         }
     }
