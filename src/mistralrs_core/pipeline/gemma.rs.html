@@ -423,16 +423,9 @@
 <a href="#422" id="422">422</a>
 <a href="#423" id="423">423</a>
 <a href="#424" id="424">424</a>
-<a href="#425" id="425">425</a>
-<a href="#426" id="426">426</a>
-<a href="#427" id="427">427</a>
-<a href="#428" id="428">428</a>
-<a href="#429" id="429">429</a>
-<a href="#430" id="430">430</a>
-<a href="#431" id="431">431</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
-    get_completion_input, get_model_paths, get_prompt_input, get_xlora_paths, Loader, ModelKind,
-    ModelPaths, Pipeline, TokenSource, XLoraPaths,
+    calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
+    Pipeline, TokenSource, XLoraPaths,
 };
 <span class="kw">use </span><span class="kw">crate</span>::models::Cache;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
@@ -464,6 +457,8 @@
     Normal(NormalModel),
     XLoraNormal(XLoraGemma),
 }
+
+<span class="kw">pub const </span>GEMMA_IS_GPTX: bool = <span class="bool-val">true</span>;
 
 <span class="kw">pub struct </span>GemmaModelPaths&lt;P&gt; {
     tokenizer_filename: P,
@@ -747,41 +742,32 @@
 
 <span class="kw">impl </span>Pipeline <span class="kw">for </span>GemmaPipeline {
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;mut </span><span class="self">self</span>, input_toks: Box&lt;[Rc&lt;RefCell&lt;Sequence&gt;&gt;]&gt;, is_prompt: bool) -&gt; Tensor {
-        <span class="kw">let </span>(input_ids, input_ids_full, seqlen_offsets, seqlen_offsets_full) =
-            <span class="kw">if </span><span class="self">self</span>.is_xlora() &amp;&amp; !is_prompt {
-                <span class="kw">let </span>(input_ids_full, seqlen_offsets_full) =
-                    get_prompt_input(<span class="kw-2">&amp;</span>input_toks, <span class="self">self</span>.device());
-                <span class="kw">let </span>(input_ids, seqlen_offsets) =
-                    get_completion_input(<span class="kw-2">&amp;</span>input_toks, <span class="self">self</span>.device(), <span class="self">self</span>.no_kv_cache);
-                (
-                    input_ids,
-                    <span class="prelude-val">Some</span>(input_ids_full),
-                    seqlen_offsets,
-                    <span class="prelude-val">Some</span>(seqlen_offsets_full),
-                )
-            } <span class="kw">else if </span><span class="self">self</span>.is_xlora() &amp;&amp; is_prompt {
-                <span class="kw">let </span>(input_ids_full, seqlen_offsets) = get_prompt_input(<span class="kw-2">&amp;</span>input_toks, <span class="self">self</span>.device());
-                (
-                    input_ids_full.clone(),
-                    <span class="prelude-val">Some</span>(input_ids_full),
-                    seqlen_offsets.clone(),
-                    <span class="prelude-val">Some</span>(seqlen_offsets),
-                )
-            } <span class="kw">else if </span>is_prompt {
-                <span class="kw">let </span>(input_ids, seqlen_offsets) = get_prompt_input(<span class="kw-2">&amp;</span>input_toks, <span class="self">self</span>.device());
-                (input_ids, <span class="prelude-val">None</span>, seqlen_offsets, <span class="prelude-val">None</span>)
-            } <span class="kw">else </span>{
-                <span class="kw">let </span>(input_ids, seqlen_offsets) =
-                    get_completion_input(<span class="kw-2">&amp;</span>input_toks, <span class="self">self</span>.device(), <span class="self">self</span>.no_kv_cache);
-                (input_ids, <span class="prelude-val">None</span>, seqlen_offsets, <span class="prelude-val">None</span>)
-            };
+        <span class="kw">let </span>ModelInputs {
+            input_ids,
+            input_ids_full,
+            seqlen_offsets,
+            seqlen_offsets_full,
+            seqlen_offsets_kernel,
+            seqlen_offsets_kernel_full,
+        } = calculate_inputs(
+            input_toks,
+            is_prompt,
+            <span class="self">self</span>.is_xlora(),
+            <span class="self">self</span>.device(),
+            <span class="self">self</span>.no_kv_cache,
+        )
+        .unwrap();
         <span class="kw">let </span>result = <span class="kw">match </span><span class="self">self</span>.model {
-            Model::Normal(<span class="kw-2">ref mut </span>model) =&gt; model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets),
+            Model::Normal(<span class="kw-2">ref mut </span>model) =&gt; {
+                model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets, seqlen_offsets_kernel)
+            }
             Model::XLoraNormal(<span class="kw-2">ref mut </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
                 input_ids_full.as_ref().unwrap(),
                 <span class="kw-2">&amp;</span>seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap(),
+                seqlen_offsets_kernel,
+                seqlen_offsets_kernel_full.unwrap(),
                 <span class="self">self</span>.no_kv_cache,
             ),
         };

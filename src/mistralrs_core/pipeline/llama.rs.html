@@ -484,11 +484,8 @@
 <a href="#483" id="483">483</a>
 <a href="#484" id="484">484</a>
 <a href="#485" id="485">485</a>
-<a href="#486" id="486">486</a>
-<a href="#487" id="487">487</a>
-<a href="#488" id="488">488</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
-    get_completion_input, get_model_paths, get_prompt_input, get_xlora_paths, ChatTemplate, Loader,
+    calculate_inputs, get_model_paths, get_xlora_paths, ChatTemplate, Loader, ModelInputs,
     ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
 };
 <span class="kw">use </span><span class="kw">crate</span>::models::llama::MAX_SEQ_LEN;
@@ -524,6 +521,7 @@
     XLoraNormal(XLoraLlama),
     XLoraQuantized(XLoraModelWeights),
 }
+<span class="kw">pub const </span>LLAMA_IS_GPTX: bool = <span class="bool-val">false</span>;
 
 <span class="kw">pub struct </span>LlamaModelPaths&lt;P&gt; {
     tokenizer_filename: P,
@@ -712,14 +710,14 @@
                 <span class="kw">let </span><span class="kw-2">mut </span>file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())<span class="question-mark">?</span>;
                 <span class="kw">let </span>model = gguf_file::Content::read(<span class="kw-2">&amp;mut </span>file)
                     .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))<span class="question-mark">?</span>;
-                <span class="kw">let </span>model = QModelWeights::from_gguf(model, <span class="kw-2">&amp;mut </span>file, device)<span class="question-mark">?</span>;
+                <span class="kw">let </span>model = QModelWeights::from_gguf(model, <span class="kw-2">&amp;mut </span>file, device, LLAMA_IS_GPTX)<span class="question-mark">?</span>;
                 Model::Quantized(model)
             }
             ModelKind::QuantizedGGML =&gt; {
                 <span class="kw">let </span><span class="kw-2">mut </span>file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())<span class="question-mark">?</span>;
                 <span class="kw">let </span>model = ggml_file::Content::read(<span class="kw-2">&amp;mut </span>file, device)
                     .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))<span class="question-mark">?</span>;
-                <span class="kw">let </span>model = QModelWeights::from_ggml(model, <span class="self">self</span>.config.gqa)<span class="question-mark">?</span>;
+                <span class="kw">let </span>model = QModelWeights::from_ggml(model, <span class="self">self</span>.config.gqa, LLAMA_IS_GPTX)<span class="question-mark">?</span>;
                 Model::Quantized(model)
             }
             ModelKind::Normal =&gt; {
@@ -734,7 +732,6 @@
                 <span class="kw">let </span>model = NormalModel::load(
                     vb,
                     <span class="kw-2">&amp;</span>basic_config.into_config(<span class="self">self</span>.config.use_flash_attn),
-                    dtype.unwrap_or(default_dtype),
                     device,
                     <span class="self">self</span>.no_kv_cache,
                 )<span class="question-mark">?</span>;
@@ -797,6 +794,7 @@
                     <span class="kw-2">&amp;</span>vb,
                     paths.get_ordering().as_ref().unwrap(),
                     paths.get_classifier_config().as_ref().unwrap().clone(),
+                    LLAMA_IS_GPTX,
                 )<span class="question-mark">?</span>;
                 Model::XLoraQuantized(model)
             }
@@ -826,6 +824,7 @@
                     <span class="kw-2">&amp;</span>vb,
                     paths.get_ordering().as_ref().unwrap(),
                     paths.get_classifier_config().as_ref().unwrap().clone(),
+                    LLAMA_IS_GPTX,
                 )<span class="question-mark">?</span>;
                 Model::XLoraQuantized(model)
             }
@@ -849,42 +848,35 @@
 
 <span class="kw">impl </span>Pipeline <span class="kw">for </span>LlamaPipeline {
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;mut </span><span class="self">self</span>, input_toks: Box&lt;[Rc&lt;RefCell&lt;Sequence&gt;&gt;]&gt;, is_prompt: bool) -&gt; Tensor {
-        <span class="kw">let </span>(input_ids, input_ids_full, seqlen_offsets, seqlen_offsets_full) =
-            <span class="kw">if </span><span class="self">self</span>.is_xlora() &amp;&amp; !is_prompt {
-                <span class="kw">let </span>(input_ids_full, seqlen_offsets_full) =
-                    get_prompt_input(<span class="kw-2">&amp;</span>input_toks, <span class="self">self</span>.device());
-                <span class="kw">let </span>(input_ids, seqlen_offsets) =
-                    get_completion_input(<span class="kw-2">&amp;</span>input_toks, <span class="self">self</span>.device(), <span class="self">self</span>.no_kv_cache);
-                (
-                    input_ids,
-                    <span class="prelude-val">Some</span>(input_ids_full),
-                    seqlen_offsets,
-                    <span class="prelude-val">Some</span>(seqlen_offsets_full),
-                )
-            } <span class="kw">else if </span><span class="self">self</span>.is_xlora() &amp;&amp; is_prompt {
-                <span class="kw">let </span>(input_ids_full, seqlen_offsets) = get_prompt_input(<span class="kw-2">&amp;</span>input_toks, <span class="self">self</span>.device());
-                (
-                    input_ids_full.clone(),
-                    <span class="prelude-val">Some</span>(input_ids_full),
-                    seqlen_offsets.clone(),
-                    <span class="prelude-val">Some</span>(seqlen_offsets),
-                )
-            } <span class="kw">else if </span>is_prompt {
-                <span class="kw">let </span>(input_ids, seqlen_offsets) = get_prompt_input(<span class="kw-2">&amp;</span>input_toks, <span class="self">self</span>.device());
-                (input_ids, <span class="prelude-val">None</span>, seqlen_offsets, <span class="prelude-val">None</span>)
-            } <span class="kw">else </span>{
-                <span class="kw">let </span>(input_ids, seqlen_offsets) =
-                    get_completion_input(<span class="kw-2">&amp;</span>input_toks, <span class="self">self</span>.device(), <span class="self">self</span>.no_kv_cache);
-                (input_ids, <span class="prelude-val">None</span>, seqlen_offsets, <span class="prelude-val">None</span>)
-            };
+        <span class="kw">let </span>ModelInputs {
+            input_ids,
+            input_ids_full,
+            seqlen_offsets,
+            seqlen_offsets_full,
+            seqlen_offsets_kernel,
+            seqlen_offsets_kernel_full,
+        } = calculate_inputs(
+            input_toks,
+            is_prompt,
+            <span class="self">self</span>.is_xlora(),
+            <span class="self">self</span>.device(),
+            <span class="self">self</span>.no_kv_cache,
+        )
+        .unwrap();
         <span class="kw">let </span>result = <span class="kw">match </span><span class="self">self</span>.model {
-            Model::Normal(<span class="kw-2">ref mut </span>model) =&gt; model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets),
-            Model::Quantized(<span class="kw-2">ref mut </span>model) =&gt; model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets),
+            Model::Normal(<span class="kw-2">ref mut </span>model) =&gt; {
+                model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets, seqlen_offsets_kernel)
+            }
+            Model::Quantized(<span class="kw-2">ref mut </span>model) =&gt; {
+                model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets, seqlen_offsets_kernel)
+            }
             Model::XLoraNormal(<span class="kw-2">ref mut </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
                 input_ids_full.as_ref().unwrap(),
                 <span class="kw-2">&amp;</span>seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap(),
+                seqlen_offsets_kernel,
+                seqlen_offsets_kernel_full.unwrap(),
                 <span class="self">self</span>.no_kv_cache,
             ),
             Model::XLoraQuantized(<span class="kw-2">ref mut </span>model) =&gt; model.forward(
@@ -892,6 +884,8 @@
                 input_ids_full.as_ref().unwrap(),
                 <span class="kw-2">&amp;</span>seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap(),
+                seqlen_offsets_kernel,
+                seqlen_offsets_kernel_full.unwrap(),
                 <span class="self">self</span>.no_kv_cache,
             ),
         };
