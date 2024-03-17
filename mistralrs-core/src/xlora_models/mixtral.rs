@@ -4,11 +4,14 @@
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{Activation, VarBuilder};
+use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
-use std::{iter::zip, sync::Arc};
+use std::sync::Arc;
 
-use crate::models::{mixtral::Config, Cache};
+use crate::{
+    models::{mixtral::Config, Cache},
+    pipeline::MIXTRAL_IS_GPTX,
+};
 
 use super::{classifier::XLoraClassifier, XLoraConfig};
 
@@ -30,65 +33,6 @@ impl Module for RmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         self.inner.forward(x)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
-}
-
-fn rotate_half(xs: &Tensor) -> Result<Tensor> {
-    let last_dim = xs.dim(D::Minus1)?;
-    let xs1 = xs.narrow(D::Minus1, 0, last_dim / 2)?;
-    let xs2 = xs.narrow(D::Minus1, last_dim / 2, last_dim - last_dim / 2)?;
-    Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)
-}
-
-impl RotaryEmbedding {
-    fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
-        let dim = cfg.hidden_size / cfg.num_attention_heads;
-        let max_seq_len = cfg.max_position_embeddings;
-        let inv_freq: Vec<_> = (0..dim)
-            .step_by(2)
-            .map(|i| 1f32 / (cfg.rope_theta as f32).powf(i as f32 / dim as f32))
-            .collect();
-        let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
-        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
-            .to_dtype(dtype)?
-            .reshape((max_seq_len, 1))?;
-        let freqs = t.matmul(&inv_freq)?;
-        let freqs = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
-        Ok(Self {
-            sin: freqs.sin()?,
-            cos: freqs.cos()?,
-        })
-    }
-
-    fn apply_rotary_emb_qkv(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        seqlen_offsets: &[usize],
-    ) -> Result<(Tensor, Tensor)> {
-        let (b_sz, _h, seq_len, _n_embd) = q.dims4()?;
-        let mut q_embeds = Vec::with_capacity(b_sz);
-        let mut k_embeds = Vec::with_capacity(b_sz);
-        for (b, seqlen_offset) in zip(0..b_sz, seqlen_offsets) {
-            let q_b = q.i(b)?.unsqueeze(0)?;
-            let k_b = k.i(b)?.unsqueeze(0)?;
-            let cos = self.cos.narrow(0, *seqlen_offset, seq_len)?;
-            let sin = self.sin.narrow(0, *seqlen_offset, seq_len)?;
-            let cos = cos.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
-            let sin = sin.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
-            let q_embed = (q_b.broadcast_mul(&cos)? + rotate_half(&q_b)?.broadcast_mul(&sin))?;
-            let k_embed = (k_b.broadcast_mul(&cos)? + rotate_half(&k_b)?.broadcast_mul(&sin))?;
-            q_embeds.push(q_embed);
-            k_embeds.push(k_embed);
-        }
-        Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
     }
 }
 
@@ -196,11 +140,13 @@ impl Attention {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &mut self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Tensor,
         global_scaling_weight: f64,
@@ -217,6 +163,18 @@ impl Attention {
             .v_proj
             .lora_forward(xs, scalings.clone(), global_scaling_weight)?;
 
+        let mut query_states =
+            query_states.reshape((b_sz, q_len, self.num_heads * self.head_dim))?;
+        let mut key_states =
+            key_states.reshape((b_sz, q_len, self.num_kv_heads * self.head_dim))?;
+
+        self.rotary_emb.forward(
+            seqlen_offsets,
+            &start_offsets_kernel,
+            &mut query_states,
+            &mut key_states,
+        )?;
+
         let query_states = query_states
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
@@ -227,15 +185,11 @@ impl Attention {
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let (query_states, key_states) =
-            self.rotary_emb
-                .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offsets)?;
-
         let (key_states, value_states) = match &*kv_cache {
             None => (key_states, value_states),
             Some((prev_k, prev_v)) => {
-                let key_states = Tensor::cat(&[prev_k, &key_states], 2)?;
-                let value_states = Tensor::cat(&[prev_v, &value_states], 2)?;
+                let key_states = candle_nn::ops::kvconcat(prev_k, &key_states, 2)?;
+                let value_states = candle_nn::ops::kvconcat(prev_v, &value_states, 2)?;
                 (key_states, value_states)
             }
         };
@@ -468,11 +422,13 @@ impl DecoderLayer {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &mut self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Tensor,
         global_scaling_weight: f64,
@@ -483,6 +439,7 @@ impl DecoderLayer {
             &xs,
             attention_mask,
             seqlen_offsets,
+            start_offsets_kernel,
             kv_cache,
             scalings.clone(),
             global_scaling_weight,
@@ -522,7 +479,14 @@ impl XLoraModel {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
-        let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb_m.device())?);
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        let rotary_emb = Arc::new(RotaryEmbedding::new(
+            cfg.rope_theta as f32,
+            head_dim,
+            cfg.max_position_embeddings,
+            vb_m.device(),
+            MIXTRAL_IS_GPTX,
+        )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         let mut count = 0;
@@ -608,6 +572,7 @@ impl XLoraModel {
         &mut self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,
@@ -640,6 +605,7 @@ impl XLoraModel {
                 &xs,
                 attention_mask.as_ref(),
                 seqlen_offsets,
+                start_offsets_kernel.clone(),
                 cache.get_mut(i).unwrap(),
                 scalings.clone(),
                 self.xlora_classifier.get_global_scaling_weight(),
@@ -648,12 +614,15 @@ impl XLoraModel {
         xs.apply(&self.norm)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &mut self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
         seqlen_offsets_full: &[usize],
+        start_offsets_kernel: Tensor,
+        start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
     ) -> Result<Tensor> {
         let (b_size, seq_len_full) = input_ids_full.dims2()?;
@@ -670,6 +639,7 @@ impl XLoraModel {
             let res = self.inner_forward(
                 input_ids_full,
                 seqlen_offsets_full,
+                start_offsets_kernel_full.clone(),
                 dummy_scalings,
                 true,
                 no_kv_cache,
@@ -689,6 +659,7 @@ impl XLoraModel {
             self.inner_forward(
                 input_ids,
                 seqlen_offsets,
+                start_offsets_kernel.clone(),
                 dummy_scalings,
                 false,
                 no_kv_cache,
@@ -701,6 +672,7 @@ impl XLoraModel {
             self.inner_forward(
                 input_ids_full,
                 seqlen_offsets_full,
+                start_offsets_kernel_full,
                 scalings,
                 true,
                 no_kv_cache,
@@ -709,9 +681,16 @@ impl XLoraModel {
             .narrow(1, seq_len_full - 1, 1)
         } else {
             // is_full_pass=true is ok because no_kv_cache=false
-            self.inner_forward(input_ids, seqlen_offsets, scalings, true, no_kv_cache)?
-                .apply(&self.lm_head)?
-                .narrow(1, seq_len - 1, 1)
+            self.inner_forward(
+                input_ids,
+                seqlen_offsets,
+                start_offsets_kernel,
+                scalings,
+                true,
+                no_kv_cache,
+            )?
+            .apply(&self.lm_head)?
+            .narrow(1, seq_len - 1, 1)
         }
     }
 }

@@ -1,6 +1,6 @@
 use super::{
-    get_completion_input, get_model_paths, get_prompt_input, get_xlora_paths, Loader, ModelKind,
-    ModelPaths, Pipeline, TokenSource, XLoraPaths,
+    calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
+    Pipeline, TokenSource, XLoraPaths,
 };
 use crate::models::Cache;
 use crate::pipeline::ChatTemplate;
@@ -32,6 +32,8 @@ enum Model {
     Normal(NormalModel),
     XLoraNormal(XLoraGemma),
 }
+
+pub const GEMMA_IS_GPTX: bool = true;
 
 pub struct GemmaModelPaths<P> {
     tokenizer_filename: P,
@@ -315,41 +317,32 @@ impl Loader for GemmaLoader {
 
 impl Pipeline for GemmaPipeline {
     fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor {
-        let (input_ids, input_ids_full, seqlen_offsets, seqlen_offsets_full) =
-            if self.is_xlora() && !is_prompt {
-                let (input_ids_full, seqlen_offsets_full) =
-                    get_prompt_input(&input_toks, self.device());
-                let (input_ids, seqlen_offsets) =
-                    get_completion_input(&input_toks, self.device(), self.no_kv_cache);
-                (
-                    input_ids,
-                    Some(input_ids_full),
-                    seqlen_offsets,
-                    Some(seqlen_offsets_full),
-                )
-            } else if self.is_xlora() && is_prompt {
-                let (input_ids_full, seqlen_offsets) = get_prompt_input(&input_toks, self.device());
-                (
-                    input_ids_full.clone(),
-                    Some(input_ids_full),
-                    seqlen_offsets.clone(),
-                    Some(seqlen_offsets),
-                )
-            } else if is_prompt {
-                let (input_ids, seqlen_offsets) = get_prompt_input(&input_toks, self.device());
-                (input_ids, None, seqlen_offsets, None)
-            } else {
-                let (input_ids, seqlen_offsets) =
-                    get_completion_input(&input_toks, self.device(), self.no_kv_cache);
-                (input_ids, None, seqlen_offsets, None)
-            };
+        let ModelInputs {
+            input_ids,
+            input_ids_full,
+            seqlen_offsets,
+            seqlen_offsets_full,
+            seqlen_offsets_kernel,
+            seqlen_offsets_kernel_full,
+        } = calculate_inputs(
+            input_toks,
+            is_prompt,
+            self.is_xlora(),
+            self.device(),
+            self.no_kv_cache,
+        )
+        .unwrap();
         let result = match self.model {
-            Model::Normal(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
+            Model::Normal(ref mut model) => {
+                model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)
+            }
             Model::XLoraNormal(ref mut model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap(),
                 &seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap(),
+                seqlen_offsets_kernel,
+                seqlen_offsets_kernel_full.unwrap(),
                 self.no_kv_cache,
             ),
         };

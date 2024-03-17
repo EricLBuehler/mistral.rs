@@ -1,5 +1,5 @@
 use super::{
-    get_completion_input, get_model_paths, get_prompt_input, get_xlora_paths, ChatTemplate, Loader,
+    calculate_inputs, get_model_paths, get_xlora_paths, ChatTemplate, Loader, ModelInputs,
     ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
 };
 use crate::models::llama::MAX_SEQ_LEN;
@@ -35,6 +35,7 @@ enum Model {
     XLoraNormal(XLoraLlama),
     XLoraQuantized(XLoraModelWeights),
 }
+pub const LLAMA_IS_GPTX: bool = false;
 
 pub struct LlamaModelPaths<P> {
     tokenizer_filename: P,
@@ -223,14 +224,14 @@ impl Loader for LlamaLoader {
                 let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
                 let model = gguf_file::Content::read(&mut file)
                     .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
-                let model = QModelWeights::from_gguf(model, &mut file, device)?;
+                let model = QModelWeights::from_gguf(model, &mut file, device, LLAMA_IS_GPTX)?;
                 Model::Quantized(model)
             }
             ModelKind::QuantizedGGML => {
                 let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
                 let model = ggml_file::Content::read(&mut file, device)
                     .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
-                let model = QModelWeights::from_ggml(model, self.config.gqa)?;
+                let model = QModelWeights::from_ggml(model, self.config.gqa, LLAMA_IS_GPTX)?;
                 Model::Quantized(model)
             }
             ModelKind::Normal => {
@@ -245,7 +246,6 @@ impl Loader for LlamaLoader {
                 let model = NormalModel::load(
                     vb,
                     &basic_config.into_config(self.config.use_flash_attn),
-                    dtype.unwrap_or(default_dtype),
                     device,
                     self.no_kv_cache,
                 )?;
@@ -308,6 +308,7 @@ impl Loader for LlamaLoader {
                     &vb,
                     paths.get_ordering().as_ref().unwrap(),
                     paths.get_classifier_config().as_ref().unwrap().clone(),
+                    LLAMA_IS_GPTX,
                 )?;
                 Model::XLoraQuantized(model)
             }
@@ -337,6 +338,7 @@ impl Loader for LlamaLoader {
                     &vb,
                     paths.get_ordering().as_ref().unwrap(),
                     paths.get_classifier_config().as_ref().unwrap().clone(),
+                    LLAMA_IS_GPTX,
                 )?;
                 Model::XLoraQuantized(model)
             }
@@ -360,42 +362,35 @@ impl Loader for LlamaLoader {
 
 impl Pipeline for LlamaPipeline {
     fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor {
-        let (input_ids, input_ids_full, seqlen_offsets, seqlen_offsets_full) =
-            if self.is_xlora() && !is_prompt {
-                let (input_ids_full, seqlen_offsets_full) =
-                    get_prompt_input(&input_toks, self.device());
-                let (input_ids, seqlen_offsets) =
-                    get_completion_input(&input_toks, self.device(), self.no_kv_cache);
-                (
-                    input_ids,
-                    Some(input_ids_full),
-                    seqlen_offsets,
-                    Some(seqlen_offsets_full),
-                )
-            } else if self.is_xlora() && is_prompt {
-                let (input_ids_full, seqlen_offsets) = get_prompt_input(&input_toks, self.device());
-                (
-                    input_ids_full.clone(),
-                    Some(input_ids_full),
-                    seqlen_offsets.clone(),
-                    Some(seqlen_offsets),
-                )
-            } else if is_prompt {
-                let (input_ids, seqlen_offsets) = get_prompt_input(&input_toks, self.device());
-                (input_ids, None, seqlen_offsets, None)
-            } else {
-                let (input_ids, seqlen_offsets) =
-                    get_completion_input(&input_toks, self.device(), self.no_kv_cache);
-                (input_ids, None, seqlen_offsets, None)
-            };
+        let ModelInputs {
+            input_ids,
+            input_ids_full,
+            seqlen_offsets,
+            seqlen_offsets_full,
+            seqlen_offsets_kernel,
+            seqlen_offsets_kernel_full,
+        } = calculate_inputs(
+            input_toks,
+            is_prompt,
+            self.is_xlora(),
+            self.device(),
+            self.no_kv_cache,
+        )
+        .unwrap();
         let result = match self.model {
-            Model::Normal(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
-            Model::Quantized(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
+            Model::Normal(ref mut model) => {
+                model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)
+            }
+            Model::Quantized(ref mut model) => {
+                model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)
+            }
             Model::XLoraNormal(ref mut model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap(),
                 &seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap(),
+                seqlen_offsets_kernel,
+                seqlen_offsets_kernel_full.unwrap(),
                 self.no_kv_cache,
             ),
             Model::XLoraQuantized(ref mut model) => model.forward(
@@ -403,6 +398,8 @@ impl Pipeline for LlamaPipeline {
                 input_ids_full.as_ref().unwrap(),
                 &seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap(),
+                seqlen_offsets_kernel,
+                seqlen_offsets_kernel_full.unwrap(),
                 self.no_kv_cache,
             ),
         };

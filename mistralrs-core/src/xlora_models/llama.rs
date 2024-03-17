@@ -1,14 +1,17 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{embedding, Embedding, Module, VarBuilder};
+use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering};
 use std::{collections::HashMap, sync::Arc};
 
-use crate::models::{
-    self,
-    llama::{Config, MAX_SEQ_LEN},
-    LayerCaches,
+use crate::{
+    models::{
+        self,
+        llama::{Config, MAX_SEQ_LEN},
+        LayerCaches,
+    },
+    pipeline::LLAMA_IS_GPTX,
 };
 
 use super::{classifier::XLoraClassifier, XLoraConfig};
@@ -17,35 +20,15 @@ use super::{classifier::XLoraClassifier, XLoraConfig};
 pub struct Cache {
     masks: HashMap<usize, Tensor>,
     pub use_kv_cache: bool,
-    cos: Tensor,
-    sin: Tensor,
     device: Device,
 }
 
 impl Cache {
-    pub fn new(use_kv_cache: bool, dtype: DType, config: &Config, device: &Device) -> Result<Self> {
-        // precompute freqs_cis
-        let n_elem = config.hidden_size / config.num_attention_heads;
-        let theta: Vec<_> = (0..n_elem)
-            .step_by(2)
-            .map(|i| 1f32 / config.rope_theta.powf(i as f32 / n_elem as f32))
-            .collect();
-        let theta = Tensor::new(theta.as_slice(), device)?;
-        let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, device)?
-            .to_dtype(DType::F32)?
-            .reshape((MAX_SEQ_LEN, 1))?
-            .matmul(&theta.reshape((1, theta.elem_count()))?)?;
-        // This is different from the paper, see:
-        // https://github.com/huggingface/transformers/blob/6112b1c6442aaf7affd2b0676a1cd4eee30c45cf/src/transformers/models/llama/modeling_llama.py#L112
-        let idx_theta = Tensor::cat(&[&idx_theta, &idx_theta], D::Minus1)?;
-        let cos = idx_theta.cos()?.to_dtype(dtype)?;
-        let sin = idx_theta.sin()?.to_dtype(dtype)?;
+    pub fn new(use_kv_cache: bool, device: &Device) -> Result<Self> {
         Ok(Self {
             masks: HashMap::new(),
             use_kv_cache,
             device: device.clone(),
-            cos,
-            sin,
         })
     }
 
@@ -93,7 +76,7 @@ struct CausalSelfAttention {
     head_dim: usize,
     use_flash_attn: bool,
     span: tracing::Span,
-    span_rot: tracing::Span,
+    rotary_emb: Arc<RotaryEmbedding>,
 }
 
 #[cfg(feature = "flash-attn")]
@@ -113,35 +96,12 @@ fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Ten
 }
 
 impl CausalSelfAttention {
-    fn apply_rotary_emb(
-        &self,
-        x: &Tensor,
-        seqlen_offsets: &[usize],
-        cache: &Cache,
-    ) -> Result<Tensor> {
-        let _enter = self.span_rot.enter();
-        let (_b_sz, _, seq_len, hidden_size) = x.dims4()?;
-        let mut ropes = Vec::new();
-        for (b, offset) in seqlen_offsets.iter().enumerate() {
-            let cos = cache.cos.narrow(0, *offset, seq_len)?;
-            let sin = cache.sin.narrow(0, *offset, seq_len)?;
-            let cos = cos.broadcast_as((1, 1, seq_len, hidden_size))?;
-            let sin = sin.broadcast_as((1, 1, seq_len, hidden_size))?;
-            let x_b = x.i(b)?.unsqueeze(0)?;
-            let x1 = x_b.narrow(D::Minus1, 0, hidden_size / 2)?;
-            let x2 = x_b.narrow(D::Minus1, hidden_size / 2, hidden_size / 2)?;
-            let rotate_x = Tensor::cat(&[&x2.neg()?, &x1], D::Minus1)?;
-            let rope = (x_b.broadcast_mul(&cos)? + rotate_x.broadcast_mul(&sin)?)?;
-            ropes.push(rope);
-        }
-        Tensor::cat(&ropes, 0)
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         x: &Tensor,
         seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
         block_idx: usize,
         kv_cache: &mut LayerCaches,
         cache: &mut Cache,
@@ -160,23 +120,26 @@ impl CausalSelfAttention {
             .v_proj
             .lora_forward(x, scalings.clone(), global_scaling_weight)?;
 
+        let mut q = q.reshape((b_sz, seq_len, self.num_attention_heads * self.head_dim))?;
+        let mut k = k.reshape((b_sz, seq_len, self.num_key_value_heads * self.head_dim))?;
+
+        self.rotary_emb
+            .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k)?;
+
         let q = q
             .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
             .transpose(1, 2)?;
-        let k = k
+        let mut k = k
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
         let mut v = v
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let q = self.apply_rotary_emb(&q, seqlen_offsets, cache)?;
-        let mut k = self.apply_rotary_emb(&k, seqlen_offsets, cache)?;
-
         if cache.use_kv_cache {
             if let Some((cache_k, cache_v)) = &kv_cache[block_idx] {
-                k = Tensor::cat(&[cache_k, &k], 2)?.contiguous()?;
-                v = Tensor::cat(&[cache_v, &v], 2)?.contiguous()?;
+                k = candle_nn::ops::kvconcat(cache_k, &k, 2)?.contiguous()?;
+                v = candle_nn::ops::kvconcat(cache_v, &v, 2)?.contiguous()?;
                 let k_seq_len = k.dims()[1];
                 if k_seq_len > MAX_SEQ_LEN {
                     k = k
@@ -244,7 +207,6 @@ impl CausalSelfAttention {
         ord: &Ordering,
     ) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "attn");
-        let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
@@ -252,6 +214,14 @@ impl CausalSelfAttention {
         let k_proj = linear(size_in, size_kv, vb.pp("k_proj"), lora_config, count, ord)?;
         let v_proj = linear(size_in, size_kv, vb.pp("v_proj"), lora_config, count, ord)?;
         let o_proj = linear(size_q, size_in, vb.pp("o_proj"), lora_config, count, ord)?;
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        let rotary_emb = Arc::new(RotaryEmbedding::new(
+            cfg.rope_theta,
+            head_dim,
+            MAX_SEQ_LEN,
+            vb.device(),
+            LLAMA_IS_GPTX,
+        )?);
         Ok(Self {
             q_proj,
             k_proj,
@@ -262,7 +232,7 @@ impl CausalSelfAttention {
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             use_flash_attn: cfg.use_flash_attn,
             span,
-            span_rot,
+            rotary_emb,
         })
     }
 }
@@ -333,6 +303,7 @@ impl Block {
         &self,
         x: &Tensor,
         seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
         block_idx: usize,
         kv_cache: &mut LayerCaches,
         cache: &mut Cache,
@@ -345,6 +316,7 @@ impl Block {
         let x = (self.attn.forward(
             &x,
             seqlen_offsets,
+            start_offsets_kernel,
             block_idx,
             kv_cache,
             cache,
@@ -403,6 +375,7 @@ impl XLoraLlama {
         &mut self,
         x: &Tensor,
         seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,
@@ -425,6 +398,7 @@ impl XLoraLlama {
             x = block.forward(
                 &x,
                 seqlen_offsets,
+                start_offsets_kernel.clone(),
                 block_idx,
                 &mut cache,
                 &mut self.cache,
@@ -435,12 +409,15 @@ impl XLoraLlama {
         self.ln_f.forward(&x)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &mut self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
         seqlen_offsets_full: &[usize],
+        start_offsets_kernel: Tensor,
+        start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
     ) -> Result<Tensor> {
         let (b_size, seq_len_full) = input_ids_full.dims2()?;
@@ -457,6 +434,7 @@ impl XLoraLlama {
             let res = self.inner_forward(
                 input_ids_full,
                 seqlen_offsets_full,
+                start_offsets_kernel_full.clone(),
                 dummy_scalings,
                 true,
                 no_kv_cache,
@@ -476,6 +454,7 @@ impl XLoraLlama {
             self.inner_forward(
                 input_ids,
                 seqlen_offsets,
+                start_offsets_kernel.clone(),
                 dummy_scalings,
                 false,
                 no_kv_cache,
@@ -488,6 +467,7 @@ impl XLoraLlama {
             self.inner_forward(
                 input_ids_full,
                 seqlen_offsets_full,
+                start_offsets_kernel_full,
                 scalings,
                 true,
                 no_kv_cache,
@@ -496,9 +476,16 @@ impl XLoraLlama {
             .i((.., seq_len_full - 1, ..))?
         } else {
             // is_full_pass=true is ok because no_kv_cache=false
-            self.inner_forward(input_ids, seqlen_offsets, scalings, true, no_kv_cache)?
-                .apply(&self.lm_head)?
-                .i((.., seq_len - 1, ..))?
+            self.inner_forward(
+                input_ids,
+                seqlen_offsets,
+                start_offsets_kernel,
+                scalings,
+                true,
+                no_kv_cache,
+            )?
+            .apply(&self.lm_head)?
+            .i((.., seq_len - 1, ..))?
         }
         .to_dtype(DType::F32)
     }
@@ -536,7 +523,7 @@ impl XLoraLlama {
             blocks,
             ln_f,
             lm_head,
-            cache: Cache::new(!no_kv_cache, dtype, cfg, device)?,
+            cache: Cache::new(!no_kv_cache, device)?,
             kv_cache: models::Cache::new(cfg.num_hidden_layers, true),
             device: device.clone(),
             xlora_classifier: XLoraClassifier::new(
