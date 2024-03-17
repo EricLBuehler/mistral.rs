@@ -170,7 +170,7 @@ impl XLoraLoader {
         tokenizer_json: Option<String>,
     ) -> PyResult<Self> {
         use_flash_attn = use_flash_attn.map(|x| x & cfg!(feature = "flash-attn"));
-        let kind = ModelKind::Normal;
+        let kind = ModelKind::XLoraNormal;
 
         let loader = Python::with_gil(|py| {
             let elems: &[Py<PyAny>] = &[
@@ -428,9 +428,9 @@ impl XLoraQuantizedLoader {
     ) -> PyResult<Self> {
         use_flash_attn = use_flash_attn.map(|x| x & cfg!(feature = "flash-attn"));
         let kind = if is_gguf {
-            ModelKind::QuantizedGGUF
+            ModelKind::XLoraGGUF
         } else {
-            ModelKind::QuantizedGGML
+            ModelKind::XLoraGGML
         };
 
         let loader = Python::with_gil(|py| {
