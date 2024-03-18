@@ -208,7 +208,7 @@ impl LayerWeights {
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
-        ).unwrap();
+        )?;
         let k = self.attention_wk.lora_forward(
             x,
             scalings.clone(),

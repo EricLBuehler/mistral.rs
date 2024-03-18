@@ -103,7 +103,8 @@ impl LoraLinear {
                         a_adapters_stack.device(),
                     )?
                     .unsqueeze(1)?
-                    .unsqueeze(1)?,
+                    .unsqueeze(1)?
+                    .to_dtype(a_adapters_stack.dtype())?,
                     scale_adapters,
                 )),
                 dropout_adapters,

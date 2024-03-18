@@ -316,10 +316,8 @@ impl Engine {
                 }
             }
             if pipeline.is_xlora() {
-                *deref_mut_refcell!(seqs[0]).scaling_cache() = pipeline
-                    .cache()
-                    .get_scalings_cache()
-                    .clone();
+                *deref_mut_refcell!(seqs[0]).scaling_cache() =
+                    pipeline.cache().get_scalings_cache().clone();
             }
         }
     }
