@@ -92,6 +92,7 @@ pub enum ModelSelected {
         order: String,
 
         /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        #[arg(long)]
         tgt_non_granular_index: Option<usize>,
     },
 
@@ -133,6 +134,7 @@ pub enum ModelSelected {
         order: String,
 
         /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        #[arg(long)]
         tgt_non_granular_index: Option<usize>,
     },
 
@@ -230,6 +232,7 @@ pub enum ModelSelected {
         order: String,
 
         /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        #[arg(long)]
         tgt_non_granular_index: Option<usize>,
     },
 
@@ -295,6 +298,7 @@ pub enum ModelSelected {
         order: String,
 
         /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        #[arg(long)]
         tgt_non_granular_index: Option<usize>,
     },
 
@@ -330,6 +334,7 @@ pub enum ModelSelected {
         order: String,
 
         /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        #[arg(long)]
         tgt_non_granular_index: Option<usize>,
     },
 
@@ -365,6 +370,7 @@ pub enum ModelSelected {
         order: String,
 
         /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        #[arg(long)]
         tgt_non_granular_index: Option<usize>,
     },
 
@@ -408,6 +414,7 @@ pub enum ModelSelected {
         gqa: usize,
 
         /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        #[arg(long)]
         tgt_non_granular_index: Option<usize>,
     },
 
@@ -443,6 +450,7 @@ pub enum ModelSelected {
         order: String,
 
         /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        #[arg(long)]
         tgt_non_granular_index: Option<usize>,
     },
 }
