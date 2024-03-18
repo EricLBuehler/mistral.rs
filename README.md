@@ -60,14 +60,7 @@ OpenAI API compatible API server
 - [Example](examples/server/chat.py)
 
 ## Benchmarks
-**A6000** X-LoRA Mistral GGUF + CUDA (8-bit quantization, prompt tokens = 27, completion tokens = 64)
-- 3.13 tok/s
-
-**A10** Mistral + CUDA (prompt tokens = 37, completion tokens = 96)
-- 32.16 tok/s
-
-**A10** Mistral GGUF + CUDA (prompt tokens = 37, completion tokens = 105)
-- 42.3 tok/s
+Coming soon!
 
 ## Usage
 ### Installation and Build
