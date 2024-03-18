@@ -719,7 +719,7 @@ impl ModelWeights {
                 scalings.clone(),
                 self.xlora_classifier.get_global_scaling_weight(),
                 is_scaling_pass,
-            )?;
+            ).unwrap();
             let x = (attn + residual)?;
 
             // MLP
