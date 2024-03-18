@@ -250,6 +250,11 @@ impl Engine {
             }
             *get_mut_arcmutex!(self.pipeline).cache().xlora_lock() = new_cache;
         }
+        if get_mut_arcmutex!(self.pipeline).is_xlora() {
+            *get_mut_arcmutex!(self.pipeline)
+                .cache()
+                .get_scalings_cache() = deref_mut_refcell!(seqs[0]).scaling_cache().clone();
+        }
         *get_mut_arcmutex!(self.pipeline).cache().lock() = new_cache;
     }
 
@@ -309,6 +314,10 @@ impl Engine {
                         v_caches.get(seq_i).unwrap().clone(),
                     ));
                 }
+            }
+            if pipeline.is_xlora() {
+                *deref_mut_refcell!(seqs[0]).scaling_cache() =
+                    pipeline.cache().get_scalings_cache().clone();
             }
         }
     }

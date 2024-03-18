@@ -11,7 +11,7 @@ use mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Ordering, QLoraL
 use crate::models::Cache;
 
 use super::classifier::XLoraClassifier;
-use super::XLoraConfig;
+use super::{NonGranularState, ScalingsMaker, XLoraConfig};
 
 pub const MAX_SEQ_LEN: u32 = 4096;
 
@@ -748,51 +748,21 @@ impl ModelWeights {
         start_offsets_kernel: Tensor,
         start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
+        non_granular_state: &Option<NonGranularState>,
     ) -> Result<Tensor> {
-        let (b_size, seq_len_full) = input_ids_full.dims2()?;
+        let (_b_size, seq_len_full) = input_ids_full.dims2()?;
         let (_, seq_len) = input_ids.dims2()?;
 
-        let dummy_scalings = self.xlora_classifier.get_dummy_scalings(
-            b_size,
-            seq_len,
-            input_ids.device(),
-            DType::F32,
+        let scalings = self.get_scalings(
+            input_ids,
+            input_ids_full,
+            seqlen_offsets,
+            seqlen_offsets_full,
+            &start_offsets_kernel,
+            &start_offsets_kernel_full,
+            no_kv_cache,
+            non_granular_state,
         )?;
-        // Using X-LoRA cache here
-        let hidden_states = if no_kv_cache {
-            let res = self.inner_forward(
-                input_ids_full,
-                seqlen_offsets_full,
-                start_offsets_kernel_full.clone(),
-                dummy_scalings,
-                true,
-                no_kv_cache,
-                Some(self.xlora_classifier.config.scaling_pass_value),
-            )?;
-
-            let mut new_cache = Vec::new();
-            for _ in 0..self.cache.xlora_lock().len() {
-                new_cache.push(Some((
-                    Tensor::zeros((1,), DType::U8, &Device::Cpu)?,
-                    Tensor::zeros((1,), DType::U8, &Device::Cpu)?,
-                )));
-            }
-            *self.cache.lock() = new_cache.clone();
-
-            res
-        } else {
-            self.inner_forward(
-                input_ids,
-                seqlen_offsets,
-                start_offsets_kernel.clone(),
-                dummy_scalings,
-                false,
-                no_kv_cache,
-                Some(self.xlora_classifier.config.scaling_pass_value),
-            )?
-        };
-
-        let scalings = self.xlora_classifier.forward(hidden_states)?;
 
         if no_kv_cache {
             self.inner_forward(
@@ -820,5 +790,37 @@ impl ModelWeights {
             .apply(&self.output)?
             .i((.., seq_len - 1, ..))
         }
+    }
+}
+
+impl ScalingsMaker for ModelWeights {
+    fn dtype(&self) -> DType {
+        DType::F32 // for dummy scalings
+    }
+    fn get_cache(&self) -> &Cache {
+        &self.cache
+    }
+    fn get_classifier(&self) -> &XLoraClassifier {
+        &self.xlora_classifier
+    }
+    fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        scalings: Tensor,
+        is_full_pass: bool,
+        no_kv_cache: bool,
+        is_scaling_pass: Option<f64>,
+    ) -> Result<Tensor> {
+        self.inner_forward(
+            input_ids,
+            seqlen_offsets,
+            start_offsets_kernel,
+            scalings,
+            is_full_pass,
+            no_kv_cache,
+            is_scaling_pass,
+        )
     }
 }

@@ -143,6 +143,7 @@ impl XLoraLoader {
     /// - `xlora_model_id=None`: X-LoRA model
     /// - `chat_template=None`: Chat template literal or file.
     /// - `tokenizer_json=None`: Tokenizer json file.
+    /// - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
     #[new]
     #[pyo3(signature = (
         class,
@@ -155,6 +156,7 @@ impl XLoraLoader {
         xlora_model_id=None,
         chat_template=None,
         tokenizer_json=None,
+        tgt_non_granular_index=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -168,6 +170,7 @@ impl XLoraLoader {
         xlora_model_id: Option<String>,
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
+        tgt_non_granular_index: Option<usize>,
     ) -> PyResult<Self> {
         use_flash_attn = use_flash_attn.map(|x| x & cfg!(feature = "flash-attn"));
         let kind = ModelKind::XLoraNormal;
@@ -186,6 +189,7 @@ impl XLoraLoader {
                 xlora_model_id.into_py(py),
                 chat_template.into_py(py),
                 tokenizer_json.into_py(py),
+                tgt_non_granular_index.into_py(py),
             ];
             let args = PyTuple::new(py, elems);
 
@@ -394,6 +398,7 @@ impl XLoraQuantizedLoader {
     /// - `xlora_model_id=None`: X-LoRA model
     /// - `chat_template=None`: Chat template literal or file.
     /// - `tokenizer_json=None`: Tokenizer json file.
+    /// - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
     #[new]
     #[pyo3(signature = (
         class,
@@ -409,6 +414,7 @@ impl XLoraQuantizedLoader {
         xlora_model_id=None,
         chat_template=None,
         tokenizer_json=None,
+        tgt_non_granular_index=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -425,6 +431,7 @@ impl XLoraQuantizedLoader {
         xlora_model_id: Option<String>,
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
+        tgt_non_granular_index: Option<usize>,
     ) -> PyResult<Self> {
         use_flash_attn = use_flash_attn.map(|x| x & cfg!(feature = "flash-attn"));
         let kind = if is_gguf {
@@ -447,6 +454,7 @@ impl XLoraQuantizedLoader {
                 xlora_model_id.into_py(py),
                 chat_template.into_py(py),
                 tokenizer_json.into_py(py),
+                tgt_non_granular_index.into_py(py),
             ];
             let args = PyTuple::new(py, elems);
 

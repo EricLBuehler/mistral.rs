@@ -131,7 +131,8 @@ impl QLoraLinear {
                         a_adapters_stack.device(),
                     )?
                     .unsqueeze(1)?
-                    .unsqueeze(1)?,
+                    .unsqueeze(1)?
+                    .to_dtype(DType::F32)?,
                     scale_adapters,
                 )),
                 dropout_adapters,
