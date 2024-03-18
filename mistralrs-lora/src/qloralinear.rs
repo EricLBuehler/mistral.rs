@@ -5,8 +5,8 @@ use candle_nn::{init, Dropout, Linear, VarBuilder};
 use either::Either;
 
 use crate::{
-    apply_scalings_to_x, get_maybe_topk_scalings, LinearLayerLike, LoraConfig,
-    LoraLinearConfig, Ordering,
+    apply_scalings_to_x, get_maybe_topk_scalings, LinearLayerLike, LoraConfig, LoraLinearConfig,
+    Ordering,
 };
 
 #[derive(Debug)]
@@ -14,7 +14,7 @@ pub struct QLoraLinear {
     old: QMatMul,
     a_adapters: Either<Vec<Linear>, (Tensor, Vec<Linear>)>,
     b_adapters: Either<Vec<Linear>, (Linear, Vec<Linear>)>,
-    scale_adapters: Vec<f64>,
+    scale_adapters: Either<Vec<f64>, (Tensor, Vec<f64>)>,
     dropout_adapters: Vec<Option<Dropout>>,
     layer_n: usize,
 }
@@ -42,7 +42,7 @@ impl QLoraLinear {
                 old,
                 a_adapters: Either::Left(vec![]),
                 b_adapters: Either::Left(vec![]),
-                scale_adapters: vec![],
+                scale_adapters: Either::Left(vec![]),
                 dropout_adapters: vec![],
                 layer_n: usize::MAX,
             });
@@ -122,9 +122,18 @@ impl QLoraLinear {
             )?;
             Ok(QLoraLinear {
                 old,
-                a_adapters: Either::Right((a_adapters_stack, a_adapters)),
+                a_adapters: Either::Right((a_adapters_stack.clone(), a_adapters)),
                 b_adapters: Either::Right((Linear::new(b_adapters_stack, None), b_adapters)),
-                scale_adapters,
+                scale_adapters: Either::Right((
+                    Tensor::from_vec(
+                        scale_adapters.clone(),
+                        scale_adapters.len(),
+                        a_adapters_stack.device(),
+                    )?
+                    .unsqueeze(1)?
+                    .unsqueeze(1)?,
+                    scale_adapters,
+                )),
                 dropout_adapters,
                 layer_n: layer,
             })
@@ -133,7 +142,7 @@ impl QLoraLinear {
                 old,
                 a_adapters: Either::Left(a_adapters),
                 b_adapters: Either::Left(b_adapters),
-                scale_adapters,
+                scale_adapters: Either::Left(scale_adapters),
                 dropout_adapters,
                 layer_n: layer,
             })
@@ -181,11 +190,16 @@ impl LinearLayerLike for QLoraLinear {
             } else {
                 self.b_adapters.as_ref().unwrap_left().clone()
             };
+            let scale_adapters = if self.scale_adapters.is_right() {
+                self.scale_adapters.as_ref().unwrap_right().1.clone()
+            } else {
+                self.scale_adapters.as_ref().unwrap_left().clone()
+            };
             for (i, (adapter_a, (adapter_b, (adapter_scale, adapter_dropout)))) in zip(
                 a_adapters,
                 zip(
                     b_adapters,
-                    zip(&self.scale_adapters, self.dropout_adapters.iter()),
+                    zip(scale_adapters, self.dropout_adapters.iter()),
                 ),
             )
             .enumerate()
@@ -199,7 +213,7 @@ impl LinearLayerLike for QLoraLinear {
                 };
                 let res = adapter_b
                     .forward(&adapter_a.forward(&input_new)?)?
-                    .mul(*adapter_scale)?
+                    .mul(adapter_scale)?
                     .mul(global_scaling_weight)?;
                 result = (result + res)?;
             }
@@ -207,26 +221,30 @@ impl LinearLayerLike for QLoraLinear {
         } else {
             let adapter_a = &self.a_adapters.as_ref().unwrap_right().0;
             let adapter_b = &self.b_adapters.as_ref().unwrap_right().0;
-            let adapter_scales = &self.scale_adapters;
+            let (adapter_scales, vec) = &self.scale_adapters.as_ref().unwrap_right();
+            let n_adapters = vec.len();
             let dropout = &self.dropout_adapters[0];
             let scalings = scalings
                 .squeeze(0)?
                 .squeeze(0)?
                 .unsqueeze(1)?
-                .unsqueeze(1)?;
-            let adapter_a = adapter_a.broadcast_mul(&scalings)?;
-            
+                .unsqueeze(1)?
+                .broadcast_mul(&adapter_scales)?;
+            let adapter_a = adapter_a
+                .broadcast_mul(&scalings)?
+                .mul(global_scaling_weight)?;
+
             let input = if let Some(ref d) = dropout {
                 d.forward(input, true)?
             } else {
                 input.clone()
             };
             let (b, s, h) = input.dims3()?;
-            let input = input.reshape((b*s, h))?;
+            let input = input.reshape((b * s, h))?;
             let out = adapter_a.broadcast_matmul(&input.t()?)?;
             let out = adapter_b.weight().broadcast_matmul(&out)?;
             let o_h = out.dims()[1];
-            let out = out.reshape((adapter_scales.len(),b,s,o_h))?;
+            let out = out.reshape((n_adapters, b, s, o_h))?;
             let out = out.sum(0)?;
             out + result
         }
