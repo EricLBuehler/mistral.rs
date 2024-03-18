@@ -221,7 +221,6 @@ impl LinearLayerLike for QLoraLinear {
             } else {
                 input.clone()
             };
-            dbg!(adapter_scales);
             let (b, s, h) = input.dims3()?;
             let input = input.reshape((b*s, h))?;
             let out = adapter_a.broadcast_matmul(&input.t()?)?;
@@ -229,7 +228,7 @@ impl LinearLayerLike for QLoraLinear {
             let o_h = out.dims()[1];
             let out = out.reshape((adapter_scales.len(),b,s,o_h))?;
             let out = out.sum(0)?;
-            Ok(out)
+            out + result
         }
     }
 }
