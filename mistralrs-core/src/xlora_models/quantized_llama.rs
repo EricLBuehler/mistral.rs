@@ -753,7 +753,7 @@ impl ModelWeights {
         let (_b_size, seq_len_full) = input_ids_full.dims2()?;
         let (_, seq_len) = input_ids.dims2()?;
 
-        dbg!("Making scalings...");
+        println!("Making scalings...");
         let scalings = self.get_scalings(
             input_ids,
             input_ids_full,

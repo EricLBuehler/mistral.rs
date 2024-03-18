@@ -28,7 +28,11 @@ impl Cache {
             } else {
                 None
             },
-            scalings_cache: None,
+            scalings_cache: if is_xlora {
+                Some(Arc::new(Mutex::new(None)))
+            } else {
+                None
+            },
         }
     }
 
