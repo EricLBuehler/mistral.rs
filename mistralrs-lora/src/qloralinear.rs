@@ -229,7 +229,7 @@ impl LinearLayerLike for QLoraLinear {
                 .squeeze(0)?
                 .unsqueeze(1)?
                 .unsqueeze(1)?
-                .broadcast_mul(&adapter_scales)?;
+                .broadcast_mul(adapter_scales)?;
             let adapter_a = adapter_a
                 .broadcast_mul(&scalings)?
                 .mul(global_scaling_weight)?;
