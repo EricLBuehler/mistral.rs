@@ -208,7 +208,7 @@ impl LayerWeights {
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
-        )?;
+        ).unwrap();
         let k = self.attention_wk.lora_forward(
             x,
             scalings.clone(),
@@ -719,7 +719,7 @@ impl ModelWeights {
                 scalings.clone(),
                 self.xlora_classifier.get_global_scaling_weight(),
                 is_scaling_pass,
-            ).unwrap();
+            )?;
             let x = (attn + residual)?;
 
             // MLP
