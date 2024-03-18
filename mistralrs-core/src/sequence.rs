@@ -48,6 +48,7 @@ pub struct Sequence {
     pub prompt_tok_per_sec: f32,
     pub prompt_timestamp: Option<u128>,
     group: Rc<RefCell<SequenceGroup>>,
+    scaling_cache: Option<Tensor>,
 }
 
 impl Sequence {
@@ -87,6 +88,7 @@ impl Sequence {
             prompt_tok_per_sec: 0.,
             prompt_timestamp: None,
             group,
+            scaling_cache: None,
         }
     }
 
@@ -125,6 +127,10 @@ impl Sequence {
 
     pub fn xlora_cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
         self.xlora_cache.as_mut().unwrap()
+    }
+
+    pub fn scaling_cache(&mut self) -> &mut Option<Tensor> {
+        &mut self.scaling_cache
     }
 
     pub fn is_xlora(&self) -> bool {

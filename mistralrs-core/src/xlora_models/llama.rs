@@ -14,7 +14,7 @@ use crate::{
     pipeline::LLAMA_IS_GPTX,
 };
 
-use super::{classifier::XLoraClassifier, ScalingsMaker, XLoraConfig};
+use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
 
 #[derive(Debug, Clone)]
 pub struct Cache {
@@ -448,6 +448,7 @@ impl XLoraLlama {
         start_offsets_kernel: Tensor,
         start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
+        non_granular_state: &Option<NonGranularState>,
     ) -> Result<Tensor> {
         let (_b_size, seq_len_full) = input_ids_full.dims2()?;
         let (_, seq_len) = input_ids.dims2()?;
@@ -460,6 +461,7 @@ impl XLoraLlama {
             &start_offsets_kernel,
             &start_offsets_kernel_full,
             no_kv_cache,
+            non_granular_state,
         )?;
 
         if no_kv_cache {

@@ -16,6 +16,7 @@ pub type LayerCaches = Vec<Option<(Tensor, Tensor)>>;
 pub struct Cache {
     cache: Arc<Mutex<LayerCaches>>,
     xlora_cache: Option<Arc<Mutex<LayerCaches>>>,
+    scalings_cache: Option<Arc<Mutex<Option<Tensor>>>>,
 }
 
 impl Cache {
@@ -27,6 +28,7 @@ impl Cache {
             } else {
                 None
             },
+            scalings_cache: None,
         }
     }
 
@@ -38,6 +40,12 @@ impl Cache {
     /// If there is no xlora cache
     pub(crate) fn xlora_lock(&self) -> MutexGuard<'_, LayerCaches> {
         get_mut_arcmutex!(self.xlora_cache.as_ref().unwrap())
+    }
+
+    /// # Panics
+    /// If there is no xlora cache
+    pub(crate) fn get_scalings_cache(&self) -> MutexGuard<'_, Option<Tensor>> {
+        get_mut_arcmutex!(self.scalings_cache.as_ref().unwrap())
     }
 
     pub(crate) fn is_xlora(&self) -> bool {

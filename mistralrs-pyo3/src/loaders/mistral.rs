@@ -29,6 +29,7 @@ impl MistralLoader {
     /// - `xlora_model_id=None`: X-LoRA model
     /// - `chat_template=None`: Chat template literal or file.
     /// - `tokenizer_json=None`: Tokenizer json file.
+    /// - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
     #[new]
     #[pyo3(signature = (
         model_id,
@@ -43,6 +44,7 @@ impl MistralLoader {
         xlora_model_id=None,
         chat_template=None,
         tokenizer_json=None,
+        tgt_non_granular_index=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -58,6 +60,7 @@ impl MistralLoader {
         xlora_model_id: Option<String>,
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
+        tgt_non_granular_index: Option<usize>,
     ) -> PyResult<Self> {
         let mut use_flash_attn = use_flash_attn.unwrap_or(false);
         use_flash_attn &= cfg!(feature = "flash-attn");
@@ -127,6 +130,7 @@ impl MistralLoader {
                 no_kv_cache,
                 chat_template,
                 tokenizer_json,
+                tgt_non_granular_index,
             ),
             no_kv_cache,
         })

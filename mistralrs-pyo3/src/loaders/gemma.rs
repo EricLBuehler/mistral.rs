@@ -30,6 +30,7 @@ impl GemmaLoader {
     /// - `xlora_model_id=None`: X-LoRA model
     /// - `chat_template=None`: Chat template literal or file.
     /// - `tokenizer_json=None`: Tokenizer json file.
+    /// - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
     #[new]
     #[pyo3(signature = (
         model_id,
@@ -44,6 +45,7 @@ impl GemmaLoader {
         xlora_model_id=None,
         chat_template=None,
         tokenizer_json=None,
+        tgt_non_granular_index=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -59,6 +61,7 @@ impl GemmaLoader {
         xlora_model_id: Option<String>,
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
+        tgt_non_granular_index: Option<usize>,
     ) -> PyResult<Self> {
         let order = if let Some(ref order_file) = order_file {
             let f = File::open(order_file);
@@ -124,6 +127,7 @@ impl GemmaLoader {
                 no_kv_cache,
                 chat_template,
                 tokenizer_json,
+                tgt_non_granular_index,
             ),
             no_kv_cache,
         })

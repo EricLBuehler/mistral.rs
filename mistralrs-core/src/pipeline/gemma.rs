@@ -4,7 +4,7 @@ use super::{
 };
 use crate::models::Cache;
 use crate::pipeline::ChatTemplate;
-use crate::xlora_models::{XLoraConfig, XLoraGemma};
+use crate::xlora_models::{NonGranularState, XLoraConfig, XLoraGemma};
 use crate::{deref_mut_refcell, deref_refcell, deserialize_chat_template};
 use crate::{
     models::gemma::{Config, Model as NormalModel},
@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::{rc::Rc, sync::Mutex};
 use thiserror::Error;
 use tokenizers::Tokenizer;
@@ -83,6 +84,7 @@ pub struct GemmaPipeline {
     config: GemmaSpecificConfig,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
+    non_granular_state: Option<NonGranularState>,
 }
 
 pub struct GemmaLoader {
@@ -96,6 +98,7 @@ pub struct GemmaLoader {
     no_kv_cache: bool,
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
+    tgt_non_granular_index: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -144,6 +147,7 @@ impl GemmaLoader {
         no_kv_cache: bool,
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
+        tgt_non_granular_index: Option<usize>,
     ) -> Self {
         Self {
             model_id,
@@ -156,6 +160,7 @@ impl GemmaLoader {
             no_kv_cache,
             chat_template,
             tokenizer_json,
+            tgt_non_granular_index,
         }
     }
 }
@@ -311,6 +316,12 @@ impl Loader for GemmaLoader {
             config: self.config,
             no_kv_cache: self.no_kv_cache,
             chat_template,
+            non_granular_state: self.tgt_non_granular_index.map(|tgt_non_granular_index| {
+                NonGranularState {
+                    non_granular_index: Arc::new(Mutex::new(0)),
+                    tgt_non_granular_index,
+                }
+            }),
         })))
     }
 }
@@ -344,6 +355,7 @@ impl Pipeline for GemmaPipeline {
                 seqlen_offsets_kernel,
                 seqlen_offsets_kernel_full.unwrap(),
                 self.no_kv_cache,
+                &self.non_granular_state,
             ),
         };
         match result {

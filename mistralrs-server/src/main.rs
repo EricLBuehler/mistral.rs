@@ -90,6 +90,9 @@ pub enum ModelSelected {
         /// Ordering JSON file
         #[arg(short, long)]
         order: String,
+
+        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        tgt_non_granular_index: Option<usize>,
     },
 
     /// Select the gemma model.
@@ -128,6 +131,9 @@ pub enum ModelSelected {
         /// Ordering JSON file
         #[arg(short, long)]
         order: String,
+
+        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        tgt_non_granular_index: Option<usize>,
     },
 
     /// Select the llama model.
@@ -222,6 +228,9 @@ pub enum ModelSelected {
         /// Ordering JSON file
         #[arg(short, long)]
         order: String,
+
+        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        tgt_non_granular_index: Option<usize>,
     },
 
     /// Select the mixtral model.
@@ -284,6 +293,9 @@ pub enum ModelSelected {
         /// Ordering JSON file
         #[arg(short, long)]
         order: String,
+
+        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        tgt_non_granular_index: Option<usize>,
     },
 
     /// Select the quantized mistral model with gguf and X-LoRA.
@@ -316,6 +328,9 @@ pub enum ModelSelected {
         /// Ordering JSON file
         #[arg(short, long)]
         order: String,
+
+        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        tgt_non_granular_index: Option<usize>,
     },
 
     /// Select the quantized mistral model with gguf and X-LoRA.
@@ -348,6 +363,9 @@ pub enum ModelSelected {
         /// Ordering JSON file
         #[arg(short, long)]
         order: String,
+
+        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        tgt_non_granular_index: Option<usize>,
     },
 
     /// Select the quantized mistral model with gguf and X-LoRA.
@@ -388,6 +406,9 @@ pub enum ModelSelected {
         /// GQA
         #[arg(long, default_value_t = 1)]
         gqa: usize,
+
+        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        tgt_non_granular_index: Option<usize>,
     },
 
     /// Select the quantized mistral model with gguf and X-LoRA.
@@ -420,6 +441,9 @@ pub enum ModelSelected {
         /// Ordering JSON file
         #[arg(short, long)]
         order: String,
+
+        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        tgt_non_granular_index: Option<usize>,
     },
 }
 
@@ -448,7 +472,7 @@ struct Args {
     #[clap(subcommand)]
     model: ModelSelected,
 
-    /// Maximum running sequences at any time
+    /// Maximum running sequences at any time. If the `tgt_non_granular_index` flag is set for X-LoRA models, this will be set to 1.
     #[arg(long, default_value_t = 16)]
     max_seqs: usize,
 
@@ -525,12 +549,59 @@ fn get_router(state: Arc<MistralRs>) -> Router {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Args::parse();
+    let mut args = Args::parse();
 
     #[cfg(not(feature = "flash-attn"))]
     let use_flash_attn = false;
     #[cfg(feature = "flash-attn")]
     let use_flash_attn = true;
+
+    let tgt_non_granular_index = match args.model {
+        ModelSelected::Gemma { .. }
+        | ModelSelected::Llama { .. }
+        | ModelSelected::LlamaGGML { .. }
+        | ModelSelected::LlamaGGUF { .. }
+        | ModelSelected::Mistral { .. }
+        | ModelSelected::MistralGGUF { .. }
+        | ModelSelected::Mixtral { .. }
+        | ModelSelected::MixtralGGUF { .. } => None,
+        ModelSelected::XLoraGemma {
+            tgt_non_granular_index,
+            ..
+        }
+        | ModelSelected::XLoraLlama {
+            tgt_non_granular_index,
+            ..
+        }
+        | ModelSelected::XLoraLlamaGGML {
+            tgt_non_granular_index,
+            ..
+        }
+        | ModelSelected::XLoraLlamaGGUF {
+            tgt_non_granular_index,
+            ..
+        }
+        | ModelSelected::XLoraMistral {
+            tgt_non_granular_index,
+            ..
+        }
+        | ModelSelected::XLoraMistralGGUF {
+            tgt_non_granular_index,
+            ..
+        }
+        | ModelSelected::XLoraMixtral {
+            tgt_non_granular_index,
+            ..
+        }
+        | ModelSelected::XLoraMixtralGGUF {
+            tgt_non_granular_index,
+            ..
+        } => tgt_non_granular_index,
+    };
+    if tgt_non_granular_index.is_some() {
+        args.max_seqs = 1;
+    }
+    let args = args;
 
     let loader: Box<dyn Loader> = match args.model {
         ModelSelected::Mistral {
@@ -551,6 +622,7 @@ async fn main() -> Result<()> {
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
+            None,
         )),
         ModelSelected::MistralGGUF {
             tok_model_id,
@@ -572,6 +644,7 @@ async fn main() -> Result<()> {
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
+            None,
         )),
         ModelSelected::XLoraMistral {
             model_id,
@@ -579,6 +652,7 @@ async fn main() -> Result<()> {
             repeat_last_n,
             order,
             tokenizer_json,
+            tgt_non_granular_index,
         } => Box::new(MistralLoader::new(
             model_id,
             MistralSpecificConfig {
@@ -593,6 +667,7 @@ async fn main() -> Result<()> {
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
+            tgt_non_granular_index,
         )),
         ModelSelected::Gemma {
             model_id,
@@ -609,6 +684,7 @@ async fn main() -> Result<()> {
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
+            None,
         )),
         ModelSelected::XLoraGemma {
             model_id,
@@ -616,6 +692,7 @@ async fn main() -> Result<()> {
             repeat_last_n,
             order,
             tokenizer_json,
+            tgt_non_granular_index,
         } => Box::new(GemmaLoader::new(
             model_id,
             GemmaSpecificConfig { repeat_last_n },
@@ -627,6 +704,7 @@ async fn main() -> Result<()> {
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
+            tgt_non_granular_index,
         )),
         ModelSelected::Llama {
             model_id,
@@ -647,6 +725,7 @@ async fn main() -> Result<()> {
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
+            None,
         )),
         ModelSelected::LlamaGGUF {
             tok_model_id,
@@ -669,6 +748,7 @@ async fn main() -> Result<()> {
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
+            None,
         )),
         ModelSelected::LlamaGGML {
             tok_model_id,
@@ -692,6 +772,7 @@ async fn main() -> Result<()> {
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
+            None,
         )),
         ModelSelected::XLoraLlama {
             model_id,
@@ -699,6 +780,7 @@ async fn main() -> Result<()> {
             repeat_last_n,
             order,
             tokenizer_json,
+            tgt_non_granular_index,
         } => Box::new(LlamaLoader::new(
             model_id,
             LlamaSpecificConfig {
@@ -714,6 +796,7 @@ async fn main() -> Result<()> {
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
+            tgt_non_granular_index,
         )),
         ModelSelected::Mixtral {
             model_id,
@@ -733,6 +816,7 @@ async fn main() -> Result<()> {
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
+            None,
         )),
         ModelSelected::MixtralGGUF {
             tok_model_id,
@@ -754,6 +838,7 @@ async fn main() -> Result<()> {
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
+            None,
         )),
         ModelSelected::XLoraMixtral {
             model_id,
@@ -761,6 +846,7 @@ async fn main() -> Result<()> {
             repeat_last_n,
             order,
             tokenizer_json,
+            tgt_non_granular_index,
         } => Box::new(MixtralLoader::new(
             model_id,
             MixtralSpecificConfig {
@@ -775,6 +861,7 @@ async fn main() -> Result<()> {
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
+            tgt_non_granular_index,
         )),
         ModelSelected::XLoraMistralGGUF {
             tok_model_id,
@@ -784,6 +871,7 @@ async fn main() -> Result<()> {
             xlora_model_id,
             order,
             tokenizer_json,
+            tgt_non_granular_index,
         } => Box::new(MistralLoader::new(
             tok_model_id,
             MistralSpecificConfig {
@@ -798,6 +886,7 @@ async fn main() -> Result<()> {
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
+            tgt_non_granular_index,
         )),
         ModelSelected::XLoraMixtralGGUF {
             tok_model_id,
@@ -807,6 +896,7 @@ async fn main() -> Result<()> {
             xlora_model_id,
             order,
             tokenizer_json,
+            tgt_non_granular_index,
         } => Box::new(MixtralLoader::new(
             tok_model_id,
             MixtralSpecificConfig {
@@ -821,6 +911,7 @@ async fn main() -> Result<()> {
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
+            tgt_non_granular_index,
         )),
         ModelSelected::XLoraLlamaGGUF {
             tok_model_id,
@@ -830,6 +921,7 @@ async fn main() -> Result<()> {
             xlora_model_id,
             order,
             tokenizer_json,
+            tgt_non_granular_index,
         } => Box::new(LlamaLoader::new(
             tok_model_id,
             LlamaSpecificConfig {
@@ -845,6 +937,7 @@ async fn main() -> Result<()> {
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
+            tgt_non_granular_index,
         )),
         ModelSelected::XLoraLlamaGGML {
             tok_model_id,
@@ -855,6 +948,7 @@ async fn main() -> Result<()> {
             order,
             gqa,
             tokenizer_json,
+            tgt_non_granular_index,
         } => Box::new(LlamaLoader::new(
             tok_model_id,
             LlamaSpecificConfig {
@@ -870,6 +964,7 @@ async fn main() -> Result<()> {
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
+            tgt_non_granular_index,
         )),
     };
 

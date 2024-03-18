@@ -6,6 +6,8 @@ mod mistral;
 mod mixtral;
 mod quantized_llama;
 
+use std::sync::{Arc, Mutex};
+
 use candle_core::{DType, Device, Result, Tensor};
 pub use config::XLoraConfig;
 pub use gemma::XLoraModel as XLoraGemma;
@@ -14,9 +16,14 @@ pub use mistral::XLoraModel as XLoraMistral;
 pub use mixtral::XLoraModel as XLoraMixtral;
 pub use quantized_llama::ModelWeights as XLoraModelWeights;
 
-use crate::models::Cache;
+use crate::{get_mut_arcmutex, models::Cache};
 
 use self::classifier::XLoraClassifier;
+
+pub struct NonGranularState {
+    pub non_granular_index: Arc<Mutex<usize>>,
+    pub tgt_non_granular_index: usize,
+}
 
 trait ScalingsMaker {
     fn get_classifier(&self) -> &XLoraClassifier;
@@ -45,9 +52,17 @@ trait ScalingsMaker {
         start_offsets_kernel: &Tensor,
         start_offsets_kernel_full: &Tensor,
         no_kv_cache: bool,
+        non_granular_state: &Option<NonGranularState>,
     ) -> Result<Tensor> {
         let (b_size, _) = input_ids_full.dims2()?;
         let (_, seq_len) = input_ids.dims2()?;
+
+        if let Some(ref non_granular_state) = non_granular_state {
+            if let Some(scalings_cache) = &*self.get_cache().get_scalings_cache() {
+                return Ok(scalings_cache.clone());
+            }
+            *get_mut_arcmutex!(non_granular_state.non_granular_index) += 1;
+        }
 
         let dummy_scalings = self.get_classifier().get_dummy_scalings(
             b_size,
@@ -90,6 +105,13 @@ trait ScalingsMaker {
         };
 
         let scalings = self.get_classifier().forward(hidden_states)?;
+        if let Some(ref non_granular_state) = non_granular_state {
+            if *get_mut_arcmutex!(non_granular_state.non_granular_index)
+                == non_granular_state.tgt_non_granular_index
+            {
+                *self.get_cache().get_scalings_cache() = Some(scalings.clone());
+            }
+        }
         Ok(scalings)
     }
 }
