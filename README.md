@@ -31,9 +31,19 @@ Mistral.rs is a LLM inference platform written in pure, safe Rust.
 |Llama|✅|✅|✅|✅|✅|
 |Mixtral 8x7B|✅| |✅|✅|✅|
 
-**Note when using quantized derivative models**
+**Using derivative models**
+To use a derivative model, select the model architecture using the correct subcommand. To see what can be passed for the architecture, pass `--help` after the subcommand. For example, when using a different model than the default, specify the following for the following types of models:
 
-Please note that when using a derivative model with a quantized architecture, it is important to specify the corresponding model ID for the tokenizer with `-t`.
+- **Normal**: Model id
+- **Quantized**: Quantized model id, quantized filename, and tokenizer id
+- **X-LoRA**: Model id, X-LoRA ordering
+- **X-LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and X-LoRA ordering
+
+See [this](#x-lora) section to determine if it is necessary to pass an X-LoRA ordering file, it is always necessary if the target modules or architecture changed, or if the adapter order changed.
+
+It is also important to check the chat template style of the model. If the HF hub repo has a `tokenizer_config.json` file, it is not necessary to specify. Otherwise, templates can be found in `chat_templates` and should be passed before the subcommand.
+
+For example, when using a Zephyr model:
 
 `./mistralrs-server --port 1234 --log output.txt mistral-gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf`
 
