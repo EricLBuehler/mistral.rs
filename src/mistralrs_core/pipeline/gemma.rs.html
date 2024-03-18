@@ -423,13 +423,25 @@
 <a href="#422" id="422">422</a>
 <a href="#423" id="423">423</a>
 <a href="#424" id="424">424</a>
+<a href="#425" id="425">425</a>
+<a href="#426" id="426">426</a>
+<a href="#427" id="427">427</a>
+<a href="#428" id="428">428</a>
+<a href="#429" id="429">429</a>
+<a href="#430" id="430">430</a>
+<a href="#431" id="431">431</a>
+<a href="#432" id="432">432</a>
+<a href="#433" id="433">433</a>
+<a href="#434" id="434">434</a>
+<a href="#435" id="435">435</a>
+<a href="#436" id="436">436</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
 };
 <span class="kw">use </span><span class="kw">crate</span>::models::Cache;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
-<span class="kw">use </span><span class="kw">crate</span>::xlora_models::{XLoraConfig, XLoraGemma};
+<span class="kw">use </span><span class="kw">crate</span>::xlora_models::{NonGranularState, XLoraConfig, XLoraGemma};
 <span class="kw">use crate</span>::{deref_mut_refcell, deref_refcell, deserialize_chat_template};
 <span class="kw">use crate</span>::{
     models::gemma::{Config, Model <span class="kw">as </span>NormalModel},
@@ -449,6 +461,7 @@
 <span class="kw">use </span>std::fs;
 <span class="kw">use </span>std::path::PathBuf;
 <span class="kw">use </span>std::str::FromStr;
+<span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{rc::Rc, sync::Mutex};
 <span class="kw">use </span>thiserror::Error;
 <span class="kw">use </span>tokenizers::Tokenizer;
@@ -508,6 +521,7 @@
     config: GemmaSpecificConfig,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
+    non_granular_state: <span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
 }
 
 <span class="kw">pub struct </span>GemmaLoader {
@@ -521,6 +535,7 @@
     no_kv_cache: bool,
     chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
 <span class="attr">#[derive(Clone, Copy)]
@@ -569,6 +584,7 @@
         no_kv_cache: bool,
         chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
         tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
+        tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             model_id,
@@ -581,6 +597,7 @@
             no_kv_cache,
             chat_template,
             tokenizer_json,
+            tgt_non_granular_index,
         }
     }
 }
@@ -736,6 +753,12 @@
             config: <span class="self">self</span>.config,
             no_kv_cache: <span class="self">self</span>.no_kv_cache,
             chat_template,
+            non_granular_state: <span class="self">self</span>.tgt_non_granular_index.map(|tgt_non_granular_index| {
+                NonGranularState {
+                    non_granular_index: Arc::new(Mutex::new(<span class="number">0</span>)),
+                    tgt_non_granular_index,
+                }
+            }),
         })))
     }
 }
@@ -769,6 +792,7 @@
                 seqlen_offsets_kernel,
                 seqlen_offsets_kernel_full.unwrap(),
                 <span class="self">self</span>.no_kv_cache,
+                <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state,
             ),
         };
         <span class="kw">match </span>result {

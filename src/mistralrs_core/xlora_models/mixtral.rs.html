@@ -739,6 +739,8 @@
 <a href="#738" id="738">738</a>
 <a href="#739" id="739">739</a>
 <a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a>
+<a href="#742" id="742">742</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
@@ -754,7 +756,7 @@
     pipeline::MIXTRAL_IS_GPTX,
 };
 
-<span class="kw">use super</span>::{classifier::XLoraClassifier, XLoraConfig};
+<span class="kw">use super</span>::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">struct </span>RmsNorm {
@@ -1405,51 +1407,21 @@
         start_offsets_kernel: Tensor,
         start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
+        non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>(b_size, seq_len_full) = input_ids_full.dims2()<span class="question-mark">?</span>;
+        <span class="kw">let </span>(_b_size, seq_len_full) = input_ids_full.dims2()<span class="question-mark">?</span>;
         <span class="kw">let </span>(<span class="kw">_</span>, seq_len) = input_ids.dims2()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>dummy_scalings = <span class="self">self</span>.xlora_classifier.get_dummy_scalings(
-            b_size,
-            seq_len,
-            input_ids.device(),
-            <span class="self">self</span>.dtype,
+        <span class="kw">let </span>scalings = <span class="self">self</span>.get_scalings(
+            input_ids,
+            input_ids_full,
+            seqlen_offsets,
+            seqlen_offsets_full,
+            <span class="kw-2">&amp;</span>start_offsets_kernel,
+            <span class="kw-2">&amp;</span>start_offsets_kernel_full,
+            no_kv_cache,
+            non_granular_state,
         )<span class="question-mark">?</span>;
-        <span class="comment">// Using X-LoRA cache here
-        </span><span class="kw">let </span>hidden_states = <span class="kw">if </span>no_kv_cache {
-            <span class="kw">let </span>res = <span class="self">self</span>.inner_forward(
-                input_ids_full,
-                seqlen_offsets_full,
-                start_offsets_kernel_full.clone(),
-                dummy_scalings,
-                <span class="bool-val">true</span>,
-                no_kv_cache,
-                <span class="prelude-val">Some</span>(<span class="self">self</span>.xlora_classifier.config.scaling_pass_value),
-            )<span class="question-mark">?</span>;
-
-            <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
-            <span class="kw">for _ in </span><span class="number">0</span>..<span class="self">self</span>.cache.xlora_lock().len() {
-                new_cache.push(<span class="prelude-val">Some</span>((
-                    Tensor::zeros((<span class="number">1</span>,), DType::U8, <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>,
-                    Tensor::zeros((<span class="number">1</span>,), DType::U8, <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>,
-                )));
-            }
-            <span class="kw-2">*</span><span class="self">self</span>.cache.lock() = new_cache.clone();
-
-            res
-        } <span class="kw">else </span>{
-            <span class="self">self</span>.inner_forward(
-                input_ids,
-                seqlen_offsets,
-                start_offsets_kernel.clone(),
-                dummy_scalings,
-                <span class="bool-val">false</span>,
-                no_kv_cache,
-                <span class="prelude-val">Some</span>(<span class="self">self</span>.xlora_classifier.config.scaling_pass_value),
-            )<span class="question-mark">?
-        </span>};
-
-        <span class="kw">let </span>scalings = <span class="self">self</span>.xlora_classifier.forward(hidden_states)<span class="question-mark">?</span>;
 
         <span class="kw">if </span>no_kv_cache {
             <span class="self">self</span>.inner_forward(
@@ -1477,6 +1449,38 @@
             </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?
             </span>.narrow(<span class="number">1</span>, seq_len - <span class="number">1</span>, <span class="number">1</span>)
         }
+    }
+}
+
+<span class="kw">impl </span>ScalingsMaker <span class="kw">for </span>XLoraModel {
+    <span class="kw">fn </span>dtype(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; DType {
+        <span class="self">self</span>.dtype
+    }
+    <span class="kw">fn </span>get_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.cache
+    }
+    <span class="kw">fn </span>get_classifier(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>XLoraClassifier {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.xlora_classifier
+    }
+    <span class="kw">fn </span>forward(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        input_ids: <span class="kw-2">&amp;</span>Tensor,
+        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+        start_offsets_kernel: Tensor,
+        scalings: Tensor,
+        is_full_pass: bool,
+        no_kv_cache: bool,
+        is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="self">self</span>.inner_forward(
+            input_ids,
+            seqlen_offsets,
+            start_offsets_kernel,
+            scalings,
+            is_full_pass,
+            no_kv_cache,
+            is_scaling_pass,
+        )
     }
 }
 </code></pre></div></section></main></body></html>

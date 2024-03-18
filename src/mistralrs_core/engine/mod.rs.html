@@ -437,6 +437,15 @@
 <a href="#436" id="436">436</a>
 <a href="#437" id="437">437</a>
 <a href="#438" id="438">438</a>
+<a href="#439" id="439">439</a>
+<a href="#440" id="440">440</a>
+<a href="#441" id="441">441</a>
+<a href="#442" id="442">442</a>
+<a href="#443" id="443">443</a>
+<a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -689,6 +698,11 @@
             }
             <span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).cache().xlora_lock() = new_cache;
         }
+        <span class="kw">if </span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).is_xlora() {
+            <span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
+                .cache()
+                .get_scalings_cache() = <span class="macro">deref_mut_refcell!</span>(seqs[<span class="number">0</span>]).scaling_cache().clone();
+        }
         <span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).cache().lock() = new_cache;
     }
 
@@ -748,6 +762,10 @@
                         v_caches.get(seq_i).unwrap().clone(),
                     ));
                 }
+            }
+            <span class="kw">if </span>pipeline.is_xlora() {
+                <span class="kw-2">*</span><span class="macro">deref_mut_refcell!</span>(seqs[<span class="number">0</span>]).scaling_cache() =
+                    pipeline.cache().get_scalings_cache().clone();
             }
         }
     }

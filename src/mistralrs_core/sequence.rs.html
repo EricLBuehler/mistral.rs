@@ -257,6 +257,12 @@
 <a href="#256" id="256">256</a>
 <a href="#257" id="257">257</a>
 <a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a>
+<a href="#260" id="260">260</a>
+<a href="#261" id="261">261</a>
+<a href="#262" id="262">262</a>
+<a href="#263" id="263">263</a>
+<a href="#264" id="264">264</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::{Cell, Ref, RefCell},
     rc::Rc,
@@ -307,6 +313,7 @@
     <span class="kw">pub </span>prompt_tok_per_sec: f32,
     <span class="kw">pub </span>prompt_timestamp: <span class="prelude-ty">Option</span>&lt;u128&gt;,
     group: Rc&lt;RefCell&lt;SequenceGroup&gt;&gt;,
+    scaling_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
 }
 
 <span class="kw">impl </span>Sequence {
@@ -346,6 +353,7 @@
             prompt_tok_per_sec: <span class="number">0.</span>,
             prompt_timestamp: <span class="prelude-val">None</span>,
             group,
+            scaling_cache: <span class="prelude-val">None</span>,
         }
     }
 
@@ -384,6 +392,10 @@
 
     <span class="kw">pub fn </span>xlora_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt; {
         <span class="self">self</span>.xlora_cache.as_mut().unwrap()
+    }
+
+    <span class="kw">pub fn </span>scaling_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;Tensor&gt; {
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>.scaling_cache
     }
 
     <span class="kw">pub fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {

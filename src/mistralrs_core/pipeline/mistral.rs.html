@@ -474,13 +474,26 @@
 <a href="#473" id="473">473</a>
 <a href="#474" id="474">474</a>
 <a href="#475" id="475">475</a>
+<a href="#476" id="476">476</a>
+<a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
+<a href="#479" id="479">479</a>
+<a href="#480" id="480">480</a>
+<a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
 };
 <span class="kw">use </span><span class="kw">crate</span>::models::{quantized_llama, Cache};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
-<span class="kw">use </span><span class="kw">crate</span>::xlora_models::{XLoraConfig, XLoraMistral, XLoraModelWeights};
+<span class="kw">use </span><span class="kw">crate</span>::xlora_models::{NonGranularState, XLoraConfig, XLoraMistral, XLoraModelWeights};
 <span class="kw">use crate</span>::{deref_mut_refcell, deref_refcell, deserialize_chat_template};
 <span class="kw">use crate</span>::{
     models::mistral::{Config, Model <span class="kw">as </span>NormalModel},
@@ -503,6 +516,7 @@
 <span class="kw">use </span>std::fs;
 <span class="kw">use </span>std::path::PathBuf;
 <span class="kw">use </span>std::str::FromStr;
+<span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{rc::Rc, sync::Mutex};
 <span class="kw">use </span>thiserror::Error;
 <span class="kw">use </span>tokenizers::Tokenizer;
@@ -563,6 +577,7 @@
     config: MistralSpecificConfig,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
+    non_granular_state: <span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
 }
 
 <span class="kw">pub struct </span>MistralLoader {
@@ -576,6 +591,7 @@
     no_kv_cache: bool,
     chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
 <span class="attr">#[derive(Clone, Copy)]
@@ -618,6 +634,7 @@
         no_kv_cache: bool,
         chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
         tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
+        tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             model_id,
@@ -630,6 +647,7 @@
             no_kv_cache,
             chat_template,
             tokenizer_json,
+            tgt_non_granular_index,
         }
     }
 }
@@ -820,6 +838,12 @@
             config: <span class="self">self</span>.config,
             no_kv_cache: <span class="self">self</span>.no_kv_cache,
             chat_template,
+            non_granular_state: <span class="self">self</span>.tgt_non_granular_index.map(|tgt_non_granular_index| {
+                NonGranularState {
+                    non_granular_index: Arc::new(Mutex::new(<span class="number">0</span>)),
+                    tgt_non_granular_index,
+                }
+            }),
         })))
     }
 }
@@ -856,6 +880,7 @@
                 seqlen_offsets_kernel,
                 seqlen_offsets_kernel_full.unwrap(),
                 <span class="self">self</span>.no_kv_cache,
+                <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state,
             ),
             Model::XLoraQuantized(<span class="kw-2">ref mut </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
@@ -865,6 +890,7 @@
                 seqlen_offsets_kernel,
                 seqlen_offsets_kernel_full.unwrap(),
                 <span class="self">self</span>.no_kv_cache,
+                <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state,
             ),
         };
         <span class="kw">match </span>result {
