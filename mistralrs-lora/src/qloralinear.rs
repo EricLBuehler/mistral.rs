@@ -220,7 +220,7 @@ impl LinearLayerLike for QLoraLinear {
             dbg!(&adapter_a);
             let (b, s, h) = input.dims3()?;
             let input = input.reshape((b*s, h))?;
-            let out = /*Linear::new(adapter_a, None)*/adapter_a.t()?.matmul(&input)?;
+            let out = /*Linear::new(adapter_a, None)*/adapter_a.matmul(&input)?;
             dbg!(&out);
             let out = adapter_b.forward(&out)?;
             let (_, o_h) = out.dims2()?;
