@@ -17,6 +17,7 @@ candle-nn.workspace = true
 half = "2.4.0"
 serde.workspace = true
 serde_json.workspace = true
+either.workspace = true
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda"]
