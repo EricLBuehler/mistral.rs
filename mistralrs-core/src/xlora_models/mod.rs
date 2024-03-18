@@ -59,7 +59,6 @@ trait ScalingsMaker {
 
         if let Some(ref non_granular_state) = non_granular_state {
             if let Some(scalings_cache) = &*self.get_cache().get_scalings_cache() {
-                println!("Using cache...");
                 return Ok(scalings_cache.clone());
             }
             if seq_len == 1 {
@@ -112,7 +111,6 @@ trait ScalingsMaker {
             if *get_mut_arcmutex!(non_granular_state.non_granular_index)
                 == non_granular_state.tgt_non_granular_index
             {
-                println!("Caching it.");
                 *self.get_cache().get_scalings_cache() = Some(scalings.clone());
             }
         }

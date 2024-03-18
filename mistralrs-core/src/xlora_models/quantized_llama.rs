@@ -753,7 +753,6 @@ impl ModelWeights {
         let (_b_size, seq_len_full) = input_ids_full.dims2()?;
         let (_, seq_len) = input_ids.dims2()?;
 
-        println!("Making scalings...");
         let scalings = self.get_scalings(
             input_ids,
             input_ids_full,
@@ -764,7 +763,6 @@ impl ModelWeights {
             no_kv_cache,
             non_granular_state,
         )?;
-        dbg!(&scalings);
 
         if no_kv_cache {
             self.inner_forward(
