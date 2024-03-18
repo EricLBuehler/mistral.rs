@@ -14,6 +14,7 @@ The following classes provide a more bare-bones method to load a model.
     - `xlora_model_id=None`: X-LoRA model
     - `chat_template=None`: Chat template literal or file.
     - `tokenizer_json=None`: Tokenizer json file.
+    - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached. If this is set then the max running sequences will be set to 1.
 - `MixtralLoader`
     - `model_id`: Base model ID, or tokenizer ID if quantized model type.
     - `kind`: Model kind
@@ -27,6 +28,7 @@ The following classes provide a more bare-bones method to load a model.
     - `xlora_model_id=None`: X-LoRA model
     - `chat_template=None`: Chat template literal or file.
     - `tokenizer_json=None`: Tokenizer json file.
+    - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached. If this is set then the max running sequences will be set to 1.
 - `GemmaLoader`
     - `model_id`: Base model ID, or tokenizer ID if quantized model type.
     - `kind`: Model kind
@@ -40,6 +42,7 @@ The following classes provide a more bare-bones method to load a model.
     - `xlora_model_id=None`: X-LoRA model
     - `chat_template=None`: Chat template literal or file.
     - `tokenizer_json=None`: Tokenizer json file.
+    - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached. If this is set then the max running sequences will be set to 1.
 - `LlamaLoader`
     - `model_id`: Base model ID, or tokenizer ID if quantized model type.
     - `kind`: Model kind
@@ -53,6 +56,7 @@ The following classes provide a more bare-bones method to load a model.
     - `xlora_model_id=None`: X-LoRA model
     - `chat_template=None`: Chat template literal or file.
     - `tokenizer_json=None`: Tokenizer json file.
+    - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached. If this is set then the max running sequences will be set to 1.
 
 Additionally, the following ergonomic classes provide a more streamlined method which take one of the above loader classes (without instantiation):
 - `NormalLoader`
@@ -75,6 +79,7 @@ Additionally, the following ergonomic classes provide a more streamlined method 
     - `xlora_model_id=None`: X-LoRA model
     - `chat_template=None`: Chat template literal or file.
     - `tokenizer_json=None`: Tokenizer json file.
+    - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached. If this is set then the max running sequences will be set to 1.
 - `QuantizedLoader`
     - `class`: Loader class.
     - `model_id`: Base model ID, or tokenizer ID if quantized model type.
@@ -101,6 +106,7 @@ Additionally, the following ergonomic classes provide a more streamlined method 
     - `xlora_model_id=None`: X-LoRA model
     - `chat_template=None`: Chat template literal or file.
     - `tokenizer_json=None`: Tokenizer json file.
+    - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached. If this is set then the max running sequences will be set to 1.
 
 Each class has one method:
 ### `load(self, token_source: str = "cache", max_seqs: int = 16, truncate_sequence: bool = false, logfile: str | None = None, revision: str | None = None, token_source_value: str | None = None) -> Runner`

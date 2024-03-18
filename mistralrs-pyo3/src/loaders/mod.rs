@@ -143,7 +143,7 @@ impl XLoraLoader {
     /// - `xlora_model_id=None`: X-LoRA model
     /// - `chat_template=None`: Chat template literal or file.
     /// - `tokenizer_json=None`: Tokenizer json file.
-    /// - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+    /// - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached. If this is set then the max running sequences will be set to 1.
     #[new]
     #[pyo3(signature = (
         class,
@@ -398,7 +398,7 @@ impl XLoraQuantizedLoader {
     /// - `xlora_model_id=None`: X-LoRA model
     /// - `chat_template=None`: Chat template literal or file.
     /// - `tokenizer_json=None`: Tokenizer json file.
-    /// - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+    /// - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached. If this is set then the max running sequences will be set to 1.
     #[new]
     #[pyo3(signature = (
         class,

@@ -14,6 +14,7 @@ use crate::{get_device, DType, ModelKind, Runner};
 pub struct GemmaLoader {
     loader: _GemmaLoader,
     no_kv_cache: bool,
+    tgt_non_granular_index: Option<usize>,
 }
 
 #[pymethods]
@@ -30,7 +31,7 @@ impl GemmaLoader {
     /// - `xlora_model_id=None`: X-LoRA model
     /// - `chat_template=None`: Chat template literal or file.
     /// - `tokenizer_json=None`: Tokenizer json file.
-    /// - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+    /// - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached. If this is set then the max running sequences will be set to 1.
     #[new]
     #[pyo3(signature = (
         model_id,
@@ -130,6 +131,7 @@ impl GemmaLoader {
                 tgt_non_granular_index,
             ),
             no_kv_cache,
+            tgt_non_granular_index,
         })
     }
 
@@ -202,9 +204,15 @@ impl GemmaLoader {
             Err(y) => return Err(PyValueError::new_err(y.to_string())),
         };
 
+        let maxseqs = if self.tgt_non_granular_index.is_some() {
+            1
+        } else {
+            max_seqs
+        };
+
         let mistralrs = MistralRs::new(
             pipeline,
-            SchedulerMethod::Fixed(max_seqs.try_into().unwrap()),
+            SchedulerMethod::Fixed(maxseqs.try_into().unwrap()),
             logfile,
             truncate_sequence,
             self.no_kv_cache,
