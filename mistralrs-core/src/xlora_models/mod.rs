@@ -62,7 +62,9 @@ trait ScalingsMaker {
                 println!("Using cache...");
                 return Ok(scalings_cache.clone());
             }
-            *get_mut_arcmutex!(non_granular_state.non_granular_index) += 1;
+            if seq_len == 1 {
+                *get_mut_arcmutex!(non_granular_state.non_granular_index) += 1;
+            }
             dbg!(*get_mut_arcmutex!(non_granular_state.non_granular_index));
         }
 
