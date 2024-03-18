@@ -315,8 +315,8 @@ impl Engine {
                     ));
                 }
             }
-            if get_mut_arcmutex!(self.pipeline).is_xlora() {
-                *deref_mut_refcell!(seqs[0]).scaling_cache() = get_mut_arcmutex!(self.pipeline)
+            if pipeline.is_xlora() {
+                *deref_mut_refcell!(seqs[0]).scaling_cache() = pipeline
                     .cache()
                     .get_scalings_cache()
                     .clone();
