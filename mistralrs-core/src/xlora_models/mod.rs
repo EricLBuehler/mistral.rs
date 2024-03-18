@@ -22,6 +22,7 @@ trait ScalingsMaker {
     fn get_classifier(&self) -> &XLoraClassifier;
     /// For dummy scalings
     fn dtype(&self) -> DType;
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &mut self,
         input_ids: &Tensor,
@@ -34,6 +35,7 @@ trait ScalingsMaker {
     ) -> Result<Tensor>;
     fn get_cache(&self) -> &Cache;
 
+    #[allow(clippy::too_many_arguments)]
     fn get_scalings(
         &mut self,
         input_ids: &Tensor,
