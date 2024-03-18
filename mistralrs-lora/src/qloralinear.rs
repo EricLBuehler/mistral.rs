@@ -5,7 +5,7 @@ use candle_nn::{init, Dropout, Linear, VarBuilder};
 use either::Either;
 
 use crate::{
-    apply_scalings_to_x, bmm, get_maybe_topk_scalings, LinearLayerLike, LoraConfig,
+    apply_scalings_to_x, get_maybe_topk_scalings, LinearLayerLike, LoraConfig,
     LoraLinearConfig, Ordering,
 };
 
@@ -214,20 +214,21 @@ impl LinearLayerLike for QLoraLinear {
                 .squeeze(0)?
                 .unsqueeze(1)?
                 .unsqueeze(1)?;
-            dbg!(&scalings);
             let adapter_a = adapter_a.broadcast_mul(&scalings)?;
-
-            dbg!(&adapter_a);
+            
+            let input = if let Some(ref d) = dropout {
+                d.forward(input, true)?
+            } else {
+                input.clone()
+            };
+            dbg!(adapter_scales);
             let (b, s, h) = input.dims3()?;
             let input = input.reshape((b*s, h))?;
-            let out = /*Linear::new(adapter_a, None)*/adapter_a.broadcast_matmul(&input.t()?)?;
-            dbg!(&out);
+            let out = adapter_a.broadcast_matmul(&input.t()?)?;
             let out = adapter_b.weight().broadcast_matmul(&out)?;
             let o_h = out.dims()[1];
             let out = out.reshape((adapter_scales.len(),b,s,o_h))?;
-            dbg!(&out);
             let out = out.sum(0)?;
-            dbg!(&out);
             Ok(out)
         }
     }
