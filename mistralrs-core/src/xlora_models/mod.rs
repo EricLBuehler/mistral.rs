@@ -65,7 +65,6 @@ trait ScalingsMaker {
             if seq_len == 1 {
                 *get_mut_arcmutex!(non_granular_state.non_granular_index) += 1;
             }
-            dbg!(*get_mut_arcmutex!(non_granular_state.non_granular_index));
         }
 
         let dummy_scalings = self.get_classifier().get_dummy_scalings(
