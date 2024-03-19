@@ -163,10 +163,22 @@ impl Attention {
         let key_states = self.k_proj.forward(xs)?;
         let value_states = self.v_proj.forward(xs)?;
 
-        let mut query_states =
+        /*let mut query_states =
             query_states.reshape((b_sz, q_len, self.num_heads * self.head_dim))?;
         let mut key_states =
-            key_states.reshape((b_sz, q_len, self.num_kv_heads * self.head_dim))?;
+            key_states.reshape((b_sz, q_len, self.num_kv_heads * self.head_dim))?;*/
+        let mut query_states = query_states
+            .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let mut key_states = key_states
+            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let value_states = value_states
+            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
 
         self.rotary_emb.forward(
             seqlen_offsets,
