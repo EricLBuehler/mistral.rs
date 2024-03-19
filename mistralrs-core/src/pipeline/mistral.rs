@@ -38,7 +38,7 @@ enum Model {
     XLoraQuantized(XLoraModelWeights),
     XLoraNormal(XLoraMistral),
 }
-pub const MISTRAL_IS_GPTX: bool = true;
+pub const MISTRAL_IS_GPTX: bool = false;
 
 pub struct MistralModelPaths<P> {
     tokenizer_filename: P,
