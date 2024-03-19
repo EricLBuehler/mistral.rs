@@ -295,7 +295,7 @@ impl Model {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
-        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        let head_dim = cfg.hidden_size / cfg.num_key_value_heads;
         let rotary_emb = Arc::new(RotaryEmbedding::new(
             cfg.rope_theta as f32,
             head_dim,
