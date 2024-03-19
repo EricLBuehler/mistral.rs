@@ -756,7 +756,7 @@
                 <span class="kw">let </span>vb = from_mmaped_safetensors(
                     paths.get_weight_filenames().to_vec(),
                     Vec::new(),
-                    DType::F16,<span class="comment">//dtype.unwrap_or(default_dtype),
+                    DType::F64,<span class="comment">//dtype.unwrap_or(default_dtype),
                     </span>device,
                     <span class="bool-val">false</span>,
                 )<span class="question-mark">?</span>;
