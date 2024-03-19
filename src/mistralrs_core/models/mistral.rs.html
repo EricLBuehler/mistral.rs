@@ -702,7 +702,7 @@
         <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
         <span class="kw">let </span>embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp(<span class="string">"embed_tokens"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>head_dim = cfg.hidden_size / cfg.num_key_value_heads;
+        <span class="kw">let </span>head_dim = cfg.hidden_size / cfg.num_attention_heads;
         <span class="kw">let </span>rotary_emb = Arc::new(RotaryEmbedding::new(
             cfg.rope_theta <span class="kw">as </span>f32,
             head_dim,
