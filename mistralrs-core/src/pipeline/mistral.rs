@@ -361,6 +361,8 @@ impl Loader for MistralLoader {
 
 impl Pipeline for MistralPipeline {
     fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor {
+        dbg!(input_toks.len());
+        dbg!(self.no_kv_cache);
         let ModelInputs {
             input_ids,
             input_ids_full,
@@ -376,6 +378,7 @@ impl Pipeline for MistralPipeline {
             self.no_kv_cache,
         )
         .unwrap();
+        dbg!(&seqlen_offsets);
         let result = match self.model {
             Model::Normal(ref mut model) => {
                 model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)
