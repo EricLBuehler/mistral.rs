@@ -414,6 +414,7 @@ impl XLoraModel {
             cfg.max_position_embeddings,
             vb.device(),
             MISTRAL_IS_GPTX,
+            vb.dtype(),
         )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");

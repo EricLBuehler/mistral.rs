@@ -243,6 +243,7 @@ impl CausalSelfAttention {
             MAX_SEQ_LEN,
             vb.device(),
             LLAMA_IS_GPTX,
+            vb.dtype(),
         )?);
         Ok(Self {
             q_proj,

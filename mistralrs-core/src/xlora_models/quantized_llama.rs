@@ -315,6 +315,7 @@ impl ModelWeights {
             MAX_SEQ_LEN as usize,
             &ct.device,
             is_gpt_neox,
+            DType::F32,
         )?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(&ct.device)?;
@@ -481,6 +482,7 @@ impl ModelWeights {
             MAX_SEQ_LEN as usize,
             device,
             is_gpt_neox,
+            DType::F32,
         )?;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
