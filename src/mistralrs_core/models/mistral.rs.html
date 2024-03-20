@@ -584,24 +584,24 @@
         <span class="kw">let </span>key_states = <span class="self">self</span>.k_proj.forward(xs)<span class="question-mark">?</span>;
         <span class="kw">let </span>value_states = <span class="self">self</span>.v_proj.forward(xs)<span class="question-mark">?</span>;
 
-        <span class="comment">/*let mut query_states =
-            query_states.reshape((b_sz, q_len, self.num_heads * self.head_dim))?;
-        let mut key_states =
-            key_states.reshape((b_sz, q_len, self.num_kv_heads * self.head_dim))?;*/
-        </span><span class="kw">let </span><span class="kw-2">mut </span>query_states = query_states
-            .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-            </span>.contiguous()<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>key_states = key_states
-            .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-            </span>.contiguous()<span class="question-mark">?</span>;
-        <span class="kw">let </span>value_states = value_states
-            .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-            </span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>query_states =
+            query_states.reshape((b_sz, q_len, <span class="self">self</span>.num_heads * <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>key_states =
+            key_states.reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads * <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="comment">/*let mut query_states = query_states
+            .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let mut key_states = key_states
+            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let value_states = value_states
+            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;*/
 
-        <span class="self">self</span>.rotary_emb.forward(
+        </span><span class="self">self</span>.rotary_emb.forward(
             seqlen_offsets,
             <span class="kw-2">&amp;</span>start_offsets_kernel,
             <span class="kw-2">&amp;mut </span>query_states,
