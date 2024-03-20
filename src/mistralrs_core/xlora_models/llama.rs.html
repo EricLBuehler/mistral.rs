@@ -573,6 +573,7 @@
 <a href="#572" id="572">572</a>
 <a href="#573" id="573">573</a>
 <a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -809,6 +810,7 @@
             MAX_SEQ_LEN,
             vb.device(),
             LLAMA_IS_GPTX,
+            vb.dtype(),
         )<span class="question-mark">?</span>);
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             q_proj,
