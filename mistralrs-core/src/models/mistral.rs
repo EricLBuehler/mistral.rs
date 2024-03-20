@@ -274,9 +274,7 @@ impl DecoderLayer {
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let residual = xs;
-        dbg!(xs.mean_all());
         let xs = self.input_layernorm.forward(xs)?;
-        dbg!(xs.mean_all());
         let xs = self.self_attn.forward(
             &xs,
             attention_mask,
