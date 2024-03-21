@@ -208,8 +208,11 @@ impl LayerWeights {
         let (k, v) = match &*kv_cache {
             None => (k, v),
             Some((k_cache, v_cache)) => {
-                let k = candle_nn::ops::kvconcat(k_cache, &k, 2)?.contiguous()?;
+                /*let k = candle_nn::ops::kvconcat(k_cache, &k, 2)?.contiguous()?;
                 let v = candle_nn::ops::kvconcat(v_cache, &v, 2)?.contiguous()?;
+                (k, v)*/
+                let k = Tensor::cat(&[k_cache, &k], 2)?.contiguous()?;
+                let v = Tensor::cat(&[v_cache, &v], 2)?.contiguous()?;
                 (k, v)
             }
         };
@@ -219,8 +222,7 @@ impl LayerWeights {
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
 
-        let something = q.matmul(&k.t()?)?;
-        let att = (something / (self.head_dim as f64).sqrt())?;
+        let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
         let mask = mask.broadcast_as(att.shape())?;
         let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
         let att = candle_nn::ops::softmax_last_dim(&att)?;
