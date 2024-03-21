@@ -156,10 +156,13 @@ pub trait Pipeline: Send + Sync {
         add_generation_prompt: bool,
     ) -> Result<String> {
         let mut env = Environment::new();
-        env.add_template(
-            "chat_template",
-            self.get_chat_template().chat_template.as_ref().unwrap(),
-        )?;
+        let template = self
+            .get_chat_template()
+            .chat_template
+            .as_ref()
+            .unwrap()
+            .replace(".strip()", "|trim");
+        env.add_template("chat_template", template.as_str())?;
         env.add_function("raise_exception", raise_exception);
         let tmpl = env.get_template("chat_template").unwrap();
         let bos_tok = match self.get_chat_template().bos_token {
