@@ -77,7 +77,7 @@ pub struct ChatTemplate {
     truncation_size: Option<String>,
     #[serde(with = "either::serde_untagged")]
     unk_token: Either<String, AddedTokensDecoder>,
-    use_default_system_prompt: bool,
+    use_default_system_prompt: Option<bool>,
 }
 
 pub enum TokenSource {
