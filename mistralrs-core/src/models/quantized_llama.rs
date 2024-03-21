@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use candle_core::quantized::QTensor;
 use candle_core::quantized::{ggml_file, gguf_file};
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 
 use super::Cache;
@@ -161,7 +161,9 @@ struct LayerWeights {
     head_dim: usize,
     span_attn: tracing::Span,
     span_mlp: tracing::Span,
-    rotary: RotaryEmbedding,
+    //rotary: RotaryEmbedding,
+    cos: Tensor,
+    sin: Tensor,
 }
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
@@ -172,6 +174,40 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 }
 
 impl LayerWeights {
+    fn apply_rotary_emb(&self, x: &Tensor, 
+        start_offsets: &[usize],) -> Result<Tensor> {
+        let (b_sz, n_head, seq_len, n_embd) = x.dims4()?;
+        let mut ropes = Vec::new();
+        for (b, offset) in (0..b_sz).zip(start_offsets) {
+            let cos = self
+                .cos
+                .narrow(0, *offset, seq_len)?
+                .reshape((seq_len, n_embd / 2, 1))?;
+            let sin = self
+                .sin
+                .narrow(0, *offset, seq_len)?
+                .reshape((seq_len, n_embd / 2, 1))?;
+            let cos = cos.broadcast_as((1, 1, seq_len, n_embd / 2, 1))?;
+            let sin = sin.broadcast_as((1, 1, seq_len, n_embd / 2, 1))?;
+            // This mimics the llama.cpp behavior.
+            // https://github.com/ggerganov/llama.cpp/blob/1f0bccb27929e261744c979bc75114955da49e98/ggml.c#L12104-L12105
+            // The x0 and x1 value are interleaved on the n_embd (= head_dim) dimension.
+            // The resulting y0 and y1 are also interleaved with:
+            //   y0 = x0*cos - x1*sin
+            //   y1 = x0*sin + x1*cos
+            let x_b = x.i(b)?.unsqueeze(0)?;
+            let x_b = x_b.reshape((1, n_head, seq_len, n_embd / 2, 2))?;
+            let x0 = x_b.narrow(D::Minus1, 0, 1)?;
+            let x1 = x_b.narrow(D::Minus1, 1, 1)?;
+            let y0 = (x0.broadcast_mul(&cos)? - x1.broadcast_mul(&sin)?)?;
+            let y1 = (x0.broadcast_mul(&sin)? + x1.broadcast_mul(&cos)?)?;
+            let rope = Tensor::cat(&[y0, y1], D::Minus1)?;
+            let rope = rope.flatten_from(D::Minus2)?;
+            ropes.push(rope);
+        }
+        Ok(Tensor::cat(&ropes, 0)?)
+    }
+
     fn forward_attn(
         &mut self,
         x: &Tensor,
@@ -186,7 +222,7 @@ impl LayerWeights {
         let k = self.attention_wk.forward(x)?;
         let v = self.attention_wv.forward(x)?;
 
-        let mut q = q.reshape((b_sz, seq_len, self.n_head * self.head_dim))?;
+        /*let mut q = q.reshape((b_sz, seq_len, self.n_head * self.head_dim))?;
         let mut k = k.reshape((b_sz, seq_len, self.n_kv_head * self.head_dim))?;
 
         self.rotary
@@ -203,7 +239,19 @@ impl LayerWeights {
         let v = v
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
             .transpose(1, 2)?
-            .contiguous()?;
+            .contiguous()?;*/
+        let q = q
+            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+            .transpose(1, 2)?;
+        let k = k
+            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+            .transpose(1, 2)?;
+        let v = v
+            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+            .transpose(1, 2)?;
+
+        let q = self.apply_rotary_emb(&q, start_offsets)?;
+        let k = self.apply_rotary_emb(&k, start_offsets)?;
 
         let (k, v) = match &*kv_cache {
             None => (k, v),
@@ -258,9 +306,29 @@ pub struct ModelWeights {
     pub cache: Cache,
 }
 
+fn precomput_freqs_cis (
+    head_dim: usize,
+    freq_base: f32,
+    device: &Device,
+) -> Result<(Tensor, Tensor)> {
+    let theta: Vec<_> = (0..head_dim)
+        .step_by(2)
+        .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))
+        .collect();
+    let theta = Tensor::new(theta.as_slice(), device)?;
+    let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, device)?
+        .to_dtype(DType::F32)?
+        .reshape((MAX_SEQ_LEN as usize, 1))?
+        .matmul(&theta.reshape((1, theta.elem_count()))?)?;
+    let cos = idx_theta.cos()?;
+    let sin = idx_theta.sin()?;
+    Ok((cos, sin))
+}
+
 impl ModelWeights {
     pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize, is_gpt_neox: bool) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
+        let (cos, sin) = precomput_freqs_cis(head_dim, 10000., &ct.device)?;
         let rotary = RotaryEmbedding::new(
             10000.,
             head_dim,
@@ -308,7 +376,9 @@ impl ModelWeights {
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
                 span_attn,
                 span_mlp,
-                rotary: rotary.clone(),
+                //rotary: rotary.clone(),
+                sin: sin.clone(),
+                cos: cos.clone(),
             })
         }
         let span = tracing::span!(tracing::Level::TRACE, "model");
@@ -364,6 +434,7 @@ impl ModelWeights {
             is_gpt_neox,
             DType::F32,
         )?;
+        let (cos, sin) = precomput_freqs_cis(rope_dim, rope_freq_base, device)?;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
@@ -433,7 +504,9 @@ impl ModelWeights {
                 head_dim,
                 span_attn,
                 span_mlp,
-                rotary: rotary.clone(),
+                //rotary: rotary.clone(),
+                sin: sin.clone(),
+                cos: cos.clone(),
             })
         }
         let span = tracing::span!(tracing::Level::TRACE, "model");
