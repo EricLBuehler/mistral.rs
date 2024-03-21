@@ -13,7 +13,7 @@ pub const MAX_SEQ_LEN: u32 = 4096;
 
 #[derive(Debug, Clone)]
 struct RmsNorm {
-    inner: candle_nn::LayerNorm,
+    inner: candle_nn::RmsNorm,
     span: tracing::Span,
 }
 
@@ -21,7 +21,7 @@ impl RmsNorm {
     fn new(scale: QTensor, eps: f32) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
         let scale = scale.dequantize(&scale.device())?;
-        let inner = candle_nn::LayerNorm::rms_norm(scale, eps as f64);
+        let inner = candle_nn::RmsNorm::new(scale, eps as f64);
         Ok(Self { inner, span })
     }
 
