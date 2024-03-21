@@ -504,6 +504,8 @@
 <a href="#503" id="503">503</a>
 <a href="#504" id="504">504</a>
 <a href="#505" id="505">505</a>
+<a href="#506" id="506">506</a>
+<a href="#507" id="507">507</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -714,8 +716,11 @@
         <span class="kw">let </span>(k, v) = <span class="kw">match </span><span class="kw-2">&amp;*</span>kv_cache {
             <span class="prelude-val">None </span>=&gt; (k, v),
             <span class="prelude-val">Some</span>((k_cache, v_cache)) =&gt; {
-                <span class="kw">let </span>k = candle_nn::ops::kvconcat(k_cache, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-                <span class="kw">let </span>v = candle_nn::ops::kvconcat(v_cache, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+                <span class="comment">/*let k = candle_nn::ops::kvconcat(k_cache, &amp;k, 2)?.contiguous()?;
+                let v = candle_nn::ops::kvconcat(v_cache, &amp;v, 2)?.contiguous()?;
+                (k, v)*/
+                </span><span class="kw">let </span>k = Tensor::cat(<span class="kw-2">&amp;</span>[k_cache, <span class="kw-2">&amp;</span>k], <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+                <span class="kw">let </span>v = Tensor::cat(<span class="kw-2">&amp;</span>[v_cache, <span class="kw-2">&amp;</span>v], <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
                 (k, v)
             }
         };
@@ -725,8 +730,7 @@
         </span><span class="kw">let </span>k = <span class="self">self</span>.repeat_kv(k)<span class="question-mark">?</span>;
         <span class="kw">let </span>v = <span class="self">self</span>.repeat_kv(v)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>something = q.matmul(<span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-        <span class="kw">let </span>att = (something / (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
+        <span class="kw">let </span>att = (q.matmul(<span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>)<span class="question-mark">? </span>/ (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
         <span class="kw">let </span>mask = mask.broadcast_as(att.shape())<span class="question-mark">?</span>;
         <span class="kw">let </span>att = masked_fill(<span class="kw-2">&amp;</span>att, <span class="kw-2">&amp;</span>mask, f32::NEG_INFINITY)<span class="question-mark">?</span>;
         <span class="kw">let </span>att = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>att)<span class="question-mark">?</span>;
