@@ -642,7 +642,7 @@
     truncation_size: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)]
     </span>unk_token: Either&lt;String, AddedTokensDecoder&gt;,
-    use_default_system_prompt: bool,
+    use_default_system_prompt: <span class="prelude-ty">Option</span>&lt;bool&gt;,
 }
 
 <span class="kw">pub enum </span>TokenSource {
