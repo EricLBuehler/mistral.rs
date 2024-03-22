@@ -161,7 +161,7 @@ struct LayerWeights {
     head_dim: usize,
     span_attn: tracing::Span,
     span_mlp: tracing::Span,
-    //rotary: RotaryEmbedding,
+    rotary: RotaryEmbedding,
     cos: Tensor,
     sin: Tensor,
 }
@@ -222,7 +222,17 @@ impl LayerWeights {
         let k = self.attention_wk.forward(x)?;
         let v = self.attention_wv.forward(x)?;
 
-        /*let mut q = q.reshape((b_sz, seq_len, self.n_head * self.head_dim))?;
+        let q = q
+        .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+        .transpose(1, 2)?;
+        let k = k
+            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+            .transpose(1, 2)?;
+        let v = v
+            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+            .transpose(1, 2)?;
+
+        let mut q = q.reshape((b_sz, seq_len, self.n_head * self.head_dim))?;
         let mut k = k.reshape((b_sz, seq_len, self.n_kv_head * self.head_dim))?;
 
         self.rotary
@@ -239,8 +249,8 @@ impl LayerWeights {
         let v = v
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
             .transpose(1, 2)?
-            .contiguous()?;*/
-        let q = q
+            .contiguous()?;
+        /*let q = q
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
             .transpose(1, 2)?;
         let k = k
@@ -251,7 +261,7 @@ impl LayerWeights {
             .transpose(1, 2)?;
 
         let q = self.apply_rotary_emb(&q, start_offsets)?;
-        let k = self.apply_rotary_emb(&k, start_offsets)?;
+        let k = self.apply_rotary_emb(&k, start_offsets)?;*/
 
         let (k, v) = match &*kv_cache {
             None => (k, v),
@@ -376,7 +386,7 @@ impl ModelWeights {
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
                 span_attn,
                 span_mlp,
-                //rotary: rotary.clone(),
+                rotary: rotary.clone(),
                 sin: sin.clone(),
                 cos: cos.clone(),
             })
@@ -504,7 +514,7 @@ impl ModelWeights {
                 head_dim,
                 span_attn,
                 span_mlp,
-                //rotary: rotary.clone(),
+                rotary: rotary.clone(),
                 sin: sin.clone(),
                 cos: cos.clone(),
             })
