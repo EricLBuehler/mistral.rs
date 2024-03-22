@@ -432,6 +432,7 @@
 <a href="#431" id="431">431</a>
 <a href="#432" id="432">432</a>
 <a href="#433" id="433">433</a>
+<a href="#434" id="434">434</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -599,6 +600,7 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>mquery_states = query_states
             .reshape((b_sz<span class="kw-2">*</span>q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+            </span>.reshape((<span class="number">1</span>, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
             </span>.transpose(<span class="number">1</span>,<span class="number">2</span>)<span class="question-mark">?
             </span>.contiguous()<span class="question-mark">?</span>;
         <span class="macro">dbg!</span>(mquery_states.shape());
