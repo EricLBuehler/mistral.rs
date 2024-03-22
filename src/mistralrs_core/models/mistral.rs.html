@@ -420,6 +420,7 @@
 <a href="#419" id="419">419</a>
 <a href="#420" id="420">420</a>
 <a href="#421" id="421">421</a>
+<a href="#422" id="422">422</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -610,6 +611,7 @@
             <span class="kw-2">&amp;mut </span>query_states,
             <span class="kw-2">&amp;mut </span>key_states,
         )<span class="question-mark">?</span>;
+        <span class="macro">dbg!</span>(query_states.mean_all());
 
         <span class="kw">let </span>query_states = query_states
             .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
