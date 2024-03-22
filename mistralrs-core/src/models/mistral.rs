@@ -172,12 +172,22 @@ impl Attention {
         //dbg!(&mquery_states.to_vec3::<half::bf16>()?[2][0][0..10]);
         //dbg!(&mquery_states.to_vec3::<half::bf16>()?[2][2][0..10]);
 
-        dbg!(query_states.shape());
+        /*dbg!(query_states.shape());
         let mut query_states =
             query_states.reshape((b_sz*q_len, self.num_heads, self.head_dim))?;
         dbg!(query_states.shape());
         let mut key_states =
-            key_states.reshape((b_sz*q_len, self.num_kv_heads, self.head_dim))?;
+            key_states.reshape((b_sz*q_len, self.num_kv_heads, self.head_dim))?;*/
+
+        let mut query_states = query_states
+            .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let mut key_states = key_states
+            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+            
         /*let mut query_states = query_states
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?
