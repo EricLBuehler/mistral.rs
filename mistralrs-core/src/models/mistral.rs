@@ -180,16 +180,15 @@ impl Attention {
             &mut query_states,
             &mut key_states,
         )?;
-
-        dbg!(query_states.shape());
-        /*let mut query_states = query_states
+        
+        let mut query_states = query_states
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
         let mut key_states = key_states
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?
-            .contiguous()?;*/
+            .contiguous()?;
 
         let (key_states, value_states) = match &*kv_cache {
             None => (key_states, value_states),
