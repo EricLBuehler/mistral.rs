@@ -604,7 +604,7 @@
             </span>.transpose(<span class="number">1</span>,<span class="number">2</span>)<span class="question-mark">?
             </span>.contiguous()<span class="question-mark">?</span>;
         <span class="macro">dbg!</span>(mquery_states.shape());
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>mquery_states.to_vec3::&lt;half::bf16&gt;()<span class="question-mark">?</span>[<span class="number">0</span>][<span class="number">0</span>][<span class="number">0</span>..<span class="number">10</span>]);
+        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>mquery_states.i(<span class="number">0</span>).unwrap().to_vec3::&lt;half::bf16&gt;()<span class="question-mark">?</span>[<span class="number">0</span>][<span class="number">0</span>][<span class="number">0</span>..<span class="number">10</span>]);
         <span class="comment">//dbg!(&amp;mquery_states.to_vec3::&lt;half::bf16&gt;()?[2][0][0..10]);
         //dbg!(&amp;mquery_states.to_vec3::&lt;half::bf16&gt;()?[2][2][0..10]);
 
