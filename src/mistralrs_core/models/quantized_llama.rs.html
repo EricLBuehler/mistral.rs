@@ -593,7 +593,6 @@
 <a href="#592" id="592">592</a>
 <a href="#593" id="593">593</a>
 <a href="#594" id="594">594</a>
-<a href="#595" id="595">595</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -818,13 +817,14 @@
         <span class="kw">let </span>k = <span class="self">self</span>.attention_wk.forward(x)<span class="question-mark">?</span>;
         <span class="kw">let </span>v = <span class="self">self</span>.attention_wv.forward(x)<span class="question-mark">?</span>;
 
-        <span class="comment">/*dbg!(q.shape());
-        let mut q = q.reshape((b_sz, seq_len, self.n_head * self.head_dim))?;
-        dbg!(q.shape());
-        let mut k = k.reshape((b_sz, seq_len, self.n_kv_head * self.head_dim))?;*/
-        </span><span class="kw">let </span><span class="kw-2">mut </span>q = q
+        <span class="macro">dbg!</span>(q.shape());
+        <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz, seq_len, <span class="self">self</span>.n_head * <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="macro">dbg!</span>(q.shape());
+        <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head * <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>q = q
             .reshape((b_sz, seq_len, <span class="self">self</span>.n_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+        <span class="macro">dbg!</span>(q.shape());
         <span class="kw">let </span><span class="kw-2">mut </span>k = k
             .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
@@ -832,8 +832,6 @@
             .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>start_offsets_kernel.to_vec2::&lt;i64&gt;());
-        <span class="macro">dbg!</span>(start_offsets);
         <span class="self">self</span>.rotary
             .forward(start_offsets, <span class="kw-2">&amp;</span>start_offsets_kernel, <span class="kw-2">&amp;mut </span>q, <span class="kw-2">&amp;mut </span>k)<span class="question-mark">?</span>;
 
