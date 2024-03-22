@@ -2,14 +2,11 @@
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{Activation, VarBuilder};
+use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 use candle_transformers::models::with_tracing::{linear_no_bias, Linear};
 use std::sync::Arc;
 
-use crate::{
-    fused::{rms_norm, RmsNorm},
-    pipeline::MISTRAL_IS_GPTX,
-};
+use crate::pipeline::MISTRAL_IS_GPTX;
 
 use super::Cache;
 
@@ -27,6 +24,27 @@ pub struct Config {
     pub(crate) rope_theta: f64,
     pub(crate) sliding_window: usize,
     pub(crate) use_flash_attn: bool,
+}
+
+#[derive(Debug, Clone)]
+struct RmsNorm {
+    inner: candle_nn::RmsNorm,
+    span: tracing::Span,
+}
+
+impl RmsNorm {
+    fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
+        let inner = candle_nn::rms_norm(size, eps, vb)?;
+        Ok(Self { inner, span })
+    }
+}
+
+impl Module for RmsNorm {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        self.inner.forward(x)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -145,6 +163,18 @@ impl Attention {
         let key_states = self.k_proj.forward(xs)?;
         let value_states = self.v_proj.forward(xs)?;
 
+        let mut query_states =
+            query_states.reshape((b_sz, q_len, self.num_heads * self.head_dim))?;
+        let mut key_states =
+            key_states.reshape((b_sz, q_len, self.num_kv_heads * self.head_dim))?;
+
+        self.rotary_emb.forward(
+            seqlen_offsets,
+            &start_offsets_kernel,
+            &mut query_states,
+            &mut key_states,
+        )?;
+
         let query_states = query_states
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?
@@ -158,19 +188,11 @@ impl Attention {
             .transpose(1, 2)?
             .contiguous()?;
 
-        self.rotary_emb.forward(
-            seqlen_offsets,
-            &start_offsets_kernel,
-            &mut query_states,
-            &mut key_states,
-        )?;
-        dbg!(query_states.mean_all());
-
         let (key_states, value_states) = match &*kv_cache {
             None => (key_states, value_states),
             Some((prev_k, prev_v)) => {
-                let key_states = Tensor::cat(&[prev_k, &key_states], 2)?;
-                let value_states = Tensor::cat(&[prev_v, &value_states], 2)?;
+                let key_states = candle_nn::ops::kvconcat(prev_k, &key_states, 2)?;
+                let value_states = candle_nn::ops::kvconcat(prev_v, &value_states, 2)?;
                 (key_states, value_states)
             }
         };
@@ -217,8 +239,8 @@ impl DecoderLayer {
         let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
         let input_layernorm =
-            rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
-        let post_attention_layernorm = rms_norm(
+            RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let post_attention_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             vb.pp("post_attention_layernorm"),
@@ -280,7 +302,6 @@ impl Model {
             cfg.max_position_embeddings,
             vb.device(),
             MISTRAL_IS_GPTX,
-            vb.dtype(),
         )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
@@ -288,7 +309,7 @@ impl Model {
             let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
             layers.push(layer)
         }
-        let norm = rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
+        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
         let lm_head = linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         Ok(Self {
             embed_tokens,
