@@ -428,6 +428,7 @@
 <a href="#427" id="427">427</a>
 <a href="#428" id="428">428</a>
 <a href="#429" id="429">429</a>
+<a href="#430" id="430">430</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -596,6 +597,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>mquery_states = query_states
             .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
             </span>.contiguous()<span class="question-mark">?</span>;
+        <span class="macro">dbg!</span>(mquery_states.shape());
         <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>mquery_states.i(<span class="number">0</span>).unwrap().to_vec3::&lt;half::bf16&gt;()<span class="question-mark">?</span>[<span class="number">0</span>][<span class="number">0</span>][<span class="number">0</span>..<span class="number">10</span>]);
         <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>mquery_states.i(<span class="number">0</span>).unwrap().to_vec3::&lt;half::bf16&gt;()<span class="question-mark">?</span>[<span class="number">2</span>][<span class="number">0</span>][<span class="number">0</span>..<span class="number">10</span>]);
         <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>mquery_states.i(<span class="number">0</span>).unwrap().to_vec3::&lt;half::bf16&gt;()<span class="question-mark">?</span>[<span class="number">2</span>][<span class="number">2</span>][<span class="number">0</span>..<span class="number">10</span>]);
