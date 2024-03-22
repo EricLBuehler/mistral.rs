@@ -408,7 +408,6 @@
 <a href="#407" id="407">407</a>
 <a href="#408" id="408">408</a>
 <a href="#409" id="409">409</a>
-<a href="#410" id="410">410</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -591,18 +590,17 @@
             <span class="kw-2">&amp;mut </span>query_states,
             <span class="kw-2">&amp;mut </span>key_states,
         )<span class="question-mark">?</span>;
+        
+        <span class="kw">let </span><span class="kw-2">mut </span>query_states = query_states
+            .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+            </span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>key_states = key_states
+            .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+            </span>.contiguous()<span class="question-mark">?</span>;
 
-        <span class="macro">dbg!</span>(query_states.shape());
-        <span class="comment">/*let mut query_states = query_states
-            .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let mut key_states = key_states
-            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;*/
-
-        </span><span class="kw">let </span>(key_states, value_states) = <span class="kw">match </span><span class="kw-2">&amp;*</span>kv_cache {
+        <span class="kw">let </span>(key_states, value_states) = <span class="kw">match </span><span class="kw-2">&amp;*</span>kv_cache {
             <span class="prelude-val">None </span>=&gt; (key_states, value_states),
             <span class="prelude-val">Some</span>((prev_k, prev_v)) =&gt; {
                 <span class="kw">let </span>key_states = candle_nn::ops::kvconcat(prev_k, <span class="kw-2">&amp;</span>key_states, <span class="number">2</span>)<span class="question-mark">?</span>;
