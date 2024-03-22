@@ -168,9 +168,9 @@ impl Attention {
             .transpose(1,2)?
             .contiguous()?;
         dbg!(mquery_states.shape());
-        dbg!(&mquery_states.i(0).unwrap().to_vec3::<half::bf16>()?[0][0][0..10]);
-        dbg!(&mquery_states.i(0).unwrap().to_vec3::<half::bf16>()?[2][0][0..10]);
-        dbg!(&mquery_states.i(0).unwrap().to_vec3::<half::bf16>()?[2][2][0..10]);
+        dbg!(&mquery_states.to_vec3::<half::bf16>()?[0][0][0..10]);
+        dbg!(&mquery_states.to_vec3::<half::bf16>()?[2][0][0..10]);
+        dbg!(&mquery_states.to_vec3::<half::bf16>()?[2][2][0..10]);
 
         dbg!(query_states.shape());
         let mut query_states =
