@@ -587,6 +587,7 @@
 <a href="#586" id="586">586</a>
 <a href="#587" id="587">587</a>
 <a href="#588" id="588">588</a>
+<a href="#589" id="589">589</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -922,6 +923,7 @@
         </span>.matmul(<span class="kw-2">&amp;</span>theta.reshape((<span class="number">1</span>, theta.elem_count()))<span class="question-mark">?</span>)<span class="question-mark">?</span>;
     <span class="kw">let </span>cos = idx_theta.cos()<span class="question-mark">?</span>;
     <span class="kw">let </span>sin = idx_theta.sin()<span class="question-mark">?</span>;
+    <span class="macro">dbg!</span>(cos.mean_all());
     <span class="prelude-val">Ok</span>((cos, sin))
 }
 
