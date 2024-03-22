@@ -163,10 +163,10 @@ impl Attention {
         let key_states = self.k_proj.forward(xs)?;
         let value_states = self.v_proj.forward(xs)?;
 
-        let mut query_states = query_states
-            .reshape((b_sz*q_len, self.num_heads, self.head_dim))?;
-        let mut key_states = key_states
-            .reshape((b_sz*q_len, self.num_kv_heads, self.head_dim))?;
+        let mut query_states =
+            query_states.reshape((b_sz * q_len, self.num_heads, self.head_dim))?;
+        let mut key_states =
+            key_states.reshape((b_sz * q_len, self.num_kv_heads, self.head_dim))?;
         let value_states = value_states
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
@@ -177,14 +177,16 @@ impl Attention {
             &mut query_states,
             &mut key_states,
         )?;
-        
+
         if query_states.rank() == 3 {
             query_states = query_states
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-                .transpose(1, 2)?.contiguous()?;
+                .transpose(1, 2)?
+                .contiguous()?;
             key_states = key_states
                 .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?.contiguous()?;
+                .transpose(1, 2)?
+                .contiguous()?;
         }
 
         let (key_states, value_states) = match &*kv_cache {
