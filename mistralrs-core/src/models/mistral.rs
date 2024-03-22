@@ -198,11 +198,13 @@ impl Attention {
             &mut key_states,
         )?;
         dbg!(query_states.mean_all());
+        dbg!(query_states.shape());
 
         let query_states = query_states
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
+        dbg!(query_states.shape());
         let key_states = key_states
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?
