@@ -163,6 +163,12 @@ impl Attention {
         let key_states = self.k_proj.forward(xs)?;
         let value_states = self.v_proj.forward(xs)?;
 
+        let mut mquery_states = query_states
+            .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        dbg!(&mquery_states.i(0).unwrap().to_vec3::<half::bf16>()?[0][0][0..10]);
+
         dbg!(query_states.shape());
         let mut query_states =
             query_states.reshape((b_sz, q_len, self.num_heads * self.head_dim))?;

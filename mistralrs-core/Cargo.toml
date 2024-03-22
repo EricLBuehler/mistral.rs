@@ -32,6 +32,7 @@ mistralrs-lora = { version = "0.1.0", path = "../mistralrs-lora" }
 minijinja = "1.0.12"
 either.workspace = true
 indexmap.workspace = true
+half = "2.4.0"
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
