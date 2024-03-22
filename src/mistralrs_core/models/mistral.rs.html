@@ -405,9 +405,6 @@
 <a href="#404" id="404">404</a>
 <a href="#405" id="405">405</a>
 <a href="#406" id="406">406</a>
-<a href="#407" id="407">407</a>
-<a href="#408" id="408">408</a>
-<a href="#409" id="409">409</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -574,15 +571,12 @@
         <span class="kw">let </span>value_states = <span class="self">self</span>.v_proj.forward(xs)<span class="question-mark">?</span>;
 
         <span class="kw">let </span><span class="kw-2">mut </span>query_states = query_states
-            .reshape((b_sz<span class="kw-2">*</span>q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.contiguous()<span class="question-mark">?</span>;
+            .reshape((b_sz<span class="kw-2">*</span>q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>key_states = key_states
-            .reshape((b_sz<span class="kw-2">*</span>q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.contiguous()<span class="question-mark">?</span>;
+            .reshape((b_sz<span class="kw-2">*</span>q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
         <span class="kw">let </span>value_states = value_states
             .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-            </span>.contiguous()<span class="question-mark">?</span>;
+            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 
         <span class="self">self</span>.rotary_emb.forward(
             seqlen_offsets,
