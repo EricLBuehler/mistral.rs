@@ -222,7 +222,7 @@ impl LayerWeights {
         let k = self.attention_wk.forward(x)?;
         let v = self.attention_wv.forward(x)?;
 
-        let q = q
+        /*let q = q
         .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
         .transpose(1, 2)?;
         let k = k
@@ -249,8 +249,9 @@ impl LayerWeights {
         let v = v
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
             .transpose(1, 2)?
-            .contiguous()?;
-        /*let q = q
+            .contiguous()?;*/
+        
+        let q = q
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
             .transpose(1, 2)?;
         let k = k
@@ -261,7 +262,7 @@ impl LayerWeights {
             .transpose(1, 2)?;
 
         let q = self.apply_rotary_emb(&q, start_offsets)?;
-        let k = self.apply_rotary_emb(&k, start_offsets)?;*/
+        let k = self.apply_rotary_emb(&k, start_offsets)?;
 
         let (k, v) = match &*kv_cache {
             None => (k, v),
