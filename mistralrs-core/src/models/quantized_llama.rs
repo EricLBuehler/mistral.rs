@@ -333,6 +333,7 @@ fn precomput_freqs_cis (
         .matmul(&theta.reshape((1, theta.elem_count()))?)?;
     let cos = idx_theta.cos()?;
     let sin = idx_theta.sin()?;
+    dbg!(cos.mean_all());
     Ok((cos, sin))
 }
 
