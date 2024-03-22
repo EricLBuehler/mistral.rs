@@ -406,42 +406,6 @@
 <a href="#405" id="405">405</a>
 <a href="#406" id="406">406</a>
 <a href="#407" id="407">407</a>
-<a href="#408" id="408">408</a>
-<a href="#409" id="409">409</a>
-<a href="#410" id="410">410</a>
-<a href="#411" id="411">411</a>
-<a href="#412" id="412">412</a>
-<a href="#413" id="413">413</a>
-<a href="#414" id="414">414</a>
-<a href="#415" id="415">415</a>
-<a href="#416" id="416">416</a>
-<a href="#417" id="417">417</a>
-<a href="#418" id="418">418</a>
-<a href="#419" id="419">419</a>
-<a href="#420" id="420">420</a>
-<a href="#421" id="421">421</a>
-<a href="#422" id="422">422</a>
-<a href="#423" id="423">423</a>
-<a href="#424" id="424">424</a>
-<a href="#425" id="425">425</a>
-<a href="#426" id="426">426</a>
-<a href="#427" id="427">427</a>
-<a href="#428" id="428">428</a>
-<a href="#429" id="429">429</a>
-<a href="#430" id="430">430</a>
-<a href="#431" id="431">431</a>
-<a href="#432" id="432">432</a>
-<a href="#433" id="433">433</a>
-<a href="#434" id="434">434</a>
-<a href="#435" id="435">435</a>
-<a href="#436" id="436">436</a>
-<a href="#437" id="437">437</a>
-<a href="#438" id="438">438</a>
-<a href="#439" id="439">439</a>
-<a href="#440" id="440">440</a>
-<a href="#441" id="441">441</a>
-<a href="#442" id="442">442</a>
-<a href="#443" id="443">443</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -607,63 +571,27 @@
         <span class="kw">let </span>key_states = <span class="self">self</span>.k_proj.forward(xs)<span class="question-mark">?</span>;
         <span class="kw">let </span>value_states = <span class="self">self</span>.v_proj.forward(xs)<span class="question-mark">?</span>;
 
-        <span class="kw">let  </span>mquery_states = query_states
-            .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>,<span class="number">2</span>)<span class="question-mark">?
-            </span>.contiguous()<span class="question-mark">?</span>;
-        <span class="macro">dbg!</span>(mquery_states.shape());
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>mquery_states.i(<span class="number">0</span>).unwrap().to_vec3::&lt;half::bf16&gt;()<span class="question-mark">?</span>[<span class="number">0</span>][<span class="number">0</span>][<span class="number">0</span>..<span class="number">10</span>]);
-        <span class="comment">//dbg!(&amp;mquery_states.to_vec3::&lt;half::bf16&gt;()?[2][0][0..10]);
-        //dbg!(&amp;mquery_states.to_vec3::&lt;half::bf16&gt;()?[2][2][0..10]);
+        <span class="kw">let </span><span class="kw-2">mut </span>query_states =
+            query_states.reshape((b_sz, q_len, <span class="self">self</span>.num_heads * <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>key_states =
+            key_states.reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads * <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
 
-        /*dbg!(query_states.shape());
-        let mut query_states =
-            query_states.reshape((b_sz*q_len, self.num_heads, self.head_dim))?;
-        dbg!(query_states.shape());
-        let mut key_states =
-            key_states.reshape((b_sz*q_len, self.num_kv_heads, self.head_dim))?;*/
-
-        </span><span class="kw">let </span><span class="kw-2">mut </span>query_states = query_states
-            .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-            </span>.contiguous()<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>key_states = key_states
-            .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-            </span>.contiguous()<span class="question-mark">?</span>;
-            
-        <span class="comment">/*let mut query_states = query_states
-            .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let mut key_states = key_states
-            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let value_states = value_states
-            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;*/
-
-        </span><span class="self">self</span>.rotary_emb.forward(
+        <span class="self">self</span>.rotary_emb.forward(
             seqlen_offsets,
             <span class="kw-2">&amp;</span>start_offsets_kernel,
             <span class="kw-2">&amp;mut </span>query_states,
             <span class="kw-2">&amp;mut </span>key_states,
         )<span class="question-mark">?</span>;
-        <span class="macro">dbg!</span>(query_states.mean_all());
-        <span class="macro">dbg!</span>(query_states.shape());
 
-        <span class="comment">/*let query_states = query_states
-            .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        dbg!(query_states.shape());
-        let key_states = key_states
-            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;*/
-        </span><span class="kw">let </span>value_states = value_states
+        <span class="kw">let </span>query_states = query_states
+            .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+            </span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>key_states = key_states
+            .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+            </span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>value_states = value_states
             .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
             </span>.contiguous()<span class="question-mark">?</span>;
