@@ -817,41 +817,41 @@
         <span class="kw">let </span>k = <span class="self">self</span>.attention_wk.forward(x)<span class="question-mark">?</span>;
         <span class="kw">let </span>v = <span class="self">self</span>.attention_wv.forward(x)<span class="question-mark">?</span>;
 
-        <span class="comment">/*dbg!(q.shape());
-        let mut q = q.reshape((b_sz, seq_len, self.n_head * self.head_dim))?;
-        dbg!(q.shape());
-        let mut k = k.reshape((b_sz, seq_len, self.n_kv_head * self.head_dim))?;*/
-        </span><span class="kw">let </span><span class="kw-2">mut </span>q = q
-            .reshape((b_sz, seq_len, <span class="self">self</span>.n_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>k = k
-            .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = v
-            .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+        <span class="macro">dbg!</span>(q.shape());
+        <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz, seq_len, <span class="self">self</span>.n_head * <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="macro">dbg!</span>(q.shape());
+        <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head * <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="comment">/*let mut q = q
+            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+            .transpose(1, 2)?;
+        let mut k = k
+            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+            .transpose(1, 2)?;
+        let v = v
+            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+            .transpose(1, 2)?;*/
 
-        <span class="self">self</span>.rotary
+        </span><span class="self">self</span>.rotary
             .forward(start_offsets, <span class="kw-2">&amp;</span>start_offsets_kernel, <span class="kw-2">&amp;mut </span>q, <span class="kw-2">&amp;mut </span>k)<span class="question-mark">?</span>;
         <span class="macro">dbg!</span>(q.mean_all());
 
+        <span class="kw">let </span>q = q
+            .reshape((b_sz, seq_len, <span class="self">self</span>.n_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
+            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+            </span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>k = k
+            .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
+            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+            </span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = v
+            .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
+            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+            </span>.contiguous()<span class="question-mark">?</span>;
+
+
+
+
         <span class="comment">/*let q = q
-            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let k = k
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let v = v
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;*/
-
-
-
-
-        /*let q = q
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
             .transpose(1, 2)?;
         let k = k
