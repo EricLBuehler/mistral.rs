@@ -592,6 +592,8 @@
 <a href="#591" id="591">591</a>
 <a href="#592" id="592">592</a>
 <a href="#593" id="593">593</a>
+<a href="#594" id="594">594</a>
+<a href="#595" id="595">595</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -833,6 +835,8 @@
         <span class="self">self</span>.rotary
             .forward(start_offsets, <span class="kw-2">&amp;</span>start_offsets_kernel, <span class="kw-2">&amp;mut </span>q, <span class="kw-2">&amp;mut </span>k)<span class="question-mark">?</span>;
 
+        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>q);
+
         <span class="comment">/*let q = q
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
             .transpose(1, 2)?
@@ -847,7 +851,7 @@
             .contiguous()?;*/
 
 
-        
+
 
         /*let q = q
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
