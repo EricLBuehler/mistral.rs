@@ -178,14 +178,12 @@ impl Attention {
             &mut key_states,
         )?;
         
-        let mut query_states = query_states
+        let query_states = query_states
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let mut key_states = key_states
+            .transpose(1, 2)?;
+        let key_states = key_states
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
+            .transpose(1, 2)?;
 
         let (key_states, value_states) = match &*kv_cache {
             None => (key_states, value_states),
