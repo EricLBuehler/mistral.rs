@@ -208,11 +208,11 @@ impl Attention {
         let key_states = key_states
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?
-            .contiguous()?;
+            .contiguous()?;*/
         let value_states = value_states
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?
-            .contiguous()?;*/
+            .contiguous()?;
 
         let (key_states, value_states) = match &*kv_cache {
             None => (key_states, value_states),
