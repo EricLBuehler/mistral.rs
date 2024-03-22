@@ -832,7 +832,7 @@
             .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>start_offsets_kernel);
+        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>start_offsets_kernel.to_vec2::&lt;i64&gt;());
         <span class="macro">dbg!</span>(start_offsets);
         <span class="self">self</span>.rotary
             .forward(start_offsets, <span class="kw-2">&amp;</span>start_offsets_kernel, <span class="kw-2">&amp;mut </span>q, <span class="kw-2">&amp;mut </span>k)<span class="question-mark">?</span>;
