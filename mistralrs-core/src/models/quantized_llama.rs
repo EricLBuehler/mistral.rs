@@ -235,11 +235,12 @@ impl LayerWeights {
         let mut k = k
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
             .transpose(1, 2)?;
+        let v = v
+            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+            .transpose(1, 2)?;
 
         self.rotary
             .forward(start_offsets, &start_offsets_kernel, &mut q, &mut k)?;
-
-        dbg!(&q);
 
         /*let q = q
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
