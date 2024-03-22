@@ -188,7 +188,7 @@ impl Attention {
             &mut query_states,
             &mut key_states,
         )?;
-        dbg!(q.mean_all());
+        dbg!(query_states.mean_all());
 
         let query_states = query_states
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
