@@ -267,7 +267,7 @@ impl Loader for MistralLoader {
                 let vb = from_mmaped_safetensors(
                     paths.get_weight_filenames().to_vec(),
                     Vec::new(),
-                    dtype.unwrap_or(default_dtype),
+                    DType::F32,//dtype.unwrap_or(default_dtype),
                     device,
                     false,
                 )?;
