@@ -236,7 +236,7 @@ impl LayerWeights {
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
             .transpose(1, 2)?;
 
-        dbg!(&start_offsets_kernel);
+        dbg!(&start_offsets_kernel.to_vec2::<i64>());
         dbg!(start_offsets);
         self.rotary
             .forward(start_offsets, &start_offsets_kernel, &mut q, &mut k)?;
