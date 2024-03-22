@@ -163,9 +163,8 @@ impl Attention {
         let key_states = self.k_proj.forward(xs)?;
         let value_states = self.v_proj.forward(xs)?;
 
-        let mut mquery_states = query_states
-            .reshape((b_sz*q_len, self.num_heads, self.head_dim))?
-            .reshape((1, q_len, self.num_heads, self.head_dim))?
+        let  mquery_states = query_states
+            .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1,2)?
             .contiguous()?;
         dbg!(mquery_states.shape());
