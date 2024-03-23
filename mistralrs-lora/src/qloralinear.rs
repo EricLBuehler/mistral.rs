@@ -124,7 +124,7 @@ impl QLoraLinear {
                 scale_adapters.clone(),
                 (scale_adapters.len(), 1, 1),
                 a_adapters_stack.device(),
-            )?;
+            )?.to_dtype(a_adapters_stack.dtype())?;
             let a_adapters_stack = a_adapters_stack.broadcast_mul(&scale_adapters_t)?;
             Ok(QLoraLinear {
                 old,
