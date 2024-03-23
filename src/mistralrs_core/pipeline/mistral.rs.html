@@ -486,7 +486,6 @@
 <a href="#485" id="485">485</a>
 <a href="#486" id="486">486</a>
 <a href="#487" id="487">487</a>
-<a href="#488" id="488">488</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -748,7 +747,7 @@
                 <span class="kw">let </span><span class="kw-2">mut </span>file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())<span class="question-mark">?</span>;
                 <span class="kw">let </span>model = gguf_file::Content::read(<span class="kw-2">&amp;mut </span>file)
                     .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))<span class="question-mark">?</span>;
-                <span class="kw">let </span>model = QModelWeights::from_gguf(model, <span class="kw-2">&amp;mut </span>file, device, MISTRAL_IS_GPTX)<span class="question-mark">?</span>;
+                <span class="kw">let </span>model = QModelWeights::from_gguf(model, <span class="kw-2">&amp;mut </span>file, device)<span class="question-mark">?</span>;
                 Model::Quantized(model)
             }
             ModelKind::QuantizedGGML =&gt; <span class="macro">unreachable!</span>(),
@@ -819,7 +818,6 @@
                     <span class="kw-2">&amp;</span>vb,
                     paths.get_ordering().as_ref().unwrap(),
                     paths.get_classifier_config().as_ref().unwrap().clone(),
-                    MISTRAL_IS_GPTX,
                 )<span class="question-mark">?</span>;
                 Model::XLoraQuantized(model)
             }

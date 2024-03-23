@@ -356,38 +356,12 @@
 <a href="#355" id="355">355</a>
 <a href="#356" id="356">356</a>
 <a href="#357" id="357">357</a>
-<a href="#358" id="358">358</a>
-<a href="#359" id="359">359</a>
-<a href="#360" id="360">360</a>
-<a href="#361" id="361">361</a>
-<a href="#362" id="362">362</a>
-<a href="#363" id="363">363</a>
-<a href="#364" id="364">364</a>
-<a href="#365" id="365">365</a>
-<a href="#366" id="366">366</a>
-<a href="#367" id="367">367</a>
-<a href="#368" id="368">368</a>
-<a href="#369" id="369">369</a>
-<a href="#370" id="370">370</a>
-<a href="#371" id="371">371</a>
-<a href="#372" id="372">372</a>
-<a href="#373" id="373">373</a>
-<a href="#374" id="374">374</a>
-<a href="#375" id="375">375</a>
-<a href="#376" id="376">376</a>
-<a href="#377" id="377">377</a>
-<a href="#378" id="378">378</a>
-<a href="#379" id="379">379</a>
-<a href="#380" id="380">380</a>
-<a href="#381" id="381">381</a>
-<a href="#382" id="382">382</a>
-<a href="#383" id="383">383</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
-<span class="kw">use </span>candle_nn::{linear_b <span class="kw">as </span>linear, Linear, RotaryEmbedding, VarBuilder};
+<span class="kw">use </span>candle_nn::{linear_b <span class="kw">as </span>linear, rms_norm, Linear, RmsNorm, RotaryEmbedding, VarBuilder};
 
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::GEMMA_IS_GPTX;
 
@@ -413,36 +387,6 @@
 
     <span class="attr">#[serde(default = <span class="string">"default_max_position_embeddings"</span>)]
     </span><span class="kw">pub </span>max_position_embeddings: usize,
-}
-
-<span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">struct </span>RmsNorm {
-    weight: Tensor,
-    eps: f64,
-}
-
-<span class="kw">impl </span>RmsNorm {
-    <span class="kw">fn </span>new(dim: usize, eps: f64, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>weight = vb.get(dim, <span class="string">"weight"</span>)<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ weight, eps })
-    }
-}
-
-<span class="kw">impl </span>Module <span class="kw">for </span>RmsNorm {
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>x_dtype = x.dtype();
-        <span class="kw">let </span>internal_dtype = <span class="kw">match </span>x_dtype {
-            DType::F16 | DType::BF16 =&gt; DType::F32,
-            d =&gt; d,
-        };
-        <span class="kw">let </span>hidden_size = x.dim(D::Minus1)<span class="question-mark">?</span>;
-        <span class="kw">let </span>x = x.to_dtype(internal_dtype)<span class="question-mark">?</span>;
-        <span class="kw">let </span>norm_x = (x.sqr()<span class="question-mark">?</span>.sum_keepdim(D::Minus1)<span class="question-mark">? </span>/ hidden_size <span class="kw">as </span>f64)<span class="question-mark">?</span>;
-        <span class="kw">let </span>x_normed = x.broadcast_div(<span class="kw-2">&amp;</span>(norm_x + <span class="self">self</span>.eps)<span class="question-mark">?</span>.sqrt()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-        x_normed
-            .to_dtype(x_dtype)<span class="question-mark">?
-            </span>.broadcast_mul(<span class="kw-2">&amp;</span>(<span class="kw-2">&amp;</span><span class="self">self</span>.weight + <span class="number">1.0</span>)<span class="question-mark">?</span>)
-    }
 }
 
 <span class="attr">#[derive(Debug, Clone)]
@@ -543,9 +487,12 @@
         <span class="kw">let </span>value_states = <span class="self">self</span>.v_proj.forward(xs)<span class="question-mark">?</span>;
 
         <span class="kw">let </span><span class="kw-2">mut </span>query_states =
-            query_states.reshape((b_sz, q_len, <span class="self">self</span>.num_heads * <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+            query_states.reshape((b_sz * q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>key_states =
-            key_states.reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads * <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+            key_states.reshape((b_sz * q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="kw">let </span>value_states = value_states
+            .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 
         <span class="self">self</span>.rotary_emb.forward(
             seqlen_offsets,
@@ -554,15 +501,16 @@
             <span class="kw-2">&amp;mut </span>key_states,
         )<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>query_states = query_states
-            .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-        <span class="kw">let </span>key_states = key_states
-            .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-        <span class="kw">let </span>value_states = value_states
-            .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+        <span class="kw">if </span>query_states.rank() == <span class="number">3 </span>{
+            query_states = query_states
+                .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+                </span>.contiguous()<span class="question-mark">?</span>;
+            key_states = key_states
+                .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+                </span>.contiguous()<span class="question-mark">?</span>;
+        }
 
         <span class="kw">let </span>(key_states, value_states) = <span class="kw">match </span><span class="kw-2">&amp;*</span>kv_cache {
             <span class="prelude-val">None </span>=&gt; (key_states, value_states),
@@ -608,8 +556,8 @@
         <span class="kw">let </span>self_attn = Attention::new(rotary_emb, cfg, vb.pp(<span class="string">"self_attn"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>mlp = MLP::new(cfg, vb.pp(<span class="string">"mlp"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>input_layernorm =
-            RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp(<span class="string">"input_layernorm"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>post_attention_layernorm = RmsNorm::new(
+            rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp(<span class="string">"input_layernorm"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>post_attention_layernorm = rms_norm(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             vb.pp(<span class="string">"post_attention_layernorm"</span>),
@@ -678,7 +626,7 @@
             <span class="kw">let </span>layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))<span class="question-mark">?</span>;
             layers.push(layer)
         }
-        <span class="kw">let </span>norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp(<span class="string">"norm"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>norm = rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp(<span class="string">"norm"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>lm_head = Linear::new(embed_tokens.embeddings().clone(), <span class="prelude-val">None</span>);
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             embed_tokens,

@@ -495,8 +495,6 @@
 <a href="#494" id="494">494</a>
 <a href="#495" id="495">495</a>
 <a href="#496" id="496">496</a>
-<a href="#497" id="497">497</a>
-<a href="#498" id="498">498</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, ChatTemplate, Loader, ModelInputs,
     ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
@@ -728,14 +726,14 @@
                 <span class="kw">let </span><span class="kw-2">mut </span>file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())<span class="question-mark">?</span>;
                 <span class="kw">let </span>model = gguf_file::Content::read(<span class="kw-2">&amp;mut </span>file)
                     .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))<span class="question-mark">?</span>;
-                <span class="kw">let </span>model = QModelWeights::from_gguf(model, <span class="kw-2">&amp;mut </span>file, device, LLAMA_IS_GPTX)<span class="question-mark">?</span>;
+                <span class="kw">let </span>model = QModelWeights::from_gguf(model, <span class="kw-2">&amp;mut </span>file, device)<span class="question-mark">?</span>;
                 Model::Quantized(model)
             }
             ModelKind::QuantizedGGML =&gt; {
                 <span class="kw">let </span><span class="kw-2">mut </span>file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())<span class="question-mark">?</span>;
                 <span class="kw">let </span>model = ggml_file::Content::read(<span class="kw-2">&amp;mut </span>file, device)
                     .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))<span class="question-mark">?</span>;
-                <span class="kw">let </span>model = QModelWeights::from_ggml(model, <span class="self">self</span>.config.gqa, LLAMA_IS_GPTX)<span class="question-mark">?</span>;
+                <span class="kw">let </span>model = QModelWeights::from_ggml(model, <span class="self">self</span>.config.gqa)<span class="question-mark">?</span>;
                 Model::Quantized(model)
             }
             ModelKind::Normal =&gt; {
@@ -812,7 +810,6 @@
                     <span class="kw-2">&amp;</span>vb,
                     paths.get_ordering().as_ref().unwrap(),
                     paths.get_classifier_config().as_ref().unwrap().clone(),
-                    LLAMA_IS_GPTX,
                 )<span class="question-mark">?</span>;
                 Model::XLoraQuantized(model)
             }
@@ -842,7 +839,6 @@
                     <span class="kw-2">&amp;</span>vb,
                     paths.get_ordering().as_ref().unwrap(),
                     paths.get_classifier_config().as_ref().unwrap().clone(),
-                    LLAMA_IS_GPTX,
                 )<span class="question-mark">?</span>;
                 Model::XLoraQuantized(model)
             }

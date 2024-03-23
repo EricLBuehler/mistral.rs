@@ -489,6 +489,10 @@
 <a href="#488" id="488">488</a>
 <a href="#489" id="489">489</a>
 <a href="#490" id="490">490</a>
+<a href="#491" id="491">491</a>
+<a href="#492" id="492">492</a>
+<a href="#493" id="493">493</a>
+<a href="#494" id="494">494</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
@@ -628,9 +632,12 @@
         <span class="kw">let </span>value_states = <span class="self">self</span>.v_proj.forward(xs)<span class="question-mark">?</span>;
 
         <span class="kw">let </span><span class="kw-2">mut </span>query_states =
-            query_states.reshape((b_sz, q_len, <span class="self">self</span>.num_heads * <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+            query_states.reshape((b_sz * q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>key_states =
-            key_states.reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads * <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+            key_states.reshape((b_sz * q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="kw">let </span>value_states = value_states
+            .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 
         <span class="self">self</span>.rotary_emb.forward(
             seqlen_offsets,
@@ -639,15 +646,16 @@
             <span class="kw-2">&amp;mut </span>key_states,
         )<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>query_states = query_states
-            .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-        <span class="kw">let </span>key_states = key_states
-            .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-        <span class="kw">let </span>value_states = value_states
-            .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+        <span class="kw">if </span>query_states.rank() == <span class="number">3 </span>{
+            query_states = query_states
+                .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+                </span>.contiguous()<span class="question-mark">?</span>;
+            key_states = key_states
+                .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+                </span>.contiguous()<span class="question-mark">?</span>;
+        }
 
         <span class="kw">let </span>(key_states, value_states) = <span class="kw">match </span><span class="kw-2">&amp;*</span>kv_cache {
             <span class="prelude-val">None </span>=&gt; (key_states, value_states),

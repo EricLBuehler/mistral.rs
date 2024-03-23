@@ -574,6 +574,10 @@
 <a href="#573" id="573">573</a>
 <a href="#574" id="574">574</a>
 <a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -706,21 +710,25 @@
             is_scaling_pass,
         )<span class="question-mark">?</span>;
 
-        <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz, seq_len, <span class="self">self</span>.num_attention_heads * <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz, seq_len, <span class="self">self</span>.num_key_value_heads * <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz * seq_len, <span class="self">self</span>.num_attention_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz * seq_len, <span class="self">self</span>.num_key_value_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>v = v
+            .reshape((b_sz, seq_len, <span class="self">self</span>.num_key_value_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 
         <span class="self">self</span>.rotary_emb
             .forward(seqlen_offsets, <span class="kw-2">&amp;</span>start_offsets_kernel, <span class="kw-2">&amp;mut </span>q, <span class="kw-2">&amp;mut </span>k)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>q = q
-            .reshape((b_sz, seq_len, <span class="self">self</span>.num_attention_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>k = k
-            .reshape((b_sz, seq_len, <span class="self">self</span>.num_key_value_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>v = v
-            .reshape((b_sz, seq_len, <span class="self">self</span>.num_key_value_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+        <span class="kw">if </span>q.rank() == <span class="number">3 </span>{
+            q = q
+                .reshape((b_sz, seq_len, <span class="self">self</span>.num_attention_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+                </span>.contiguous()<span class="question-mark">?</span>;
+            k = k
+                .reshape((b_sz, seq_len, <span class="self">self</span>.num_key_value_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+                </span>.contiguous()<span class="question-mark">?</span>;
+        }
 
         <span class="kw">if </span>cache.use_kv_cache {
             <span class="kw">if let </span><span class="prelude-val">Some</span>((cache_k, cache_v)) = <span class="kw-2">&amp;</span>kv_cache[block_idx] {

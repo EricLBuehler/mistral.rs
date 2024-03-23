@@ -826,7 +826,6 @@
 <a href="#825" id="825">825</a>
 <a href="#826" id="826">826</a>
 <a href="#827" id="827">827</a>
-<a href="#828" id="828">828</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -1051,24 +1050,25 @@
             is_scaling_pass,
         )<span class="question-mark">?</span>;
 
-        <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz, seq_len, <span class="self">self</span>.n_head * <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head * <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz * seq_len, <span class="self">self</span>.n_head, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz * seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = v
+            .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
+            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 
         <span class="self">self</span>.rotary
             .forward(start_offsets, <span class="kw-2">&amp;</span>start_offsets_kernel, <span class="kw-2">&amp;mut </span>q, <span class="kw-2">&amp;mut </span>k)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>q = q
-            .reshape((b_sz, seq_len, <span class="self">self</span>.n_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-            </span>.contiguous()<span class="question-mark">?</span>;
-        <span class="kw">let </span>k = k
-            .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-            </span>.contiguous()<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = v
-            .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-            </span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">if </span>q.rank() == <span class="number">3 </span>{
+            q = q
+                .reshape((b_sz, seq_len, <span class="self">self</span>.n_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+                </span>.contiguous()<span class="question-mark">?</span>;
+            k = k
+                .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+                </span>.contiguous()<span class="question-mark">?</span>;
+        }
 
         <span class="kw">let </span>(k, v) = <span class="kw">match </span><span class="kw-2">&amp;*</span>kv_cache {
             <span class="prelude-val">None </span>=&gt; (k, v),
@@ -1135,7 +1135,6 @@
         vb: <span class="kw-2">&amp;</span>VarBuilder,
         ordering: <span class="kw-2">&amp;</span>Ordering,
         xlora_config: XLoraConfig,
-        is_gpt_neox: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>head_dim = (ct.hparams.n_embd / ct.hparams.n_head) <span class="kw">as </span>usize;
         <span class="kw">let </span>rotary = RotaryEmbedding::new(
@@ -1143,7 +1142,7 @@
             head_dim,
             MAX_SEQ_LEN <span class="kw">as </span>usize,
             <span class="kw-2">&amp;</span>ct.device,
-            is_gpt_neox,
+            <span class="bool-val">false</span>,
             DType::F32,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = ct.remove(<span class="string">"tok_embeddings.weight"</span>)<span class="question-mark">?</span>;
@@ -1280,7 +1279,6 @@
         vb: <span class="kw-2">&amp;</span>VarBuilder,
         ordering: <span class="kw-2">&amp;</span>Ordering,
         xlora_config: XLoraConfig,
-        is_gpt_neox: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>md_get = |s: <span class="kw-2">&amp;</span>str| <span class="kw">match </span>ct.metadata.get(s) {
             <span class="prelude-val">None </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"cannot find {s} in metadata"</span>),
@@ -1310,7 +1308,7 @@
             rope_dim,
             MAX_SEQ_LEN <span class="kw">as </span>usize,
             device,
-            is_gpt_neox,
+            <span class="bool-val">false</span>,
             DType::F32,
         )<span class="question-mark">?</span>;
 
