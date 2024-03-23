@@ -138,6 +138,7 @@ impl LinearLayerLike for LoraLinear {
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         let mut result = self.old.forward(input)?;
+        return Ok(result);
 
         if is_scaling_pass.is_some_and(|x| x == 0.) {
             return Ok(result);
@@ -145,7 +146,6 @@ impl LinearLayerLike for LoraLinear {
 
         let scalings = get_maybe_topk_scalings(scalings, self.layer_n)?;
         if self.a_adapters.is_left() || scalings.dims3()?.1 != 1 {
-            return Ok(result);
             let a_adapters = if self.a_adapters.is_right() {
                 self.a_adapters.as_ref().unwrap_right().1.clone()
             } else {
