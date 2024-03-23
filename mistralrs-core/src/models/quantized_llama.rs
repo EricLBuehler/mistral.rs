@@ -362,7 +362,7 @@ impl ModelWeights {
             rope_dim,
             MAX_SEQ_LEN as usize,
             device,
-            is_gpt_neox,
+            false,//is_gpt_neox,
             DType::F32,
         )?;
 
