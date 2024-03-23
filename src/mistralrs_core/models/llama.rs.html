@@ -573,7 +573,7 @@
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 
         <span class="self">self</span>.rotary_emb
-            .forward(seqlen_offsets, <span class="kw-2">&amp;</span>start_offsets_kernel, <span class="kw-2">&amp;mut </span>q, <span class="kw-2">&amp;mut </span>k)<span class="question-mark">?</span>;
+            .forward(seqlen_offsets, <span class="kw-2">&amp;</span>start_offsets_kernel, <span class="kw-2">&amp;mut </span>q, <span class="kw-2">&amp;mut </span>k, b_sz)<span class="question-mark">?</span>;
 
         <span class="kw">if </span>q.rank() == <span class="number">3 </span>{
             q = q

@@ -493,6 +493,7 @@
 <a href="#492" id="492">492</a>
 <a href="#493" id="493">493</a>
 <a href="#494" id="494">494</a>
+<a href="#495" id="495">495</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
@@ -644,6 +645,7 @@
             <span class="kw-2">&amp;</span>start_offsets_kernel,
             <span class="kw-2">&amp;mut </span>query_states,
             <span class="kw-2">&amp;mut </span>key_states,
+            b_sz,
         )<span class="question-mark">?</span>;
 
         <span class="kw">if </span>query_states.rank() == <span class="number">3 </span>{
