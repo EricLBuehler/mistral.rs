@@ -213,12 +213,6 @@
 <a href="#212" id="212">212</a>
 <a href="#213" id="213">213</a>
 <a href="#214" id="214">214</a>
-<a href="#215" id="215">215</a>
-<a href="#216" id="216">216</a>
-<a href="#217" id="217">217</a>
-<a href="#218" id="218">218</a>
-<a href="#219" id="219">219</a>
-<a href="#220" id="220">220</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{iter::zip, ops::Mul};
 
 <span class="kw">use </span>candle_core::{Module, <span class="prelude-ty">Result</span>, Shape, Tensor};
@@ -234,8 +228,8 @@
 </span><span class="kw">pub struct </span>LoraLinear {
     old: FrozenLinear,
     a_adapters: Either&lt;Vec&lt;Linear&gt;, (Tensor, Vec&lt;Linear&gt;)&gt;,
-    b_adapters: Either&lt;Vec&lt;Linear&gt;, (Linear, Vec&lt;Linear&gt;)&gt;,
-    scale_adapters: Either&lt;Vec&lt;f64&gt;, (Tensor, Vec&lt;f64&gt;)&gt;,
+    b_adapters: Either&lt;Vec&lt;Linear&gt;, (Tensor, Vec&lt;Linear&gt;)&gt;,
+    scale_adapters: Vec&lt;f64&gt;,
     dropout_adapters: Vec&lt;<span class="prelude-ty">Option</span>&lt;Dropout&gt;&gt;,
     layer_n: usize,
 }
@@ -313,21 +307,18 @@
                     .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>,
                 <span class="number">0</span>,
             )<span class="question-mark">?</span>;
+            <span class="kw">let </span>scale_adapters_t = Tensor::from_vec(
+                scale_adapters.clone(),
+                (scale_adapters.len(), <span class="number">1</span>, <span class="number">1</span>),
+                a_adapters_stack.device(),
+            )<span class="question-mark">?
+            </span>.to_dtype(a_adapters_stack.dtype())<span class="question-mark">?</span>;
+            <span class="kw">let </span>a_adapters_stack = a_adapters_stack.broadcast_mul(<span class="kw-2">&amp;</span>scale_adapters_t)<span class="question-mark">?</span>;
             <span class="prelude-val">Ok</span>(LoraLinear {
                 old: FrozenLinear::new_from_linear(old)<span class="question-mark">?</span>,
                 a_adapters: Either::Right((a_adapters_stack.clone(), a_adapters)),
-                b_adapters: Either::Right((Linear::new(b_adapters_stack, <span class="prelude-val">None</span>), b_adapters)),
-                scale_adapters: Either::Right((
-                    Tensor::from_vec(
-                        scale_adapters.clone(),
-                        scale_adapters.len(),
-                        a_adapters_stack.device(),
-                    )<span class="question-mark">?
-                    </span>.unsqueeze(<span class="number">1</span>)<span class="question-mark">?
-                    </span>.unsqueeze(<span class="number">1</span>)<span class="question-mark">?
-                    </span>.to_dtype(a_adapters_stack.dtype())<span class="question-mark">?</span>,
-                    scale_adapters,
-                )),
+                b_adapters: Either::Right((b_adapters_stack, b_adapters)),
+                scale_adapters,
                 dropout_adapters,
                 layer_n,
             })
@@ -336,7 +327,7 @@
                 old: FrozenLinear::new_from_linear(old)<span class="question-mark">?</span>,
                 a_adapters: Either::Left(a_adapters),
                 b_adapters: Either::Left(b_adapters),
-                scale_adapters: Either::Left(scale_adapters),
+                scale_adapters,
                 dropout_adapters,
                 layer_n,
             })
@@ -379,15 +370,13 @@
             } <span class="kw">else </span>{
                 <span class="self">self</span>.b_adapters.as_ref().unwrap_left().clone()
             };
-            <span class="kw">let </span>scale_adapters = <span class="kw">if </span><span class="self">self</span>.scale_adapters.is_right() {
-                <span class="self">self</span>.scale_adapters.as_ref().unwrap_right().<span class="number">1</span>.clone()
-            } <span class="kw">else </span>{
-                <span class="self">self</span>.scale_adapters.as_ref().unwrap_left().clone()
-            };
             <span class="comment">//No fan_in_fan_out so no weight.transpose(0,1)
             </span><span class="kw">for </span>(i, (adapter_a, (adapter_b, (adapter_scale, adapter_dropout)))) <span class="kw">in </span>zip(
                 a_adapters,
-                zip(b_adapters, zip(scale_adapters, <span class="kw-2">&amp;</span><span class="self">self</span>.dropout_adapters)),
+                zip(
+                    b_adapters,
+                    zip(<span class="kw-2">&amp;</span><span class="self">self</span>.scale_adapters, <span class="kw-2">&amp;</span><span class="self">self</span>.dropout_adapters),
+                ),
             )
             .enumerate()
             {
@@ -402,7 +391,7 @@
 
                 <span class="kw">let </span>res = adapter_b
                     .forward(<span class="kw-2">&amp;</span>adapter_a.forward(<span class="kw-2">&amp;</span>input_new)<span class="question-mark">?</span>)<span class="question-mark">?
-                    </span>.mul(adapter_scale)<span class="question-mark">?
+                    </span>.mul(<span class="kw-2">*</span>adapter_scale)<span class="question-mark">?
                     </span>.mul(global_scaling_weight)<span class="question-mark">?</span>;
                 result = (result + res)<span class="question-mark">?</span>;
             }
@@ -410,15 +399,14 @@
         } <span class="kw">else </span>{
             <span class="kw">let </span>adapter_a = <span class="kw-2">&amp;</span><span class="self">self</span>.a_adapters.as_ref().unwrap_right().<span class="number">0</span>;
             <span class="kw">let </span>adapter_b = <span class="kw-2">&amp;</span><span class="self">self</span>.b_adapters.as_ref().unwrap_right().<span class="number">0</span>;
-            <span class="kw">let </span>(adapter_scales, vec) = <span class="kw-2">&amp;</span><span class="self">self</span>.scale_adapters.as_ref().unwrap_right();
-            <span class="kw">let </span>n_adapters = vec.len();
+            <span class="kw">let </span>adapter_scales = <span class="kw-2">&amp;</span><span class="self">self</span>.scale_adapters;
+            <span class="kw">let </span>n_adapters = adapter_scales.len();
             <span class="kw">let </span>dropout = <span class="kw-2">&amp;</span><span class="self">self</span>.dropout_adapters[<span class="number">0</span>];
             <span class="kw">let </span>scalings = scalings
                 .squeeze(<span class="number">0</span>)<span class="question-mark">?
                 </span>.squeeze(<span class="number">0</span>)<span class="question-mark">?
                 </span>.unsqueeze(<span class="number">1</span>)<span class="question-mark">?
-                </span>.unsqueeze(<span class="number">1</span>)<span class="question-mark">?
-                </span>.broadcast_mul(adapter_scales)<span class="question-mark">?</span>;
+                </span>.unsqueeze(<span class="number">1</span>)<span class="question-mark">?</span>;
             <span class="kw">let </span>adapter_a = adapter_a
                 .broadcast_mul(<span class="kw-2">&amp;</span>scalings)<span class="question-mark">?
                 </span>.mul(global_scaling_weight)<span class="question-mark">?</span>;
@@ -431,7 +419,7 @@
             <span class="kw">let </span>(b, s, h) = input.dims3()<span class="question-mark">?</span>;
             <span class="kw">let </span>input = input.reshape((b * s, h))<span class="question-mark">?</span>;
             <span class="kw">let </span>out = adapter_a.broadcast_matmul(<span class="kw-2">&amp;</span>input.t()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>out = adapter_b.weight().broadcast_matmul(<span class="kw-2">&amp;</span>out)<span class="question-mark">?</span>;
+            <span class="kw">let </span>out = adapter_b.broadcast_matmul(<span class="kw-2">&amp;</span>out)<span class="question-mark">?</span>;
             <span class="kw">let </span>o_h = out.dims()[<span class="number">1</span>];
             <span class="kw">let </span>out = out.reshape((n_adapters, b, s, o_h))<span class="question-mark">?</span>;
             <span class="kw">let </span>out = out.sum(<span class="number">0</span>)<span class="question-mark">?</span>;
