@@ -124,9 +124,9 @@ pub fn linear(
         }
     }
 
-    *count += 1;
+    if target_modules.contains(module) { *count += 1; }
     return Ok(Arc::new(inner));
-    
+
     if !target_modules.contains(module) {
         return Ok(Arc::new(inner));
     }
@@ -159,7 +159,7 @@ pub fn linear_no_bias(
         }
     }
     
-    *count += 1;
+    if target_modules.contains(module) { *count += 1; }
     return Ok(Arc::new(inner));
 
     if !target_modules.contains(module) {
