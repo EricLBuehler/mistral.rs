@@ -138,7 +138,6 @@ impl LinearLayerLike for LoraLinear {
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         let mut result = self.old.forward(input)?;
-        return Ok(result);
 
         if is_scaling_pass.is_some_and(|x| x == 0.) {
             return Ok(result);

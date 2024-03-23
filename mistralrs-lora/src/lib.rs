@@ -124,9 +124,6 @@ pub fn linear(
         }
     }
 
-    if target_modules.contains(module) { *count += 1; }
-    return Ok(Arc::new(inner));
-
     if !target_modules.contains(module) {
         return Ok(Arc::new(inner));
     }
@@ -158,9 +155,6 @@ pub fn linear_no_bias(
             candle_core::bail!("Expected all target modules to be the same.");
         }
     }
-    
-    if target_modules.contains(module) { *count += 1; }
-    return Ok(Arc::new(inner));
 
     if !target_modules.contains(module) {
         return Ok(Arc::new(inner));
