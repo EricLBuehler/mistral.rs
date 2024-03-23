@@ -446,6 +446,7 @@
 <a href="#445" id="445">445</a>
 <a href="#446" id="446">446</a>
 <a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -566,6 +567,7 @@
             );
             <span class="kw">if let </span><span class="prelude-val">Some</span>(reason) = is_done {
                 <span class="self">self</span>.finish_seq(seq, reason);
+                <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).reset_non_granular_state();
             }
         }
     }

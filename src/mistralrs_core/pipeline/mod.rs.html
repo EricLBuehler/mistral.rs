@@ -566,6 +566,16 @@
 <a href="#565" id="565">565</a>
 <a href="#566" id="566">566</a>
 <a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -594,8 +604,11 @@
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
 
 <span class="kw">use crate</span>::{
-    deref_refcell, models::Cache, sequence::Sequence, utils::tokens::get_token,
-    xlora_models::XLoraConfig,
+    deref_refcell, get_mut_arcmutex,
+    models::Cache,
+    sequence::Sequence,
+    utils::tokens::get_token,
+    xlora_models::{NonGranularState, XLoraConfig},
 };
 
 <span class="kw">pub trait </span>ModelPaths {
@@ -754,6 +767,13 @@
         })<span class="question-mark">?</span>)
     }
     <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ChatTemplate;
+    <span class="kw">fn </span>get_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;NonGranularState&gt;;
+    <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) {
+        <span class="kw-2">*</span><span class="self">self</span>.cache().get_scalings_cache() = <span class="prelude-val">None</span>;
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(s) = <span class="self">self</span>.get_non_granular_state().as_ref() {
+            <span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(s.non_granular_index) = <span class="number">0</span>;
+        }
+    }
 }
 
 <span class="kw">struct </span>InputMetadata {

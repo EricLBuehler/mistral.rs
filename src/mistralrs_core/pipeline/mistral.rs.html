@@ -486,6 +486,9 @@
 <a href="#485" id="485">485</a>
 <a href="#486" id="486">486</a>
 <a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -971,6 +974,9 @@
     }
     <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ChatTemplate {
         <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template
+    }
+    <span class="kw">fn </span>get_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;NonGranularState&gt; {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state
     }
 }
 </code></pre></div></section></main></body></html>
