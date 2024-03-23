@@ -297,7 +297,9 @@ impl Attention {
             flash_attn(&q, &k, &v, softmax_scale, q_len > 1)?.transpose(1, 2)?
         } else {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
+            println!("a");
             let attn_weights = (query_states.matmul(&key_states.transpose(2, 3)?)? * scale)?;
+            println!("b");
 
             let attn_weights = match attention_mask {
                 None => attn_weights,
@@ -306,6 +308,7 @@ impl Attention {
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
             attn_weights.matmul(&value_states)?
         };
+        println!("c");
         self.o_proj.lora_forward(
             &attn_output
                 .transpose(1, 2)?
