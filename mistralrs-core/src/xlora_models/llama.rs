@@ -130,21 +130,25 @@ impl CausalSelfAttention {
             is_scaling_pass,
         )?;
 
-        let mut q = q.reshape((b_sz, seq_len, self.num_attention_heads * self.head_dim))?;
-        let mut k = k.reshape((b_sz, seq_len, self.num_key_value_heads * self.head_dim))?;
+        let mut q = q.reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
+        let mut k = k.reshape((b_sz * seq_len, self.num_key_value_heads, self.head_dim))?;
+        let mut v = v
+            .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
+            .transpose(1, 2)?;
 
         self.rotary_emb
             .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k)?;
 
-        let q = q
-            .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
-            .transpose(1, 2)?;
-        let mut k = k
-            .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
-            .transpose(1, 2)?;
-        let mut v = v
-            .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
-            .transpose(1, 2)?;
+        if q.rank() == 3 {
+            q = q
+                .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
+                .transpose(1, 2)?
+                .contiguous()?;
+            k = k
+                .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
+                .transpose(1, 2)?
+                .contiguous()?;
+        }
 
         if cache.use_kv_cache {
             if let Some((cache_k, cache_v)) = &kv_cache[block_idx] {

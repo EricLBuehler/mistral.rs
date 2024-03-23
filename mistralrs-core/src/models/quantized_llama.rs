@@ -260,14 +260,14 @@ pub struct ModelWeights {
 }
 
 impl ModelWeights {
-    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize, is_gpt_neox: bool) -> Result<Self> {
+    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
         let rotary = RotaryEmbedding::new(
             10000.,
             head_dim,
             MAX_SEQ_LEN as usize,
             &ct.device,
-            is_gpt_neox,
+            false,
             DType::F32,
         )?;
 
@@ -331,7 +331,6 @@ impl ModelWeights {
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
-        is_gpt_neox: bool,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle_core::bail!("cannot find {s} in metadata"),
@@ -362,7 +361,7 @@ impl ModelWeights {
             rope_dim,
             MAX_SEQ_LEN as usize,
             device,
-            false,//is_gpt_neox,
+            false,
             DType::F32,
         )?;
 

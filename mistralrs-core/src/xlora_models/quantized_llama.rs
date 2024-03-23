@@ -222,24 +222,25 @@ impl LayerWeights {
             is_scaling_pass,
         )?;
 
-        let mut q = q.reshape((b_sz, seq_len, self.n_head * self.head_dim))?;
-        let mut k = k.reshape((b_sz, seq_len, self.n_kv_head * self.head_dim))?;
+        let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
+        let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
+        let v = v
+            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+            .transpose(1, 2)?;
 
         self.rotary
             .forward(start_offsets, &start_offsets_kernel, &mut q, &mut k)?;
 
-        let q = q
-            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let k = k
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let v = v
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
+        if q.rank() == 3 {
+            q = q
+                .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+                .transpose(1, 2)?
+                .contiguous()?;
+            k = k
+                .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                .transpose(1, 2)?
+                .contiguous()?;
+        }
 
         let (k, v) = match &*kv_cache {
             None => (k, v),
@@ -306,7 +307,6 @@ impl ModelWeights {
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: XLoraConfig,
-        is_gpt_neox: bool,
     ) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
         let rotary = RotaryEmbedding::new(
@@ -314,7 +314,7 @@ impl ModelWeights {
             head_dim,
             MAX_SEQ_LEN as usize,
             &ct.device,
-            is_gpt_neox,
+            false,
             DType::F32,
         )?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
@@ -451,7 +451,6 @@ impl ModelWeights {
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: XLoraConfig,
-        is_gpt_neox: bool,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle_core::bail!("cannot find {s} in metadata"),
@@ -481,7 +480,7 @@ impl ModelWeights {
             rope_dim,
             MAX_SEQ_LEN as usize,
             device,
-            is_gpt_neox,
+            false,
             DType::F32,
         )?;
 
