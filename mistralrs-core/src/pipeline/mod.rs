@@ -187,6 +187,7 @@ pub trait Pipeline: Send + Sync {
     fn get_chat_template(&self) -> &ChatTemplate;
     fn get_non_granular_state(&self) -> &Option<NonGranularState>;
     fn reset_non_granular_state(&self) {
+        *self.cache().get_scalings_cache() = None;
         self.get_non_granular_state().as_ref().map(|s| {
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         });
