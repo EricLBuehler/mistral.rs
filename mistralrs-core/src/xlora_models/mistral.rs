@@ -261,6 +261,7 @@ impl Attention {
             &start_offsets_kernel,
             &mut query_states,
             &mut key_states,
+            b_sz,
         )?;
 
         if query_states.rank() == 3 {

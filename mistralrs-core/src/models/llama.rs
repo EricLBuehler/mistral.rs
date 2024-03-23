@@ -157,7 +157,7 @@ impl CausalSelfAttention {
             .transpose(1, 2)?;
 
         self.rotary_emb
-            .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k)?;
+            .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
 
         if q.rank() == 3 {
             q = q
