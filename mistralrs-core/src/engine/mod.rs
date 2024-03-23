@@ -328,7 +328,6 @@ impl Engine {
             get_mut_arcmutex!(self.pipeline).apply_chat_template(request.messages.clone(), true),
             request.response
         );
-        dbg!(&prompt);
         let mut prompt = handle_seq_error!(
             get_mut_arcmutex!(self.pipeline).tokenize_prompt(&prompt),
             request.response
