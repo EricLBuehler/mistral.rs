@@ -303,7 +303,7 @@ impl Model {
             head_dim,
             cfg.max_position_embeddings,
             vb.device(),
-            false,//MISTRAL_IS_GPTX,
+            MISTRAL_IS_GPTX,
             vb.dtype(),
         )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
