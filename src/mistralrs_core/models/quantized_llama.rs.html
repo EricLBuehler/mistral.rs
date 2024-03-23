@@ -868,8 +868,8 @@
             rope_dim,
             MAX_SEQ_LEN <span class="kw">as </span>usize,
             device,
-            is_gpt_neox,
-            DType::F32,
+            <span class="bool-val">false</span>,<span class="comment">//is_gpt_neox,
+            </span>DType::F32,
         )<span class="question-mark">?</span>;
 
         <span class="kw">let </span>tok_embeddings = ct.tensor(reader, <span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
