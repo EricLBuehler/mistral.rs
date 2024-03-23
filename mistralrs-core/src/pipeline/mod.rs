@@ -26,7 +26,11 @@ use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 
 use crate::{
-    deref_refcell, get_mut_arcmutex, models::Cache, sequence::Sequence, utils::tokens::get_token, xlora_models::{NonGranularState, XLoraConfig}
+    deref_refcell, get_mut_arcmutex,
+    models::Cache,
+    sequence::Sequence,
+    utils::tokens::get_token,
+    xlora_models::{NonGranularState, XLoraConfig},
 };
 
 pub trait ModelPaths {
@@ -188,9 +192,9 @@ pub trait Pipeline: Send + Sync {
     fn get_non_granular_state(&self) -> &Option<NonGranularState>;
     fn reset_non_granular_state(&self) {
         *self.cache().get_scalings_cache() = None;
-        self.get_non_granular_state().as_ref().map(|s| {
+        if let Some(s) = self.get_non_granular_state().as_ref() {
             *get_mut_arcmutex!(s.non_granular_index) = 0;
-        });
+        }
     }
 }
 

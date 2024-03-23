@@ -67,13 +67,11 @@ impl Engine {
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
                 self.sample_seqs(&scheduled.completion, logits);
-                dbg!("Compl done");
                 if !self.no_kv_cache {
                     self.clone_out_cache(&scheduled.completion);
                 } else {
                     self.set_none_cache();
                 }
-                dbg!("Cloned out compl");
             }
 
             if scheduled.prompt.len() > 0 {
@@ -94,13 +92,11 @@ impl Engine {
                     deref_mut_refcell!(seq).prompt_timestamp = Some(now);
                 }
                 self.sample_seqs(&scheduled.prompt, logits);
-                dbg!("Prompt done");
                 if !self.no_kv_cache {
                     self.clone_out_cache(&scheduled.prompt);
                 } else {
                     self.set_none_cache();
                 }
-                dbg!("Cloned out prompt");
             }
         }
     }
