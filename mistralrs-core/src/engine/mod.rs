@@ -122,6 +122,7 @@ impl Engine {
             );
             if let Some(reason) = is_done {
                 self.finish_seq(seq, reason);
+                get_mut_arcmutex!(self.pipeline).reset_non_granular_state();
             }
         }
     }

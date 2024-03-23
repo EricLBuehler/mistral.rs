@@ -493,4 +493,7 @@ impl Pipeline for LlamaPipeline {
     fn get_chat_template(&self) -> &ChatTemplate {
         &self.chat_template
     }
+    fn get_non_granular_state(&self) -> &Option<NonGranularState> {
+        &self.non_granular_state
+    }
 }
