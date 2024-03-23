@@ -13,7 +13,7 @@ use crate::{
 pub struct QLoraLinear {
     old: QMatMul,
     a_adapters: Either<Vec<Linear>, (Tensor, Vec<Linear>)>,
-    b_adapters: Either<Vec<Linear>, (Linear, Vec<Linear>)>,
+    b_adapters: Either<Vec<Linear>, (Tensor, Vec<Linear>)>,
     scale_adapters: Vec<f64>,
     dropout_adapters: Vec<Option<Dropout>>,
     layer_n: usize,
@@ -124,12 +124,13 @@ impl QLoraLinear {
                 scale_adapters.clone(),
                 (scale_adapters.len(), 1, 1),
                 a_adapters_stack.device(),
-            )?.to_dtype(a_adapters_stack.dtype())?;
+            )?
+            .to_dtype(a_adapters_stack.dtype())?;
             let a_adapters_stack = a_adapters_stack.broadcast_mul(&scale_adapters_t)?;
             Ok(QLoraLinear {
                 old,
                 a_adapters: Either::Right((a_adapters_stack.clone(), a_adapters)),
-                b_adapters: Either::Right((Linear::new(b_adapters_stack, None), b_adapters)),
+                b_adapters: Either::Right((b_adapters_stack.clone(), b_adapters)),
                 scale_adapters,
                 dropout_adapters,
                 layer_n: layer,
@@ -233,7 +234,7 @@ impl LinearLayerLike for QLoraLinear {
             let (b, s, h) = input.dims3()?;
             let input = input.reshape((b * s, h))?;
             let out = adapter_a.broadcast_matmul(&input.t()?)?;
-            let out = adapter_b.weight().broadcast_matmul(&out)?;
+            let out = adapter_b.broadcast_matmul(&out)?;
             let o_h = out.dims()[1];
             let out = out.reshape((n_adapters, b, s, o_h))?;
             let out = out.sum(0)?;
