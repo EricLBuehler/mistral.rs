@@ -845,7 +845,7 @@
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">struct </span>RmsNorm {
-    inner: candle_nn::LayerNorm,
+    inner: candle_nn::RmsNorm,
     span: tracing::Span,
 }
 
@@ -853,7 +853,7 @@
     <span class="kw">fn </span>new(scale: QTensor, eps: f32) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>span = <span class="macro">tracing::span!</span>(tracing::Level::TRACE, <span class="string">"rms-norm"</span>);
         <span class="kw">let </span>scale = scale.dequantize(<span class="kw-2">&amp;</span>scale.device())<span class="question-mark">?</span>;
-        <span class="kw">let </span>inner = candle_nn::LayerNorm::rms_norm(scale, eps <span class="kw">as </span>f64);
+        <span class="kw">let </span>inner = candle_nn::RmsNorm::new(scale, eps <span class="kw">as </span>f64);
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ inner, span })
     }
 
