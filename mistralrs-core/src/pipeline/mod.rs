@@ -181,6 +181,9 @@ pub trait Pipeline: Send + Sync {
             Either::Left(ref lit) => lit,
             Either::Right(ref added) => &added.content,
         };
+        dbg!(&bos_tok);
+        dbg!(&eos_tok);
+        dbg!(&unk_tok);
         Ok(tmpl.render(context! {
             messages => messages,
             add_generation_prompt => add_generation_prompt,
