@@ -579,10 +579,6 @@
 <a href="#578" id="578">578</a>
 <a href="#579" id="579">579</a>
 <a href="#580" id="580">580</a>
-<a href="#581" id="581">581</a>
-<a href="#582" id="582">582</a>
-<a href="#583" id="583">583</a>
-<a href="#584" id="584">584</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -750,7 +746,6 @@
             .as_ref()
             .unwrap()
             .replace(<span class="string">".strip()"</span>, <span class="string">"|trim"</span>);
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>template);
         env.add_template(<span class="string">"chat_template"</span>, template.as_str())<span class="question-mark">?</span>;
         env.add_function(<span class="string">"raise_exception"</span>, raise_exception);
         <span class="kw">let </span>tmpl = env.get_template(<span class="string">"chat_template"</span>).unwrap();
@@ -766,9 +761,6 @@
             Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit,
             Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="kw-2">&amp;</span>added.content,
         };
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>bos_tok);
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>eos_tok);
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>unk_tok);
         <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context! </span>{
             messages =&gt; messages,
             add_generation_prompt =&gt; add_generation_prompt,

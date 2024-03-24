@@ -447,8 +447,6 @@
 <a href="#446" id="446">446</a>
 <a href="#447" id="447">447</a>
 <a href="#448" id="448">448</a>
-<a href="#449" id="449">449</a>
-<a href="#450" id="450">450</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -779,8 +777,6 @@
             <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).apply_chat_template(request.messages.clone(), <span class="bool-val">true</span>),
             request.response
         );
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>prompt);
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>prompt.len());
         <span class="kw">let </span><span class="kw-2">mut </span>prompt = <span class="macro">handle_seq_error!</span>(
             <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenize_prompt(<span class="kw-2">&amp;</span>prompt),
             request.response
