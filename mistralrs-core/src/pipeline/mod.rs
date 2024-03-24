@@ -527,7 +527,7 @@ macro_rules! deserialize_chat_template {
             bos_token: Option<String>,
             eos_token: Option<String>,
         }
-        match template.chat_template {
+        let mut template = match template.chat_template {
             Some(_) => template,
             None => {
                 println!("`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
@@ -576,6 +576,9 @@ macro_rules! deserialize_chat_template {
                 let ser = serde_json::to_string_pretty(&deser).unwrap();
                 serde_json::from_str(&ser).unwrap()
             }
-        }
+        };
+        // TODO(EricLBuehler): Pending on https://github.com/mitsuhiko/minijinja/issues/446
+        template.chat_template = Some(template.chat_template.unwrap().replace("}\n{", "}{"));
+        template
     }};
 }
