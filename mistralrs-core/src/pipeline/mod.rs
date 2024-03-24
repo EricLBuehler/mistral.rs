@@ -165,6 +165,7 @@ pub trait Pipeline: Send + Sync {
             .as_ref()
             .unwrap()
             .replace(".strip()", "|trim");
+        dbg!(&template);
         env.add_template("chat_template", template.as_str())?;
         env.add_function("raise_exception", raise_exception);
         let tmpl = env.get_template("chat_template").unwrap();
