@@ -329,6 +329,8 @@ impl Engine {
             request.response
         );
         dbg!(&prompt);
+        dbg!(&prompt.len());
+        let prompt = "<|user|>\nHello!</s>\n<|assistant|>\n".to_string();
         let mut prompt = handle_seq_error!(
             get_mut_arcmutex!(self.pipeline).tokenize_prompt(&prompt),
             request.response
