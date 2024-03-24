@@ -47,58 +47,6 @@ impl Module for RmsNorm {
     }
 }
 
-/*#[derive(Debug, Clone)]
-struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
-}
-
-fn rotate_half(xs: &Tensor) -> Result<Tensor> {
-    let last_dim = xs.dim(D::Minus1)?;
-    let xs1 = xs.narrow(D::Minus1, 0, last_dim / 2)?;
-    let xs2 = xs.narrow(D::Minus1, last_dim / 2, last_dim - last_dim / 2)?;
-    Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)
-}
-
-impl RotaryEmbedding {
-    fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
-        let rope_theta = cfg.rope_theta as f32;
-        let dim = cfg.hidden_size / cfg.num_attention_heads;
-        let max_seq_len = cfg.max_position_embeddings;
-        let inv_freq: Vec<_> = (0..dim)
-            .step_by(2)
-            .map(|i| 1f32 / rope_theta.powf(i as f32 / dim as f32))
-            .collect();
-        let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
-        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
-            .to_dtype(dtype)?
-            .reshape((max_seq_len, 1))?;
-        let freqs = t.matmul(&inv_freq)?;
-        let freqs = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
-        Ok(Self {
-            sin: freqs.sin()?,
-            cos: freqs.cos()?,
-        })
-    }
-
-    fn apply_rotary_emb_qkv(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        seqlen_offset: usize,
-    ) -> Result<(Tensor, Tensor)> {
-        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
-        let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
-        let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
-        let cos = cos.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
-        let sin = sin.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
-        let q_embed = (q.broadcast_mul(&cos)? + rotate_half(q)?.broadcast_mul(&sin))?;
-        let k_embed = (k.broadcast_mul(&cos)? + rotate_half(k)?.broadcast_mul(&sin))?;
-        Ok((q_embed, k_embed))
-    }
-}*/
-
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
@@ -241,19 +189,6 @@ impl Attention {
                 .transpose(1, 2)?
                 .contiguous()?;
         }
-        /*let query_states = query_states
-            .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?;
-        let key_states = key_states
-            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
-        let value_states = value_states
-            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
-
-        let (query_states, key_states) =
-            self.rotary_emb
-                .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offsets[0])?;*/
 
         let (key_states, value_states) = match &*kv_cache {
             None => (key_states, value_states),
@@ -370,7 +305,7 @@ impl Model {
             vb.device(),
             MISTRAL_IS_GPTX,
             vb.dtype(),
-        )?);/*Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb_m.device())?);*/
+        )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
