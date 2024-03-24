@@ -576,6 +576,13 @@
 <a href="#575" id="575">575</a>
 <a href="#576" id="576">576</a>
 <a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -743,6 +750,7 @@
             .as_ref()
             .unwrap()
             .replace(<span class="string">".strip()"</span>, <span class="string">"|trim"</span>);
+        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>template);
         env.add_template(<span class="string">"chat_template"</span>, template.as_str())<span class="question-mark">?</span>;
         env.add_function(<span class="string">"raise_exception"</span>, raise_exception);
         <span class="kw">let </span>tmpl = env.get_template(<span class="string">"chat_template"</span>).unwrap();
@@ -758,6 +766,9 @@
             Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit,
             Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="kw-2">&amp;</span>added.content,
         };
+        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>bos_tok);
+        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>eos_tok);
+        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>unk_tok);
         <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context! </span>{
             messages =&gt; messages,
             add_generation_prompt =&gt; add_generation_prompt,
@@ -1101,7 +1112,7 @@
             bos_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
             eos_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
         }
-        <span class="kw">match </span>template.chat_template {
+        <span class="kw">let </span><span class="kw-2">mut </span>template = <span class="kw">match </span>template.chat_template {
             <span class="prelude-val">Some</span>(<span class="kw">_</span>) =&gt; template,
             <span class="prelude-val">None </span>=&gt; {
                 <span class="macro">println!</span>(<span class="string">"`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template."</span>);
@@ -1150,7 +1161,10 @@
                 <span class="kw">let </span>ser = serde_json::to_string_pretty(<span class="kw-2">&amp;</span>deser).unwrap();
                 serde_json::from_str(<span class="kw-2">&amp;</span>ser).unwrap()
             }
-        }
+        };
+        <span class="comment">// TODO(EricLBuehler): Pending on https://github.com/mitsuhiko/minijinja/issues/446
+        </span>template.chat_template = <span class="prelude-val">Some</span>(template.chat_template.unwrap().replace(<span class="string">"%}\n"</span>, <span class="string">"%}"</span>));
+        template
     }};
 }
 </code></pre></div></section></main></body></html>

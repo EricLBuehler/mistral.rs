@@ -189,6 +189,8 @@
 <a href="#188" id="188">188</a>
 <a href="#189" id="189">189</a>
 <a href="#190" id="190">190</a>
+<a href="#191" id="191">191</a>
+<a href="#192" id="192">192</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashSet, fmt::Debug, sync::Arc};
 
 <span class="kw">use </span>candle_core::{quantized::QTensor, IndexOp, <span class="prelude-ty">Result</span>, Shape, Tensor, D};
@@ -314,6 +316,7 @@
             <span class="macro">candle_core::bail!</span>(<span class="string">"Expected all target modules to be the same."</span>);
         }
     }
+
     <span class="kw">if </span>!target_modules.contains(module) {
         <span class="kw">return </span><span class="prelude-val">Ok</span>(Arc::new(inner));
     }
@@ -345,6 +348,7 @@
             <span class="macro">candle_core::bail!</span>(<span class="string">"Expected all target modules to be the same."</span>);
         }
     }
+
     <span class="kw">if </span>!target_modules.contains(module) {
         <span class="kw">return </span><span class="prelude-val">Ok</span>(Arc::new(inner));
     }
