@@ -578,7 +578,7 @@ macro_rules! deserialize_chat_template {
             }
         };
         // TODO(EricLBuehler): Pending on https://github.com/mitsuhiko/minijinja/issues/446
-        template.chat_template = Some(template.chat_template.unwrap().replace("}\n{", "}{"));
+        template.chat_template = Some(template.chat_template.unwrap().replace("%}\n{%", "%}{%"));
         template
     }};
 }
