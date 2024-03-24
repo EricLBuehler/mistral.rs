@@ -190,8 +190,6 @@ impl Attention {
                 .contiguous()?;
         }
 
-        dbg!(query_states.mean_all());
-
         let (key_states, value_states) = match &*kv_cache {
             None => (key_states, value_states),
             Some((prev_k, prev_v)) => {
