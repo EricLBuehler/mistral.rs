@@ -165,7 +165,6 @@ pub trait Pipeline: Send + Sync {
             .as_ref()
             .unwrap()
             .replace(".strip()", "|trim");
-        dbg!(&template);
         env.add_template("chat_template", template.as_str())?;
         env.add_function("raise_exception", raise_exception);
         let tmpl = env.get_template("chat_template").unwrap();
@@ -181,9 +180,6 @@ pub trait Pipeline: Send + Sync {
             Either::Left(ref lit) => lit,
             Either::Right(ref added) => &added.content,
         };
-        dbg!(&bos_tok);
-        dbg!(&eos_tok);
-        dbg!(&unk_tok);
         Ok(tmpl.render(context! {
             messages => messages,
             add_generation_prompt => add_generation_prompt,
