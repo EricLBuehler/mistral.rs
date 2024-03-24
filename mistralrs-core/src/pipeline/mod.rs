@@ -165,6 +165,7 @@ pub trait Pipeline: Send + Sync {
             .as_ref()
             .unwrap()
             .replace(".strip()", "|trim");
+        dbg!(&template);
         env.add_template("chat_template", template.as_str())?;
         env.add_function("raise_exception", raise_exception);
         let tmpl = env.get_template("chat_template").unwrap();
@@ -180,6 +181,9 @@ pub trait Pipeline: Send + Sync {
             Either::Left(ref lit) => lit,
             Either::Right(ref added) => &added.content,
         };
+        dbg!(&bos_tok);
+        dbg!(&eos_tok);
+        dbg!(&unk_tok);
         Ok(tmpl.render(context! {
             messages => messages,
             add_generation_prompt => add_generation_prompt,
@@ -523,7 +527,7 @@ macro_rules! deserialize_chat_template {
             bos_token: Option<String>,
             eos_token: Option<String>,
         }
-        match template.chat_template {
+        let mut template = match template.chat_template {
             Some(_) => template,
             None => {
                 println!("`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
@@ -572,6 +576,9 @@ macro_rules! deserialize_chat_template {
                 let ser = serde_json::to_string_pretty(&deser).unwrap();
                 serde_json::from_str(&ser).unwrap()
             }
-        }
+        };
+        // TODO(EricLBuehler): Pending on https://github.com/mitsuhiko/minijinja/issues/446
+        template.chat_template = Some(template.chat_template.unwrap().replace("%}\n", "%}"));
+        template
     }};
 }
