@@ -141,7 +141,7 @@ impl PASequenceGroup {
 
     pub fn set_status(&self, status: PASequenceStatus) {
         for seq in self.seqs.values() {
-            seq.deref_mut().deref().set_status(status.clone());
+            seq.status = status.clone();
         }
     }
 
@@ -149,7 +149,7 @@ impl PASequenceGroup {
     pub fn total_blocks_to_add_new_tok(&self) -> usize {
         self.seqs
             .values()
-            .map(|seq| seq.deref_mut().blocks_to_add_new_tok())
+            .map(|seq| seq.blocks_to_add_new_tok())
             .sum()
     }
 
@@ -160,7 +160,7 @@ impl PASequenceGroup {
     pub fn get_total_logical_token_blocks(&self) -> usize {
         self.seqs
             .values()
-            .map(|seq| seq.deref_mut().get_logical_token_blocks())
+            .map(|seq| seq.get_logical_token_blocks())
             .sum()
     }
 
@@ -177,7 +177,7 @@ impl PASequenceGroup {
     }
 
     pub fn is_finished(&self) -> bool {
-        self.seqs.iter().all(|(_, x)| x.deref_mut().is_finished())
+        self.seqs.iter().all(|(_, x)| x.is_finished())
     }
 
     pub fn get_request_id(&self) -> &String {

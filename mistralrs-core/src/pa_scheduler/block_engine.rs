@@ -229,7 +229,7 @@ impl BlockEngine {
     pub fn free_sequence(&mut self, sequence: &PASequence) {
         let block_table = self
             .block_tables
-            .get(&sequence.deref_mut().get_id())
+            .get(&sequence.get_id())
             .unwrap();
 
         // Free from block table
@@ -241,7 +241,7 @@ impl BlockEngine {
             }
         }
 
-        self.block_tables.remove(&sequence.deref_mut().get_id());
+        self.block_tables.remove(&sequence.get_id());
     }
 
     pub fn can_swap_out_seq_group(&self, seq_group: &PASequenceGroup) -> bool {
@@ -296,10 +296,10 @@ impl BlockEngine {
     pub fn append_token_slot_to_seq(&mut self, sequence: &PASequence) -> Option<(usize, usize)> {
         let table = self
             .block_tables
-            .get_mut(&sequence.deref_mut().get_id())
+            .get_mut(&sequence.get_id())
             .unwrap();
 
-        match sequence.deref_mut().blocks_to_add_new_tok() {
+        match sequence.blocks_to_add_new_tok() {
             1 => {
                 table.push(self.gpu_allocator.allocate());
                 None
