@@ -500,6 +500,6 @@ impl ModelWeights {
         let x = x.i((.., seq_len - 1, ..))?;
         let _enter = self.span_output.enter();
         dbg!(&x);
-        self.output.forward(&x)
+        self.output.forward(&x.contiguous()?)
     }
 }
