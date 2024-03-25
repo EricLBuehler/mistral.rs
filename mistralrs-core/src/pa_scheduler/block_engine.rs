@@ -227,10 +227,7 @@ impl BlockEngine {
     }
 
     pub fn free_sequence(&mut self, sequence: &PASequence) {
-        let block_table = self
-            .block_tables
-            .get(&sequence.get_id())
-            .unwrap();
+        let block_table = self.block_tables.get(&sequence.get_id()).unwrap();
 
         // Free from block table
         for block in block_table {
@@ -294,10 +291,7 @@ impl BlockEngine {
     // Returns the COW mapping (src, dst).
     // COW is performed if there are multiple references to the last physical block.
     pub fn append_token_slot_to_seq(&mut self, sequence: &PASequence) -> Option<(usize, usize)> {
-        let table = self
-            .block_tables
-            .get_mut(&sequence.get_id())
-            .unwrap();
+        let table = self.block_tables.get_mut(&sequence.get_id()).unwrap();
 
         match sequence.blocks_to_add_new_tok() {
             1 => {

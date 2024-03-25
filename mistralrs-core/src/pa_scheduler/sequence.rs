@@ -68,20 +68,6 @@ impl PASequence {
                 | PASequenceStatus::Finished(_)
         )
     }
-    pub fn set_finish_reason(&mut self, finish_reason: String) {
-        self.status = PASequenceStatus::Finished(finish_reason.clone());
-    }
-
-    pub fn get_finish_reason(&self) -> String {
-        match &self.deref().status {
-            PASequenceStatus::Finished(state) => state.clone(),
-            PASequenceStatus::FinishedAborted => "abort".to_string(),
-            PASequenceStatus::FinishedIgnored => "length".to_string(),
-            _ => {
-                unreachable!("No finish reason.")
-            }
-        }
-    }
 
     fn append_tokens_to_blocks(&mut self, tokens: Vec<u32>) {
         for tok in tokens {
