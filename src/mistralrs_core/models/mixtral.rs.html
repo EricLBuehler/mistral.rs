@@ -500,7 +500,7 @@
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
 </span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
-<span class="kw">use </span>candle_nn::{Activation, RotaryEmbedding, VarBuilder};
+<span class="kw">use </span>candle_nn::{layer_norm::RmsNormNonQuantized, Activation, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>candle_transformers::models::with_tracing::{linear_no_bias, Linear};
 <span class="kw">use </span>serde::Deserialize;
 <span class="kw">use </span>std::sync::Arc;
@@ -530,14 +530,14 @@
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">struct </span>RmsNorm {
-    inner: candle_nn::RmsNorm,
+    inner: candle_nn::RmsNorm&lt;RmsNormNonQuantized&gt;,
     span: tracing::Span,
 }
 
 <span class="kw">impl </span>RmsNorm {
     <span class="kw">fn </span>new(size: usize, eps: f64, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>span = <span class="macro">tracing::span!</span>(tracing::Level::TRACE, <span class="string">"rms-norm"</span>);
-        <span class="kw">let </span>inner = candle_nn::rms_norm(size, eps, vb)<span class="question-mark">?</span>;
+        <span class="kw">let </span>inner = candle_nn::rms_norm_non_quant(size, eps, vb)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ inner, span })
     }
 }

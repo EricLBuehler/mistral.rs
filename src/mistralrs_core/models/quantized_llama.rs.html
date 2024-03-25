@@ -503,6 +503,7 @@
 <a href="#502" id="502">502</a>
 <a href="#503" id="503">503</a>
 <a href="#504" id="504">504</a>
+<a href="#505" id="505">505</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -510,6 +511,7 @@
 <span class="kw">use </span>candle_core::quantized::QTensor;
 <span class="kw">use </span>candle_core::quantized::{ggml_file, gguf_file};
 <span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor};
+<span class="kw">use </span>candle_nn::layer_norm::RmsNormQuantized;
 <span class="kw">use </span>candle_nn::{Embedding, Module, RotaryEmbedding};
 
 <span class="kw">use </span><span class="kw">super</span>::Cache;
@@ -518,7 +520,7 @@
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">struct </span>RmsNorm {
-    inner: candle_nn::RmsNorm,
+    inner: candle_nn::RmsNorm&lt;RmsNormQuantized&gt;,
     span: tracing::Span,
 }
 
@@ -526,7 +528,7 @@
     <span class="kw">fn </span>new(scale: QTensor, eps: f32) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>span = <span class="macro">tracing::span!</span>(tracing::Level::TRACE, <span class="string">"rms-norm"</span>);
         <span class="kw">let </span>scale = scale.dequantize(<span class="kw-2">&amp;</span>scale.device())<span class="question-mark">?</span>;
-        <span class="kw">let </span>inner = candle_nn::RmsNorm::new(scale, eps <span class="kw">as </span>f64);
+        <span class="kw">let </span>inner = candle_nn::RmsNorm::&lt;RmsNormQuantized&gt;::new(scale, eps <span class="kw">as </span>f64);
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ inner, span })
     }
 
@@ -1004,7 +1006,7 @@
         <span class="kw">let </span>x = <span class="self">self</span>.norm.forward(<span class="kw-2">&amp;</span>layer_in)<span class="question-mark">?</span>;
         <span class="kw">let </span>x = x.i((.., seq_len - <span class="number">1</span>, ..))<span class="question-mark">?</span>;
         <span class="kw">let </span>_enter = <span class="self">self</span>.span_output.enter();
-        <span class="self">self</span>.output.forward(<span class="kw-2">&amp;</span>x)
+        <span class="self">self</span>.output.forward(<span class="kw-2">&amp;</span>x.contiguous()<span class="question-mark">?</span>)
     }
 }
 </code></pre></div></section></main></body></html>

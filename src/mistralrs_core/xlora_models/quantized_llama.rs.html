@@ -826,6 +826,9 @@
 <a href="#825" id="825">825</a>
 <a href="#826" id="826">826</a>
 <a href="#827" id="827">827</a>
+<a href="#828" id="828">828</a>
+<a href="#829" id="829">829</a>
+<a href="#830" id="830">830</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -833,6 +836,7 @@
 <span class="kw">use </span>candle_core::quantized::{ggml_file, gguf_file};
 <span class="kw">use </span>candle_core::quantized::{QMatMul, QTensor};
 <span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor};
+<span class="kw">use </span>candle_nn::layer_norm::RmsNormQuantized;
 <span class="kw">use </span>candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Ordering, QLoraLinear};
 
@@ -845,7 +849,7 @@
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">struct </span>RmsNorm {
-    inner: candle_nn::RmsNorm,
+    inner: candle_nn::RmsNorm&lt;RmsNormQuantized&gt;,
     span: tracing::Span,
 }
 
@@ -853,7 +857,7 @@
     <span class="kw">fn </span>new(scale: QTensor, eps: f32) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>span = <span class="macro">tracing::span!</span>(tracing::Level::TRACE, <span class="string">"rms-norm"</span>);
         <span class="kw">let </span>scale = scale.dequantize(<span class="kw-2">&amp;</span>scale.device())<span class="question-mark">?</span>;
-        <span class="kw">let </span>inner = candle_nn::RmsNorm::new(scale, eps <span class="kw">as </span>f64);
+        <span class="kw">let </span>inner = candle_nn::RmsNorm::&lt;RmsNormQuantized&gt;::new(scale, eps <span class="kw">as </span>f64);
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ inner, span })
     }
 
@@ -1603,6 +1607,7 @@
                 no_kv_cache,
                 <span class="prelude-val">None</span>,
             )<span class="question-mark">?
+            </span>.contiguous()<span class="question-mark">?
             </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.output)<span class="question-mark">?
             </span>.i((.., seq_len_full - <span class="number">1</span>, ..))
         } <span class="kw">else </span>{
@@ -1616,6 +1621,7 @@
                 no_kv_cache,
                 <span class="prelude-val">None</span>,
             )<span class="question-mark">?
+            </span>.contiguous()<span class="question-mark">?
             </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.output)<span class="question-mark">?
             </span>.i((.., seq_len - <span class="number">1</span>, ..))
         }
