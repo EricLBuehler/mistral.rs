@@ -293,7 +293,7 @@ impl PAScheduler {
     /// Preempt either by recomputation (for single sequence), or by swapping (for multiple).
     fn _preempt(
         &mut self,
-        seq_group: &mut PASequenceGroup,
+        seq_group: PASequenceGroup,
         blocks_to_swap_out: &mut HashMap<usize, usize>,
     ) {
         match seq_group.get_seqs().len() {
@@ -302,7 +302,7 @@ impl PAScheduler {
         }
     }
 
-    fn _preempt_by_recompute(&mut self, seq_group: &mut PASequenceGroup) {
+    fn _preempt_by_recompute(&mut self, mut seq_group: PASequenceGroup) {
         seq_group.set_status(PASequenceStatus::Waiting);
         self._free(&seq_group);
         self.waiting.push_front(seq_group);
@@ -310,7 +310,7 @@ impl PAScheduler {
 
     fn _preempt_by_swap(
         &mut self,
-        seq_group: &mut PASequenceGroup,
+        mut seq_group: PASequenceGroup,
         blocks_to_swap_out: &mut HashMap<usize, usize>,
     ) {
         if !self.block_engine.can_swap_out_seq_group(&seq_group) {
