@@ -290,7 +290,7 @@ impl BlockEngine {
 
     // Returns the COW mapping (src, dst).
     // COW is performed if there are multiple references to the last physical block.
-    pub fn append_token_slot_to_seq(&mut self, sequence: &PASequence) -> Option<(usize, usize)> {
+    pub fn append_token_slot_to_seq(&mut self, sequence: &mut PASequence) -> Option<(usize, usize)> {
         let table = self.block_tables.get_mut(&sequence.get_id()).unwrap();
 
         match sequence.blocks_to_add_new_tok() {
