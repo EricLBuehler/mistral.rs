@@ -48,20 +48,21 @@ enum DType {
     F64,
 }
 
-#[cfg(not(feature = "metal"))]
-static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
+//#[cfg(not(feature = "metal"))]
+//static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
 #[cfg(feature = "metal")]
 static METAL_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
 
 #[cfg(not(feature = "metal"))]
 fn get_device() -> Result<Device> {
-    let mut device = CUDA_DEVICE.lock().unwrap();
+    return Device::cuda_if_available(0);
+    /*let mut device = CUDA_DEVICE.lock().unwrap();
     if let Some(device) = device.as_ref() {
         return Ok(device.clone());
     };
     let res = Device::cuda_if_available(0)?;
     *device = Some(res.clone());
-    Ok(res)
+    Ok(res)*/
 }
 #[cfg(feature = "metal")]
 fn get_device() -> Result<Device> {
