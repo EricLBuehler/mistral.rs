@@ -89,7 +89,7 @@ impl PAScheduler {
             let mut scheduled = VecDeque::new();
             let mut ignored_seq_groups = VecDeque::new();
             while !self.waiting.is_empty() {
-                let seq_group = self.waiting.front().unwrap().clone();
+                let mut seq_group = self.waiting.front().unwrap().clone();
 
                 // If adding this seq means we will have too many, stop as no more could be added.
                 if self.config.max_num_seqs
@@ -153,18 +153,18 @@ impl PAScheduler {
         let mut running = VecDeque::new();
         let mut preempted = VecDeque::new();
         while !self.running.is_empty() {
-            let seq_group = self.running.pop_front().unwrap();
+            let mut seq_group = self.running.pop_front().unwrap();
             let mut finished_with_break = false;
             while !self.block_engine.can_append_token_to_seq(&seq_group) {
                 // If we cannot, now we need to preempt some seqs
                 if !self.running.is_empty() {
                     // There is something to preempt.
-                    let seq_to_preempt = self.running.pop_back().unwrap();
-                    self._preempt(seq_to_preempt.clone(), &mut blocks_to_swap_out);
+                    let mut seq_to_preempt = self.running.pop_back().unwrap();
+                    self._preempt(&mut *seq_to_preempt, &mut blocks_to_swap_out);
                     preempted.push_back(seq_to_preempt);
                 } else {
                     // Nothing to preempt, preempt ourselves. Also, do not bother looking at anything else.
-                    self._preempt(seq_group.clone(), &mut blocks_to_swap_out);
+                    self._preempt(&mut *seq_group, &mut blocks_to_swap_out);
                     preempted.push_back(seq_group.clone());
                     finished_with_break = true;
                     break;
@@ -293,7 +293,7 @@ impl PAScheduler {
     /// Preempt either by recomputation (for single sequence), or by swapping (for multiple).
     fn _preempt(
         &mut self,
-        seq_group: Arc<PASequenceGroup>,
+        seq_group: &mut PASequenceGroup,
         blocks_to_swap_out: &mut HashMap<usize, usize>,
     ) {
         match seq_group.get_seqs().len() {
@@ -302,7 +302,7 @@ impl PAScheduler {
         }
     }
 
-    fn _preempt_by_recompute(&mut self, seq_group: Arc<PASequenceGroup>) {
+    fn _preempt_by_recompute(&mut self, seq_group: &mut PASequenceGroup) {
         seq_group.set_status(PASequenceStatus::Waiting);
         self._free(&seq_group);
         self.waiting.push_front(seq_group);
@@ -310,7 +310,7 @@ impl PAScheduler {
 
     fn _preempt_by_swap(
         &mut self,
-        seq_group: Arc<PASequenceGroup>,
+        seq_group: &mut PASequenceGroup,
         blocks_to_swap_out: &mut HashMap<usize, usize>,
     ) {
         if !self.block_engine.can_swap_out_seq_group(&seq_group) {
