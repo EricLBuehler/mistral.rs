@@ -33,6 +33,7 @@ minijinja = "1.0.12"
 either.workspace = true
 indexmap.workspace = true
 half = "2.4.0"
+candle-paged-attention = { git = "https://github.com/huggingface/candle-paged-attention.git", version = "0.0.1" }
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
