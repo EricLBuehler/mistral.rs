@@ -4,7 +4,7 @@
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
+use candle_nn::{layer_norm::RmsNormNonQuantized, Activation, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 use std::sync::Arc;
 
@@ -17,14 +17,14 @@ use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraC
 
 #[derive(Debug, Clone)]
 struct RmsNorm {
-    inner: candle_nn::RmsNorm,
+    inner: candle_nn::RmsNorm<RmsNormNonQuantized>,
     span: tracing::Span,
 }
 
 impl RmsNorm {
     fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
-        let inner = candle_nn::rms_norm(size, eps, vb)?;
+        let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
         Ok(Self { inner, span })
     }
 }
