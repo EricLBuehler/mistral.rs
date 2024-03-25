@@ -270,7 +270,7 @@ impl PAScheduler {
         seq_group: &PASequenceGroup,
         blocks_to_copy: &mut HashMap<usize, Vec<usize>>,
     ) {
-        for seq in seq_group.get_seqs().values() {
+        for seq in seq_group.get_seqs().values_mut() {
             let op = self.block_engine.append_token_slot_to_seq(seq);
             if let Some((src_block, dst_block)) = op {
                 if let std::collections::hash_map::Entry::Vacant(e) =

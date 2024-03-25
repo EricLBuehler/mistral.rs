@@ -97,7 +97,7 @@ type SeqID = usize;
 /// A PASequenceGroup holds the `n` (see SamplingParams) sequences generated from a single prompt.
 /// A PASequenceGroup contains only sequences with the same prompt. They will always be scheduled together.
 pub struct PASequenceGroup {
-    seqs: HashMap<SeqID, Arc<PASequence>>,
+    seqs: HashMap<SeqID, PASequence>,
     arrival_time: u64,
     group_id: usize,
     request_id: String,
