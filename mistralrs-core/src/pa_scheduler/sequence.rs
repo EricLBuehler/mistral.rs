@@ -106,15 +106,15 @@ pub struct PASequenceGroup {
 
 impl PASequenceGroup {
     pub fn new(
-        seqs: &[Arc<PASequence>],
+        seqs: Vec<PASequence>,
         arrival_time: u64,
         group_id: usize,
         request_id: String,
         created: u64,
     ) -> Self {
         let mut seq_map = HashMap::new();
-        for seq in seqs {
-            seq_map.insert(seq.get_id(), seq.clone());
+        for seq in seqs.into_iter() {
+            seq_map.insert(seq.get_id(), seq);
         }
         Self {
             seqs: seq_map,
@@ -150,7 +150,7 @@ impl PASequenceGroup {
             .sum()
     }
 
-    pub fn get_seqs(&self) -> &HashMap<SeqID, Arc<PASequence>> {
+    pub fn get_seqs(&self) -> &HashMap<SeqID, PASequence> {
         &self.seqs
     }
 
