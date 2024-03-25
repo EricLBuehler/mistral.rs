@@ -52,6 +52,7 @@ pub struct ChatCompletionResponse {
     pub usage: ChatCompletionUsage,
 }
 
+#[derive(Debug)]
 pub enum Response {
     Error(Box<dyn Error + Send + Sync>),
     Done(ChatCompletionResponse),

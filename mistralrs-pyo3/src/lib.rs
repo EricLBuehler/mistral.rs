@@ -118,6 +118,8 @@ impl Runner {
             sender.send(model_request).unwrap();
             let response = rx.recv().unwrap();
 
+            dbg!(&response);
+
             match response {
                 Response::Error(e) => Err(PyValueError::new_err(e.to_string())),
                 Response::Done(response) => {
