@@ -43,11 +43,11 @@ pub trait ConfigLike {
 }
 
 pub struct PASchedulerOutput {
-    pub scheduled: Arc<VecDeque<Arc<PASequenceGroup>>>,
+    pub scheduled: Arc<VecDeque<PASequenceGroup>>,
     pub blocks_to_swap_in: HashMap<CPUBlockFrom, GPUBlockTo>,
     pub blocks_to_swap_out: HashMap<GPUBlockFrom, CPUBlockTo>,
     pub blocks_to_copy: HashMap<SrcBlockFrom, DstBlocksTo>,
-    pub ignored_seq_groups: Arc<VecDeque<Arc<PASequenceGroup>>>,
+    pub ignored_seq_groups: Arc<VecDeque<PASequenceGroup>>,
 }
 
 pub struct PASchedulerConfig {
@@ -55,9 +55,9 @@ pub struct PASchedulerConfig {
 }
 
 pub struct PAScheduler {
-    waiting: VecDeque<Arc<PASequenceGroup>>,
-    running: VecDeque<Arc<PASequenceGroup>>,
-    swapped_out: VecDeque<Arc<PASequenceGroup>>,
+    waiting: VecDeque<PASequenceGroup>,
+    running: VecDeque<PASequenceGroup>,
+    swapped_out: VecDeque<PASequenceGroup>,
     config: PASchedulerConfig,
     pub block_engine: BlockEngine,
 }
