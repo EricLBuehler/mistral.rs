@@ -775,6 +775,7 @@ impl ModelWeights {
                 no_kv_cache,
                 None,
             )?
+            .contiguous()?
             .apply(&self.output)?
             .i((.., seq_len_full - 1, ..))
         } else {
@@ -788,6 +789,7 @@ impl ModelWeights {
                 no_kv_cache,
                 None,
             )?
+            .contiguous()?
             .apply(&self.output)?
             .i((.., seq_len - 1, ..))
         }

@@ -220,7 +220,7 @@ impl LayerWeights {
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
 
-        let att = ( q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
+        let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
         let mask = mask.broadcast_as(att.shape())?;
         let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
         let att = candle_nn::ops::softmax_last_dim(&att)?;
@@ -499,7 +499,6 @@ impl ModelWeights {
         let x = self.norm.forward(&layer_in)?;
         let x = x.i((.., seq_len - 1, ..))?;
         let _enter = self.span_output.enter();
-        dbg!(&x);
         self.output.forward(&x.contiguous()?)
     }
 }
