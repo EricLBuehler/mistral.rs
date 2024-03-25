@@ -6,10 +6,10 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use super::sequence::{Sequence, SequenceGroup};
+use super::sequence::{PASequence, PASequenceGroup};
 
 pub struct LogicalTokenBlock {
-    tokens: Vec<usize>,
+    tokens: Vec<u32>,
     block_size: usize,
     num_tokens: usize,
 }
@@ -27,13 +27,13 @@ impl LogicalTokenBlock {
         self.num_tokens == self.block_size
     }
 
-    pub fn append_token_id(&mut self, token: usize) {
+    pub fn append_token_id(&mut self, token: u32) {
         assert!(!self.is_full());
         self.tokens[self.num_tokens] = token;
         self.num_tokens += 1;
     }
 
-    pub fn append_tokens(&mut self, tokens: &[usize]) {
+    pub fn append_tokens(&mut self, tokens: &[u32]) {
         for token in tokens {
             self.append_token_id(*token);
         }
@@ -175,7 +175,7 @@ pub enum AllocStatus {
 
 type SeqID = usize;
 
-/// A BlockEngine maps each Sequence (identified by its SeqID), to physical token blocks.
+/// A BlockEngine maps each Sequencee (identified by its SeqID), to physical token blocks.
 /// The physical token blocks may not match the logical token blocks because during
 /// scheduling, physical blocks are allocated to accommodate the new tokens generated.
 /// These new tokens will be added to the logical token block for each sequence.
@@ -197,7 +197,7 @@ impl BlockEngine {
         }
     }
 
-    pub fn can_allocate(&self, seq_group: &SequenceGroup) -> AllocStatus {
+    pub fn can_allocate(&self, seq_group: &PASequenceGroup) -> AllocStatus {
         let num_required_blocks = seq_group.get_total_logical_token_blocks();
         let num_free_gpu_blocks = self.gpu_allocator.get_num_free_blocks();
 
@@ -210,7 +210,7 @@ impl BlockEngine {
         }
     }
 
-    pub fn allocate(&mut self, seq_group: &SequenceGroup) {
+    pub fn allocate(&mut self, seq_group: &PASequenceGroup) {
         let mut block_table = Vec::new();
         for _logcical_idx in 0..seq_group.get_total_logical_token_blocks() {
             block_table.push(self.gpu_allocator.allocate());
@@ -220,13 +220,13 @@ impl BlockEngine {
         }
     }
 
-    pub fn can_append_token_to_seq(&self, seq_group: &SequenceGroup) -> bool {
+    pub fn can_append_token_to_seq(&self, seq_group: &PASequenceGroup) -> bool {
         let free_blocks = self.gpu_allocator.get_num_free_blocks();
         // Physical blocks = logical blocks
         seq_group.total_blocks_to_add_new_tok() <= *free_blocks
     }
 
-    pub fn free_sequence(&mut self, sequence: &Sequence) {
+    pub fn free_sequence(&mut self, sequence: &PASequence) {
         let block_table = self
             .block_tables
             .get(&sequence.deref_mut().get_id())
@@ -244,7 +244,7 @@ impl BlockEngine {
         self.block_tables.remove(&sequence.deref_mut().get_id());
     }
 
-    pub fn can_swap_out_seq_group(&self, seq_group: &SequenceGroup) -> bool {
+    pub fn can_swap_out_seq_group(&self, seq_group: &PASequenceGroup) -> bool {
         let blocks_required: usize = self
             .block_tables
             .iter()
@@ -256,7 +256,7 @@ impl BlockEngine {
 
     /// Update the block table so that the sequence does no longer reserve any GPU
     /// physical blocks, and only has CPU physical blocks.
-    pub fn swap_out(&mut self, seq_group: &SequenceGroup) -> HashMap<usize, usize> {
+    pub fn swap_out(&mut self, seq_group: &PASequenceGroup) -> HashMap<usize, usize> {
         // GPU block to a CPU block
         let mut new_mapping = HashMap::new();
         for seq_id in seq_group.get_seqs().keys() {
@@ -293,7 +293,7 @@ impl BlockEngine {
 
     // Returns the COW mapping (src, dst).
     // COW is performed if there are multiple references to the last physical block.
-    pub fn append_token_slot_to_seq(&mut self, sequence: &Sequence) -> Option<(usize, usize)> {
+    pub fn append_token_slot_to_seq(&mut self, sequence: &PASequence) -> Option<(usize, usize)> {
         let table = self
             .block_tables
             .get_mut(&sequence.deref_mut().get_id())
@@ -325,7 +325,7 @@ impl BlockEngine {
         }
     }
 
-    pub fn can_swap_in_seq_group(&self, seq_group: &SequenceGroup) -> bool {
+    pub fn can_swap_in_seq_group(&self, seq_group: &PASequenceGroup) -> bool {
         let blocks_required: usize = self
             .block_tables
             .iter()
@@ -337,7 +337,7 @@ impl BlockEngine {
 
     /// Update the block table so that the sequence does no longer reserve any CPU
     /// physical blocks, and only has GPU physical blocks.
-    pub fn swap_in(&mut self, seq_group: &SequenceGroup) -> HashMap<usize, usize> {
+    pub fn swap_in(&mut self, seq_group: &PASequenceGroup) -> HashMap<usize, usize> {
         // CPU block to a GPU block
         let mut new_mapping = HashMap::new();
         for seq_id in seq_group.get_seqs().keys() {

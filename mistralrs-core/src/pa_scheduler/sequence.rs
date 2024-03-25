@@ -18,14 +18,14 @@ pub enum PASequenceStatus {
 }
 
 pub struct PASequenceData {
-    prompt_token_ids: Vec<usize>,
+    prompt_token_ids: Vec<u32>,
     output_token_ids: Vec<Logprobs>,
     cumulative_logprob: f32,
     status: PASequenceStatus,
 }
 
 impl PASequenceData {
-    pub fn new(prompt_token_ids: Vec<usize>) -> Self {
+    pub fn new(prompt_token_ids: Vec<u32>) -> Self {
         Self {
             prompt_token_ids,
             output_token_ids: Vec::new(),
@@ -58,7 +58,7 @@ pub struct _PASequence {
 }
 
 impl _PASequence {
-    pub fn new(prompt_token_ids: Vec<usize>, seq_id: usize, block_size: usize) -> Self {
+    pub fn new(prompt_token_ids: Vec<u32>, seq_id: usize, block_size: usize) -> Self {
         let mut this = Self {
             data: Mutex::new(PASequenceData::new(prompt_token_ids.clone())),
             seq_id,
@@ -104,7 +104,7 @@ impl _PASequence {
         self.deref().prompt_token_ids.len() + self.deref().output_token_ids.len()
     }
 
-    pub fn get_token_ids(&self) -> Vec<usize> {
+    pub fn get_token_ids(&self) -> Vec<u32> {
         let mut res = self.deref().prompt_token_ids.clone();
         res.extend(
             self.deref()
@@ -116,7 +116,7 @@ impl _PASequence {
         res
     }
 
-    pub fn get_last_token_id(&self) -> usize {
+    pub fn get_last_token_id(&self) -> u32 {
         if self.deref().output_token_ids.is_empty() {
             *self.deref().prompt_token_ids.last().unwrap()
         } else {
@@ -159,13 +159,13 @@ impl _PASequence {
         self.deref().output_token_ids.clone() // TODO(EricLBuehler): Better way to do this?
     }
 
-    fn append_tokens_to_blocks(&mut self, tokens: Vec<usize>) {
+    fn append_tokens_to_blocks(&mut self, tokens: Vec<u32>) {
         for tok in tokens {
             self.append_token_to_blocks(tok);
         }
     }
 
-    fn append_token_to_blocks(&mut self, token: usize) {
+    fn append_token_to_blocks(&mut self, token: u32) {
         let last = self.logical_token_blocks.last_mut();
         if !last.as_ref().is_some_and(|last| last.is_full()) {
             // If we have space

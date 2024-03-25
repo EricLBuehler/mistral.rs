@@ -2,6 +2,7 @@
 //! primary method `schedule` returns the batched sequences as inputs, as well as the
 //! operations to be executed on the cache by the CacheEngine.
 
+mod backend;
 /// The higher-level manager of the blocks allocated. Operations performed by the block engine do
 /// not directly change memory.
 pub mod block_engine;
@@ -23,9 +24,23 @@ use std::{
     sync::Arc,
 };
 
-use crate::log_warning;
+use self::{
+    block_engine::{AllocStatus, BlockEngine},
+    cache_engine::CacheConfig,
+    sequence::{PASequenceGroup, PASequenceStatus},
+};
 
-use self::{block_engine::{BlockEngine, AllocStatus}, cache_engine::CacheConfig, sequence::{PASequenceGroup, PASequenceStatus}};
+pub trait ConfigLike {
+    fn get_num_kv_heads(&self) -> usize;
+    fn get_hidden_size(&self) -> usize;
+    fn get_num_hidden_layers(&self) -> usize;
+    fn get_num_attention_heads(&self) -> usize;
+    fn get_vocab_size(&self) -> usize;
+    fn get_sliding_window(&self) -> Option<usize>;
+    fn get_head_size(&self) -> usize {
+        self.get_hidden_size() / self.get_num_attention_heads()
+    }
+}
 
 pub struct PASchedulerOutput {
     pub scheduled: Arc<VecDeque<Arc<PASequenceGroup>>>,
@@ -40,9 +55,9 @@ pub struct PASchedulerConfig {
 }
 
 pub struct PAScheduler {
-    waiting: VecDeque<Arc<SequenceGroup>>,
-    running: VecDeque<Arc<SequenceGroup>>,
-    swapped_out: VecDeque<Arc<SequenceGroup>>,
+    waiting: VecDeque<Arc<PASequenceGroup>>,
+    running: VecDeque<Arc<PASequenceGroup>>,
+    swapped_out: VecDeque<Arc<PASequenceGroup>>,
     config: PASchedulerConfig,
     pub block_engine: BlockEngine,
 }
@@ -63,7 +78,7 @@ impl PAScheduler {
         }
     }
 
-    pub fn add_sequence(&mut self, seq_group: SequenceGroup) {
+    pub fn add_sequence(&mut self, seq_group: PASequenceGroup) {
         self.waiting.push_back(Arc::new(seq_group));
     }
 
@@ -93,17 +108,16 @@ impl PAScheduler {
                 match can_allocate {
                     AllocStatus::Later => break, //If we can only allocate later, do not bother iterating over the rest.
                     AllocStatus::Impossible => {
-                        log_warning(
-                            &format!("Input prompt with length of {} tokens is too long and exceeds capacity of block engine.",
-                            seq_group.get_prompt_len())
+                        eprintln!("Input prompt with length of {} tokens is too long and exceeds capacity of block engine.",
+                            seq_group.get_prompt_len()
                         );
-                        seq_group.set_status(SequenceStatus::FinishedIgnored);
+                        seq_group.set_status(PASequenceStatus::FinishedIgnored);
                         ignored_seq_groups.push_back(self.waiting.pop_front().unwrap());
                     }
                     _ => {}
                 }
 
-                seq_group.set_status(SequenceStatus::Running);
+                seq_group.set_status(PASequenceStatus::Running);
                 self._allocate(&seq_group);
 
                 let seq_group = self.waiting.pop_front().unwrap();
@@ -225,7 +239,7 @@ impl PAScheduler {
 }
 
 impl PAScheduler {
-    fn remove_seq_group(&mut self, seq_group: &SequenceGroup) {
+    fn remove_seq_group(&mut self, seq_group: &PASequenceGroup) {
         // Remove it if it is in waiting
         if let Some(idx) = self
             .waiting
@@ -253,7 +267,7 @@ impl PAScheduler {
     }
     fn _append_token_slot_to_seq_group(
         &mut self,
-        seq_group: &SequenceGroup,
+        seq_group: &PASequenceGroup,
         blocks_to_copy: &mut HashMap<usize, Vec<usize>>,
     ) {
         for seq in seq_group.get_seqs().values() {
@@ -270,16 +284,16 @@ impl PAScheduler {
         }
     }
 
-    fn _abort_seq_group(&mut self, seq_group: &SequenceGroup) {
+    fn _abort_seq_group(&mut self, seq_group: &PASequenceGroup) {
         self.remove_seq_group(seq_group);
-        seq_group.set_status(SequenceStatus::FinishedAborted);
+        seq_group.set_status(PASequenceStatus::FinishedAborted);
         self._free(seq_group);
     }
 
     /// Preempt either by recomputation (for single sequence), or by swapping (for multiple).
     fn _preempt(
         &mut self,
-        seq_group: Arc<SequenceGroup>,
+        seq_group: Arc<PASequenceGroup>,
         blocks_to_swap_out: &mut HashMap<usize, usize>,
     ) {
         match seq_group.get_seqs().len() {
@@ -288,15 +302,15 @@ impl PAScheduler {
         }
     }
 
-    fn _preempt_by_recompute(&mut self, seq_group: Arc<SequenceGroup>) {
-        seq_group.set_status(SequenceStatus::Waiting);
+    fn _preempt_by_recompute(&mut self, seq_group: Arc<PASequenceGroup>) {
+        seq_group.set_status(PASequenceStatus::Waiting);
         self._free(&seq_group);
         self.waiting.push_front(seq_group);
     }
 
     fn _preempt_by_swap(
         &mut self,
-        seq_group: Arc<SequenceGroup>,
+        seq_group: Arc<PASequenceGroup>,
         blocks_to_swap_out: &mut HashMap<usize, usize>,
     ) {
         if !self.block_engine.can_swap_out_seq_group(&seq_group) {
@@ -306,16 +320,16 @@ impl PAScheduler {
         }
         let new_to_swap = self.block_engine.swap_out(&seq_group);
         blocks_to_swap_out.extend(new_to_swap);
-        seq_group.set_status(SequenceStatus::Swapped);
+        seq_group.set_status(PASequenceStatus::Swapped);
 
         self.swapped_out.push_back(seq_group);
     }
 
-    fn _allocate(&mut self, seq_group: &SequenceGroup) {
+    fn _allocate(&mut self, seq_group: &PASequenceGroup) {
         self.block_engine.allocate(seq_group)
     }
 
-    fn _free(&mut self, seq_group: &SequenceGroup) {
+    fn _free(&mut self, seq_group: &PASequenceGroup) {
         for seq in seq_group.get_seqs().values() {
             self.block_engine.free_sequence(seq);
         }

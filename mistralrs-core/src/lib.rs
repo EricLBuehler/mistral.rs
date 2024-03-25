@@ -16,6 +16,7 @@ pub use pipeline::Pipeline;
 
 mod engine;
 mod models;
+mod pa_scheduler;
 mod pipeline;
 mod request;
 mod response;
@@ -24,7 +25,6 @@ mod scheduler;
 mod sequence;
 mod utils;
 mod xlora_models;
-mod pa_scheduler;
 
 pub use pipeline::{
     GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader, MistralLoader,
