@@ -7,7 +7,7 @@ mod backend;
 /// not directly change memory.
 pub mod block_engine;
 /// This is the lower-level manager of the cache. It manages swapping and copying the blocks and
-/// actually allocates the KV cache for the CPU and GPU. It is used by the LLMEngine to execute
+/// actually allocates the KV cache for the CPU and GPU. It is used by the Engine to execute
 /// operations issued by the PAScheduler.
 pub mod cache_engine;
 pub mod sequence;

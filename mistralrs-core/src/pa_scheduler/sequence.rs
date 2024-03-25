@@ -17,53 +17,22 @@ pub enum PASequenceStatus {
     Finished(String),
 }
 
-pub struct PASequenceData {
-    prompt_token_ids: Vec<u32>,
-    output_token_ids: Vec<Logprobs>,
-    cumulative_logprob: f32,
-    status: PASequenceStatus,
-}
-
-impl PASequenceData {
-    pub fn new(prompt_token_ids: Vec<u32>) -> Self {
-        Self {
-            prompt_token_ids,
-            output_token_ids: Vec::new(),
-            cumulative_logprob: 0.,
-            status: PASequenceStatus::Waiting,
-        }
-    }
-
-    pub fn append_token_id(&mut self, logprobs: Logprobs) {
-        self.cumulative_logprob += logprobs.logprob;
-        self.output_token_ids.push(logprobs);
-    }
-
-    pub fn set_status(&mut self, status: PASequenceStatus) {
-        self.status = status;
-    }
-
-    fn get_cumulative_logprob(&self) -> f32 {
-        self.cumulative_logprob
-    }
-}
-
 /// A PASequence holds information about the data it contains (the tokens), and the logical token blocks
 /// to which it is mapped.
 pub struct _PASequence {
-    data: Mutex<PASequenceData>,
     seq_id: usize,
     logical_token_blocks: Vec<LogicalTokenBlock>,
     block_size: usize,
+    status: PASequenceStatus,
 }
 
 impl _PASequence {
     pub fn new(prompt_token_ids: Vec<u32>, seq_id: usize, block_size: usize) -> Self {
         let mut this = Self {
-            data: Mutex::new(PASequenceData::new(prompt_token_ids.clone())),
             seq_id,
             logical_token_blocks: Vec::new(),
             block_size,
+            status: PASequenceStatus::Waiting,
         };
         this.append_tokens_to_blocks(prompt_token_ids);
         this
@@ -151,12 +120,6 @@ impl _PASequence {
                 unreachable!("No finish reason.")
             }
         }
-    }
-
-    #[must_use]
-    /// Clones the internal logprobs.
-    pub fn get_output_tokens(&self) -> Vec<Logprobs> {
-        self.deref().output_token_ids.clone() // TODO(EricLBuehler): Better way to do this?
     }
 
     fn append_tokens_to_blocks(&mut self, tokens: Vec<u32>) {
