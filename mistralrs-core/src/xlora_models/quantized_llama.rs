@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::quantized::{QMatMul, QTensor};
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_nn::layer_norm::RmsNormQuantized;
 use candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Ordering, QLoraLinear};
 
@@ -17,7 +18,7 @@ pub const MAX_SEQ_LEN: u32 = 4096;
 
 #[derive(Debug, Clone)]
 struct RmsNorm {
-    inner: candle_nn::RmsNorm,
+    inner: candle_nn::RmsNorm<RmsNormQuantized>,
     span: tracing::Span,
 }
 
@@ -25,7 +26,7 @@ impl RmsNorm {
     fn new(scale: QTensor, eps: f32) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
         let scale = scale.dequantize(&scale.device())?;
-        let inner = candle_nn::RmsNorm::new(scale, eps as f64);
+        let inner = candle_nn::RmsNorm::<RmsNormQuantized>::new(scale, eps as f64);
         Ok(Self { inner, span })
     }
 

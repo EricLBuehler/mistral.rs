@@ -1,7 +1,9 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
+use candle_nn::{
+    embedding, layer_norm::RmsNormNonQuantized, Embedding, Module, RotaryEmbedding, VarBuilder,
+};
 use mistralrs_lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering};
 use std::{collections::HashMap, sync::Arc};
 
@@ -48,14 +50,14 @@ impl Cache {
 
 #[derive(Debug, Clone)]
 struct RmsNorm {
-    inner: candle_nn::RmsNorm,
+    inner: candle_nn::RmsNorm<RmsNormNonQuantized>,
     span: tracing::Span,
 }
 
 impl RmsNorm {
     fn load(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
-        let inner = candle_nn::rms_norm(size, eps, vb)?;
+        let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
         Ok(Self { inner, span })
     }
 

@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{linear_b as linear, rms_norm, Linear, RmsNorm, RotaryEmbedding, VarBuilder};
+use candle_nn::{
+    layer_norm::RmsNormNonQuantized, linear_b as linear, rms_norm_non_quant, Linear, RmsNorm,
+    RotaryEmbedding, VarBuilder,
+};
 
 use crate::pipeline::GEMMA_IS_GPTX;
 
@@ -190,8 +193,8 @@ impl Attention {
 struct DecoderLayer {
     self_attn: Attention,
     mlp: MLP,
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
+    input_layernorm: RmsNorm<RmsNormNonQuantized>,
+    post_attention_layernorm: RmsNorm<RmsNormNonQuantized>,
 }
 
 impl DecoderLayer {
@@ -199,8 +202,8 @@ impl DecoderLayer {
         let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
         let input_layernorm =
-            rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
-        let post_attention_layernorm = rms_norm(
+            rms_norm_non_quant(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let post_attention_layernorm = rms_norm_non_quant(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             vb.pp("post_attention_layernorm"),
@@ -241,7 +244,7 @@ impl DecoderLayer {
 pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
-    norm: RmsNorm,
+    norm: RmsNorm<RmsNormNonQuantized>,
     lm_head: Linear,
     dtype: DType,
     hidden_size: usize,
@@ -269,7 +272,7 @@ impl Model {
             let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
             layers.push(layer)
         }
-        let norm = rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
+        let norm = rms_norm_non_quant(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
         let lm_head = Linear::new(embed_tokens.embeddings().clone(), None);
         Ok(Self {
             embed_tokens,
