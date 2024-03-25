@@ -220,12 +220,15 @@ impl LayerWeights {
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
 
-        let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
+        dbg!(&q);
+        let att = ( q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
+        dbg!(&att);
         let mask = mask.broadcast_as(att.shape())?;
         let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
         let att = candle_nn::ops::softmax_last_dim(&att)?;
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = att.matmul(&v.contiguous()?)?;
+        dbg!(&y);
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = self.attention_wo.forward(&y)?;
         Ok(y)
