@@ -145,24 +145,6 @@ impl _PASequence {
     }
 }
 
-impl _PASequence {
-    pub fn deref(&self) -> MutexGuard<'_, PASequenceData> {
-        loop {
-            if let Ok(res) = self.data.try_lock() {
-                return res;
-            }
-        }
-    }
-
-    pub fn deref_mut(&self) -> MutexGuard<'_, PASequenceData> {
-        loop {
-            if let Ok(res) = self.data.try_lock() {
-                return res;
-            }
-        }
-    }
-}
-
 pub struct PASequence(pub Mutex<_PASequence>);
 
 impl PASequence {
