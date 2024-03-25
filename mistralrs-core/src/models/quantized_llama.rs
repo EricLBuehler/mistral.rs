@@ -231,6 +231,7 @@ impl LayerWeights {
         dbg!(&y);
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = self.attention_wo.forward(&y)?;
+        dbg!(&y);
         Ok(y)
     }
 
