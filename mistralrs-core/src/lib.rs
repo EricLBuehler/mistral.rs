@@ -24,6 +24,7 @@ mod scheduler;
 mod sequence;
 mod utils;
 mod xlora_models;
+mod pa_scheduler;
 
 pub use pipeline::{
     GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader, MistralLoader,
