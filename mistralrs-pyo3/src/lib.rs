@@ -131,6 +131,12 @@ impl Runner {
     }
 }
 
+impl Drop for Runner {
+    fn drop(&mut self) {
+        eprintln!("Dropping runner.");
+    }
+}
+
 #[pyclass]
 #[derive(Debug)]
 /// An OpenAI API compatible chat completion request.

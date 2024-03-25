@@ -224,3 +224,10 @@ impl MistralLoader {
         Ok(Runner { runner: mistralrs })
     }
 }
+
+
+impl Drop for MistralLoader {
+    fn drop(&mut self) {
+        eprintln!("Dropping mloader.");
+    }
+}
