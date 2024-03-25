@@ -19,14 +19,14 @@ pub enum PASequenceStatus {
 
 /// A PASequence holds information about the data it contains (the tokens), and the logical token blocks
 /// to which it is mapped.
-pub struct _PASequence {
+pub struct PASequence {
     seq_id: usize,
     logical_token_blocks: Vec<LogicalTokenBlock>,
     block_size: usize,
     status: PASequenceStatus,
 }
 
-impl _PASequence {
+impl PASequence {
     pub fn new(prompt_token_ids: Vec<u32>, seq_id: usize, block_size: usize) -> Self {
         let mut this = Self {
             seq_id,
@@ -38,9 +38,8 @@ impl _PASequence {
         this
     }
 
-    pub fn add_token(&mut self, logprobs: Logprobs) {
-        self.append_token_to_blocks(logprobs.token);
-        self.deref_mut().append_token_id(logprobs);
+    pub fn add_token(&mut self, token: u32) {
+        self.append_token_to_blocks(token);
     }
 
     pub fn blocks_to_add_new_tok(&mut self) -> usize {
@@ -61,54 +60,16 @@ impl _PASequence {
         self.seq_id
     }
 
-    pub fn is_prompt(&self) -> bool {
-        self.deref().output_token_ids.is_empty()
-    }
-
-    pub fn get_prompt_len(&self) -> usize {
-        self.deref().prompt_token_ids.len()
-    }
-
-    pub fn get_len(&self) -> usize {
-        self.deref().prompt_token_ids.len() + self.deref().output_token_ids.len()
-    }
-
-    pub fn get_token_ids(&self) -> Vec<u32> {
-        let mut res = self.deref().prompt_token_ids.clone();
-        res.extend(
-            self.deref()
-                .output_token_ids
-                .iter()
-                .map(|logprobs| logprobs.token)
-                .clone(),
-        );
-        res
-    }
-
-    pub fn get_last_token_id(&self) -> u32 {
-        if self.deref().output_token_ids.is_empty() {
-            *self.deref().prompt_token_ids.last().unwrap()
-        } else {
-            self.deref().output_token_ids.last().unwrap().token
-        }
-    }
-
     pub fn is_finished(&self) -> bool {
         matches!(
-            self.deref().status,
+            self.status,
             PASequenceStatus::FinishedAborted
                 | PASequenceStatus::FinishedIgnored
                 | PASequenceStatus::Finished(_)
         )
     }
-
-    pub fn get_cumulative_logprob(&self) -> f32 {
-        self.deref().get_cumulative_logprob()
-    }
-
     pub fn set_finish_reason(&mut self, finish_reason: String) {
-        self.deref()
-            .set_status(PASequenceStatus::Finished(finish_reason.clone()));
+        self.status = PASequenceStatus::Finished(finish_reason.clone());
     }
 
     pub fn get_finish_reason(&self) -> String {
@@ -145,18 +106,6 @@ impl _PASequence {
     }
 }
 
-pub struct PASequence(pub Mutex<_PASequence>);
-
-impl PASequence {
-    pub fn deref_mut(&self) -> MutexGuard<'_, _PASequence> {
-        loop {
-            if let Ok(v) = self.0.try_lock() {
-                return v;
-            }
-        }
-    }
-}
-
 type SeqID = usize;
 
 /// A PASequenceGroup holds the `n` (see SamplingParams) sequences generated from a single prompt.
@@ -179,7 +128,7 @@ impl PASequenceGroup {
     ) -> Self {
         let mut seq_map = HashMap::new();
         for seq in seqs {
-            seq_map.insert(seq.deref_mut().get_id(), seq.clone());
+            seq_map.insert(seq.get_id(), seq.clone());
         }
         Self {
             seqs: seq_map,
