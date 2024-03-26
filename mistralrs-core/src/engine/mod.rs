@@ -4,7 +4,7 @@ use std::{
     iter::zip,
     rc::Rc,
     sync::{mpsc::Receiver, Mutex},
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use candle_core::Tensor;
@@ -64,15 +64,11 @@ impl Engine {
                 if !self.no_kv_cache {
                     self.clone_in_cache(&scheduled.completion);
                 }
-                let s = Instant::now();
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
-                println!("Compl tok = {}ms", Instant::now().duration_since(s).as_millis());
                 self.sample_seqs(&scheduled.completion, logits);
                 if !self.no_kv_cache {
-                    let s = Instant::now();
                     self.clone_out_cache(&scheduled.completion);
-                    println!("Clone out = {}ms", Instant::now().duration_since(s).as_millis());
                 } else {
                     self.set_none_cache();
                 }

@@ -28,7 +28,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Instant;
 use std::{rc::Rc, sync::Mutex};
 use thiserror::Error;
 use tokenizers::Tokenizer;
@@ -362,7 +361,6 @@ impl Loader for MistralLoader {
 
 impl Pipeline for MistralPipeline {
     fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor {
-        let s = Instant::now();
         let ModelInputs {
             input_ids,
             input_ids_full,
@@ -378,7 +376,6 @@ impl Pipeline for MistralPipeline {
             self.no_kv_cache,
         )
         .unwrap();
-        println!("Input gen = {}ms", Instant::now().duration_since(s).as_millis());
         let result = match self.model {
             Model::Normal(ref mut model) => {
                 model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)
