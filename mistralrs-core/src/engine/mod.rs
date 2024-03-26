@@ -455,6 +455,7 @@ impl Engine {
         let group = Rc::new(RefCell::new(SequenceGroup::new(
             request.sampling_params.n_choices,
         )));
+        let device = get_mut_arcmutex!(self.pipeline).device().clone();
         // Add sequences
         for _ in 0..request.sampling_params.n_choices {
             println!("Creating");
@@ -482,7 +483,7 @@ impl Engine {
                 request.return_logprobs,
                 get_mut_arcmutex!(self.pipeline).is_xlora(),
                 group.clone(),
-                get_mut_arcmutex!(self.pipeline).device(),
+                &device,
             );
             println!("created id {}", self.id);
             let seq = handle_seq_error!(
