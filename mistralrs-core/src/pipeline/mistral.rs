@@ -326,7 +326,6 @@ impl Loader for MistralLoader {
                     model,
                     &mut file,
                     device,
-                    
                     paths.get_adapter_configs().as_ref().unwrap(),
                     &vb,
                     paths.get_ordering().as_ref().unwrap(),

@@ -76,7 +76,7 @@ impl Engine {
                     .expect("Time travel has occurred!")
                     .as_millis();
                 for seq in scheduled.completion.iter() {
-                    deref_mut_refcell!(seq).total_sampling_time += end-start;
+                    deref_mut_refcell!(seq).total_sampling_time += end - start;
                 }
                 if !self.no_kv_cache {
                     self.clone_out_cache(&scheduled.completion);
@@ -112,7 +112,7 @@ impl Engine {
                     .expect("Time travel has occurred!")
                     .as_millis();
                 for seq in scheduled.prompt.iter() {
-                    deref_mut_refcell!(seq).total_sampling_time += end-start;
+                    deref_mut_refcell!(seq).total_sampling_time += end - start;
                 }
                 if !self.no_kv_cache {
                     self.clone_out_cache(&scheduled.prompt);
