@@ -457,6 +457,7 @@ impl Engine {
         )));
         // Add sequences
         for _ in 0..request.sampling_params.n_choices {
+            println!("Creating");
             let seq = handle_seq_error!(
                 Sequence::new_waiting(
                     prompt.clone(),
@@ -486,6 +487,7 @@ impl Engine {
                 ),
                 request.response
             );
+            println!("created id {}", self.id);
             self.id += 1;
             self.scheduler.add_seq(seq);
         }
