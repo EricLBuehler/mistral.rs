@@ -89,6 +89,7 @@ pub struct MistralPipeline {
     no_kv_cache: bool,
     chat_template: ChatTemplate,
     non_granular_state: Option<NonGranularState>,
+    eos_token: Tensor,
 }
 
 pub struct MistralLoader {
@@ -342,6 +343,16 @@ impl Loader for MistralLoader {
 
         let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
 
+        let eos_tok = match chat_template.eos_token {
+            Either::Left(ref lit) => lit,
+            Either::Right(ref added) => &added.content,
+        };
+        let eos_tok = tokenizer
+            .get_vocab(true)
+            .get(eos_tok)
+            .copied()
+            .unwrap_or_else(|| panic!("Unable to extract `{eos_tok}` EOS token."));
+
         Ok(Box::new(Mutex::new(MistralPipeline {
             model,
             tokenizer,
@@ -354,6 +365,7 @@ impl Loader for MistralLoader {
                     tgt_non_granular_index,
                 }
             }),
+            eos_token: Tensor::new(eos_tok, device)?,
         })))
     }
 }
@@ -438,10 +450,11 @@ impl Pipeline for MistralPipeline {
             .to_dtype(DType::F32)
             .unwrap();
         let start_at = deref_refcell!(seq)
-            .get_toks()
             .len()
             .saturating_sub(self.config.repeat_last_n);
-        let ctxt = deref_refcell!(seq).get_toks()[start_at..].to_vec();
+        let ctxt = deref_refcell!(seq)
+            .get_toks()
+            .narrow(0, start_at, self.config.repeat_last_n)?;
 
         Ok(deref_mut_refcell!(seq)
             .logits_processor()
@@ -450,16 +463,8 @@ impl Pipeline for MistralPipeline {
     fn tokenizer(&self) -> Tokenizer {
         self.tokenizer.clone()
     }
-    fn eos_tok(&self) -> u32 {
-        let eos_tok = match self.get_chat_template().eos_token {
-            Either::Left(ref lit) => lit,
-            Either::Right(ref added) => &added.content,
-        };
-        self.tokenizer
-            .get_vocab(true)
-            .get(eos_tok)
-            .copied()
-            .unwrap_or_else(|| panic!("Unable to extract `{eos_tok}` EOS token."))
+    fn eos_tok(&self) -> Tensor {
+        self.eos_token.clone()
     }
     fn name(&self) -> &'static str {
         "mistral"

@@ -5,7 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use candle_core::Tensor;
+use candle_core::{Device, IntDType, Result, Tensor};
 use candle_sampling::logits_processor::{LogitsProcessor, Logprobs};
 
 use crate::{
@@ -32,24 +32,33 @@ pub enum SequenceState {
 }
 
 pub struct Sequence {
-    tokens: Vec<u32>,
-    logprobs: Vec<Logprobs>,
-    prompt_len: usize,
+    // Metadata, const
     id: usize,
+    prompt_len: usize,
+    max_len: Option<usize>,
     timestamp: u128,
-    state: Cell<SequenceState>,
+    logits_processor: LogitsProcessor,
+    stop_tokens: Vec<Tensor>, // scalars
+    return_logprobs: bool,
+    responder: Sender<Response>,
+
+    // Cache
+    scaling_cache: Option<Tensor>,
     cache: Vec<Option<(Tensor, Tensor)>>,
     xlora_cache: Option<Vec<Option<(Tensor, Tensor)>>>,
-    responder: Sender<Response>,
-    logits_processor: LogitsProcessor,
-    stop_tokens: Vec<u32>,
-    max_len: Option<usize>,
-    return_logprobs: bool,
+
+    // Mutables
+    tokens: Tensor,
+    logprobs: Vec<Logprobs>,
+    position: Tensor, // scalar
+    position_usize: usize,
+
+    // GPU things
     pub prompt_tok_per_sec: f32,
     pub prompt_timestamp: Option<u128>,
     group: Rc<RefCell<SequenceGroup>>,
-    scaling_cache: Option<Tensor>,
     pub total_sampling_time: u128,
+    state: Cell<SequenceState>,
 }
 
 impl Sequence {
@@ -66,10 +75,11 @@ impl Sequence {
         return_logprobs: bool,
         is_xlora: bool,
         group: Rc<RefCell<SequenceGroup>>,
-    ) -> Self {
+        device: &Device,
+    ) -> Result<Self> {
         let prompt_len = tokens.len();
-        Self {
-            tokens,
+        Ok(Self {
+            tokens: Tensor::new(tokens, device)?,
             logprobs: Vec::new(),
             prompt_len,
             id,
@@ -83,7 +93,10 @@ impl Sequence {
             },
             responder,
             logits_processor,
-            stop_tokens,
+            stop_tokens: stop_tokens
+                .iter()
+                .map(|t| Tensor::new(vec![*t], device).unwrap())
+                .collect::<Vec<_>>(),
             max_len,
             return_logprobs,
             prompt_tok_per_sec: 0.,
@@ -91,11 +104,13 @@ impl Sequence {
             group,
             scaling_cache: None,
             total_sampling_time: 0,
-        }
+            position: Tensor::new(0u32, device).unwrap(),
+            position_usize: 0,
+        })
     }
 
     pub fn len(&self) -> usize {
-        self.tokens.len()
+        self.tokens.dims1().unwrap()
     }
 
     pub fn id(&self) -> &usize {
@@ -119,8 +134,16 @@ impl Sequence {
         self.state.get() == SequenceState::Waiting
     }
 
-    pub fn get_toks(&self) -> &[u32] {
+    pub fn get_toks(&self) -> &Tensor {
         &self.tokens
+    }
+
+    pub fn get_position_scalar(&mut self) -> &mut Tensor {
+        &mut self.position
+    }
+
+    pub fn get_position_usize(&mut self) -> &mut usize {
+        &mut self.position_usize
     }
 
     pub fn cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
@@ -143,9 +166,10 @@ impl Sequence {
         &mut self.logits_processor
     }
 
-    pub fn add_token(&mut self, tok: Logprobs) {
-        self.tokens.push(tok.token);
+    pub fn add_token(&mut self, tok: Logprobs) -> Result<()> {
+        self.tokens = Tensor::cat(&[self.tokens, tok.token], 0)?;
         self.logprobs.push(tok);
+        Ok(())
     }
 
     pub fn responder(&self) -> Sender<Response> {
@@ -156,17 +180,36 @@ impl Sequence {
         self.state.set(state);
     }
 
-    pub fn is_done(&self, tok: u32, eos_tok: u32, max_model_len: usize) -> Option<StopReason> {
-        if tok == eos_tok {
+    pub fn is_done(
+        &self,
+        tok: Tensor,
+        eos_tok: Tensor,
+        max_model_len: usize,
+    ) -> Option<StopReason> {
+        // TODO(EricLBuehler): Is there a way to avoid this copy?
+        if tok
+            .eq(&eos_tok)
+            .unwrap()
+            .to_scalar::<u8>()
+            .unwrap()
+            .is_true()
+        {
             Some(StopReason::Eos)
-        } else if self.stop_tokens.contains(&tok) {
-            Some(StopReason::StopTok(tok))
+        } else if self.stop_tokens.iter().any(|stop_t| {
+            stop_t
+                .eq(&tok)
+                .unwrap()
+                .to_scalar::<u8>()
+                .unwrap()
+                .is_true()
+        }) {
+            Some(StopReason::StopTok(tok.to_scalar::<u32>().unwrap()))
         } else if self.max_len.is_some()
-            && self.tokens.len().saturating_sub(self.prompt_len) == self.max_len.unwrap()
+            && self.len().saturating_sub(self.prompt_len) == self.max_len.unwrap()
         {
             // add_token was already called
             Some(StopReason::Length(self.max_len.unwrap()))
-        } else if self.tokens.len().saturating_sub(self.prompt_len) == max_model_len {
+        } else if self.len().saturating_sub(self.prompt_len) == max_model_len {
             Some(StopReason::ModelLength(max_model_len))
         } else {
             None
@@ -209,8 +252,6 @@ impl Sequence {
 
         deref_mut_refcell!(self.group).total_prompt_toks += self.prompt_len;
         deref_mut_refcell!(self.group).total_toks += self.len();
-
-        deref_mut_refcell!(self.group).total_sampling_time += self.total_sampling_time;
     }
 
     pub fn get_group(&self) -> Ref<'_, SequenceGroup> {

@@ -7,16 +7,17 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use candle_core::Tensor;
+use candle_core::{Result, Tensor};
 use candle_sampling::logits_processor::{LogitsProcessor, SamplingMethod};
 
 use crate::{
     deref_mut_refcell, deref_refcell, get_mut_arcmutex, handle_seq_error,
-    handle_seq_error_stateaware,
+    handle_seq_error_stateaware, handle_seq_error_unit_ok,
     pipeline::Pipeline,
     request::Request,
     response::{
         ChatCompletionResponse, Choice, Logprobs, Response, ResponseLogprob, ResponseMessage,
+        TopLogprob,
     },
     scheduler::{Scheduler, SchedulerMethod},
     sequence::{Sequence, SequenceGroup, SequenceState, StopReason},
@@ -145,27 +146,36 @@ impl Engine {
         }
     }
 
-    fn finish_seq(&self, seq: &Rc<RefCell<Sequence>>, reason: StopReason) {
+    fn finish_seq(&self, seq: &Rc<RefCell<Sequence>>, reason: StopReason) -> Result<()> {
         deref_mut_refcell!(seq).set_state(SequenceState::Done(reason));
 
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer().clone();
         let mut logprobs = Vec::new();
         for logprob in deref_refcell!(seq).logprobs() {
             let resp_logprob = ResponseLogprob {
-                token: handle_seq_error!(
-                    tokenizer.decode(&[logprob.token], false),
+                token: handle_seq_error_unit_ok!(
+                    tokenizer.decode(&[logprob.token.to_scalar::<u32>()?], false),
                     deref_refcell!(seq).responder()
                 ),
                 bytes: logprob.bytes.clone().into_bytes(),
                 logprob: logprob.logprob,
-                top_logprobs: logprob.top_logprobs.clone(),
+                top_logprobs: logprob
+                    .top_logprobs
+                    .iter()
+                    .map(|x| TopLogprob {
+                        token: x.token.to_scalar::<u32>().unwrap(),
+                        logprob: x.logprob,
+                        bytes: x.bytes,
+                    })
+                    .collect::<Vec<_>>(),
             };
             logprobs.push(resp_logprob);
         }
 
-        let res = handle_seq_error!(
+        let res = handle_seq_error_unit_ok!(
             get_mut_arcmutex!(self.pipeline).tokenizer().decode(
-                &deref_refcell!(seq).get_toks()[deref_refcell!(seq).prompt_tokens()..],
+                &deref_refcell!(seq).get_toks().to_vec1::<u32>()?
+                    [deref_refcell!(seq).prompt_tokens()..],
                 false
             ),
             deref_refcell!(seq).responder()
@@ -194,7 +204,7 @@ impl Engine {
 
         // Is the group done?
         if !deref_refcell!(seq).get_group().is_done() {
-            return;
+            return Ok(());
         }
 
         // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
@@ -210,6 +220,7 @@ impl Engine {
                 usage: deref_refcell!(seq).get_group().get_usage(),
             }))
             .unwrap();
+        Ok(())
     }
 
     /// Clone the cache FROM the sequences' cache TO the model cache. Only used for completion seqs.
@@ -438,30 +449,34 @@ impl Engine {
         )));
         // Add sequences
         for _ in 0..request.sampling_params.n_choices {
-            let seq = Sequence::new_waiting(
-                prompt.clone(),
-                self.id,
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Time travel has occurred!")
-                    .as_millis(),
-                num_hidden_layers,
-                request.response.clone(),
-                LogitsProcessor::new(
-                    SEED,
-                    request.sampling_params.temperature,
-                    sampling_method.clone(),
-                    request.sampling_params.top_n_logprobs,
-                    tokenizer.clone(),
-                    request.sampling_params.repeat_penalty,
-                    request.sampling_params.presence_penalty,
-                    request.sampling_params.logits_bias.clone(),
+            let seq = handle_seq_error!(
+                Sequence::new_waiting(
+                    prompt.clone(),
+                    self.id,
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .expect("Time travel has occurred!")
+                        .as_millis(),
+                    num_hidden_layers,
+                    request.response.clone(),
+                    LogitsProcessor::new(
+                        SEED,
+                        request.sampling_params.temperature,
+                        sampling_method.clone(),
+                        request.sampling_params.top_n_logprobs,
+                        tokenizer.clone(),
+                        request.sampling_params.repeat_penalty,
+                        request.sampling_params.presence_penalty,
+                        request.sampling_params.logits_bias.clone(),
+                    ),
+                    stop_toks.clone(),
+                    request.sampling_params.max_len,
+                    request.return_logprobs,
+                    get_mut_arcmutex!(self.pipeline).is_xlora(),
+                    group.clone(),
+                    get_mut_arcmutex!(self.pipeline).device(),
                 ),
-                stop_toks.clone(),
-                request.sampling_params.max_len,
-                request.return_logprobs,
-                get_mut_arcmutex!(self.pipeline).is_xlora(),
-                group.clone(),
+                request.response
             );
             self.id += 1;
             self.scheduler.add_seq(seq);

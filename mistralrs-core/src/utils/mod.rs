@@ -28,6 +28,21 @@ macro_rules! handle_seq_error {
 }
 
 #[macro_export]
+macro_rules! handle_seq_error_unit_ok {
+    ($fallible:expr, $response:expr) => {
+        match $fallible {
+            Ok(v) => v,
+            Err(e) => {
+                use $crate::response::Response;
+                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
+                $response.send(Response::Error(e.into())).unwrap();
+                return Ok(());
+            }
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! handle_seq_error_stateaware {
     ($fallible:expr, $seq:expr) => {
         match $fallible {
