@@ -458,33 +458,35 @@ impl Engine {
         // Add sequences
         for _ in 0..request.sampling_params.n_choices {
             println!("Creating");
-            let seq = handle_seq_error!(
-                Sequence::new_waiting(
-                    prompt.clone(),
-                    self.id,
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .expect("Time travel has occurred!")
-                        .as_millis(),
-                    num_hidden_layers,
-                    request.response.clone(),
-                    LogitsProcessor::new(
-                        SEED,
-                        request.sampling_params.temperature,
-                        sampling_method.clone(),
-                        request.sampling_params.top_n_logprobs,
-                        tokenizer.clone(),
-                        request.sampling_params.repeat_penalty,
-                        request.sampling_params.presence_penalty,
-                        request.sampling_params.logits_bias.clone(),
-                    ),
-                    stop_toks.clone(),
-                    request.sampling_params.max_len,
-                    request.return_logprobs,
-                    get_mut_arcmutex!(self.pipeline).is_xlora(),
-                    group.clone(),
-                    get_mut_arcmutex!(self.pipeline).device(),
+            let seq = Sequence::new_waiting(
+                prompt.clone(),
+                self.id,
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("Time travel has occurred!")
+                    .as_millis(),
+                num_hidden_layers,
+                request.response.clone(),
+                LogitsProcessor::new(
+                    SEED,
+                    request.sampling_params.temperature,
+                    sampling_method.clone(),
+                    request.sampling_params.top_n_logprobs,
+                    tokenizer.clone(),
+                    request.sampling_params.repeat_penalty,
+                    request.sampling_params.presence_penalty,
+                    request.sampling_params.logits_bias.clone(),
                 ),
+                stop_toks.clone(),
+                request.sampling_params.max_len,
+                request.return_logprobs,
+                get_mut_arcmutex!(self.pipeline).is_xlora(),
+                group.clone(),
+                get_mut_arcmutex!(self.pipeline).device(),
+            );
+            println!("created id {}", self.id);
+            let seq = handle_seq_error!(
+                seq,
                 request.response
             );
             println!("created id {}", self.id);
