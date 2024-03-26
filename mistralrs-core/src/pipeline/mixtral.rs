@@ -383,14 +383,7 @@ impl Pipeline for MixtralPipeline {
             seqlen_offsets_full,
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full,
-        } = calculate_inputs(
-            input_toks,
-            is_prompt,
-            self.is_xlora(),
-            self.device(),
-            self.no_kv_cache,
-        )
-        .unwrap();
+        } = calculate_inputs(input_toks, is_prompt, self.is_xlora(), self.no_kv_cache).unwrap();
         let result = match self.model {
             Model::Normal(ref mut model) => {
                 model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)

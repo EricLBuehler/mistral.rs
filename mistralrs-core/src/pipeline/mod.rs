@@ -25,7 +25,7 @@ use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 
 use crate::{
-    deref_refcell, get_mut_arcmutex,
+    deref_mut_refcell, deref_refcell, get_mut_arcmutex,
     models::Cache,
     sequence::Sequence,
     utils::tokens::get_token,
@@ -203,26 +203,22 @@ struct InputMetadata {
     positions_kernel: Tensor, // [bs, seq len]
 }
 
-fn get_prompt_input(
-    input_toks: &[Rc<RefCell<Sequence>>],
-    device: &Device,
-) -> Result<InputMetadata> {
+fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>]) -> Result<InputMetadata> {
     // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
     let max_len = input_toks
         .iter()
         .map(|seq| deref_refcell!(seq).len())
         .max()
         .unwrap();
-    let padding_tok = 0;
     // Pad each sequence by the padding token to the max len.
     let mut seqs_tensors = Vec::new();
     let mut seqlen_offsets = Vec::new();
     let mut seqlen_offsets_usize = Vec::new();
     for seq in input_toks.iter() {
-        let mut ctxt = deref_refcell!(seq).get_toks();
+        let ctxt = deref_refcell!(seq).get_toks().clone();
         let len = deref_refcell!(seq).len();
-        seqlen_offsets.push(deref_refcell!(seq).get_position_scalar().clone());
-        seqlen_offsets_usize.push(deref_refcell!(seq).get_position_usize().clone());
+        seqlen_offsets.push(deref_mut_refcell!(seq).get_position_scalar().clone());
+        seqlen_offsets_usize.push(deref_mut_refcell!(seq).get_position_usize().clone());
 
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
         seqs_tensors.push(
@@ -243,11 +239,10 @@ fn get_prompt_input(
 
 fn get_completion_input(
     input_toks: &[Rc<RefCell<Sequence>>],
-    device: &Device,
     no_kv_cache: bool,
 ) -> Result<InputMetadata> {
     if no_kv_cache {
-        return get_prompt_input(input_toks, device);
+        return get_prompt_input(input_toks);
     }
     let mut seqs_tensors = Vec::new();
     let mut seqlen_offsets = Vec::new();
@@ -255,8 +250,8 @@ fn get_completion_input(
     for seq in input_toks.iter() {
         let start_pos = deref_refcell!(seq).len().saturating_sub(1);
         let ctxt = deref_refcell!(seq).get_toks().narrow(0, start_pos, 1)?;
-        seqlen_offsets.push(deref_refcell!(seq).get_position_scalar().clone());
-        seqlen_offsets_usize.push(deref_refcell!(seq).get_position_usize().clone());
+        seqlen_offsets.push(deref_mut_refcell!(seq).get_position_scalar().clone());
+        seqlen_offsets_usize.push(deref_mut_refcell!(seq).get_position_usize().clone());
 
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
         seqs_tensors.push(ctxt.unsqueeze(0).unwrap());
@@ -284,7 +279,6 @@ fn calculate_inputs(
     input_toks: Box<[Rc<RefCell<Sequence>>]>,
     is_prompt: bool,
     is_xlora: bool,
-    device: &Device,
     no_kv_cache: bool,
 ) -> Result<ModelInputs> {
     if is_xlora && !is_prompt {
@@ -292,12 +286,12 @@ fn calculate_inputs(
             input: input_ids_full,
             positions: seqlen_offsets_full,
             positions_kernel: seqlen_offsets_kernel_full,
-        } = get_prompt_input(&input_toks, device)?;
+        } = get_prompt_input(&input_toks)?;
         let InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_completion_input(&input_toks, device, no_kv_cache)?;
+        } = get_completion_input(&input_toks, no_kv_cache)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: Some(input_ids_full),
@@ -311,7 +305,7 @@ fn calculate_inputs(
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_prompt_input(&input_toks, device)?;
+        } = get_prompt_input(&input_toks)?;
         Ok(ModelInputs {
             input_ids: input_ids.clone(),
             input_ids_full: Some(input_ids),
@@ -325,7 +319,7 @@ fn calculate_inputs(
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_prompt_input(&input_toks, device)?;
+        } = get_prompt_input(&input_toks)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: None,
@@ -339,7 +333,7 @@ fn calculate_inputs(
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_completion_input(&input_toks, device, no_kv_cache)?;
+        } = get_completion_input(&input_toks, no_kv_cache)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: None,

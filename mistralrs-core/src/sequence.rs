@@ -167,7 +167,7 @@ impl Sequence {
     }
 
     pub fn add_token(&mut self, tok: Logprobs) -> Result<()> {
-        self.tokens = Tensor::cat(&[self.tokens, tok.token], 0)?;
+        self.tokens = Tensor::cat(&[&self.tokens, &tok.token], 0)?;
         self.logprobs.push(tok);
         Ok(())
     }

@@ -132,15 +132,15 @@ impl Engine {
         for (logits_per_seq, seq) in zip(logits_seq, seqs.iter()) {
             let sampled = get_mut_arcmutex!(self.pipeline).sample(logits_per_seq, seq.clone());
             let next_token = handle_seq_error_stateaware!(sampled, seq);
-            let next_token_id = next_token.token;
-            deref_mut_refcell!(seq).add_token(next_token);
+            let next_token_id = next_token.token.clone();
+            deref_mut_refcell!(seq).add_token(next_token).unwrap();
             let is_done = deref_refcell!(seq).is_done(
                 next_token_id,
-                eos_tok,
+                eos_tok.clone(),
                 get_mut_arcmutex!(self.pipeline).get_max_seq_len(),
             );
             if let Some(reason) = is_done {
-                self.finish_seq(seq, reason);
+                self.finish_seq(seq, reason).unwrap();
                 get_mut_arcmutex!(self.pipeline).reset_non_granular_state();
             }
         }
@@ -165,7 +165,7 @@ impl Engine {
                     .map(|x| TopLogprob {
                         token: x.token.to_scalar::<u32>().unwrap(),
                         logprob: x.logprob,
-                        bytes: x.bytes,
+                        bytes: x.bytes.clone(),
                     })
                     .collect::<Vec<_>>(),
             };
