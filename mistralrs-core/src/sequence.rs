@@ -202,7 +202,7 @@ impl Sequence {
             .expect("Time travel has occurred!")
             .as_millis();
 
-        deref_mut_refcell!(self.group).total_comple_time += now - self.prompt_timestamp.unwrap() - self.total_sampling_time;
+        deref_mut_refcell!(self.group).total_comple_time += now - self.prompt_timestamp.unwrap();// - self.total_sampling_time;
         deref_mut_refcell!(self.group).total_prompt_time +=
             self.prompt_timestamp.unwrap() - self.timestamp;
         deref_mut_refcell!(self.group).total_time += now - self.timestamp;
