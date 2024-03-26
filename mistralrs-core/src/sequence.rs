@@ -49,6 +49,7 @@ pub struct Sequence {
     pub prompt_timestamp: Option<u128>,
     group: Rc<RefCell<SequenceGroup>>,
     scaling_cache: Option<Tensor>,
+    pub total_sampling_time: u128,
 }
 
 impl Sequence {
@@ -89,6 +90,7 @@ impl Sequence {
             prompt_timestamp: None,
             group,
             scaling_cache: None,
+            total_sampling_time: 0,
         }
     }
 
@@ -207,6 +209,8 @@ impl Sequence {
 
         deref_mut_refcell!(self.group).total_prompt_toks += self.prompt_len;
         deref_mut_refcell!(self.group).total_toks += self.len();
+
+        deref_mut_refcell!(self.group).total_sampling_time += self.total_sampling_time;
     }
 
     pub fn get_group(&self) -> Ref<'_, SequenceGroup> {
@@ -222,6 +226,7 @@ pub struct SequenceGroup {
     pub total_prompt_time: u128,
     pub total_time: u128,
     pub total_comple_time: u128,
+    pub total_sampling_time: u128,
     choices: Vec<Choice>,
 }
 
@@ -236,6 +241,7 @@ impl SequenceGroup {
             total_prompt_time: 0,
             total_time: 0,
             total_comple_time: 0,
+            total_sampling_time: 0,
         }
     }
 
@@ -258,6 +264,8 @@ impl SequenceGroup {
                 * 1000.,
             avg_compl_tok_per_sec: ((self.total_toks - self.total_prompt_toks) as f32
                 / self.total_comple_time as f32)
+                * 1000.,
+            avg_sample_tok_per_sec: (self.total_toks as f32 / self.total_sampling_time as f32)
                 * 1000.,
         }
     }
