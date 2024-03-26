@@ -176,7 +176,7 @@ impl LayerWeights {
     fn forward_attn(
         &mut self,
         x: &Tensor,
-        mask: &Tensor,
+        mask: &Option<Tensor>,
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
@@ -222,8 +222,13 @@ impl LayerWeights {
         let v = self.repeat_kv(v)?;
 
         let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-        let mask = mask.broadcast_as(att.shape())?;
-        let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
+        let att = match mask {
+            None => att,
+            Some(mask) => {
+                let mask = mask.broadcast_as(att.shape())?;
+                masked_fill(&att, &mask, f32::NEG_INFINITY)?
+            }
+        };
         let att = candle_nn::ops::softmax_last_dim(&att)?;
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = att.matmul(&v.contiguous()?)?;
@@ -472,7 +477,11 @@ impl ModelWeights {
         start_offsets_kernel: Tensor,
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
-        let mask = self.mask(seq_len, x.device())?;
+        let mask = if seq_len == 1 {
+            None
+        } else {
+            Some(self.mask(seq_len, x.device())?)
+        };
         let _enter = self.span.enter();
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();
