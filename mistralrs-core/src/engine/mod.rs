@@ -66,7 +66,19 @@ impl Engine {
                 }
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
+                let start = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("Time travel has occurred!")
+                    .as_millis();
                 self.sample_seqs(&scheduled.completion, logits);
+                for seq in scheduled.completion.iter() {
+                    deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
+                    let end = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .expect("Time travel has occurred!")
+                        .as_millis();
+                    deref_mut_refcell!(seq).total_sampling_time += end-start;
+                }
                 if !self.no_kv_cache {
                     self.clone_out_cache(&scheduled.completion);
                 } else {
@@ -91,7 +103,19 @@ impl Engine {
                     deref_mut_refcell!(seq).prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
                     deref_mut_refcell!(seq).prompt_timestamp = Some(now);
                 }
+                let start = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("Time travel has occurred!")
+                    .as_millis();
                 self.sample_seqs(&scheduled.prompt, logits);
+                for seq in scheduled.prompt.iter() {
+                    deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
+                    let end = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .expect("Time travel has occurred!")
+                        .as_millis();
+                    deref_mut_refcell!(seq).total_sampling_time += end-start;
+                }
                 if !self.no_kv_cache {
                     self.clone_out_cache(&scheduled.prompt);
                 } else {

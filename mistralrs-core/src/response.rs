@@ -39,6 +39,7 @@ pub struct ChatCompletionUsage {
     pub avg_tok_per_sec: f32,
     pub avg_prompt_tok_per_sec: f32,
     pub avg_compl_tok_per_sec: f32,
+    pub avg_sample_tok_per_sec: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]
