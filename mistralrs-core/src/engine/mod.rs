@@ -57,8 +57,12 @@ impl Engine {
         loop {
             if let Ok(request) = self.rx.try_recv() {
                 self.add_request(request);
+            } else {
+                continue;
             }
+            println!("scheduling...");
             let scheduled = self.scheduler.schedule();
+            println!("scheduled");
 
             if scheduled.completion.len() > 0 {
                 // Run the completion seqs
