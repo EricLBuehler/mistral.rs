@@ -71,12 +71,11 @@ impl Engine {
                     .expect("Time travel has occurred!")
                     .as_millis();
                 self.sample_seqs(&scheduled.completion, logits);
+                let end = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("Time travel has occurred!")
+                    .as_millis();
                 for seq in scheduled.completion.iter() {
-                    deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
-                    let end = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .expect("Time travel has occurred!")
-                        .as_millis();
                     deref_mut_refcell!(seq).total_sampling_time += end-start;
                 }
                 if !self.no_kv_cache {
@@ -108,12 +107,11 @@ impl Engine {
                     .expect("Time travel has occurred!")
                     .as_millis();
                 self.sample_seqs(&scheduled.prompt, logits);
+                let end = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("Time travel has occurred!")
+                    .as_millis();
                 for seq in scheduled.prompt.iter() {
-                    deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
-                    let end = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .expect("Time travel has occurred!")
-                        .as_millis();
                     deref_mut_refcell!(seq).total_sampling_time += end-start;
                 }
                 if !self.no_kv_cache {
