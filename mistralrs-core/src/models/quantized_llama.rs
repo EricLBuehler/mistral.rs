@@ -508,7 +508,7 @@ impl ModelWeights {
             let x = (x + residual)?;
             layer_in = x
         }
-        //Sequence::copy(Tensor::new(0u32, &self.device).unwrap());
+        Sequence::copy(Tensor::new(0u32, &self.device).unwrap());
         //let x = self.norm.forward(&layer_in)?;
         let x = layer_in;
         let x = x.i((.., seq_len - 1, ..))?;
