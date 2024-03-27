@@ -263,6 +263,7 @@ fn get_completion_input(
     for seq in input_toks.iter() {
         let start_pos = deref_refcell!(seq).len().saturating_sub(1);
         let ctxt = deref_refcell!(seq).get_toks().narrow(0, start_pos, 1)?;
+        dbg!(&ctxt);
 
         seqlen_offsets.push(
             deref_mut_refcell!(seq)
@@ -272,6 +273,7 @@ fn get_completion_input(
                 .unwrap(),
         );
         seqlen_offsets_usize.push(deref_mut_refcell!(seq).get_position_usize().clone());
+        dbg!(&seqlen_offsets);
         *deref_mut_refcell!(seq).get_position_scalar() = deref_mut_refcell!(seq)
             .get_position_scalar()
             .add(incrementor)?;
