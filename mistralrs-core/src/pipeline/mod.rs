@@ -251,12 +251,13 @@ fn get_completion_input(
     for seq in input_toks.iter() {
         let start_pos = deref_refcell!(seq).len().saturating_sub(1);
         let ctxt = deref_refcell!(seq).get_toks().narrow(0, start_pos, 1)?;
-        seqlen_offsets.push(deref_mut_refcell!(seq).get_position_scalar().clone());
-        seqlen_offsets_usize.push(deref_mut_refcell!(seq).get_position_usize().clone());
+        
         *deref_mut_refcell!(seq).get_position_scalar() = deref_mut_refcell!(seq)
             .get_position_scalar()
             .add(incrementor)?;
         *deref_mut_refcell!(seq).get_position_usize() += 1;
+        seqlen_offsets.push(deref_mut_refcell!(seq).get_position_scalar().clone());
+        seqlen_offsets_usize.push(deref_mut_refcell!(seq).get_position_usize().clone());
 
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
         seqs_tensors.push(ctxt.unsqueeze(0).unwrap());
