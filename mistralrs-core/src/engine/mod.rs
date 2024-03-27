@@ -138,15 +138,21 @@ impl Engine {
         debug_assert_eq!(logits_seq.len(), seqs_len);
         let eos_tok = get_mut_arcmutex!(self.pipeline).eos_tok();
         for (logits_per_seq, seq) in zip(logits_seq, seqs.iter()) {
+            let before = Instant::now();
             let sampled = get_mut_arcmutex!(self.pipeline).sample(logits_per_seq, seq.clone());
+            println!("Sampled run = {}", before.elapsed().as_millis());
             let next_token = handle_seq_error_stateaware!(sampled, seq);
             let next_token_id = next_token.token.clone();
+            let before = Instant::now();
             deref_mut_refcell!(seq).add_token(next_token).unwrap();
+            println!("add token = {}", before.elapsed().as_millis());
+            let before = Instant::now();
             let is_done = deref_refcell!(seq).is_done(
                 next_token_id,
                 eos_tok.clone(),
                 get_mut_arcmutex!(self.pipeline).get_max_seq_len(),
             );
+            println!("Is done = {}", before.elapsed().as_millis());
             if let Some(reason) = is_done {
                 self.finish_seq(seq, reason).unwrap();
                 get_mut_arcmutex!(self.pipeline).reset_non_granular_state();
