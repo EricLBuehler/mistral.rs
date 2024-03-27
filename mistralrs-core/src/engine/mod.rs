@@ -63,7 +63,9 @@ impl Engine {
             if scheduled.completion.len() > 0 {
                 // Run the completion seqs
                 if !self.no_kv_cache {
+                    let before = Instant::now();
                     self.clone_in_cache(&scheduled.completion);
+                    println!("Clone in = {}", before.elapsed().as_millis());
                 }
                 let before = Instant::now();
                 let logits =
@@ -73,7 +75,9 @@ impl Engine {
                     .duration_since(UNIX_EPOCH)
                     .expect("Time travel has occurred!")
                     .as_millis();
+                let before = Instant::now();
                 self.sample_seqs(&scheduled.completion, logits);
+                println!("Sample = {}", before.elapsed().as_millis());
                 let end = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .expect("Time travel has occurred!")
@@ -82,7 +86,9 @@ impl Engine {
                     deref_mut_refcell!(seq).total_sampling_time += end - start;
                 }
                 if !self.no_kv_cache {
+                    let before = Instant::now();
                     self.clone_out_cache(&scheduled.completion);
+                    println!("Clone out = {}", before.elapsed().as_millis());
                 } else {
                     self.set_none_cache();
                 }
