@@ -265,6 +265,7 @@ pub struct ModelWeights {
     span_output: tracing::Span,
     pub device: Device,
     pub cache: Cache,
+    x: Tensor,
 }
 
 impl ModelWeights {
@@ -332,6 +333,7 @@ impl ModelWeights {
             span_output,
             device: ct.device.clone(),
             cache: Cache::new(ct.hparams.n_layer as usize, false),
+            x: Tensor::new(0u32, &ct.device).unwrap(),
         })
     }
 
@@ -456,6 +458,7 @@ impl ModelWeights {
             span_output,
             device: device.clone(),
             cache: Cache::new(block_count, false),
+            x: Tensor::new(0u32, &device).unwrap(),
         })
     }
 
@@ -508,7 +511,7 @@ impl ModelWeights {
             let x = (x + residual)?;
             layer_in = x
         }
-        //Sequence::copy(Tensor::new(0u32, &self.device).unwrap());
+        Sequence::copy(self.x.clone());
         let x = self.norm.forward(&layer_in)?;
         let x = x.i((.., seq_len - 1, ..))?;
         let _enter = self.span_output.enter();
