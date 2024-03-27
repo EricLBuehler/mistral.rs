@@ -497,7 +497,6 @@ impl ModelWeights {
         for (i, layer) in self.layers.iter_mut().enumerate() {
             let x = layer_in;
             let residual = &x;
-            Sequence::copy(self.x.clone());
             let x = layer.attention_norm.forward(&x)?;
             let attn = layer.forward_attn(
                 &x,
