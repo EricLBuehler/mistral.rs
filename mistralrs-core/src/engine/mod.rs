@@ -61,6 +61,7 @@ impl Engine {
             let scheduled = self.scheduler.schedule();
 
             if scheduled.completion.len() > 0 {
+                Sequence::copy(get_mut_arcmutex!(self.pipeline).eos_tok());
                 // Run the completion seqs
                 if !self.no_kv_cache {
                     let before = Instant::now();
