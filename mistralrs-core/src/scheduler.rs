@@ -75,7 +75,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             .cloned()
             .collect::<Vec<_>>();
 
-        if self.waiting.iter().count() == 0 && running.is_empty() {
+        /*if self.waiting.iter().count() == 0 && running.is_empty() {
             return SchedulerOutput {
                 prompt: vec![].into(),
                 completion: vec![].into(),
@@ -97,7 +97,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
                 prompt: vec![].into(),
                 completion: running.into(),
             };
-        }
+        }*/
 
         // Sort the waiting seqs
         self.waiting.sort_ascending_ids();
