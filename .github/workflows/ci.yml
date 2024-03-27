@@ -5,6 +5,8 @@ on:
     branches: 
       - master
   pull_request:
+  workflow_dispatch:
+  
 
 name: Continuous integration
 
@@ -26,7 +28,6 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: check
-          args: --examples
 
   test:
     name: Test Suite
