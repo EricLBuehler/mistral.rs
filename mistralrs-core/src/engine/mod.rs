@@ -57,8 +57,6 @@ impl Engine {
         loop {
             if let Ok(request) = self.rx.try_recv() {
                 self.add_request(request);
-            } else {
-                continue;
             }
             let scheduled = self.scheduler.schedule();
 
