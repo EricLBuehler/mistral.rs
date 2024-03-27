@@ -494,6 +494,7 @@ impl ModelWeights {
         Sequence::copy(self.x.clone());
         let mut cache = self.cache.lock();
         Sequence::copy(self.x.clone());
+        Sequence::copy(self.x.clone());
         for (i, layer) in self.layers.iter_mut().enumerate() {
             let x = layer_in;
             let residual = &x;
