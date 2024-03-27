@@ -489,11 +489,8 @@ impl ModelWeights {
             Some(self.mask(seq_len, x.device())?)
         };
         let _enter = self.span.enter();
-        Sequence::copy(self.x.clone());
         let mut layer_in = self.tok_embeddings.forward(x)?;
-        Sequence::copy(self.x.clone());
         let mut cache = self.cache.lock();
-        Sequence::copy(self.x.clone());
         for (i, layer) in self.layers.iter_mut().enumerate() {
             Sequence::copy(self.x.clone());
             let x = layer_in;
