@@ -79,6 +79,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             let seq = self.waiting.next().unwrap();
             deref_mut_refcell!(seq).set_state(SequenceState::RunningPrompt);
             self.running.push(seq);
+            self.waiting = Backer::new();
             return SchedulerOutput {
                 prompt: self.running.clone().into(),
                 completion: vec![].into(),
