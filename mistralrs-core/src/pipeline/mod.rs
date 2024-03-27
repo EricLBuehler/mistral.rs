@@ -267,7 +267,7 @@ fn get_completion_input(
     let mut seqlen_offsets_usize = Vec::new();
     for seq in input_toks.iter() {
         let start_pos = deref_refcell!(seq).len().saturating_sub(1);
-        let ctxt = deref_refcell!(seq).get_toks().narrow(0, start_pos, 1).unwrap();
+        let ctxt = deref_refcell!(seq).get_toks().narrow(0, start_pos, 1)?;
 
         seqlen_offsets.push(
             deref_mut_refcell!(seq)

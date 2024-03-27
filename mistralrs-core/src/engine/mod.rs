@@ -126,6 +126,7 @@ impl Engine {
                 } else {
                     self.set_none_cache();
                 }
+                println!("done with prompt sample");
             }
         }
     }
