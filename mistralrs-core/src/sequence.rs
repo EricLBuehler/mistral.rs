@@ -180,6 +180,7 @@ impl Sequence {
         self.state.set(state);
     }
 
+    #[inline(never)]
     fn copy(eos_tok: Tensor) {
         let before = Instant::now();
         let _eos_tok = eos_tok.to_scalar::<u32>().unwrap();
