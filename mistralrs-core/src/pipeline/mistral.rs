@@ -451,12 +451,15 @@ impl Pipeline for MistralPipeline {
             .unwrap()
             .to_dtype(DType::F32)
             .unwrap();
-        let start_at = deref_refcell!(seq)
-            .len()
-            .saturating_sub(self.config.repeat_last_n);
-        let ctxt = deref_refcell!(seq)
-            .get_toks()
-            .narrow(0, start_at, self.config.repeat_last_n)?;
+        let len = deref_refcell!(seq).len();
+        let start_at = len.saturating_sub(self.config.repeat_last_n);
+        let ctxt = if len >= self.config.repeat_last_n {
+            deref_refcell!(seq)
+                .get_toks()
+                .narrow(0, start_at, self.config.repeat_last_n)?
+        } else {
+            deref_refcell!(seq).get_toks().clone()
+        };
 
         Ok(deref_mut_refcell!(seq)
             .logits_processor()

@@ -217,23 +217,18 @@ fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>]) -> Result<InputMetadat
     for seq in input_toks.iter() {
         let ctxt = deref_refcell!(seq).get_toks().clone();
         let len = deref_refcell!(seq).len();
-        let dev = deref_mut_refcell!(seq).get_position_scalar().device().clone();
+        let dev = deref_mut_refcell!(seq)
+            .get_position_scalar()
+            .device()
+            .clone();
         seqlen_offsets.push(
-            Tensor::arange(
-                0i64,
-                max_len as i64,
-                &dev,
-            )
-            .unwrap()
-            .unsqueeze(0)
-            .unwrap(),
+            Tensor::arange(0i64, max_len as i64, &dev)
+                .unwrap()
+                .unsqueeze(0)
+                .unwrap(),
         );
         seqlen_offsets_usize.push(deref_mut_refcell!(seq).get_position_usize().clone());
-        *deref_mut_refcell!(seq).get_position_scalar() = Tensor::new(
-            len as i64,
-            &dev,
-        )
-        .unwrap();
+        *deref_mut_refcell!(seq).get_position_scalar() = Tensor::new(len as i64, &dev).unwrap();
         *deref_mut_refcell!(seq).get_position_usize() = len;
 
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
