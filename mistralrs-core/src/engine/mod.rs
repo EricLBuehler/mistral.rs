@@ -60,19 +60,15 @@ impl Engine {
             } else {
                 continue;
             }
-            println!("scheduling...");
             let scheduled = self.scheduler.schedule();
-            println!("scheduled");
 
             if scheduled.completion.len() > 0 {
                 // Run the completion seqs
                 if !self.no_kv_cache {
                     self.clone_in_cache(&scheduled.completion);
                 }
-                println!("starting comple");
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
-                println!("done with comple");
                 let start = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .expect("Time travel has occurred!")
@@ -95,10 +91,8 @@ impl Engine {
             if scheduled.prompt.len() > 0 {
                 // Run the prompt seqs
                 self.set_none_cache();
-                println!("starting prompt");
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.prompt.clone(), true);
-                println!("done with prompt");
                 for seq in scheduled.prompt.iter() {
                     deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
                     let now = SystemTime::now()
@@ -458,7 +452,6 @@ impl Engine {
         let device = get_mut_arcmutex!(self.pipeline).device().clone();
         // Add sequences
         for _ in 0..request.sampling_params.n_choices {
-            println!("Creating");
             let seq = Sequence::new_waiting(
                 prompt.clone(),
                 self.id,
@@ -485,12 +478,10 @@ impl Engine {
                 group.clone(),
                 &device,
             );
-            println!("created id {}", self.id);
             let seq = handle_seq_error!(
                 seq,
                 request.response
             );
-            println!("created id {}", self.id);
             self.id += 1;
             self.scheduler.add_seq(seq);
         }
