@@ -61,15 +61,12 @@ impl Engine {
             let scheduled = self.scheduler.schedule();
 
             if scheduled.completion.len() > 0 {
-                println!("cloning in comple");
                 // Run the completion seqs
                 if !self.no_kv_cache {
                     self.clone_in_cache(&scheduled.completion);
                 }
-                println!("starting comple");
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
-                println!("done with comple");
                 let start = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .expect("Time travel has occurred!")
@@ -92,10 +89,8 @@ impl Engine {
             if scheduled.prompt.len() > 0 {
                 // Run the prompt seqs
                 self.set_none_cache();
-                println!("starting prompt");
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.prompt.clone(), true);
-                println!("done with prompt");
                 for seq in scheduled.prompt.iter() {
                     deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
                     let now = SystemTime::now()
@@ -125,7 +120,6 @@ impl Engine {
                 } else {
                     self.set_none_cache();
                 }
-                println!("done with prompt sample");
             }
         }
     }

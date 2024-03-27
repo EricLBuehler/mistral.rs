@@ -256,14 +256,12 @@ fn get_completion_input(
     if no_kv_cache {
         return get_prompt_input(input_toks);
     }
-    println!("making comple input");
     let mut seqs_tensors = Vec::new();
     let mut seqlen_offsets = Vec::new();
     let mut seqlen_offsets_usize = Vec::new();
     for seq in input_toks.iter() {
         let start_pos = deref_refcell!(seq).len().saturating_sub(1);
         let ctxt = deref_refcell!(seq).get_toks().narrow(0, start_pos, 1)?;
-        dbg!(&ctxt);
 
         seqlen_offsets.push(
             deref_mut_refcell!(seq)
@@ -273,7 +271,6 @@ fn get_completion_input(
                 .unwrap(),
         );
         seqlen_offsets_usize.push(deref_mut_refcell!(seq).get_position_usize().clone());
-        dbg!(&seqlen_offsets);
         let new_scalar = deref_mut_refcell!(seq)
             .get_position_scalar()
             .add(incrementor)?;
@@ -285,7 +282,6 @@ fn get_completion_input(
     }
 
     let positions_kernel = Tensor::cat(&seqlen_offsets, 0)?;
-    dbg!(&positions_kernel);
     // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
     Ok(InputMetadata {
         input: Tensor::cat(&seqs_tensors, 0).unwrap(),

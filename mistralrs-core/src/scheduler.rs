@@ -67,7 +67,15 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
 
     /// Schedule all sequences based on their state and the available space.
     pub fn schedule(&mut self) -> SchedulerOutput {
-        if self.waiting.iter().count() == 1 && self.running.is_empty() {
+        // Filter out all done sequences
+        let running = self.running.clone();
+        let mut running = running
+            .iter()
+            .filter(|seq| deref_refcell!(seq).is_running())
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if self.waiting.iter().count() == 1 && running.is_empty() {
             let seq = self.waiting.next().unwrap();
             deref_mut_refcell!(seq).set_state(SequenceState::RunningPrompt);
             self.running.push(seq);
@@ -76,19 +84,12 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
                 completion: vec![].into(),
             };
         }
-        if self.running.len() == 1 && self.waiting.iter().count() == 0 {
+        if running.len() == 1 && self.waiting.iter().count() == 0 {
             return SchedulerOutput {
                 prompt: vec![].into(),
-                completion: self.running.clone().into(),
+                completion: running.clone().into(),
             };
         }
-        // Filter out all done sequences
-        let running = self.running.clone();
-        let mut running = running
-            .iter()
-            .filter(|seq| deref_refcell!(seq).is_running())
-            .cloned()
-            .collect::<Vec<_>>();
 
         // Sort the waiting seqs
         self.waiting.sort_ascending_ids();
