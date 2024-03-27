@@ -217,11 +217,12 @@ fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>]) -> Result<InputMetadat
     for seq in input_toks.iter() {
         let ctxt = deref_refcell!(seq).get_toks().clone();
         let len = deref_refcell!(seq).len();
+        let dev = deref_mut_refcell!(seq).get_position_scalar().device().clone();
         seqlen_offsets.push(
             Tensor::arange(
                 0i64,
                 max_len as i64,
-                deref_mut_refcell!(seq).get_position_scalar().device(),
+                &dev,
             )
             .unwrap()
             .unsqueeze(0)
@@ -230,7 +231,7 @@ fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>]) -> Result<InputMetadat
         seqlen_offsets_usize.push(deref_mut_refcell!(seq).get_position_usize().clone());
         *deref_mut_refcell!(seq).get_position_scalar() = Tensor::new(
             len as i64,
-            deref_mut_refcell!(seq).get_position_scalar().device(),
+            &dev,
         )
         .unwrap();
         *deref_mut_refcell!(seq).get_position_usize() = len;
