@@ -69,6 +69,7 @@ impl Engine {
                 }
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
+                println!("done with comple");
                 let start = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .expect("Time travel has occurred!")
@@ -93,6 +94,7 @@ impl Engine {
                 self.set_none_cache();
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.prompt.clone(), true);
+                println!("done with prompt");
                 for seq in scheduled.prompt.iter() {
                     deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
                     let now = SystemTime::now()
