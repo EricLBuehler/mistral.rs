@@ -85,9 +85,10 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             };
         }
         if running.len() == 1 && self.waiting.iter().count() == 0 {
+            self.running = running.clone();
             return SchedulerOutput {
                 prompt: vec![].into(),
-                completion: running.clone().into(),
+                completion: running.into(),
             };
         }
 
