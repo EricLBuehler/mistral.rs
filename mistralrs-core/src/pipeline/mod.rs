@@ -217,8 +217,23 @@ fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>]) -> Result<InputMetadat
     for seq in input_toks.iter() {
         let ctxt = deref_refcell!(seq).get_toks().clone();
         let len = deref_refcell!(seq).len();
-        seqlen_offsets.push(Tensor::arange(0i64, max_len as i64, deref_mut_refcell!(seq).get_position_scalar().device()).unwrap().unsqueeze(0).unwrap());
+        seqlen_offsets.push(
+            Tensor::arange(
+                0i64,
+                max_len as i64,
+                deref_mut_refcell!(seq).get_position_scalar().device(),
+            )
+            .unwrap()
+            .unsqueeze(0)
+            .unwrap(),
+        );
         seqlen_offsets_usize.push(deref_mut_refcell!(seq).get_position_usize().clone());
+        *deref_mut_refcell!(seq).get_position_scalar() = Tensor::new(
+            len as i64,
+            deref_mut_refcell!(seq).get_position_scalar().device(),
+        )
+        .unwrap();
+        *deref_mut_refcell!(seq).get_position_usize() = len;
 
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
         seqs_tensors.push(
@@ -256,7 +271,13 @@ fn get_completion_input(
             .get_position_scalar()
             .add(incrementor)?;
         *deref_mut_refcell!(seq).get_position_usize() += 1;
-        seqlen_offsets.push(deref_mut_refcell!(seq).get_position_scalar().clone());
+        seqlen_offsets.push(
+            deref_mut_refcell!(seq)
+                .get_position_scalar()
+                .clone()
+                .unsqueeze(0)
+                .unwrap(),
+        );
         seqlen_offsets_usize.push(deref_mut_refcell!(seq).get_position_usize().clone());
 
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
