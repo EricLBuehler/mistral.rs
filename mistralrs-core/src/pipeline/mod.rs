@@ -244,6 +244,7 @@ fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>]) -> Result<InputMetadat
     }
 
     let positions_kernel = Tensor::cat(&seqlen_offsets, 0)?;
+    dbg!(&seqlen_offsets);
     // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
     Ok(InputMetadata {
         input: Tensor::cat(&seqs_tensors, 0).unwrap(),
