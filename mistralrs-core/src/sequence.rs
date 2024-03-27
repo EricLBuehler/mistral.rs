@@ -2,7 +2,7 @@ use std::{
     cell::{Cell, Ref, RefCell},
     rc::Rc,
     sync::mpsc::Sender,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use candle_core::{Device, IntDType, Result, Tensor};
@@ -187,15 +187,16 @@ impl Sequence {
         max_model_len: usize,
     ) -> Option<StopReason> {
         // TODO(EricLBuehler): Is there a way to avoid this copy?
-        if tok
-            .eq(&eos_tok)
-            .unwrap()
-            .to_scalar::<u8>()
-            .unwrap()
-            .is_true()
+        let before = Instant::now();
+        let tok = tok.to_scalar::<u8>().unwrap();
+        println!("Token = {}", before.elapsed().as_millis());
+        let before = Instant::now();
+        let eos_tok = eos_tok.to_scalar::<u8>().unwrap();
+        println!("Token = {}", before.elapsed().as_millis());
+        if tok == eos_tok
         {
             Some(StopReason::Eos)
-        } else if self.stop_tokens.iter().any(|stop_t| {
+        }/*else if self.stop_tokens.iter().any(|stop_t| {
             stop_t
                 .eq(&tok)
                 .unwrap()
@@ -204,7 +205,7 @@ impl Sequence {
                 .is_true()
         }) {
             Some(StopReason::StopTok(tok.to_scalar::<u32>().unwrap()))
-        } else if self.max_len.is_some()
+        } */else if self.max_len.is_some()
             && self.len().saturating_sub(self.prompt_len) == self.max_len.unwrap()
         {
             // add_token was already called
