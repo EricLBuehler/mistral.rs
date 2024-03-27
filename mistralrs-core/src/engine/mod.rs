@@ -67,8 +67,8 @@ impl Engine {
                     self.clone_in_cache(&scheduled.completion);
                     println!("Clone in = {}", before.elapsed().as_millis());
                 }
-                let before = Instant::now();
                 Sequence::copy(get_mut_arcmutex!(self.pipeline).eos_tok());
+                let before = Instant::now();
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
                 println!("Comple = {}", before.elapsed().as_millis());
