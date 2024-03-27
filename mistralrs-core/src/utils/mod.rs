@@ -19,6 +19,7 @@ macro_rules! handle_seq_error {
             Ok(v) => v,
             Err(e) => {
                 use $crate::response::Response;
+                panic!("you raised an error!!");
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                 $response.send(Response::Error(e.into())).unwrap();
                 return;
