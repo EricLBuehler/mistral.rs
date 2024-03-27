@@ -296,6 +296,7 @@ impl SequenceGroup {
     }
 
     pub fn get_usage(&self) -> ChatCompletionUsage {
+        dbg!(self.total_toks as f32 / self.total_sampling_time as f32);
         #[allow(clippy::cast_precision_loss)]
         ChatCompletionUsage {
             completion_tokens: self.total_toks - self.total_prompt_toks,
