@@ -180,6 +180,12 @@ impl Sequence {
         self.state.set(state);
     }
 
+    fn copy(eos_tok: Tensor) {
+        let before = Instant::now();
+        let _eos_tok = eos_tok.to_scalar::<u32>().unwrap();
+        println!("eos Token = {}", before.elapsed().as_millis());
+    }
+
     pub fn is_done(
         &self,
         tok: Tensor,
@@ -187,19 +193,16 @@ impl Sequence {
         max_model_len: usize,
     ) -> Option<StopReason> {
         // TODO(EricLBuehler): Is there a way to avoid this copy?
-        let before = Instant::now();
-        let _eos_tok = eos_tok.to_scalar::<u32>().unwrap();
-        println!("eos Token = {}", before.elapsed().as_millis());
-        let before = Instant::now();
-        let tok = tok.to_scalar::<u32>().unwrap();
-        println!("Token = {}", before.elapsed().as_millis());
-        let before = Instant::now();
-        let eos_tok = eos_tok.to_scalar::<u32>().unwrap();
-        println!("eos Token = {}", before.elapsed().as_millis());
-        if tok == eos_tok
+        Self::copy(eos_tok.clone());
+        if eos_tok
+            .eq(&tok)
+            .unwrap()
+            .to_scalar::<u8>()
+            .unwrap()
+            .is_true()
         {
             Some(StopReason::Eos)
-        }/*else if self.stop_tokens.iter().any(|stop_t| {
+        } else if self.stop_tokens.iter().any(|stop_t| {
             stop_t
                 .eq(&tok)
                 .unwrap()
@@ -208,7 +211,7 @@ impl Sequence {
                 .is_true()
         }) {
             Some(StopReason::StopTok(tok.to_scalar::<u32>().unwrap()))
-        } */else if self.max_len.is_some()
+        } else if self.max_len.is_some()
             && self.len().saturating_sub(self.prompt_len) == self.max_len.unwrap()
         {
             // add_token was already called
