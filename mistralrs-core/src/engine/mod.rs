@@ -92,6 +92,7 @@ impl Engine {
                 } else {
                     self.set_none_cache();
                 }
+                Sequence::copy(get_mut_arcmutex!(self.pipeline).eos_tok());
                 println!();
                 println!();
             }
@@ -132,6 +133,7 @@ impl Engine {
                 } else {
                     self.set_none_cache();
                 }
+                Sequence::copy(get_mut_arcmutex!(self.pipeline).eos_tok());
             }
         }
     }

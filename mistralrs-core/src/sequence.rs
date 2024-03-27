@@ -181,7 +181,7 @@ impl Sequence {
     }
 
     #[inline(never)]
-    fn copy(eos_tok: Tensor) {
+    pub fn copy(eos_tok: Tensor) {
         let before = Instant::now();
         let _eos_tok = eos_tok.to_scalar::<u32>().unwrap();
         println!("eos Token = {}", before.elapsed().as_millis());
@@ -194,7 +194,6 @@ impl Sequence {
         max_model_len: usize,
     ) -> Option<StopReason> {
         // TODO(EricLBuehler): Is there a way to avoid this copy?
-        Self::copy(eos_tok.clone());
         if eos_tok
             .eq(&tok)
             .unwrap()
