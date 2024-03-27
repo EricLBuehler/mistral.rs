@@ -184,7 +184,7 @@ impl Sequence {
     pub fn copy(eos_tok: Tensor) {
         let before = Instant::now();
         let _eos_tok = eos_tok.to_scalar::<u32>().unwrap();
-        //println!("eos Token = {}", before.elapsed().as_millis());
+        println!("eos Token = {}", before.elapsed().as_millis());
     }
 
     pub fn is_done(
