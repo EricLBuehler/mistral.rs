@@ -194,7 +194,7 @@ impl Sequence {
         max_model_len: usize,
     ) -> Option<StopReason> {
         // TODO(EricLBuehler): Is there a way to avoid this copy?
-        if eos_tok
+        /*if eos_tok
             .eq(&tok)
             .unwrap()
             .to_scalar::<u8>()
@@ -211,7 +211,7 @@ impl Sequence {
                 .is_true()
         }) {
             Some(StopReason::StopTok(tok.to_scalar::<u32>().unwrap()))
-        } else if self.max_len.is_some()
+        } else */if self.max_len.is_some()
             && self.len().saturating_sub(self.prompt_len) == self.max_len.unwrap()
         {
             // add_token was already called
