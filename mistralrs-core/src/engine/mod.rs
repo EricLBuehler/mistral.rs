@@ -68,9 +68,11 @@ impl Engine {
                     println!("Clone in = {}", before.elapsed().as_millis());
                 }
                 let before = Instant::now();
+                Sequence::copy(get_mut_arcmutex!(self.pipeline).eos_tok());
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
                 println!("Comple = {}", before.elapsed().as_millis());
+                Sequence::copy(get_mut_arcmutex!(self.pipeline).eos_tok());
                 let start = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .expect("Time travel has occurred!")
