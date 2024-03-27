@@ -282,6 +282,7 @@ fn get_completion_input(
     }
 
     let positions_kernel = Tensor::cat(&seqlen_offsets, 0)?;
+    dbg!(&seqs_tensors);
     // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
     Ok(InputMetadata {
         input: Tensor::cat(&seqs_tensors, 0).unwrap(),
