@@ -61,19 +61,16 @@ impl Engine {
             let scheduled = self.scheduler.schedule();
 
             if scheduled.completion.len() > 0 {
-                Sequence::copy(get_mut_arcmutex!(self.pipeline).eos_tok());
                 // Run the completion seqs
                 if !self.no_kv_cache {
                     let before = Instant::now();
                     self.clone_in_cache(&scheduled.completion);
                     println!("Clone in = {}", before.elapsed().as_millis());
                 }
-                Sequence::copy(get_mut_arcmutex!(self.pipeline).eos_tok());
                 let before = Instant::now();
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
                 println!("Comple = {}", before.elapsed().as_millis());
-                Sequence::copy(get_mut_arcmutex!(self.pipeline).eos_tok());
                 let start = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .expect("Time travel has occurred!")
@@ -143,14 +140,11 @@ impl Engine {
 
     fn sample_seqs(&self, seqs: &[Rc<RefCell<Sequence>>], logits: Tensor) {
         let seqs_len = seqs.len();
-        Sequence::copy(get_mut_arcmutex!(self.pipeline).eos_tok());
         let logits_seq = logits.chunk(seqs_len, 0).unwrap();
-        Sequence::copy(get_mut_arcmutex!(self.pipeline).eos_tok());
         debug_assert_eq!(logits_seq.len(), seqs_len);
         let eos_tok = get_mut_arcmutex!(self.pipeline).eos_tok();
         for (logits_per_seq, seq) in zip(logits_seq, seqs.iter()) {
             let before = Instant::now();
-            Sequence::copy(get_mut_arcmutex!(self.pipeline).eos_tok());
             let sampled = get_mut_arcmutex!(self.pipeline).sample(logits_per_seq, seq.clone());
             println!("Sampled run = {}", before.elapsed().as_millis());
             let next_token = handle_seq_error_stateaware!(sampled, seq);
