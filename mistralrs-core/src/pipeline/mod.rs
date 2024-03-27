@@ -228,6 +228,8 @@ fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>]) -> Result<InputMetadat
         );
     }
 
+    dbg!(&seqlen_offsets_usize);
+
     let positions_kernel = Tensor::cat(&seqlen_offsets, 0)?;
     // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
     Ok(InputMetadata {
@@ -251,7 +253,7 @@ fn get_completion_input(
     for seq in input_toks.iter() {
         let start_pos = deref_refcell!(seq).len().saturating_sub(1);
         let ctxt = deref_refcell!(seq).get_toks().narrow(0, start_pos, 1)?;
-        
+
         *deref_mut_refcell!(seq).get_position_scalar() = deref_mut_refcell!(seq)
             .get_position_scalar()
             .add(incrementor)?;
@@ -262,6 +264,7 @@ fn get_completion_input(
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
         seqs_tensors.push(ctxt.unsqueeze(0).unwrap());
     }
+    dbg!(&seqlen_offsets_usize);
 
     let positions_kernel = Tensor::cat(&seqlen_offsets, 0)?;
     // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
