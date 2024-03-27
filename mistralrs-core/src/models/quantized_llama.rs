@@ -487,7 +487,6 @@ impl ModelWeights {
         let _enter = self.span.enter();
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();
-        Sequence::copy(Tensor::new(0u32, &self.device).unwrap());
         for (i, layer) in self.layers.iter_mut().enumerate() {
             let x = layer_in;
             let residual = &x;
@@ -509,6 +508,7 @@ impl ModelWeights {
             let x = (x + residual)?;
             layer_in = x
         }
+        Sequence::copy(Tensor::new(0u32, &self.device).unwrap());
         let x = self.norm.forward(&layer_in)?;
         let x = x.i((.., seq_len - 1, ..))?;
         let _enter = self.span_output.enter();
