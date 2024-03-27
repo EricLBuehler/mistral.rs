@@ -274,9 +274,10 @@ fn get_completion_input(
         );
         seqlen_offsets_usize.push(deref_mut_refcell!(seq).get_position_usize().clone());
         dbg!(&seqlen_offsets);
-        *deref_mut_refcell!(seq).get_position_scalar() = deref_mut_refcell!(seq)
+        let new_scalar = deref_mut_refcell!(seq)
             .get_position_scalar()
             .add(incrementor)?;
+        *deref_mut_refcell!(seq).get_position_scalar() = new_scalar;
         *deref_mut_refcell!(seq).get_position_usize() += 1;
 
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
