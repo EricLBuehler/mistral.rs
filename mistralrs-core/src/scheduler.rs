@@ -75,6 +75,12 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             .cloned()
             .collect::<Vec<_>>();
 
+        if self.waiting.iter().count() == 0 && running.is_empty() {
+            return SchedulerOutput {
+                prompt: vec![].into(),
+                completion: vec![].into(),
+            };
+        }
         if self.waiting.iter().count() == 1 && running.is_empty() {
             let seq = self.waiting.next().unwrap();
             deref_mut_refcell!(seq).set_state(SequenceState::RunningPrompt);
