@@ -514,7 +514,8 @@ impl ModelWeights {
             let x = layer.ffn_norm.forward(&x)?;
             let x = layer.mlp_or_moe.forward(&x)?;
             let x = (x + residual)?;
-            layer_in = x
+            layer_in = x;
+            break;
         }
         Sequence::copy(self.x.clone());
         let x = self.norm.forward(&layer_in)?;
