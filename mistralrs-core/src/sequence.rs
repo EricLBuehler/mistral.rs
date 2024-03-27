@@ -252,7 +252,7 @@ impl Sequence {
 
         deref_mut_refcell!(self.group).total_prompt_toks += self.prompt_len;
         deref_mut_refcell!(self.group).total_toks += self.len();
-        dbg!(self.total_sampling_time);
+        deref_mut_refcell!(self.group).total_sampling_time += self.total_sampling_time;
     }
 
     pub fn get_group(&self) -> Ref<'_, SequenceGroup> {
@@ -296,7 +296,6 @@ impl SequenceGroup {
     }
 
     pub fn get_usage(&self) -> ChatCompletionUsage {
-        dbg!(self.total_toks as f32 / self.total_sampling_time as f32);
         #[allow(clippy::cast_precision_loss)]
         ChatCompletionUsage {
             completion_tokens: self.total_toks - self.total_prompt_toks,
