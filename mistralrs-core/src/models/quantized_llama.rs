@@ -509,8 +509,7 @@ impl ModelWeights {
             layer_in = x
         }
         Sequence::copy(Tensor::new(0u32, &self.device).unwrap());
-        //let x = self.norm.forward(&layer_in)?;
-        let x = layer_in;
+        let x = self.norm.forward(&layer_in)?;
         let x = x.i((.., seq_len - 1, ..))?;
         let _enter = self.span_output.enter();
         self.output.forward(&x.contiguous()?)
