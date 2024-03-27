@@ -105,7 +105,7 @@ impl Engine {
                 let before = Instant::now();
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.prompt.clone(), true);
-                println!("Prompt = {}\n", before.elapsed().as_millis());
+                println!("Prompt = {}", before.elapsed().as_millis());
                 for seq in scheduled.prompt.iter() {
                     deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
                     let now = SystemTime::now()
@@ -135,6 +135,8 @@ impl Engine {
                 } else {
                     self.set_none_cache();
                 }
+                println!();
+                println!();
             }
         }
     }
