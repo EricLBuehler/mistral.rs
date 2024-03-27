@@ -252,6 +252,7 @@ impl Sequence {
 
         deref_mut_refcell!(self.group).total_prompt_toks += self.prompt_len;
         deref_mut_refcell!(self.group).total_toks += self.len();
+        dbg!(self.total_sampling_time);
     }
 
     pub fn get_group(&self) -> Ref<'_, SequenceGroup> {
