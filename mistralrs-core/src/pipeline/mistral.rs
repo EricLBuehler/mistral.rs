@@ -390,9 +390,6 @@ impl Pipeline for MistralPipeline {
             &self.incrementor,
         )
         .unwrap();
-        let before = Instant::now();
-        dbg!(&input_ids);
-        Sequence::copy(self.eos_tok());
         let result = match self.model {
             Model::Normal(ref mut model) => {
                 model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)
@@ -421,8 +418,6 @@ impl Pipeline for MistralPipeline {
                 &self.non_granular_state,
             ),
         };
-        Sequence::copy(self.eos_tok());
-        println!("Acutal run = {}", before.elapsed().as_millis());
         match result {
             Ok(v) => v,
             Err(e) => {
