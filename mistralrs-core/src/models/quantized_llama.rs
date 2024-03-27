@@ -8,8 +8,6 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::layer_norm::RmsNormQuantized;
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 
-use crate::sequence::Sequence;
-
 use super::Cache;
 
 pub const MAX_SEQ_LEN: u32 = 4096;
@@ -265,7 +263,6 @@ pub struct ModelWeights {
     span_output: tracing::Span,
     pub device: Device,
     pub cache: Cache,
-    x: Tensor,
 }
 
 impl ModelWeights {
@@ -333,7 +330,6 @@ impl ModelWeights {
             span_output,
             device: ct.device.clone(),
             cache: Cache::new(ct.hparams.n_layer as usize, false),
-            x: Tensor::new(0u32, &ct.device).unwrap(),
         })
     }
 
@@ -458,7 +454,6 @@ impl ModelWeights {
             span_output,
             device: device.clone(),
             cache: Cache::new(block_count, false),
-            x: Tensor::new(0u32, &device).unwrap(),
         })
     }
 
@@ -482,7 +477,6 @@ impl ModelWeights {
         start_offsets_kernel: Tensor,
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
-        Sequence::copy(self.x.clone());
         let mask = if seq_len == 1 {
             None
         } else {
@@ -492,7 +486,6 @@ impl ModelWeights {
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            Sequence::copy(self.x.clone());
             let x = layer_in;
             let residual = &x;
             let x = layer.attention_norm.forward(&x)?;
@@ -513,7 +506,6 @@ impl ModelWeights {
             let x = (x + residual)?;
             layer_in = x;
         }
-        Sequence::copy(self.x.clone());
         let x = self.norm.forward(&layer_in)?;
         let x = x.i((.., seq_len - 1, ..))?;
         let _enter = self.span_output.enter();

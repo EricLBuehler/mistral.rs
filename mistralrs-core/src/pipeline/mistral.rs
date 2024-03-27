@@ -28,7 +28,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Instant;
 use std::{rc::Rc, sync::Mutex};
 use thiserror::Error;
 use tokenizers::Tokenizer;
