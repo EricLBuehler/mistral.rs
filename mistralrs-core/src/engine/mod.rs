@@ -63,6 +63,7 @@ impl Engine {
             let scheduled = self.scheduler.schedule();
 
             if scheduled.completion.len() > 0 {
+                println!("cloning in comple");
                 // Run the completion seqs
                 if !self.no_kv_cache {
                     self.clone_in_cache(&scheduled.completion);
