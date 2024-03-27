@@ -192,7 +192,7 @@ impl Sequence {
         println!("Token = {}", before.elapsed().as_millis());
         let before = Instant::now();
         let eos_tok = eos_tok.to_scalar::<u32>().unwrap();
-        println!("Token = {}", before.elapsed().as_millis());
+        println!("eos Token = {}", before.elapsed().as_millis());
         if tok == eos_tok
         {
             Some(StopReason::Eos)
