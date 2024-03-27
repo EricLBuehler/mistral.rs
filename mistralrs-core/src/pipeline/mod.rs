@@ -227,7 +227,7 @@ fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>]) -> Result<InputMetadat
                 .unsqueeze(0)
                 .unwrap(),
         );
-        seqlen_offsets_usize.push(deref_mut_refcell!(seq).get_position_usize().clone());
+        seqlen_offsets_usize.push(*deref_mut_refcell!(seq).get_position_usize());
         *deref_mut_refcell!(seq).get_position_scalar() = Tensor::new(len as i64, &dev).unwrap();
         *deref_mut_refcell!(seq).get_position_usize() = len;
 
@@ -270,7 +270,7 @@ fn get_completion_input(
                 .unsqueeze(0)
                 .unwrap(),
         );
-        seqlen_offsets_usize.push(deref_mut_refcell!(seq).get_position_usize().clone());
+        seqlen_offsets_usize.push(*deref_mut_refcell!(seq).get_position_usize());
         let new_scalar = deref_mut_refcell!(seq)
             .get_position_scalar()
             .add(incrementor)?;
