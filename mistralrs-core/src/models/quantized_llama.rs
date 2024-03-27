@@ -495,6 +495,7 @@ impl ModelWeights {
         let mut cache = self.cache.lock();
         Sequence::copy(self.x.clone());
         for (i, layer) in self.layers.iter_mut().enumerate() {
+            Sequence::copy(self.x.clone());
             let x = layer_in;
             let residual = &x;
             let x = layer.attention_norm.forward(&x)?;
@@ -505,7 +506,6 @@ impl ModelWeights {
                 start_offsets_kernel.clone(),
                 cache.get_mut(i).unwrap(),
             )?;
-            Sequence::copy(self.x.clone());
             let x = (attn + residual)?;
 
             // MLP
@@ -515,7 +515,6 @@ impl ModelWeights {
             let x = layer.mlp_or_moe.forward(&x)?;
             let x = (x + residual)?;
             layer_in = x;
-            break;
         }
         Sequence::copy(self.x.clone());
         let x = self.norm.forward(&layer_in)?;
