@@ -256,6 +256,7 @@ fn get_completion_input(
         *deref_mut_refcell!(seq).get_position_scalar() = deref_mut_refcell!(seq)
             .get_position_scalar()
             .add(incrementor)?;
+        *deref_mut_refcell!(seq).get_position_usize() += 1;
 
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
         seqs_tensors.push(ctxt.unsqueeze(0).unwrap());
