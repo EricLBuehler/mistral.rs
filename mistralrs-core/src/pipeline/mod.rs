@@ -217,7 +217,7 @@ fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>]) -> Result<InputMetadat
     for seq in input_toks.iter() {
         let ctxt = deref_refcell!(seq).get_toks().clone();
         let len = deref_refcell!(seq).len();
-        seqlen_offsets.push(deref_mut_refcell!(seq).get_position_scalar().clone());
+        seqlen_offsets.push(Tensor::arange(0i64, max_len as i64, deref_mut_refcell!(seq).get_position_scalar().device()).unwrap().unsqueeze(0).unwrap());
         seqlen_offsets_usize.push(deref_mut_refcell!(seq).get_position_usize().clone());
 
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
@@ -227,8 +227,6 @@ fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>]) -> Result<InputMetadat
                 .unwrap(),
         );
     }
-
-    dbg!(&seqlen_offsets_usize);
 
     let positions_kernel = Tensor::cat(&seqlen_offsets, 0)?;
     // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
@@ -264,7 +262,6 @@ fn get_completion_input(
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
         seqs_tensors.push(ctxt.unsqueeze(0).unwrap());
     }
-    dbg!(&seqlen_offsets_usize);
 
     let positions_kernel = Tensor::cat(&seqlen_offsets, 0)?;
     // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
