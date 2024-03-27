@@ -188,7 +188,7 @@ impl Sequence {
     ) -> Option<StopReason> {
         // TODO(EricLBuehler): Is there a way to avoid this copy?
         let before = Instant::now();
-        let eos_tok = eos_tok.to_scalar::<u32>().unwrap();
+        let _eos_tok = eos_tok.to_scalar::<u32>().unwrap();
         println!("eos Token = {}", before.elapsed().as_millis());
         let before = Instant::now();
         let tok = tok.to_scalar::<u32>().unwrap();
