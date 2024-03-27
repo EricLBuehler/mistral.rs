@@ -104,7 +104,7 @@ impl Sequence {
             group,
             scaling_cache: None,
             total_sampling_time: 0,
-            position: Tensor::new(0u32, device).unwrap(),
+            position: Tensor::new(0i64, device).unwrap(),
             position_usize: 0,
         })
     }

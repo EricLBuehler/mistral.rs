@@ -240,6 +240,7 @@ fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>]) -> Result<InputMetadat
 fn get_completion_input(
     input_toks: &[Rc<RefCell<Sequence>>],
     no_kv_cache: bool,
+    incrementor: &Tensor,
 ) -> Result<InputMetadata> {
     if no_kv_cache {
         return get_prompt_input(input_toks);
@@ -252,6 +253,9 @@ fn get_completion_input(
         let ctxt = deref_refcell!(seq).get_toks().narrow(0, start_pos, 1)?;
         seqlen_offsets.push(deref_mut_refcell!(seq).get_position_scalar().clone());
         seqlen_offsets_usize.push(deref_mut_refcell!(seq).get_position_usize().clone());
+        *deref_mut_refcell!(seq).get_position_scalar() = deref_mut_refcell!(seq)
+            .get_position_scalar()
+            .add(incrementor)?;
 
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
         seqs_tensors.push(ctxt.unsqueeze(0).unwrap());
@@ -280,6 +284,7 @@ fn calculate_inputs(
     is_prompt: bool,
     is_xlora: bool,
     no_kv_cache: bool,
+    incrementor: &Tensor,
 ) -> Result<ModelInputs> {
     if is_xlora && !is_prompt {
         let InputMetadata {
@@ -291,7 +296,7 @@ fn calculate_inputs(
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_completion_input(&input_toks, no_kv_cache)?;
+        } = get_completion_input(&input_toks, no_kv_cache, incrementor)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: Some(input_ids_full),
@@ -333,7 +338,7 @@ fn calculate_inputs(
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_completion_input(&input_toks, no_kv_cache)?;
+        } = get_completion_input(&input_toks, no_kv_cache, incrementor)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: None,

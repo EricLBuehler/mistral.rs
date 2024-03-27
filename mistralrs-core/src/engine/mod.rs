@@ -478,10 +478,7 @@ impl Engine {
                 group.clone(),
                 &device,
             );
-            let seq = handle_seq_error!(
-                seq,
-                request.response
-            );
+            let seq = handle_seq_error!(seq, request.response);
             self.id += 1;
             self.scheduler.add_seq(seq);
         }

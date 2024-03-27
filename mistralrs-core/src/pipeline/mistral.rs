@@ -90,6 +90,7 @@ pub struct MistralPipeline {
     chat_template: ChatTemplate,
     non_granular_state: Option<NonGranularState>,
     eos_token: Tensor,
+    incrementor: Tensor,
 }
 
 pub struct MistralLoader {
@@ -366,6 +367,7 @@ impl Loader for MistralLoader {
                 }
             }),
             eos_token: Tensor::new(eos_tok, device)?,
+            incrementor: Tensor::new(1i64, device)?,
         })))
     }
 }
@@ -379,7 +381,14 @@ impl Pipeline for MistralPipeline {
             seqlen_offsets_full,
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full,
-        } = calculate_inputs(input_toks, is_prompt, self.is_xlora(), self.no_kv_cache).unwrap();
+        } = calculate_inputs(
+            input_toks,
+            is_prompt,
+            self.is_xlora(),
+            self.no_kv_cache,
+            &self.incrementor,
+        )
+        .unwrap();
         let result = match self.model {
             Model::Normal(ref mut model) => {
                 model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)
