@@ -3,6 +3,7 @@ mod llama;
 mod mistral;
 mod mixtral;
 use candle_sampling::logits_processor::Logprobs;
+use core::fmt;
 use either::Either;
 pub use gemma::{GemmaLoader, GemmaSpecificConfig, GEMMA_IS_GPTX};
 use hf_hub::{
@@ -83,11 +84,49 @@ pub struct ChatTemplate {
     use_default_system_prompt: Option<bool>,
 }
 
+#[derive(Debug, Clone)]
 pub enum TokenSource {
     Literal(String),
     EnvVar(String),
     Path(String),
     CacheToken,
+}
+
+impl FromStr for TokenSource {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.splitn(2, ':').collect();
+        match parts[0] {
+            "literal" => parts
+                .get(1)
+                .map(|&value| TokenSource::Literal(value.to_string()))
+                .ok_or_else(|| "Expected a value for 'literal'".to_string()),
+            "env" => Ok(TokenSource::EnvVar(
+                parts
+                    .get(1)
+                    .unwrap_or(&"HUGGING_FACE_HUB_TOKEN")
+                    .to_string(),
+            )),
+            "path" => parts
+                .get(1)
+                .map(|&value| TokenSource::Path(value.to_string()))
+                .ok_or_else(|| "Expected a value for 'path'".to_string()),
+            "cache" => Ok(TokenSource::CacheToken),
+            _ => Err("Invalid token source format".to_string()),
+        }
+    }
+}
+
+impl fmt::Display for TokenSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TokenSource::Literal(value) => write!(f, "literal:{}", value),
+            TokenSource::EnvVar(value) => write!(f, "env:{}", value),
+            TokenSource::Path(value) => write!(f, "path:{}", value),
+            TokenSource::CacheToken => write!(f, "cache"),
+        }
+    }
 }
 
 pub enum ModelKind {

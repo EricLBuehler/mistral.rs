@@ -455,6 +455,10 @@ pub enum ModelSelected {
     },
 }
 
+fn parse_token_source(s: &str) -> Result<TokenSource, String> {
+    s.parse()
+}
+
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -492,6 +496,12 @@ struct Args {
     /// Used if the automatic deserialization fails. If this ends with `.json` (ie., it is a file) then that template is loaded.
     #[arg(short, long)]
     chat_template: Option<String>,
+
+    /// Source of the token for authentication.
+    /// Can be in the formats: "literal:<value>", "env:<value>", "path:<value>", or "cache" to use a cached token.
+    /// Defaults to using a cached token.
+    #[arg(long, default_value_t = TokenSource::CacheToken, value_parser = parse_token_source)]
+    token_source: TokenSource,
 }
 
 async fn chatcompletions(
@@ -981,7 +991,7 @@ async fn main() -> Result<()> {
     #[cfg(not(feature = "metal"))]
     let device = Device::cuda_if_available(0)?;
 
-    let pipeline = loader.load_model(None, TokenSource::CacheToken, None, &device)?;
+    let pipeline = loader.load_model(None, args.token_source, None, &device)?;
     let mistralrs = MistralRs::new(
         pipeline,
         SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
