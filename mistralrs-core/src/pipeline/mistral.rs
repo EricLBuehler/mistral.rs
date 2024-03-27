@@ -375,7 +375,6 @@ impl Loader for MistralLoader {
 
 impl Pipeline for MistralPipeline {
     fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor {
-        let before = Instant::now();
         let ModelInputs {
             input_ids,
             input_ids_full,
@@ -391,8 +390,8 @@ impl Pipeline for MistralPipeline {
             &self.incrementor,
         )
         .unwrap();
-        println!("Computed inputs = {}\n", before.elapsed().as_millis());
         let before = Instant::now();
+        dbg!(&input_ids);
         let result = match self.model {
             Model::Normal(ref mut model) => {
                 model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)
@@ -421,7 +420,7 @@ impl Pipeline for MistralPipeline {
                 &self.non_granular_state,
             ),
         };
-        println!("Acutal run = {}\n", before.elapsed().as_millis());
+        println!("Acutal run = {}", before.elapsed().as_millis());
         match result {
             Ok(v) => v,
             Err(e) => {
