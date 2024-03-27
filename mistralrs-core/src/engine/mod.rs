@@ -67,6 +67,7 @@ impl Engine {
                 if !self.no_kv_cache {
                     self.clone_in_cache(&scheduled.completion);
                 }
+                println!("starting comple");
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
                 println!("done with comple");
@@ -92,6 +93,7 @@ impl Engine {
             if scheduled.prompt.len() > 0 {
                 // Run the prompt seqs
                 self.set_none_cache();
+                println!("starting prompt");
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.prompt.clone(), true);
                 println!("done with prompt");
