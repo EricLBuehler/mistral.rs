@@ -8,7 +8,6 @@ COPY mistralrs-lora mistralrs-lora
 COPY mistralrs-pyo3 mistralrs-pyo3
 COPY mistralrs-server mistralrs-server
 COPY Cargo.toml ./
-COPY Cargo.lock ./
 
 RUN cargo build --release
 
