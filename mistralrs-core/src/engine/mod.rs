@@ -1,8 +1,8 @@
 use std::{
-    cell::RefCell, collections::VecDeque, iter::zip, rc::Rc, sync::{mpsc::Receiver, Mutex}, thread::sleep, time::{Duration, Instant, SystemTime, UNIX_EPOCH}
+    cell::RefCell, collections::VecDeque, iter::zip, rc::Rc, sync::{mpsc::Receiver, Mutex}, time::{Instant, SystemTime, UNIX_EPOCH}
 };
 
-use candle_core::{Device, Result, Tensor};
+use candle_core::{Result, Tensor};
 use candle_sampling::logits_processor::{LogitsProcessor, SamplingMethod};
 
 use crate::{

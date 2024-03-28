@@ -2,7 +2,7 @@ use std::{
     cell::{Cell, Ref, RefCell},
     rc::Rc,
     sync::mpsc::Sender,
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use candle_core::{Device, IntDType, Result, Tensor};
@@ -180,13 +180,6 @@ impl Sequence {
         self.state.set(state);
     }
 
-    #[inline(never)]
-    pub fn copy(eos_tok: Tensor) {
-        let before = Instant::now();
-        let _eos_tok = eos_tok.to_scalar::<u32>().unwrap();
-        println!("eos Token = {}", before.elapsed().as_millis());
-    }
-
     pub fn is_done(
         &self,
         tok: Tensor,
@@ -194,7 +187,7 @@ impl Sequence {
         max_model_len: usize,
     ) -> Option<StopReason> {
         // TODO(EricLBuehler): Is there a way to avoid this copy?
-        /*if eos_tok
+        if eos_tok
             .eq(&tok)
             .unwrap()
             .to_scalar::<u8>()
@@ -211,7 +204,7 @@ impl Sequence {
                 .is_true()
         }) {
             Some(StopReason::StopTok(tok.to_scalar::<u32>().unwrap()))
-        } else */if self.max_len.is_some()
+        } else if self.max_len.is_some()
             && self.len().saturating_sub(self.prompt_len) == self.max_len.unwrap()
         {
             // add_token was already called
