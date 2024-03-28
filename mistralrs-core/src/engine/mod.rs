@@ -73,8 +73,8 @@ impl Engine {
                 let before = Instant::now();
                 self.sample_seqs(&scheduled.completion, logits);
                 println!("Sample = {}", before.elapsed().as_millis());
-                sleep(Duration::from_millis(100));
                 Sequence::copy(get_mut_arcmutex!(self.pipeline).eos_tok());
+                sleep(Duration::from_millis(100));
                 let end = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .expect("Time travel has occurred!")
