@@ -2,7 +2,7 @@ use std::{
     cell::RefCell, collections::VecDeque, iter::zip, rc::Rc, sync::{mpsc::Receiver, Mutex}, thread::sleep, time::{Duration, Instant, SystemTime, UNIX_EPOCH}
 };
 
-use candle_core::{Result, Tensor};
+use candle_core::{Device, Result, Tensor};
 use candle_sampling::logits_processor::{LogitsProcessor, SamplingMethod};
 
 use crate::{
@@ -65,6 +65,10 @@ impl Engine {
                 let before = Instant::now();
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
+                #[cfg(feature="cuda")]
+                if let Device::Cuda(dev) = get_mut_arcmutex!(self.pipeline).device() {
+                    dev.synchronize()?;
+                }
                 println!("Comple = {}", before.elapsed().as_millis());
                 let start = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -73,8 +77,6 @@ impl Engine {
                 let before = Instant::now();
                 self.sample_seqs(&scheduled.completion, logits);
                 println!("Sample = {}", before.elapsed().as_millis());
-                Sequence::copy(get_mut_arcmutex!(self.pipeline).eos_tok());
-                sleep(Duration::from_millis(100));
                 let end = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .expect("Time travel has occurred!")
