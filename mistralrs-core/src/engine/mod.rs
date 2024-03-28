@@ -67,7 +67,7 @@ impl Engine {
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
                 #[cfg(feature="cuda")]
                 if let Device::Cuda(dev) = get_mut_arcmutex!(self.pipeline).device() {
-                    dev.synchronize()?;
+                    dev.synchronize().unwrap();
                 }
                 println!("Comple = {}", before.elapsed().as_millis());
                 let start = SystemTime::now()
