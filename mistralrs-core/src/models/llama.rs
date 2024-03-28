@@ -207,13 +207,16 @@ impl CausalSelfAttention {
             let q = q.to_dtype(DType::F32)?;
             let k = k.to_dtype(DType::F32)?;
             let v = v.to_dtype(DType::F32)?;
+            println!("starting attn");
             let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
+            println!("calculated scaled");
             let mask = cache.mask(seq_len)?.broadcast_as(att.shape())?;
             let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
             let att = candle_nn::ops::softmax(&att, D::Minus1)?;
             // Convert to contiguous as matmul doesn't support strided vs for now.
             att.matmul(&v.contiguous()?)?.to_dtype(in_dtype)?
         };
+        println!("done with attn");
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
         let y = self.o_proj.forward(&y)?;
         Ok(y)
