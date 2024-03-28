@@ -64,7 +64,7 @@ impl Engine {
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
                 #[cfg(feature="cuda")]
-                if let Device::Cuda(dev) = get_mut_arcmutex!(self.pipeline).device() {
+                if let candle_core::Device::Cuda(dev) = get_mut_arcmutex!(self.pipeline).device() {
                     dev.synchronize().unwrap();
                 }
                 println!("Comple = {}", before.elapsed().as_millis());
@@ -96,7 +96,7 @@ impl Engine {
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.prompt.clone(), true);
                 #[cfg(feature="cuda")]
-                if let Device::Cuda(dev) = get_mut_arcmutex!(self.pipeline).device() {
+                if let candle_core::Device::Cuda(dev) = get_mut_arcmutex!(self.pipeline).device() {
                     dev.synchronize().unwrap();
                 }
                 println!("Prompt = {}", before.elapsed().as_millis());
