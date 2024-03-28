@@ -16,6 +16,7 @@ pub use pipeline::Pipeline;
 
 mod engine;
 mod models;
+mod pa_scheduler;
 mod pipeline;
 mod request;
 mod response;
