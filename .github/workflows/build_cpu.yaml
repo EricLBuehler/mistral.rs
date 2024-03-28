@@ -62,8 +62,7 @@ jobs:
                 file: Dockerfile
                 push: ${{ github.event_name != 'pull_request' }}
                 platforms: 'linux/amd64'
-                build-args: |
-                    tags: ${{ steps.meta-cpu.outputs.tags }}
-                    labels: ${{ steps.meta-cpu.outputs.labels }}
+                tags: ${{ steps.meta-cpu.outputs.tags }}
+                labels: ${{ steps.meta-cpu.outputs.labels }}
             
             
