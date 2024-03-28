@@ -1,22 +1,18 @@
 use std::{
-    cell::RefCell,
-    collections::VecDeque,
-    iter::zip,
-    rc::Rc,
-    sync::{mpsc::Receiver, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    cell::RefCell, collections::VecDeque, iter::zip, rc::Rc, sync::{mpsc::Receiver, Mutex}, time::{Instant, SystemTime, UNIX_EPOCH}
 };
 
-use candle_core::Tensor;
+use candle_core::{Result, Tensor};
 use candle_sampling::logits_processor::{LogitsProcessor, SamplingMethod};
 
 use crate::{
     deref_mut_refcell, deref_refcell, get_mut_arcmutex, handle_seq_error,
-    handle_seq_error_stateaware,
+    handle_seq_error_stateaware, handle_seq_error_unit_ok,
     pipeline::Pipeline,
     request::Request,
     response::{
         ChatCompletionResponse, Choice, Logprobs, Response, ResponseLogprob, ResponseMessage,
+        TopLogprob,
     },
     scheduler::{Scheduler, SchedulerMethod},
     sequence::{Sequence, SequenceGroup, SequenceState, StopReason},
@@ -64,8 +60,14 @@ impl Engine {
                 if !self.no_kv_cache {
                     self.clone_in_cache(&scheduled.completion);
                 }
+                let before = Instant::now();
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
+                #[cfg(feature="cuda")]
+                if let candle_core::Device::Cuda(dev) = get_mut_arcmutex!(self.pipeline).device() {
+                    dev.synchronize().unwrap();
+                }
+                println!("Comple = {}", before.elapsed().as_millis());
                 let start = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .expect("Time travel has occurred!")
@@ -83,13 +85,21 @@ impl Engine {
                 } else {
                     self.set_none_cache();
                 }
+                println!();
+                println!();
             }
 
             if scheduled.prompt.len() > 0 {
                 // Run the prompt seqs
                 self.set_none_cache();
+                let before = Instant::now();
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.prompt.clone(), true);
+                #[cfg(feature="cuda")]
+                if let candle_core::Device::Cuda(dev) = get_mut_arcmutex!(self.pipeline).device() {
+                    dev.synchronize().unwrap();
+                }
+                println!("Prompt = {}", before.elapsed().as_millis());
                 for seq in scheduled.prompt.iter() {
                     deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
                     let now = SystemTime::now()
@@ -119,6 +129,8 @@ impl Engine {
                 } else {
                     self.set_none_cache();
                 }
+                println!();
+                println!();
             }
         }
     }
@@ -131,41 +143,50 @@ impl Engine {
         for (logits_per_seq, seq) in zip(logits_seq, seqs.iter()) {
             let sampled = get_mut_arcmutex!(self.pipeline).sample(logits_per_seq, seq.clone());
             let next_token = handle_seq_error_stateaware!(sampled, seq);
-            let next_token_id = next_token.token;
-            deref_mut_refcell!(seq).add_token(next_token);
+            let next_token_id = next_token.token.clone();
+            deref_mut_refcell!(seq).add_token(next_token).unwrap();
             let is_done = deref_refcell!(seq).is_done(
                 next_token_id,
-                eos_tok,
+                eos_tok.clone(),
                 get_mut_arcmutex!(self.pipeline).get_max_seq_len(),
             );
             if let Some(reason) = is_done {
-                self.finish_seq(seq, reason);
+                self.finish_seq(seq, reason).unwrap();
                 get_mut_arcmutex!(self.pipeline).reset_non_granular_state();
             }
         }
     }
 
-    fn finish_seq(&self, seq: &Rc<RefCell<Sequence>>, reason: StopReason) {
+    fn finish_seq(&self, seq: &Rc<RefCell<Sequence>>, reason: StopReason) -> Result<()> {
         deref_mut_refcell!(seq).set_state(SequenceState::Done(reason));
 
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer().clone();
         let mut logprobs = Vec::new();
         for logprob in deref_refcell!(seq).logprobs() {
             let resp_logprob = ResponseLogprob {
-                token: handle_seq_error!(
-                    tokenizer.decode(&[logprob.token], false),
+                token: handle_seq_error_unit_ok!(
+                    tokenizer.decode(&[logprob.token.to_scalar::<u32>()?], false),
                     deref_refcell!(seq).responder()
                 ),
                 bytes: logprob.bytes.clone().into_bytes(),
                 logprob: logprob.logprob,
-                top_logprobs: logprob.top_logprobs.clone(),
+                top_logprobs: logprob
+                    .top_logprobs
+                    .iter()
+                    .map(|x| TopLogprob {
+                        token: x.token.to_scalar::<u32>().unwrap(),
+                        logprob: x.logprob,
+                        bytes: x.bytes.clone(),
+                    })
+                    .collect::<Vec<_>>(),
             };
             logprobs.push(resp_logprob);
         }
 
-        let res = handle_seq_error!(
+        let res = handle_seq_error_unit_ok!(
             get_mut_arcmutex!(self.pipeline).tokenizer().decode(
-                &deref_refcell!(seq).get_toks()[deref_refcell!(seq).prompt_tokens()..],
+                &deref_refcell!(seq).get_toks().to_vec1::<u32>()?
+                    [deref_refcell!(seq).prompt_tokens()..],
                 false
             ),
             deref_refcell!(seq).responder()
@@ -194,7 +215,7 @@ impl Engine {
 
         // Is the group done?
         if !deref_refcell!(seq).get_group().is_done() {
-            return;
+            return Ok(());
         }
 
         // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
@@ -210,6 +231,7 @@ impl Engine {
                 usage: deref_refcell!(seq).get_group().get_usage(),
             }))
             .unwrap();
+        Ok(())
     }
 
     /// Clone the cache FROM the sequences' cache TO the model cache. Only used for completion seqs.
@@ -436,6 +458,7 @@ impl Engine {
         let group = Rc::new(RefCell::new(SequenceGroup::new(
             request.sampling_params.n_choices,
         )));
+        let device = get_mut_arcmutex!(self.pipeline).device().clone();
         // Add sequences
         for _ in 0..request.sampling_params.n_choices {
             let seq = Sequence::new_waiting(
@@ -462,7 +485,9 @@ impl Engine {
                 request.return_logprobs,
                 get_mut_arcmutex!(self.pipeline).is_xlora(),
                 group.clone(),
+                &device,
             );
+            let seq = handle_seq_error!(seq, request.response);
             self.id += 1;
             self.scheduler.add_seq(seq);
         }

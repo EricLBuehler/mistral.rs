@@ -504,7 +504,7 @@ impl ModelWeights {
             let x = layer.ffn_norm.forward(&x)?;
             let x = layer.mlp_or_moe.forward(&x)?;
             let x = (x + residual)?;
-            layer_in = x
+            layer_in = x;
         }
         let x = self.norm.forward(&layer_in)?;
         let x = x.i((.., seq_len - 1, ..))?;

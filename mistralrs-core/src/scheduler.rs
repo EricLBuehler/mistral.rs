@@ -67,21 +67,6 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
 
     /// Schedule all sequences based on their state and the available space.
     pub fn schedule(&mut self) -> SchedulerOutput {
-        if self.waiting.iter().count() == 1 && self.running.is_empty() {
-            let seq = self.waiting.next().unwrap();
-            deref_mut_refcell!(seq).set_state(SequenceState::RunningPrompt);
-            self.running.push(seq);
-            return SchedulerOutput {
-                prompt: self.running.clone().into(),
-                completion: vec![].into(),
-            };
-        }
-        if self.running.len() == 1 && self.waiting.iter().count() == 0 {
-            return SchedulerOutput {
-                prompt: vec![].into(),
-                completion: self.running.clone().into(),
-            };
-        }
         // Filter out all done sequences
         let running = self.running.clone();
         let mut running = running
@@ -89,6 +74,30 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             .filter(|seq| deref_refcell!(seq).is_running())
             .cloned()
             .collect::<Vec<_>>();
+
+        /*if self.waiting.iter().count() == 0 && running.is_empty() {
+            return SchedulerOutput {
+                prompt: vec![].into(),
+                completion: vec![].into(),
+            };
+        }
+        if self.waiting.iter().count() == 1 && running.is_empty() {
+            let seq = self.waiting.next().unwrap();
+            deref_mut_refcell!(seq).set_state(SequenceState::RunningPrompt);
+            self.running.push(seq);
+            self.waiting = Backer::new();
+            return SchedulerOutput {
+                prompt: self.running.clone().into(),
+                completion: vec![].into(),
+            };
+        }
+        if running.len() == 1 && self.waiting.iter().count() == 0 {
+            self.running = running.clone();
+            return SchedulerOutput {
+                prompt: vec![].into(),
+                completion: running.into(),
+            };
+        }*/
 
         // Sort the waiting seqs
         self.waiting.sort_ascending_ids();

@@ -1,7 +1,14 @@
 use std::error::Error;
 
-use candle_sampling::logits_processor::TopLogprob;
 use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize)]
+// Top-n logprobs element
+pub struct TopLogprob {
+    pub token: u32,
+    pub logprob: f32,
+    pub bytes: String,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ResponseMessage {
