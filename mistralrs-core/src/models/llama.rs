@@ -219,6 +219,7 @@ impl CausalSelfAttention {
         println!("done with attn");
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
         let y = self.o_proj.forward(&y)?;
+        println!("full done with attn");
         Ok(y)
     }
 
