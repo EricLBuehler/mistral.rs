@@ -1,10 +1,5 @@
 use std::{
-    cell::RefCell,
-    collections::VecDeque,
-    iter::zip,
-    rc::Rc,
-    sync::{mpsc::Receiver, Mutex},
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    cell::RefCell, collections::VecDeque, iter::zip, rc::Rc, sync::{mpsc::Receiver, Mutex}, thread::sleep, time::{Duration, Instant, SystemTime, UNIX_EPOCH}
 };
 
 use candle_core::{Result, Tensor};
@@ -78,6 +73,7 @@ impl Engine {
                 let before = Instant::now();
                 self.sample_seqs(&scheduled.completion, logits);
                 println!("Sample = {}", before.elapsed().as_millis());
+                sleep(Duration::from_millis(100));
                 Sequence::copy(get_mut_arcmutex!(self.pipeline).eos_tok());
                 let end = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
