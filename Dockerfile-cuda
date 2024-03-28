@@ -1,0 +1,123 @@
+FROM nvidia/cuda:12.2.0-devel-ubuntu22.04 AS base-builder
+
+ENV SCCACHE=0.5.4
+ENV RUSTC_WRAPPER=/usr/local/bin/sccache
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    curl \
+    libssl-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Donwload and configure sccache
+RUN curl -fsSL https://github.com/mozilla/sccache/releases/download/v$SCCACHE/sccache-v$SCCACHE-x86_64-unknown-linux-musl.tar.gz | tar -xzv --strip-components=1 -C /usr/local/bin sccache-v$SCCACHE-x86_64-unknown-linux-musl/sccache && \
+    chmod +x /usr/local/bin/sccache
+
+RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
+RUN cargo install cargo-chef --locked
+
+FROM base-builder AS planner
+
+WORKDIR /usr/src
+
+COPY backends backends
+COPY core core
+COPY router router
+COPY Cargo.toml ./
+COPY Cargo.lock ./
+
+RUN cargo chef prepare  --recipe-path recipe.json
+
+FROM base-builder AS builder
+
+ARG CUDA_COMPUTE_CAP=80
+ARG GIT_SHA
+ARG DOCKER_LABEL
+
+# sccache specific variables
+ARG ACTIONS_CACHE_URL
+ARG ACTIONS_RUNTIME_TOKEN
+ARG SCCACHE_GHA_ENABLED
+
+WORKDIR /usr/src
+
+RUN if [ ${CUDA_COMPUTE_CAP} -ge 75 -a ${CUDA_COMPUTE_CAP} -lt 80 ]; \
+    then  \
+        nvprune --generate-code code=sm_${CUDA_COMPUTE_CAP} /usr/local/cuda/lib64/libcublas_static.a -o /usr/local/cuda/lib64/libcublas_static.a; \
+    elif [ ${CUDA_COMPUTE_CAP} -ge 80 -a ${CUDA_COMPUTE_CAP} -lt 90 ]; \
+    then  \
+        nvprune --generate-code code=sm_80 --generate-code code=sm_${CUDA_COMPUTE_CAP} /usr/local/cuda/lib64/libcublas_static.a -o /usr/local/cuda/lib64/libcublas_static.a; \
+    elif [ ${CUDA_COMPUTE_CAP} -eq 90 ]; \
+    then  \
+        nvprune --generate-code code=sm_90 /usr/local/cuda/lib64/libcublas_static.a -o /usr/local/cuda/lib64/libcublas_static.a; \
+    else  \
+        echo "cuda compute cap ${CUDA_COMPUTE_CAP} is not supported"; exit 1; \
+    fi;
+
+COPY --from=planner /usr/src/recipe.json recipe.json
+
+RUN if [ ${CUDA_COMPUTE_CAP} -ge 75 -a ${CUDA_COMPUTE_CAP} -lt 80 ]; \
+    then \
+        cargo chef cook --release --features candle-cuda-turing --features static-linking --no-default-features --recipe-path recipe.json && sccache -s; \
+    else \
+        cargo chef cook --release --features candle-cuda --features static-linking --no-default-features --recipe-path recipe.json && sccache -s; \
+    fi;
+
+COPY backends backends
+COPY core core
+COPY router router
+COPY Cargo.toml ./
+COPY Cargo.lock ./
+
+FROM builder as http-builder
+
+RUN if [ ${CUDA_COMPUTE_CAP} -ge 75 -a ${CUDA_COMPUTE_CAP} -lt 80 ]; \
+    then \
+        cargo build --release --bin text-embeddings-router -F candle-cuda-turing -F static-linking -F http --no-default-features && sccache -s; \
+    else \
+        cargo build --release --bin text-embeddings-router -F candle-cuda -F static-linking -F http --no-default-features && sccache -s; \
+    fi;
+
+FROM builder as grpc-builder
+
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN PROTOC_ZIP=protoc-21.12-linux-x86_64.zip && \
+    curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v21.12/$PROTOC_ZIP && \
+    unzip -o $PROTOC_ZIP -d /usr/local bin/protoc && \
+    unzip -o $PROTOC_ZIP -d /usr/local 'include/*' && \
+    rm -f $PROTOC_ZIP
+
+COPY proto proto
+
+RUN if [ ${CUDA_COMPUTE_CAP} -ge 75 -a ${CUDA_COMPUTE_CAP} -lt 80 ]; \
+    then \
+        cargo build --release --bin text-embeddings-router -F candle-cuda-turing -F static-linking -F grpc --no-default-features && sccache -s; \
+    else \
+        cargo build --release --bin text-embeddings-router -F candle-cuda -F static-linking -F grpc --no-default-features && sccache -s; \
+    fi;
+
+FROM nvidia/cuda:12.2.0-base-ubuntu22.04 as base
+
+ARG DEFAULT_USE_FLASH_ATTENTION=True
+
+ENV HUGGINGFACE_HUB_CACHE=/data \
+    PORT=80 \
+    USE_FLASH_ATTENTION=$DEFAULT_USE_FLASH_ATTENTION
+
+FROM base as grpc
+
+COPY --from=grpc-builder /usr/src/target/release/text-embeddings-router /usr/local/bin/text-embeddings-router
+
+ENTRYPOINT ["text-embeddings-router"]
+CMD ["--json-output"]
+
+FROM base
+
+COPY --from=http-builder /usr/src/target/release/text-embeddings-router /usr/local/bin/text-embeddings-router
+
+ENTRYPOINT ["text-embeddings-router"]
+CMD ["--json-output"]
