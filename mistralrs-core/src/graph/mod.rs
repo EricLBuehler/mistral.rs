@@ -249,6 +249,7 @@ impl ComputationGraph<Ready> {
             }
             self.data[i] = res;
         }
+        self.latest_bs = None;
         Ok(x)
     }
 }
