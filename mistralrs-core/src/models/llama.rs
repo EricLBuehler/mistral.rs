@@ -396,7 +396,9 @@ impl Llama {
         }
         let x = self.ln_f.forward(&x)?;
         let x = x.i((.., seq_len - 1, ..))?;
+        dbg!(&x);
         let logits = self.lm_head.forward(&x)?;
+        dbg!(&logits);
         logits.to_dtype(DType::F32)
     }
 
