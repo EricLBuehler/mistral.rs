@@ -2,11 +2,16 @@
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{layer_norm::RmsNormNonQuantized, Activation, RotaryEmbedding, VarBuilder};
-use candle_transformers::models::with_tracing::{linear_no_bias, Linear};
+use candle_nn::{
+    layer_norm::RmsNormNonQuantized, linear_no_bias, rms_norm_non_quant, Activation, Linear,
+    RotaryEmbedding, VarBuilder,
+};
 use std::sync::Arc;
 
-use crate::pipeline::MISTRAL_IS_GPTX;
+use crate::{
+    graph::{ComputationGraph, NodeOperator},
+    pipeline::MISTRAL_IS_GPTX,
+};
 
 use super::Cache;
 
@@ -279,11 +284,9 @@ impl DecoderLayer {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
-    layers: Vec<DecoderLayer>,
-    norm: RmsNorm,
+    graph: ComputationGraph,
     lm_head: Linear,
     sliding_window: usize,
     dtype: DType,
@@ -294,30 +297,173 @@ pub struct Model {
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let mut graph = ComputationGraph::empty();
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        let rotary_emb = Arc::new(RotaryEmbedding::new(
+        let rotary_emb = RotaryEmbedding::new(
             cfg.rope_theta as f32,
             head_dim,
             cfg.max_position_embeddings,
             vb.device(),
             MISTRAL_IS_GPTX,
             vb.dtype(),
-        )?);
-        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
-        let vb_l = vb_m.pp("layers");
-        for layer_idx in 0..cfg.num_hidden_layers {
-            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
-            layers.push(layer)
-        }
-        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
+        )?;
+        let norm = rms_norm_non_quant(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
         let lm_head = linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
+
+        graph.add_op(NodeOperator::Embedding { op: embed_tokens });
+        let vb_l = vb_m.pp("layers");
+        let mut decoder_out = 0;
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let vb = vb_l.pp(layer_idx);
+            let input_layernorm =
+                rms_norm_non_quant(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+            let post_attention_layernorm = rms_norm_non_quant(
+                cfg.hidden_size,
+                cfg.rms_norm_eps,
+                vb.pp("post_attention_layernorm"),
+            )?;
+
+            let xs = graph.get_current_node_id();
+            let residual = xs;
+            let xs = graph.add_op(NodeOperator::RmsNorm {
+                op: input_layernorm,
+                from: residual,
+            });
+            // Self attn
+            let attn_output = {
+                let vb = vb.pp("self_attn");
+                let hidden_sz = cfg.hidden_size;
+                let num_heads = cfg.num_attention_heads;
+                let num_kv_heads = cfg.num_key_value_heads;
+                let num_kv_groups = num_heads / num_kv_heads;
+                let head_dim = hidden_sz / num_heads;
+                let q_proj = linear_no_bias(hidden_sz, num_heads * head_dim, vb.pp("q_proj"))?;
+                let k_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("k_proj"))?;
+                let v_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("v_proj"))?;
+                let o_proj = linear_no_bias(num_heads * head_dim, hidden_sz, vb.pp("o_proj"))?;
+
+                // Run q,k,v proj
+                let query_states = graph.add_op(NodeOperator::Linear {
+                    op: q_proj,
+                    from: xs,
+                });
+                let key_states = graph.add_op(NodeOperator::Linear {
+                    op: k_proj,
+                    from: xs,
+                });
+                let _value_states = graph.add_op(NodeOperator::Linear {
+                    op: v_proj,
+                    from: xs,
+                });
+                let value_states = graph.add_op(NodeOperator::Transpose12);
+
+                // Reshape in prep for rmsnorm
+                let query_states = graph.add_op(NodeOperator::ReshapeRms { from: query_states });
+                let key_states = graph.add_op(NodeOperator::ReshapeRms { from: key_states });
+                graph.add_op(NodeOperator::RoPE {
+                    op: rotary_emb.clone(),
+                    q: query_states,
+                    k: key_states,
+                });
+
+                // If the rank is 3
+                let _query_states = graph.add_op(NodeOperator::ReshapeAttn {
+                    num_heads,
+                    from: query_states,
+                });
+                let _query_states = graph.add_op(NodeOperator::Transpose12);
+                let query_states = graph.add_op(NodeOperator::Contiguous);
+                let _key_states = graph.add_op(NodeOperator::ReshapeAttn {
+                    num_heads: num_kv_heads,
+                    from: query_states,
+                });
+                let _key_states = graph.add_op(NodeOperator::Transpose12);
+                let key_states = graph.add_op(NodeOperator::Contiguous);
+
+                // Update KV cache
+                graph.add_op(NodeOperator::UpdateKVCache {
+                    k: key_states,
+                    q: query_states,
+                    layer_idx,
+                });
+
+                // Repeat kv cache, supporting GQA
+                let query_states = graph.add_op(NodeOperator::RepeatKV {
+                    num_kv_groups,
+                    from: query_states,
+                });
+                let key_states = graph.add_op(NodeOperator::RepeatKV {
+                    num_kv_groups,
+                    from: key_states,
+                });
+
+                let scale = 1f64 / f64::sqrt(head_dim as f64);
+                let key_states = graph.add_op(NodeOperator::Transpose23 { from: key_states });
+                let _attn_weights = graph.add_op(NodeOperator::Matmul {
+                    l: query_states,
+                    r: key_states,
+                });
+                let attn_weights = graph.add_op(NodeOperator::Scale { factor: scale });
+                let attn_weights =
+                    graph.add_op(NodeOperator::ApplyAttentionMask { from: attn_weights });
+                let attn_weights = graph.add_op(NodeOperator::Softmax { from: attn_weights });
+                let _attn_weights = graph.add_op(NodeOperator::Matmul {
+                    l: attn_weights,
+                    r: value_states,
+                });
+
+                let _attn_output = graph.add_op(NodeOperator::Transpose12);
+                let attn_output = graph.add_op(NodeOperator::ReshapeAttnOutput);
+                let attn_output = graph.add_op(NodeOperator::Linear {
+                    op: o_proj,
+                    from: attn_output,
+                });
+                attn_output
+            };
+            let residual = graph.add_op(NodeOperator::Add {
+                l: attn_output,
+                r: residual,
+            });
+            let xs = graph.add_op(NodeOperator::RmsNorm {
+                op: post_attention_layernorm,
+                from: residual,
+            });
+            // MLP
+            let xs = {
+                let vb = vb.pp("mlp");
+                let hidden_sz = cfg.hidden_size;
+                let intermediate_sz = cfg.intermediate_size;
+                let gate_proj = linear_no_bias(hidden_sz, intermediate_sz, vb.pp("gate_proj"))?;
+                let up_proj = linear_no_bias(hidden_sz, intermediate_sz, vb.pp("up_proj"))?;
+                let down_proj = linear_no_bias(intermediate_sz, hidden_sz, vb.pp("down_proj"))?;
+
+                let _gate = graph.add_op(NodeOperator::Linear {
+                    op: gate_proj,
+                    from: xs,
+                });
+                let lhs = graph.add_op(NodeOperator::Activation { op: cfg.hidden_act });
+                let rhs = graph.add_op(NodeOperator::Linear {
+                    op: up_proj,
+                    from: xs,
+                });
+                let pre_down = graph.add_op(NodeOperator::Mul { l: lhs, r: rhs });
+                graph.add_op(NodeOperator::Linear {
+                    op: down_proj,
+                    from: pre_down,
+                })
+            };
+            decoder_out = graph.add_op(NodeOperator::Add { l: residual, r: xs });
+        }
+        graph.add_op(NodeOperator::RmsNorm {
+            op: norm,
+            from: decoder_out,
+        });
+
         Ok(Self {
-            embed_tokens,
-            layers,
-            norm,
+            graph,
             lm_head,
             sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
@@ -391,18 +537,15 @@ impl Model {
                 self.prepare_decoder_attention_mask(b_size, seq_len, past_key_values_length)?;
             Some(mask)
         };
-        let mut xs = self.embed_tokens.forward(input_ids)?;
-        let mut cache = self.cache.lock();
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            xs = layer.forward(
-                &xs,
-                attention_mask.as_ref(),
+        let cache = self.cache.lock();
+        self.graph
+            .execute(
+                &input_ids,
+                attention_mask,
+                cache,
                 seqlen_offsets,
-                start_offsets_kernel.clone(),
-                cache.get_mut(i).unwrap(),
+                start_offsets_kernel,
             )?
-        }
-        xs.apply(&self.norm)?
             .apply(&self.lm_head)?
             .narrow(1, seq_len - 1, 1)
     }

@@ -15,6 +15,7 @@ pub use mistralrs_lora::Ordering;
 pub use pipeline::Pipeline;
 
 mod engine;
+mod graph;
 mod models;
 mod pipeline;
 mod request;
