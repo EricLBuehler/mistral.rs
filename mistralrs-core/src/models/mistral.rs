@@ -9,7 +9,7 @@ use candle_nn::{
 use std::sync::Arc;
 
 use crate::{
-    graph::{ComputationGraph, NodeOperator},
+    graph::{ComputationGraph, NodeOperator, Ready},
     pipeline::MISTRAL_IS_GPTX,
 };
 
@@ -286,7 +286,7 @@ impl DecoderLayer {
 
 #[derive(Debug)]
 pub struct Model {
-    graph: ComputationGraph,
+    graph: ComputationGraph<Ready>,
     lm_head: Linear,
     sliding_window: usize,
     dtype: DType,
@@ -313,7 +313,8 @@ impl Model {
         let norm = rms_norm_non_quant(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
         let lm_head = linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
 
-        graph.add_op(NodeOperator::Embedding { op: embed_tokens });
+        let xs = graph.add_op(NodeOperator::Embedding { op: embed_tokens });
+        let _ = graph.add_op(NodeOperator::StartModel { inp: xs });
         let vb_l = vb_m.pp("layers");
         let mut decoder_out = 0;
         for layer_idx in 0..cfg.num_hidden_layers {
@@ -361,32 +362,34 @@ impl Model {
                 let value_states = graph.add_op(NodeOperator::Transpose12);
 
                 // Reshape in prep for rmsnorm
-                let query_states = graph.add_op(NodeOperator::ReshapeRms { from: query_states });
-                let key_states = graph.add_op(NodeOperator::ReshapeRms { from: key_states });
-                graph.add_op(NodeOperator::RoPE {
+                let query_states = graph.add_op(NodeOperator::ReshapeRms {
+                    from: query_states,
+                    num_heads,
+                    head_dim,
+                });
+                let key_states = graph.add_op(NodeOperator::ReshapeRms {
+                    from: key_states,
+                    num_heads: num_kv_heads,
+                    head_dim,
+                });
+                let _ = graph.add_op(NodeOperator::RoPE {
                     op: rotary_emb.clone(),
                     q: query_states,
                     k: key_states,
                 });
 
                 // If the rank is 3
-                let _query_states = graph.add_op(NodeOperator::ReshapeAttn {
-                    num_heads,
-                    from: query_states,
-                });
+                let _query_states = graph.add_op(NodeOperator::ReshapeAttn { from: query_states });
                 let _query_states = graph.add_op(NodeOperator::Transpose12);
                 let query_states = graph.add_op(NodeOperator::Contiguous);
-                let _key_states = graph.add_op(NodeOperator::ReshapeAttn {
-                    num_heads: num_kv_heads,
-                    from: query_states,
-                });
+                let _key_states = graph.add_op(NodeOperator::ReshapeAttn { from: query_states });
                 let _key_states = graph.add_op(NodeOperator::Transpose12);
                 let key_states = graph.add_op(NodeOperator::Contiguous);
 
                 // Update KV cache
-                graph.add_op(NodeOperator::UpdateKVCache {
+                let _ = graph.add_op(NodeOperator::UpdateKVCache {
                     k: key_states,
-                    q: query_states,
+                    v: value_states,
                     layer_idx,
                 });
 
@@ -416,12 +419,13 @@ impl Model {
                 });
 
                 let _attn_output = graph.add_op(NodeOperator::Transpose12);
-                let attn_output = graph.add_op(NodeOperator::ReshapeAttnOutput);
-                let attn_output = graph.add_op(NodeOperator::Linear {
+                let attn_output = graph.add_op(NodeOperator::ReshapeAttnOutput {
+                    hidden_size: hidden_sz,
+                });
+                graph.add_op(NodeOperator::Linear {
                     op: o_proj,
                     from: attn_output,
-                });
-                attn_output
+                })
             };
             let residual = graph.add_op(NodeOperator::Add {
                 l: attn_output,
@@ -457,13 +461,13 @@ impl Model {
             };
             decoder_out = graph.add_op(NodeOperator::Add { l: residual, r: xs });
         }
-        graph.add_op(NodeOperator::RmsNorm {
+        let _ = graph.add_op(NodeOperator::RmsNorm {
             op: norm,
             from: decoder_out,
         });
 
         Ok(Self {
-            graph,
+            graph: graph.finalize_graph(),
             lm_head,
             sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
@@ -540,7 +544,7 @@ impl Model {
         let cache = self.cache.lock();
         self.graph
             .execute(
-                &input_ids,
+                input_ids,
                 attention_mask,
                 cache,
                 seqlen_offsets,
