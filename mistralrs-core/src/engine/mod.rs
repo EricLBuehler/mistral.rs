@@ -7,7 +7,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use candle_core::Tensor;
+use candle_core::{Device, Tensor};
 use candle_sampling::logits_processor::{LogitsProcessor, SamplingMethod};
 
 use crate::{
@@ -66,6 +66,7 @@ impl Engine {
                 }
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
+                self.synchronize(get_mut_arcmutex!(self.pipeline).device());
                 let start = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .expect("Time travel has occurred!")
@@ -90,6 +91,7 @@ impl Engine {
                 self.set_none_cache();
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.prompt.clone(), true);
+                self.synchronize(get_mut_arcmutex!(self.pipeline).device());
                 for seq in scheduled.prompt.iter() {
                     deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
                     let now = SystemTime::now()
@@ -122,6 +124,15 @@ impl Engine {
             }
         }
     }
+
+    #[cfg(feature = "cuda")]
+    fn synchronize(&self, dev: &Device) {
+        if let candle_core::Device::Cuda(dev) = dev {
+            dev.synchronize().unwrap();
+        }
+    }
+    #[cfg(not(feature = "cuda"))]
+    fn synchronize(&self, _dev: &Device) {}
 
     fn sample_seqs(&self, seqs: &[Rc<RefCell<Sequence>>], logits: Tensor) {
         let seqs_len = seqs.len();
