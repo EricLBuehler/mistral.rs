@@ -152,7 +152,8 @@ impl ComputationGraph<Ready> {
                     head_dim,
                 } => {
                     let v = &self.data[*from].as_ref().unwrap();
-                    let (b_sz, q_len, _, _) = v.dims4()?;
+                    dbg!(&v);
+                    let (b_sz, q_len, _) = v.dims3()?;
                     Some(v.reshape((b_sz * q_len, *num_heads, *head_dim))?)
                 }
                 NodeOperator::RoPE { op, q, k } => {
@@ -169,6 +170,7 @@ impl ComputationGraph<Ready> {
                 }
                 NodeOperator::ReshapeAttn { from } => {
                     let v = &self.data[*from].as_ref().unwrap();
+                    dbg!(&v);
                     let (b_sz_q_len, num_heads, head_dim) = v.dims3()?;
                     Some(v.reshape((
                         self.latest_bs.unwrap(),
@@ -190,6 +192,7 @@ impl ComputationGraph<Ready> {
                     self.data[*from].as_ref().unwrap(),
                 )?),
                 NodeOperator::ReshapeAttnOutput { hidden_size } => {
+                    dbg!(&x);
                     let (b_sz, q_len, _) = x.dims3()?;
                     Some(x.reshape((b_sz, q_len, *hidden_size))?)
                 }
