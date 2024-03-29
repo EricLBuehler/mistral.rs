@@ -201,7 +201,7 @@ pub trait Pipeline: Send + Sync {
         // https://github.com/huggingface/transformers/blob/76a33a10923ccc1074917f6b6a1e719e626b7dc9/src/transformers/tokenization_utils_base.py#L1842
         env.set_lstrip_blocks(true);
         env.set_trim_blocks(true);
-        
+
         let template = self
             .get_chat_template()
             .chat_template
