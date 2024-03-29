@@ -142,7 +142,7 @@ impl ComputationGraph<Ready> {
                 NodeOperator::Embedding { op } => Some(op.forward(&x)?),
                 NodeOperator::RmsNorm { op, from } => {
                     dbg!(&self.data);
-                    dbg!(from)
+                    dbg!(from);
                     Some(op.forward(self.data[*from].as_ref().unwrap())?)
                 }
                 NodeOperator::Linear { op, from } => {
