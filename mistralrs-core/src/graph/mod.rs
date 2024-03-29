@@ -141,6 +141,8 @@ impl ComputationGraph<Ready> {
             let res = match op {
                 NodeOperator::Embedding { op } => Some(op.forward(&x)?),
                 NodeOperator::RmsNorm { op, from } => {
+                    dbg!(&self.data);
+                    dbg!(from)
                     Some(op.forward(self.data[*from].as_ref().unwrap())?)
                 }
                 NodeOperator::Linear { op, from } => {
