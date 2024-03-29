@@ -141,8 +141,6 @@ impl ComputationGraph<Ready> {
             let res = match op {
                 NodeOperator::Embedding { op } => Some(op.forward(&x)?),
                 NodeOperator::RmsNorm { op, from } => {
-                    dbg!(&self.data);
-                    dbg!(from);
                     Some(op.forward(self.data[*from].as_ref().unwrap())?)
                 }
                 NodeOperator::Linear { op, from } => {
@@ -154,7 +152,7 @@ impl ComputationGraph<Ready> {
                     head_dim,
                 } => {
                     let v = &self.data[*from].as_ref().unwrap();
-                    let (b_sz, q_len, _) = v.dims3()?;
+                    let (b_sz, q_len, _, _) = v.dims4()?;
                     Some(v.reshape((b_sz * q_len, *num_heads, *head_dim))?)
                 }
                 NodeOperator::RoPE { op, q, k } => {
