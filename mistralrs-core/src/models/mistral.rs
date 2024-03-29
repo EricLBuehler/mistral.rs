@@ -359,6 +359,7 @@ impl Model {
                     from: xs,
                 });
                 let value_states = graph.add_op(NodeOperator::Transpose12);
+                let value_states = graph.add_op(NodeOperator::ReshapeAttn { from: value_states });
 
                 // Reshape in prep for rmsnorm
                 let query_states = graph.add_op(NodeOperator::ReshapeRms {
