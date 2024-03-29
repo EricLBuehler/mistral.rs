@@ -649,7 +649,7 @@
                 StopReason::Length(<span class="kw">_</span>) | StopReason::ModelLength(<span class="kw">_</span>) =&gt; <span class="string">"length"</span>.to_string(),
                 StopReason::StopTok(<span class="kw">_</span>) =&gt; <span class="string">"stop"</span>.to_string(),
             },
-            index: <span class="number">0</span>,
+            index: <span class="macro">deref_refcell!</span>(seq).get_next_choice_index(),
             message: ResponseMessage {
                 content: res,
                 role: <span class="string">"assistant"</span>.to_string(),
