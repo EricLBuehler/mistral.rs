@@ -219,6 +219,7 @@ impl LayerWeights {
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
 
+        let q = q.contiguous()?;
         dbg!(&q.contiguous()?.stride());
         dbg!(&q.stride());
 
