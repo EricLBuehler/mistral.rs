@@ -199,8 +199,7 @@ impl LayerWeights {
         if q.rank() == 3 {
             q = q
                 .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
+                .transpose(1, 2)?;
             k = k
                 .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
                 .transpose(1, 2)?;
