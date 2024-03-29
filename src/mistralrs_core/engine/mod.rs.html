@@ -473,21 +473,13 @@
 <a href="#471" id="471">471</a>
 <a href="#472" id="472">472</a>
 <a href="#473" id="473">473</a>
-<a href="#474" id="474">474</a>
-<a href="#475" id="475">475</a>
-<a href="#476" id="476">476</a>
-<a href="#477" id="477">477</a>
-<a href="#478" id="478">478</a>
-<a href="#479" id="479">479</a>
-<a href="#480" id="480">480</a>
-<a href="#481" id="481">481</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
     iter::zip,
     rc::Rc,
     sync::{mpsc::Receiver, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 <span class="kw">use </span>candle_core::{Device, Tensor};
@@ -550,18 +542,14 @@
                 <span class="kw">let </span>logits =
                     <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).forward(scheduled.completion.clone(), <span class="bool-val">false</span>);
                 <span class="self">self</span>.synchronize(<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).device());
-                <span class="kw">let </span>start = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect(<span class="string">"Time travel has occurred!"</span>)
-                    .as_millis();
+
+                <span class="kw">let </span>before_sample = Instant::now();
                 <span class="self">self</span>.sample_seqs(<span class="kw-2">&amp;</span>scheduled.completion, logits);
-                <span class="kw">let </span>end = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect(<span class="string">"Time travel has occurred!"</span>)
-                    .as_millis();
+                <span class="kw">let </span>sampling_time = before_sample.elapsed().as_millis();
                 <span class="kw">for </span>seq <span class="kw">in </span>scheduled.completion.iter() {
-                    <span class="macro">deref_mut_refcell!</span>(seq).total_sampling_time += end - start;
+                    <span class="macro">deref_mut_refcell!</span>(seq).total_sampling_time += sampling_time;
                 }
+
                 <span class="kw">if </span>!<span class="self">self</span>.no_kv_cache {
                     <span class="self">self</span>.clone_out_cache(<span class="kw-2">&amp;</span>scheduled.completion);
                 } <span class="kw">else </span>{
@@ -587,18 +575,14 @@
                     <span class="macro">deref_mut_refcell!</span>(seq).prompt_tok_per_sec = prompt_tok_per_sec * <span class="number">1000.</span>;
                     <span class="macro">deref_mut_refcell!</span>(seq).prompt_timestamp = <span class="prelude-val">Some</span>(now);
                 }
-                <span class="kw">let </span>start = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect(<span class="string">"Time travel has occurred!"</span>)
-                    .as_millis();
+
+                <span class="kw">let </span>before_sample = Instant::now();
                 <span class="self">self</span>.sample_seqs(<span class="kw-2">&amp;</span>scheduled.prompt, logits);
-                <span class="kw">let </span>end = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect(<span class="string">"Time travel has occurred!"</span>)
-                    .as_millis();
+                <span class="kw">let </span>sampling_time = before_sample.elapsed().as_millis();
                 <span class="kw">for </span>seq <span class="kw">in </span>scheduled.prompt.iter() {
-                    <span class="macro">deref_mut_refcell!</span>(seq).total_sampling_time += end - start;
+                    <span class="macro">deref_mut_refcell!</span>(seq).total_sampling_time += sampling_time;
                 }
+
                 <span class="kw">if </span>!<span class="self">self</span>.no_kv_cache {
                     <span class="self">self</span>.clone_out_cache(<span class="kw-2">&amp;</span>scheduled.prompt);
                 } <span class="kw">else </span>{
