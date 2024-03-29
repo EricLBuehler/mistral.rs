@@ -177,7 +177,7 @@ impl Engine {
                 StopReason::Length(_) | StopReason::ModelLength(_) => "length".to_string(),
                 StopReason::StopTok(_) => "stop".to_string(),
             },
-            index: 0,
+            index: deref_refcell!(seq).get_next_choice_index(),
             message: ResponseMessage {
                 content: res,
                 role: "assistant".to_string(),

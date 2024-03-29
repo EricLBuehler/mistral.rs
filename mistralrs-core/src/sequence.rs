@@ -220,6 +220,10 @@ impl Sequence {
         deref_mut_refcell!(self.group).total_sampling_time += self.total_sampling_time;
     }
 
+    pub fn get_next_choice_index(&self) -> usize {
+        deref_refcell!(self.group).choices.len()
+    }
+
     pub fn get_group(&self) -> Ref<'_, SequenceGroup> {
         deref_refcell!(self.group)
     }
