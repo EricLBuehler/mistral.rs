@@ -32,24 +32,31 @@ pub enum SequenceState {
 }
 
 pub struct Sequence {
-    tokens: Vec<u32>,
-    logprobs: Vec<Logprobs>,
-    prompt_len: usize,
+    // Metadata, const
     id: usize,
+    prompt_len: usize,
+    max_len: Option<usize>,
     timestamp: u128,
-    state: Cell<SequenceState>,
-    cache: Vec<Option<(Tensor, Tensor)>>,
-    xlora_cache: Option<Vec<Option<(Tensor, Tensor)>>>,
-    responder: Sender<Response>,
     logits_processor: LogitsProcessor,
     stop_tokens: Vec<u32>,
-    max_len: Option<usize>,
     return_logprobs: bool,
+    responder: Sender<Response>,
+
+    // Cache
+    scaling_cache: Option<Tensor>,
+    cache: Vec<Option<(Tensor, Tensor)>>,
+    xlora_cache: Option<Vec<Option<(Tensor, Tensor)>>>,
+
+    // Mutables
+    tokens: Vec<u32>,
+    logprobs: Vec<Logprobs>,
+
+    // GPU things
     pub prompt_tok_per_sec: f32,
     pub prompt_timestamp: Option<u128>,
     group: Rc<RefCell<SequenceGroup>>,
-    scaling_cache: Option<Tensor>,
     pub total_sampling_time: u128,
+    state: Cell<SequenceState>,
 }
 
 impl Sequence {
@@ -211,6 +218,10 @@ impl Sequence {
         deref_mut_refcell!(self.group).total_toks += self.len();
 
         deref_mut_refcell!(self.group).total_sampling_time += self.total_sampling_time;
+    }
+
+    pub fn get_next_choice_index(&self) -> usize {
+        deref_refcell!(self.group).choices.len()
     }
 
     pub fn get_group(&self) -> Ref<'_, SequenceGroup> {

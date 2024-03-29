@@ -4,10 +4,10 @@ use std::{
     iter::zip,
     rc::Rc,
     sync::{mpsc::Receiver, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use candle_core::Tensor;
+use candle_core::{Device, Tensor};
 use candle_sampling::logits_processor::{LogitsProcessor, SamplingMethod};
 
 use crate::{
@@ -66,18 +66,15 @@ impl Engine {
                 }
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
-                let start = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Time travel has occurred!")
-                    .as_millis();
+                self.synchronize(get_mut_arcmutex!(self.pipeline).device());
+
+                let before_sample = Instant::now();
                 self.sample_seqs(&scheduled.completion, logits);
-                let end = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Time travel has occurred!")
-                    .as_millis();
+                let sampling_time = before_sample.elapsed().as_millis();
                 for seq in scheduled.completion.iter() {
-                    deref_mut_refcell!(seq).total_sampling_time += end - start;
+                    deref_mut_refcell!(seq).total_sampling_time += sampling_time;
                 }
+
                 if !self.no_kv_cache {
                     self.clone_out_cache(&scheduled.completion);
                 } else {
@@ -90,6 +87,7 @@ impl Engine {
                 self.set_none_cache();
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.prompt.clone(), true);
+                self.synchronize(get_mut_arcmutex!(self.pipeline).device());
                 for seq in scheduled.prompt.iter() {
                     deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
                     let now = SystemTime::now()
@@ -102,18 +100,14 @@ impl Engine {
                     deref_mut_refcell!(seq).prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
                     deref_mut_refcell!(seq).prompt_timestamp = Some(now);
                 }
-                let start = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Time travel has occurred!")
-                    .as_millis();
+
+                let before_sample = Instant::now();
                 self.sample_seqs(&scheduled.prompt, logits);
-                let end = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Time travel has occurred!")
-                    .as_millis();
+                let sampling_time = before_sample.elapsed().as_millis();
                 for seq in scheduled.prompt.iter() {
-                    deref_mut_refcell!(seq).total_sampling_time += end - start;
+                    deref_mut_refcell!(seq).total_sampling_time += sampling_time;
                 }
+
                 if !self.no_kv_cache {
                     self.clone_out_cache(&scheduled.prompt);
                 } else {
@@ -122,6 +116,15 @@ impl Engine {
             }
         }
     }
+
+    #[cfg(feature = "cuda")]
+    fn synchronize(&self, dev: &Device) {
+        if let candle_core::Device::Cuda(dev) = dev {
+            dev.synchronize().unwrap();
+        }
+    }
+    #[cfg(not(feature = "cuda"))]
+    fn synchronize(&self, _dev: &Device) {}
 
     fn sample_seqs(&self, seqs: &[Rc<RefCell<Sequence>>], logits: Tensor) {
         let seqs_len = seqs.len();
@@ -177,7 +180,7 @@ impl Engine {
                 StopReason::Length(_) | StopReason::ModelLength(_) => "length".to_string(),
                 StopReason::StopTok(_) => "stop".to_string(),
             },
-            index: 0,
+            index: deref_refcell!(seq).get_next_choice_index(),
             message: ResponseMessage {
                 content: res,
                 role: "assistant".to_string(),
