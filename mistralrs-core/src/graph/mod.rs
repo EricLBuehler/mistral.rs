@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, sync::MutexGuard};
+use std::{marker::PhantomData, sync::MutexGuard, time::Instant};
 
 use candle_core::{Result, Tensor};
 use candle_nn::{
@@ -136,6 +136,7 @@ impl ComputationGraph<Ready> {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
     ) -> Result<Tensor> {
+        let now = Instant::now();
         let mut x = input.clone();
         for (i, op) in self.nodes.iter().enumerate() {
             let res = match op {
@@ -165,6 +166,7 @@ impl ComputationGraph<Ready> {
                 NodeOperator::Matmul { l, r } => {
                     let l = self.data[*l].as_ref().unwrap();
                     let r = self.data[*r].as_ref().unwrap();
+                    dbg!(now.elapsed().as_micros());
                     dbg!(&l);
                     dbg!(&r);
                     Some(l.matmul(r)?)
