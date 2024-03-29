@@ -272,6 +272,13 @@
 <a href="#270" id="270">270</a>
 <a href="#271" id="271">271</a>
 <a href="#272" id="272">272</a>
+<a href="#273" id="273">273</a>
+<a href="#274" id="274">274</a>
+<a href="#275" id="275">275</a>
+<a href="#276" id="276">276</a>
+<a href="#277" id="277">277</a>
+<a href="#278" id="278">278</a>
+<a href="#279" id="279">279</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::{Cell, Ref, RefCell},
     rc::Rc,
@@ -306,24 +313,31 @@
 }
 
 <span class="kw">pub struct </span>Sequence {
-    tokens: Vec&lt;u32&gt;,
-    logprobs: Vec&lt;Logprobs&gt;,
+    <span class="comment">// Metadata, const
+    </span>id: usize,
     prompt_len: usize,
-    id: usize,
+    max_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     timestamp: u128,
-    state: Cell&lt;SequenceState&gt;,
-    cache: Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt;,
-    xlora_cache: <span class="prelude-ty">Option</span>&lt;Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt;&gt;,
-    responder: Sender&lt;Response&gt;,
     logits_processor: LogitsProcessor,
     stop_tokens: Vec&lt;u32&gt;,
-    max_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     return_logprobs: bool,
-    <span class="kw">pub </span>prompt_tok_per_sec: f32,
+    responder: Sender&lt;Response&gt;,
+
+    <span class="comment">// Cache
+    </span>scaling_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+    cache: Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt;,
+    xlora_cache: <span class="prelude-ty">Option</span>&lt;Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt;&gt;,
+
+    <span class="comment">// Mutables
+    </span>tokens: Vec&lt;u32&gt;,
+    logprobs: Vec&lt;Logprobs&gt;,
+
+    <span class="comment">// GPU things
+    </span><span class="kw">pub </span>prompt_tok_per_sec: f32,
     <span class="kw">pub </span>prompt_timestamp: <span class="prelude-ty">Option</span>&lt;u128&gt;,
     group: Rc&lt;RefCell&lt;SequenceGroup&gt;&gt;,
-    scaling_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
     <span class="kw">pub </span>total_sampling_time: u128,
+    state: Cell&lt;SequenceState&gt;,
 }
 
 <span class="kw">impl </span>Sequence {
