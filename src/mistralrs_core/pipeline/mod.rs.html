@@ -619,6 +619,7 @@
 <a href="#617" id="617">617</a>
 <a href="#618" id="618">618</a>
 <a href="#619" id="619">619</a>
+<a href="#620" id="620">620</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -819,6 +820,10 @@
         add_generation_prompt: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>env = Environment::new();
+        <span class="comment">// https://github.com/huggingface/transformers/blob/76a33a10923ccc1074917f6b6a1e719e626b7dc9/src/transformers/tokenization_utils_base.py#L1842
+        </span>env.set_lstrip_blocks(<span class="bool-val">true</span>);
+        env.set_trim_blocks(<span class="bool-val">true</span>);
+        
         <span class="kw">let </span>template = <span class="self">self
             </span>.get_chat_template()
             .chat_template
@@ -1183,7 +1188,7 @@
             bos_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
             eos_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
         }
-        <span class="kw">let </span><span class="kw-2">mut </span>template = <span class="kw">match </span>template.chat_template {
+        <span class="kw">match </span>template.chat_template {
             <span class="prelude-val">Some</span>(<span class="kw">_</span>) =&gt; template,
             <span class="prelude-val">None </span>=&gt; {
                 <span class="macro">println!</span>(<span class="string">"`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template."</span>);
@@ -1232,10 +1237,7 @@
                 <span class="kw">let </span>ser = serde_json::to_string_pretty(<span class="kw-2">&amp;</span>deser).unwrap();
                 serde_json::from_str(<span class="kw-2">&amp;</span>ser).unwrap()
             }
-        };
-        <span class="comment">// TODO(EricLBuehler): Pending on https://github.com/mitsuhiko/minijinja/issues/446
-        </span>template.chat_template = <span class="prelude-val">Some</span>(template.chat_template.unwrap().replace(<span class="string">"%}\n"</span>, <span class="string">"%}"</span>));
-        template
+        }
     }};
 }
 </code></pre></div></section></main></body></html>
