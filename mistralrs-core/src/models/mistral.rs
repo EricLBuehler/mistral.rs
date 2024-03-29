@@ -313,8 +313,8 @@ impl Model {
         let norm = rms_norm_non_quant(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
         let lm_head = linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
 
-        let xs = graph.add_op(NodeOperator::Embedding { op: embed_tokens });
-        let _ = graph.add_op(NodeOperator::StartModel { inp: xs });
+        let mut input_xs = graph.add_op(NodeOperator::Embedding { op: embed_tokens });
+        let _ = graph.add_op(NodeOperator::StartModel { inp: input_xs });
         let vb_l = vb_m.pp("layers");
         let mut decoder_out = 0;
         for layer_idx in 0..cfg.num_hidden_layers {
@@ -327,8 +327,7 @@ impl Model {
                 vb.pp("post_attention_layernorm"),
             )?;
 
-            let xs = graph.get_current_node_id();
-            let residual = xs;
+            let residual = input_xs;
             let xs = graph.add_op(NodeOperator::RmsNorm {
                 op: input_layernorm,
                 from: residual,
@@ -460,6 +459,8 @@ impl Model {
                 })
             };
             decoder_out = graph.add_op(NodeOperator::Add { l: residual, r: xs });
+
+            input_xs = decoder_out;
         }
         let _ = graph.add_op(NodeOperator::RmsNorm {
             op: norm,
