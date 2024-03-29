@@ -165,6 +165,8 @@ impl ComputationGraph<Ready> {
                 NodeOperator::Matmul { l, r } => {
                     let l = self.data[*l].as_ref().unwrap();
                     let r = self.data[*r].as_ref().unwrap();
+                    dbg!(&l);
+                    dbg!(&r);
                     Some(l.matmul(r)?)
                 }
                 NodeOperator::ReshapeAttn { from } => {
