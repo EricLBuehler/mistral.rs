@@ -381,7 +381,7 @@ impl Model {
                 let _query_states = graph.add_op(NodeOperator::ReshapeAttn { from: query_states });
                 let _query_states = graph.add_op(NodeOperator::Transpose12);
                 let query_states = graph.add_op(NodeOperator::Contiguous);
-                let _key_states = graph.add_op(NodeOperator::ReshapeAttn { from: query_states });
+                let _key_states = graph.add_op(NodeOperator::ReshapeAttn { from: key_states });
                 let _key_states = graph.add_op(NodeOperator::Transpose12);
                 let key_states = graph.add_op(NodeOperator::Contiguous);
 
