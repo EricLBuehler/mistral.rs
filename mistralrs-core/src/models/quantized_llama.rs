@@ -219,6 +219,9 @@ impl LayerWeights {
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
 
+        dbg!(&q.contiguous()?.stride());
+        dbg!(&q.stride());
+
         let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
         let att = match mask {
             None => att,
