@@ -181,6 +181,8 @@
 <a href="#179" id="179">179</a>
 <a href="#180" id="180">180</a>
 <a href="#181" id="181">181</a>
+<a href="#182" id="182">182</a>
+<a href="#183" id="183">183</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::{vec_deque::Iter, HashMap, VecDeque},
@@ -260,6 +262,7 @@
 
         <span class="kw">match </span>(<span class="self">self</span>.waiting.iter().count(), running.len()) {
             (<span class="number">0</span>, <span class="number">0</span>) =&gt; {
+                <span class="self">self</span>.running = running;
                 <span class="kw">return </span>SchedulerOutput {
                     prompt: <span class="macro">vec!</span>[].into(),
                     completion: <span class="macro">vec!</span>[].into(),
@@ -275,6 +278,7 @@
                 };
             }
             (<span class="number">0</span>, <span class="kw">_</span>) =&gt; {
+                <span class="self">self</span>.running = running;
                 <span class="kw">return </span>SchedulerOutput {
                     prompt: <span class="macro">vec!</span>[].into(),
                     completion: <span class="self">self</span>.running.clone().into(),
