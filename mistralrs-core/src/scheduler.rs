@@ -84,9 +84,11 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
                 };
             }
             (_, 0) => {
-                let seq = self.waiting.next().unwrap();
-                deref_mut_refcell!(seq).set_state(SequenceState::RunningPrompt);
-                self.running.push(seq);
+                for seq in self.waiting.iter() {
+                    deref_mut_refcell!(seq).set_state(SequenceState::RunningPrompt);
+                    self.running.push(seq.clone());
+                }
+                self.waiting = Backer::new();
                 return SchedulerOutput {
                     prompt: self.running.clone().into(),
                     completion: vec![].into(),
