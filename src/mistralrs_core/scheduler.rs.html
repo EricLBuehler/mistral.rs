@@ -171,6 +171,16 @@
 <a href="#169" id="169">169</a>
 <a href="#170" id="170">170</a>
 <a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
+<a href="#175" id="175">175</a>
+<a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a>
+<a href="#178" id="178">178</a>
+<a href="#179" id="179">179</a>
+<a href="#180" id="180">180</a>
+<a href="#181" id="181">181</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::{vec_deque::Iter, HashMap, VecDeque},
@@ -240,21 +250,6 @@
 
     <span class="doccomment">/// Schedule all sequences based on their state and the available space.
     </span><span class="kw">pub fn </span>schedule(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; SchedulerOutput {
-        <span class="kw">if </span><span class="self">self</span>.waiting.iter().count() == <span class="number">1 </span>&amp;&amp; <span class="self">self</span>.running.is_empty() {
-            <span class="kw">let </span>seq = <span class="self">self</span>.waiting.next().unwrap();
-            <span class="macro">deref_mut_refcell!</span>(seq).set_state(SequenceState::RunningPrompt);
-            <span class="self">self</span>.running.push(seq);
-            <span class="kw">return </span>SchedulerOutput {
-                prompt: <span class="self">self</span>.running.clone().into(),
-                completion: <span class="macro">vec!</span>[].into(),
-            };
-        }
-        <span class="kw">if </span><span class="self">self</span>.running.len() == <span class="number">1 </span>&amp;&amp; <span class="self">self</span>.waiting.iter().count() == <span class="number">0 </span>{
-            <span class="kw">return </span>SchedulerOutput {
-                prompt: <span class="macro">vec!</span>[].into(),
-                completion: <span class="self">self</span>.running.clone().into(),
-            };
-        }
         <span class="comment">// Filter out all done sequences
         </span><span class="kw">let </span>running = <span class="self">self</span>.running.clone();
         <span class="kw">let </span><span class="kw-2">mut </span>running = running
@@ -262,6 +257,31 @@
             .filter(|seq| <span class="macro">deref_refcell!</span>(seq).is_running())
             .cloned()
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+
+        <span class="kw">match </span>(<span class="self">self</span>.waiting.iter().count(), running.len()) {
+            (<span class="number">0</span>, <span class="number">0</span>) =&gt; {
+                <span class="kw">return </span>SchedulerOutput {
+                    prompt: <span class="macro">vec!</span>[].into(),
+                    completion: <span class="macro">vec!</span>[].into(),
+                };
+            }
+            (<span class="kw">_</span>, <span class="number">0</span>) =&gt; {
+                <span class="kw">let </span>seq = <span class="self">self</span>.waiting.next().unwrap();
+                <span class="macro">deref_mut_refcell!</span>(seq).set_state(SequenceState::RunningPrompt);
+                <span class="self">self</span>.running.push(seq);
+                <span class="kw">return </span>SchedulerOutput {
+                    prompt: <span class="self">self</span>.running.clone().into(),
+                    completion: <span class="macro">vec!</span>[].into(),
+                };
+            }
+            (<span class="number">0</span>, <span class="kw">_</span>) =&gt; {
+                <span class="kw">return </span>SchedulerOutput {
+                    prompt: <span class="macro">vec!</span>[].into(),
+                    completion: <span class="self">self</span>.running.clone().into(),
+                };
+            }
+            <span class="kw">_ </span>=&gt; {}
+        }
 
         <span class="comment">// Sort the waiting seqs
         </span><span class="self">self</span>.waiting.sort_ascending_ids();
