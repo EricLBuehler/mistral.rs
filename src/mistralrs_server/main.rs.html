@@ -1015,6 +1015,8 @@
 <a href="#1013" id="1013">1013</a>
 <a href="#1014" id="1014">1014</a>
 <a href="#1015" id="1015">1015</a>
+<a href="#1016" id="1016">1016</a>
+<a href="#1017" id="1017">1017</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fs::File,
     sync::{mpsc::channel, Arc},
@@ -2008,7 +2010,9 @@
     <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
     </span><span class="kw">let </span>device = Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?</span>;
 
+    <span class="macro">println!</span>(<span class="string">"Loading model `{}` on {device:?}..."</span>, loader.get_id());
     <span class="kw">let </span>pipeline = loader.load_model(<span class="prelude-val">None</span>, args.token_source, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>;
+    <span class="macro">println!</span>(<span class="string">"Model loaded."</span>);
     <span class="kw">let </span>mistralrs = MistralRs::new(
         pipeline,
         SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),

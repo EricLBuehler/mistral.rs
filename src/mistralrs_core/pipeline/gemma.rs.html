@@ -439,6 +439,8 @@
 <a href="#437" id="437">437</a>
 <a href="#438" id="438">438</a>
 <a href="#439" id="439">439</a>
+<a href="#440" id="440">440</a>
+<a href="#441" id="441">441</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -696,7 +698,6 @@
             DType::F32
         };
 
-        <span class="macro">println!</span>(<span class="string">"Loading model on {device:?}..."</span>);
         <span class="kw">let </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
             ModelKind::QuantizedGGUF =&gt; <span class="macro">unreachable!</span>(),
             ModelKind::QuantizedGGML =&gt; <span class="macro">unreachable!</span>(),
@@ -744,7 +745,6 @@
             ModelKind::XLoraGGUF =&gt; <span class="macro">unreachable!</span>(),
             ModelKind::XLoraGGML =&gt; <span class="macro">unreachable!</span>(),
         };
-        <span class="macro">println!</span>(<span class="string">"Model loaded."</span>);
 
         <span class="kw">let </span>tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
             .map_err(|e| TokenizerError::Error(e.to_string()))<span class="question-mark">?</span>;
@@ -764,6 +764,10 @@
                 }
             }),
         })))
+    }
+
+    <span class="kw">fn </span>get_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.model_id
     }
 }
 

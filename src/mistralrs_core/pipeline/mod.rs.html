@@ -620,6 +620,8 @@
 <a href="#618" id="618">618</a>
 <a href="#619" id="619">619</a>
 <a href="#620" id="620">620</a>
+<a href="#621" id="621">621</a>
+<a href="#622" id="622">622</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -789,6 +791,8 @@
         <span class="kw">let </span>paths = <span class="self">self</span>.download_model(revision, token_source)<span class="question-mark">?</span>;
         <span class="self">self</span>._setup_model(<span class="kw-2">&amp;*</span>paths, dtype, device)
     }
+
+    <span class="kw">fn </span>get_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str;
 }
 
 <span class="kw">fn </span>raise_exception(msg: String) -&gt; <span class="prelude-ty">Result</span>&lt;String, minijinja::Error&gt; {
