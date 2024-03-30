@@ -77,6 +77,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
 
         match (self.waiting.iter().count(), running.len()) {
             (0, 0) => {
+                self.running = running;
                 return SchedulerOutput {
                     prompt: vec![].into(),
                     completion: vec![].into(),
@@ -92,6 +93,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
                 };
             }
             (0, _) => {
+                self.running = running;
                 return SchedulerOutput {
                     prompt: vec![].into(),
                     completion: self.running.clone().into(),
