@@ -7,7 +7,7 @@ Mistral.rs is a LLM inference platform written in pure, safe Rust.
 - Falcon model.
 - X-LoRA: Scalings `topk`.
 - X-LoRA: Softmax `topk`.
-- Fused kernel for softmax
+- PagedAttention (#47) ⭐ Active work.
 
 ## Description
 - Fast performance with per-sequence and catch-up KV cache management technique.
