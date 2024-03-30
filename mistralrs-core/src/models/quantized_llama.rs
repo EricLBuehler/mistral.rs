@@ -212,19 +212,19 @@ impl LayerWeights {
         let value_cache = &cache.1;
         let scale = 1. / (self.head_dim as f32).sqrt();
         candle_paged_attention::reshape_and_cache(
-            k,
-            v,
+            &k,
+            &v,
             key_cache,
             value_cache,
             &input_metadata.slot_mapping,
         );
         candle_paged_attention::paged_attention(
-            q,
-            key_cache,
-            value_cache,
-            &input_metadata.block_tables,
-            &input_metadata.context_lens,
-            &input_metadata.max_context_len,
+            &q,
+            &key_cache,
+            &value_cache,
+            &input_metadata.block_tables.as_ref().unwrap().clone(),
+            &input_metadata.context_lens.as_ref().unwrap().clone(),
+            &input_metadata.max_context_len.as_ref().unwrap().clone(),
             scale,
         );
 

@@ -40,17 +40,17 @@ pub struct CacheEngine {
 
 impl CacheEngine {
     pub fn new(
-        model_config: Box<dyn ConfigLike>,
+        model_config: &dyn ConfigLike,
         cache_config: CacheConfig,
         dtype: DType,
     ) -> Result<Self> {
         Ok(Self {
             gpu_cache: Arc::new(Mutex::new(Self::allocate_gpu_cache(
-                &*model_config,
+                model_config,
                 &cache_config,
                 dtype,
             )?)),
-            cpu_cache: Self::allocate_cpu_cache(&*model_config, &cache_config, dtype)?,
+            cpu_cache: Self::allocate_cpu_cache(model_config, &cache_config, dtype)?,
             num_layers: model_config.get_num_hidden_layers(),
         })
     }

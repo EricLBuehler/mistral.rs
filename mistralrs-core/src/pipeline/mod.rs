@@ -27,10 +27,6 @@ pub trait ModelPaths {
     fn get_config_filename(&self) -> &PathBuf;
     fn get_tokenizer_filename(&self) -> &PathBuf;
     fn get_template_filename(&self) -> &PathBuf;
-    fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>>;
-    fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>>;
-    fn get_classifier_path(&self) -> &Option<PathBuf>;
-    fn get_ordering(&self) -> &Option<Ordering>;
 }
 
 #[allow(dead_code)]

@@ -51,18 +51,6 @@ impl ModelPaths for MistralModelPaths<PathBuf> {
     fn get_weight_filenames(&self) -> &[PathBuf] {
         &self.filenames
     }
-    fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>> {
-        &self.xlora_adapter_filenames
-    }
-    fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>> {
-        &self.xlora_adapter_configs
-    }
-    fn get_classifier_path(&self) -> &Option<PathBuf> {
-        &self.classifier_path
-    }
-    fn get_ordering(&self) -> &Option<Ordering> {
-        &self.xlora_ordering
-    }
     fn get_template_filename(&self) -> &PathBuf {
         &self.template_filename
     }
@@ -298,7 +286,7 @@ impl Pipeline for MistralPipeline {
         }
     }
     fn num_hidden_layers(&self) -> usize {
-        self.cache().lock().len()
+        self.config_like.get_num_hidden_layers()
     }
     fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs> {
         let logits = logits
@@ -352,5 +340,7 @@ impl Pipeline for MistralPipeline {
     fn get_chat_template(&self) -> &ChatTemplate {
         &self.chat_template
     }
-    fn config(&self) -> Box<dyn ConfigLike> {}
+    fn config(&self) -> Box<dyn ConfigLike> {
+        self.config_like
+    }
 }
