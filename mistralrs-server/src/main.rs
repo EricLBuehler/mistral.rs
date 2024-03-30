@@ -991,7 +991,9 @@ async fn main() -> Result<()> {
     #[cfg(not(feature = "metal"))]
     let device = Device::cuda_if_available(0)?;
 
+    println!("Loading model `{}` on {device:?}...", loader.get_id());
     let pipeline = loader.load_model(None, args.token_source, None, &device)?;
+    println!("Model loaded.");
     let mistralrs = MistralRs::new(
         pipeline,
         SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),

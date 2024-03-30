@@ -167,6 +167,8 @@ pub trait Loader {
         let paths = self.download_model(revision, token_source)?;
         self._setup_model(&*paths, dtype, device)
     }
+
+    fn get_id(&self) -> &str;
 }
 
 fn raise_exception(msg: String) -> Result<String, minijinja::Error> {
