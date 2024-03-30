@@ -322,7 +322,7 @@ impl Pipeline for MistralPipeline {
     fn get_chat_template(&self) -> &ChatTemplate {
         &self.chat_template
     }
-    fn config(&self) -> Box<dyn ConfigLike> {
-        self.config_like
+    fn config(&self) -> &dyn ConfigLike {
+        &*self.config_like
     }
 }

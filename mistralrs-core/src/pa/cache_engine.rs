@@ -7,7 +7,7 @@ use candle_core::{DType, Device, Result, Tensor};
 
 use crate::pipeline::ConfigLike;
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct CacheConfig {
     pub block_size: usize,
     pub num_gpu_blocks: Option<usize>, // Set after profiling init

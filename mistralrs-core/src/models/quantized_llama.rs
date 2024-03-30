@@ -262,7 +262,7 @@ impl LayerWeights {
             &value_cache,
             &input_metadata.block_tables.as_ref().unwrap().clone(),
             &input_metadata.context_lens.as_ref().unwrap().clone(),
-            &input_metadata.max_context_len.as_ref().unwrap().clone(),
+            input_metadata.max_context_len.as_ref().unwrap().clone(),
             scale,
         );
 

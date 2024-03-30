@@ -1,4 +1,5 @@
 use std::{
+    arch::global_asm,
     cell::RefCell,
     collections::VecDeque,
     iter::zip,
@@ -40,6 +41,13 @@ pub struct Engine {
     cache_engine: CacheEngine,
 }
 
+const BLOCK_SIZE: usize = 16;
+const CPU_SWAP_SPACE: usize = 1024 * 128; // 128 kb
+const GPU_UTILIZATION: usize = 1024 * 1024 * 1024 * 80; // 80gb
+const BLOCK_SIZE_BYTES: usize = BLOCK_SIZE * 4; // Assume f32
+const NUM_CPU_BLOCKS: usize = CPU_SWAP_SPACE / BLOCK_SIZE_BYTES;
+const NUM_GPU_BLOCKS: usize = GPU_UTILIZATION / BLOCK_SIZE_BYTES;
+
 impl Engine {
     pub fn new(
         rx: Receiver<Request>,
@@ -50,11 +58,10 @@ impl Engine {
     ) -> Self {
         let (cache_engine, conf) = {
             let pipeline = get_mut_arcmutex!(pipeline);
-            // todo!("this is todo")
             let conf = CacheConfig {
-                block_size: 123,
-                num_cpu_blocks: Some(1234),
-                num_gpu_blocks: Some(124),
+                block_size: BLOCK_SIZE,
+                num_cpu_blocks: Some(NUM_CPU_BLOCKS),
+                num_gpu_blocks: Some(NUM_GPU_BLOCKS),
                 fully_init: true,
             };
             (
@@ -65,7 +72,7 @@ impl Engine {
         Self {
             rx,
             pipeline,
-            scheduler: Scheduler::new(max_num_seqs),
+            scheduler: Scheduler::new(max_num_seqs, BLOCK_SIZE, NUM_CPU_BLOCKS, NUM_GPU_BLOCKS),
             id: 0,
             truncate_sequence,
             no_kv_cache,
@@ -85,7 +92,13 @@ impl Engine {
 
             let seqs = scheduled
                 .iter()
-                .flat_map(|group| deref_refcell!(group).get_seqs().values().cloned())
+                .flat_map(|group| {
+                    deref_refcell!(group)
+                        .get_seqs()
+                        .values()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
                 .collect::<Vec<_>>();
 
             if scheduled.len() > 0 {
@@ -94,7 +107,8 @@ impl Engine {
                     .get_seqs()
                     .values()
                     .nth(0)
-                    .unwrap();
+                    .unwrap()
+                    .clone();
                 let PreparedInputs {
                     tokens,
                     positions,
@@ -240,19 +254,16 @@ impl Engine {
         let mut input_positions = Vec::new();
         let mut slot_mappings = Vec::new();
         for group in groups {
-            for seq in deref_refcell!(group).get_seqs().values() {
-                let prompt_ids = deref_refcell!(seq).get_toks();
+            for seq in deref_refcell!(group).get_seqs().values().cloned() {
+                let seq = deref_refcell!(seq);
+                let prompt_ids = seq.get_toks().to_vec();
 
                 let prompt_len = prompt_ids.len();
                 prompt_lens.push(prompt_len);
 
                 input_tokens.push(prompt_ids);
                 input_positions.push((0..prompt_len).collect::<Vec<_>>());
-                let table = self
-                    .scheduler
-                    .block_engine
-                    .block_tables
-                    .get(&deref_refcell!(seq).id());
+                let table = self.scheduler.block_engine.block_tables.get(&seq.id());
                 if table.is_none() {
                     // Will be None during profiling.
                     slot_mappings.push([_PAD_SLOT_ID].repeat(prompt_len));
@@ -290,7 +301,7 @@ impl Engine {
         }
 
         let max_prompt_len = prompt_lens.iter().max().unwrap();
-        let dev = get_mut_arcmutex!(self.pipeline).device();
+        let dev = get_mut_arcmutex!(self.pipeline).device().clone();
         let input_tokens = _make_tensor_with_pad(
             input_tokens
                 .iter()
@@ -334,8 +345,8 @@ impl Engine {
         let mut slot_mappings = Vec::new();
         let mut block_tables = Vec::new();
         for group in groups {
-            for seq in deref_refcell!(group).get_seqs().values() {
-                let last_token_id = deref_mut_refcell!(seq).get_toks().last().unwrap();
+            for seq in deref_refcell!(group).get_seqs().values().cloned() {
+                let last_token_id = *deref_refcell!(seq).get_toks().last().unwrap();
                 input_tokens.push(vec![last_token_id]);
 
                 let position = deref_refcell!(seq).len() - 1;
@@ -385,11 +396,11 @@ impl Engine {
             }
         }
 
-        let dev = get_mut_arcmutex!(self.pipeline).device();
+        let dev = get_mut_arcmutex!(self.pipeline).device().clone();
         let input_tokens = _make_tensor_with_pad(
             input_tokens
                 .iter()
-                .map(|x| x.iter().map(|x| **x as i64).collect::<Vec<_>>())
+                .map(|x| x.iter().map(|x| *x as i64).collect::<Vec<_>>())
                 .collect::<Vec<_>>(),
             1,
             0,
@@ -529,7 +540,9 @@ impl Engine {
 
         let group = Rc::new(RefCell::new(SequenceGroup::new(
             request.sampling_params.n_choices,
+            self.id,
         )));
+        self.id += 1;
         // Add sequences
         for _ in 0..request.sampling_params.n_choices {
             let seq = Sequence::new_waiting(
@@ -556,7 +569,7 @@ impl Engine {
                 request.return_logprobs,
                 get_mut_arcmutex!(self.pipeline).is_xlora(),
                 Rc::downgrade(&group),
-                todo!(),
+                BLOCK_SIZE,
             );
             self.id += 1;
             let seq = Rc::new(RefCell::new(seq));

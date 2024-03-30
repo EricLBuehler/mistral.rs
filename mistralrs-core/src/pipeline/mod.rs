@@ -232,7 +232,7 @@ pub trait Pipeline: Send + Sync {
         })?)
     }
     fn get_chat_template(&self) -> &ChatTemplate;
-    fn config(&self) -> Box<dyn ConfigLike>;
+    fn config(&self) -> &dyn ConfigLike;
 }
 
 // TODO(EricLBuehler): Ensure the padding token matches tokenizer

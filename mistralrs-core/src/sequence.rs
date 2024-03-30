@@ -298,10 +298,11 @@ pub struct SequenceGroup {
     pub total_sampling_time: u128,
     choices: Vec<Choice>,
     seqs: HashMap<usize, Rc<RefCell<Sequence>>>,
+    id: usize,
 }
 
 impl SequenceGroup {
-    pub fn new(n_choices: usize) -> Self {
+    pub fn new(n_choices: usize, id: usize) -> Self {
         Self {
             done_count: 0,
             choices: Vec::new(),
@@ -313,6 +314,7 @@ impl SequenceGroup {
             total_comple_time: 0,
             total_sampling_time: 0,
             seqs: HashMap::new(),
+            id,
         }
     }
 
@@ -366,11 +368,11 @@ impl SequenceGroup {
     }
 
     pub fn id(&self) -> usize {
-        todo!()
+        self.id
     }
 
     pub fn timestamp(&self) -> u128 {
-        todo!()
+        deref_refcell!(self.seqs.values().nth(0).unwrap()).timestamp
     }
 
     pub fn set_state(&self, status: SequenceState) {

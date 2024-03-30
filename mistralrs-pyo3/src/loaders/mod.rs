@@ -6,10 +6,10 @@ use pyo3::{
 
 use crate::{DType, ModelKind};
 
-pub mod gemma;
-pub mod llama;
+//pub mod gemma;
+//pub mod llama;
 pub mod mistral;
-pub mod mixtral;
+//pub mod mixtral;
 
 #[pyclass]
 pub struct NormalLoader {

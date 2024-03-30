@@ -1,7 +1,7 @@
 use candle_core::DType as _DType;
 use mistralrs::{
     Loader, MistralLoader as _MistralLoader, MistralRs, MistralSpecificConfig,
-    ModelKind as _ModelKind, SchedulerMethod, TokenSource,
+    ModelKind as _ModelKind, TokenSource,
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
 use std::fs::File;
@@ -215,7 +215,7 @@ impl MistralLoader {
 
         let mistralrs = MistralRs::new(
             pipeline,
-            SchedulerMethod::Fixed(maxseqs.try_into().unwrap()),
+            maxseqs.try_into().unwrap(),
             logfile,
             truncate_sequence,
             self.no_kv_cache,

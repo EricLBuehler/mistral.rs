@@ -9,8 +9,11 @@ use std::{
 use ::mistralrs::{MistralRs, Request as _Request, Response, SamplingParams, StopTokens};
 use candle_core::Device;
 use loaders::{
-    gemma::GemmaLoader, llama::LlamaLoader, mistral::MistralLoader, mixtral::MixtralLoader,
-    NormalLoader, QuantizedLoader, XLoraLoader, XLoraQuantizedLoader,
+    mistral::MistralLoader, //gemma::GemmaLoader, llama::LlamaLoader, , mixtral::MixtralLoader,
+    NormalLoader,
+    QuantizedLoader,
+    XLoraLoader,
+    XLoraQuantizedLoader,
 };
 use pyo3::{
     exceptions::PyValueError,
@@ -211,9 +214,9 @@ impl ChatCompletionRequest {
 fn mistralrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<Runner>()?;
     m.add_class::<MistralLoader>()?;
-    m.add_class::<MixtralLoader>()?;
-    m.add_class::<GemmaLoader>()?;
-    m.add_class::<LlamaLoader>()?;
+    //m.add_class::<MixtralLoader>()?;
+    //m.add_class::<GemmaLoader>()?;
+    //m.add_class::<LlamaLoader>()?;
     m.add_class::<ModelKind>()?;
     m.add_class::<ChatCompletionRequest>()?;
     m.add_class::<NormalLoader>()?;

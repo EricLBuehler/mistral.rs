@@ -13,9 +13,8 @@ use candle_core::Device;
 use clap::{Parser, Subcommand};
 use indexmap::IndexMap;
 use mistralrs_core::{
-    GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader, MistralLoader,
-    MistralRs, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind, Request,
-    Response, SamplingParams, SchedulerMethod, StopTokens as InternalStopTokens, TokenSource,
+    Loader, MistralLoader, MistralRs, MistralSpecificConfig, ModelKind, Request, Response,
+    SamplingParams, StopTokens as InternalStopTokens, TokenSource,
 };
 use openai::{ChatCompletionRequest, StopTokens};
 mod openai;
@@ -622,7 +621,7 @@ async fn main() -> Result<()> {
     let args = args;
 
     let loader: Box<dyn Loader> = match args.model {
-        ModelSelected::Mistral {
+        /*ModelSelected::Mistral {
             model_id,
             repeat_last_n,
             tokenizer_json,
@@ -641,7 +640,7 @@ async fn main() -> Result<()> {
             args.chat_template,
             tokenizer_json,
             None,
-        )),
+        )),*/
         ModelSelected::MistralGGUF {
             tok_model_id,
             quantized_model_id,
@@ -664,7 +663,7 @@ async fn main() -> Result<()> {
             tokenizer_json,
             None,
         )),
-        ModelSelected::XLoraMistral {
+        /*ModelSelected::XLoraMistral {
             model_id,
             xlora_model_id,
             repeat_last_n,
@@ -983,7 +982,8 @@ async fn main() -> Result<()> {
             args.chat_template,
             tokenizer_json,
             tgt_non_granular_index,
-        )),
+        )),*/
+        _ => unreachable!(),
     };
 
     #[cfg(feature = "metal")]
@@ -994,7 +994,7 @@ async fn main() -> Result<()> {
     let pipeline = loader.load_model(None, args.token_source, None, &device)?;
     let mistralrs = MistralRs::new(
         pipeline,
-        SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
+        args.max_seqs.try_into().unwrap(),
         args.log,
         args.truncate_sequence,
         args.no_kv_cache,

@@ -35,12 +35,17 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
-    pub fn new(max_num_seqs: usize) -> Self {
+    pub fn new(
+        max_num_seqs: usize,
+        block_size: usize,
+        num_gpu_blocks: usize,
+        num_cpu_blocks: usize,
+    ) -> Self {
         Self {
             running: VecDeque::new(),
             waiting: VecDeque::new(),
             swapped_out: VecDeque::new(),
-            block_engine: todo!(),
+            block_engine: BlockEngine::new(block_size, num_gpu_blocks, num_cpu_blocks),
             max_num_seqs,
         }
     }
@@ -279,7 +284,8 @@ impl Scheduler {
         seq_group: Rc<RefCell<SequenceGroup>>,
         blocks_to_swap_out: &mut HashMap<usize, usize>,
     ) {
-        match deref_refcell!(seq_group).get_seqs().len() {
+        let len = deref_refcell!(seq_group).get_seqs().len();
+        match len {
             1 => self._preempt_by_recompute(seq_group),
             _ => self._preempt_by_swap(seq_group, blocks_to_swap_out),
         }
