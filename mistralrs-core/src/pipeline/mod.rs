@@ -1,21 +1,15 @@
-mod gemma;
-mod llama;
 mod mistral;
-mod mixtral;
 use candle_sampling::logits_processor::Logprobs;
 use core::fmt;
 use either::Either;
-pub use gemma::{GemmaLoader, GemmaSpecificConfig, GEMMA_IS_GPTX};
 use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
     Repo, RepoType,
 };
 use indexmap::IndexMap;
-pub use llama::{LlamaLoader, LlamaSpecificConfig, LLAMA_IS_GPTX};
 use minijinja::{context, Environment, ErrorKind};
 pub use mistral::{MistralLoader, MistralSpecificConfig, MISTRAL_IS_GPTX};
 use mistralrs_lora::{LoraConfig, Ordering};
-pub use mixtral::{MixtralLoader, MixtralSpecificConfig, MIXTRAL_IS_GPTX};
 use serde::Deserialize;
 use std::{
     cell::RefCell, collections::HashMap, fs, iter::repeat, path::PathBuf, rc::Rc, str::FromStr,
@@ -24,15 +18,9 @@ use std::{
 use tokenizers::Tokenizer;
 
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor};
+use candle_core::{DType, Device, Tensor, WithDType};
 
-use crate::{
-    deref_refcell, get_mut_arcmutex,
-    models::Cache,
-    sequence::Sequence,
-    utils::tokens::get_token,
-    xlora_models::{NonGranularState, XLoraConfig},
-};
+use crate::{pa::InputMetadata, sequence::Sequence, utils::tokens::get_token};
 
 pub trait ModelPaths {
     fn get_weight_filenames(&self) -> &[PathBuf];
@@ -42,7 +30,6 @@ pub trait ModelPaths {
     fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>>;
     fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>>;
     fn get_classifier_path(&self) -> &Option<PathBuf>;
-    fn get_classifier_config(&self) -> &Option<XLoraConfig>;
     fn get_ordering(&self) -> &Option<Ordering>;
 }
 
@@ -173,8 +160,26 @@ fn raise_exception(msg: String) -> Result<String, minijinja::Error> {
     Err(minijinja::Error::new(ErrorKind::InvalidOperation, msg))
 }
 
+pub trait ConfigLike {
+    fn get_num_kv_heads(&self) -> usize;
+    fn get_hidden_size(&self) -> usize;
+    fn get_num_hidden_layers(&self) -> usize;
+    fn get_num_attention_heads(&self) -> usize;
+    fn get_vocab_size(&self) -> usize;
+    fn get_sliding_window(&self) -> Option<usize>;
+    fn get_head_size(&self) -> usize {
+        self.get_hidden_size() / self.get_num_attention_heads()
+    }
+}
+
 pub trait Pipeline: Send + Sync {
-    fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor;
+    fn forward(
+        &mut self,
+        input_tokens: Tensor,
+        input_positions: Tensor,
+        kv_cache: &[(Tensor, Tensor)],
+        input_metadata: InputMetadata,
+    ) -> Tensor;
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
         let encoding = self
             .tokenizer()
@@ -184,7 +189,6 @@ pub trait Pipeline: Send + Sync {
     }
     fn device(&self) -> &Device;
     fn num_hidden_layers(&self) -> usize;
-    fn cache(&self) -> &Cache;
     fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs>;
     fn tokenizer(&self) -> Tokenizer;
     fn eos_tok(&self) -> u32;
@@ -232,286 +236,24 @@ pub trait Pipeline: Send + Sync {
         })?)
     }
     fn get_chat_template(&self) -> &ChatTemplate;
-    fn get_non_granular_state(&self) -> &Option<NonGranularState>;
-    fn reset_non_granular_state(&self) {
-        if let Some(s) = self.get_non_granular_state().as_ref() {
-            *self.cache().get_scalings_cache() = None;
-            *get_mut_arcmutex!(s.non_granular_index) = 0;
-        }
-    }
+    fn config(&self) -> Box<dyn ConfigLike>;
 }
 
-struct InputMetadata {
-    input: Tensor,
-    positions: Vec<usize>,
-    positions_kernel: Tensor, // [bs, seq len]
-}
-
-fn get_prompt_input(
-    input_toks: &[Rc<RefCell<Sequence>>],
-    device: &Device,
-) -> Result<InputMetadata> {
-    // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
-    let max_len = input_toks
-        .iter()
-        .map(|seq| deref_refcell!(seq).len())
-        .max()
-        .unwrap();
-    let padding_tok = 0;
-    // Pad each sequence by the padding token to the max len.
-    let mut seqs_tensors = Vec::new();
-    let mut seqlen_offsets = Vec::new();
-    for seq in input_toks.iter() {
-        let mut ctxt = deref_refcell!(seq).get_toks().to_vec();
-        seqlen_offsets.push(0);
-
-        ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
-
-        // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
-        seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
+// TODO(EricLBuehler): Ensure the padding token matches tokenizer
+pub fn _make_tensor_with_pad<D: WithDType>(
+    x: Vec<Vec<D>>,
+    max_len: usize,
+    pad: D,
+    dev: &Device,
+) -> candle_core::Result<Tensor> {
+    let mut padded_x = Vec::new();
+    for mut x_i in x {
+        assert!(x_i.len() <= max_len);
+        x_i.extend([pad].repeat(max_len - x_i.len()));
+        let shape = (x_i.len(),);
+        padded_x.push(Tensor::from_vec(x_i, shape, dev)?);
     }
-
-    let mut tmp = Vec::new();
-    for pos in (0..seqs_tensors.len())
-        .map(|_| (0..max_len).map(|x| x as i64).collect::<Vec<_>>())
-        .collect::<Vec<_>>()
-    {
-        tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
-    }
-    let positions_kernel = Tensor::cat(&tmp, 0)?;
-    // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
-    Ok(InputMetadata {
-        input: Tensor::cat(&seqs_tensors, 0).unwrap(),
-        positions: seqlen_offsets,
-        positions_kernel,
-    })
-}
-
-fn get_completion_input(
-    input_toks: &[Rc<RefCell<Sequence>>],
-    device: &Device,
-    no_kv_cache: bool,
-) -> Result<InputMetadata> {
-    if no_kv_cache {
-        return get_prompt_input(input_toks, device);
-    }
-    // Pad each sequence by the padding token to the max len.
-    let mut seqs_tensors = Vec::new();
-    let mut seqlen_offsets = Vec::new();
-    for seq in input_toks.iter() {
-        let start_pos = deref_refcell!(seq).get_toks().len().saturating_sub(1);
-        let ctxt = deref_refcell!(seq).get_toks()[start_pos..].to_vec();
-        seqlen_offsets.push(start_pos);
-
-        // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
-        seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
-    }
-    // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
-    let mut tmp = Vec::new();
-    for pos in (0..seqs_tensors.len())
-        .map(|i| vec![*seqlen_offsets.get(i).unwrap() as i64])
-        .collect::<Vec<_>>()
-    {
-        tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
-    }
-    let positions_kernel = Tensor::cat(&tmp, 0)?;
-    Ok(InputMetadata {
-        input: Tensor::cat(&seqs_tensors, 0).unwrap(),
-        positions: seqlen_offsets,
-        positions_kernel,
-    })
-}
-
-struct ModelInputs {
-    input_ids: Tensor,
-    input_ids_full: Option<Tensor>,
-    seqlen_offsets: Vec<usize>,
-    seqlen_offsets_full: Option<Vec<usize>>,
-    seqlen_offsets_kernel: Tensor,
-    seqlen_offsets_kernel_full: Option<Tensor>,
-}
-
-fn calculate_inputs(
-    input_toks: Box<[Rc<RefCell<Sequence>>]>,
-    is_prompt: bool,
-    is_xlora: bool,
-    device: &Device,
-    no_kv_cache: bool,
-) -> Result<ModelInputs> {
-    if is_xlora && !is_prompt {
-        let InputMetadata {
-            input: input_ids_full,
-            positions: seqlen_offsets_full,
-            positions_kernel: seqlen_offsets_kernel_full,
-        } = get_prompt_input(&input_toks, device)?;
-        let InputMetadata {
-            input: input_ids,
-            positions: seqlen_offsets,
-            positions_kernel: seqlen_offsets_kernel,
-        } = get_completion_input(&input_toks, device, no_kv_cache)?;
-        Ok(ModelInputs {
-            input_ids,
-            input_ids_full: Some(input_ids_full),
-            seqlen_offsets,
-            seqlen_offsets_full: Some(seqlen_offsets_full),
-            seqlen_offsets_kernel,
-            seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel_full),
-        })
-    } else if is_xlora && is_prompt {
-        let InputMetadata {
-            input: input_ids,
-            positions: seqlen_offsets,
-            positions_kernel: seqlen_offsets_kernel,
-        } = get_prompt_input(&input_toks, device)?;
-        Ok(ModelInputs {
-            input_ids: input_ids.clone(),
-            input_ids_full: Some(input_ids),
-            seqlen_offsets: seqlen_offsets.clone(),
-            seqlen_offsets_full: Some(seqlen_offsets),
-            seqlen_offsets_kernel: seqlen_offsets_kernel.clone(),
-            seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel),
-        })
-    } else if is_prompt {
-        let InputMetadata {
-            input: input_ids,
-            positions: seqlen_offsets,
-            positions_kernel: seqlen_offsets_kernel,
-        } = get_prompt_input(&input_toks, device)?;
-        Ok(ModelInputs {
-            input_ids,
-            input_ids_full: None,
-            seqlen_offsets,
-            seqlen_offsets_full: None,
-            seqlen_offsets_kernel,
-            seqlen_offsets_kernel_full: None,
-        })
-    } else {
-        let InputMetadata {
-            input: input_ids,
-            positions: seqlen_offsets,
-            positions_kernel: seqlen_offsets_kernel,
-        } = get_completion_input(&input_toks, device, no_kv_cache)?;
-        Ok(ModelInputs {
-            input_ids,
-            input_ids_full: None,
-            seqlen_offsets,
-            seqlen_offsets_full: None,
-            seqlen_offsets_kernel,
-            seqlen_offsets_kernel_full: None,
-        })
-    }
-}
-
-struct XLoraPaths {
-    adapter_configs: Option<Vec<(String, LoraConfig)>>,
-    adapter_safetensors: Option<Vec<(String, PathBuf)>>,
-    classifier_path: Option<PathBuf>,
-    xlora_order: Option<Ordering>,
-    xlora_config: Option<XLoraConfig>,
-}
-
-fn get_xlora_paths(
-    xlora_model_id: &Option<String>,
-    token_source: &TokenSource,
-    revision: String,
-    xlora_order: &Option<Ordering>,
-) -> Result<XLoraPaths> {
-    Ok(if let Some(ref xlora_id) = xlora_model_id {
-        let api = ApiBuilder::new()
-            .with_progress(true)
-            .with_token(Some(get_token(token_source)?))
-            .build()?;
-        let api = api.repo(Repo::with_revision(
-            xlora_id.clone(),
-            RepoType::Model,
-            revision,
-        ));
-        let xlora_classifier = &api
-            .info()?
-            .siblings
-            .iter()
-            .map(|x| x.rfilename.clone())
-            .filter(|x| x.contains("xlora_classifier.safetensors"))
-            .collect::<Vec<_>>()[0];
-        let xlora_config = &api
-            .info()?
-            .siblings
-            .iter()
-            .map(|x| x.rfilename.clone())
-            .filter(|x| x.contains("xlora_config.json"))
-            .collect::<Vec<_>>()[0];
-        let classifier_path = api.get(xlora_classifier)?;
-        let config_path = api.get(xlora_config)?;
-        let conf = fs::read_to_string(config_path)?;
-        let xlora_config: XLoraConfig = serde_json::from_str(&conf)?;
-
-        let adapter_files = api
-            .info()?
-            .siblings
-            .iter()
-            .map(|x| x.rfilename.clone())
-            .filter(|x| x.contains("/adapter_"))
-            .map(|x| {
-                let mut split = x.split('/');
-                let pos = split.clone().count() - 2;
-                let name = split.nth(pos).unwrap().to_string();
-                (x, name)
-            })
-            .collect::<Vec<_>>();
-        let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
-        for (file, name) in adapter_files {
-            if let Some(paths) = adapters_paths.get_mut(&name) {
-                paths.push(api.get(&file)?);
-            } else {
-                adapters_paths.insert(name, vec![api.get(&file)?]);
-            }
-        }
-        let mut adapters_configs = Vec::new();
-        let mut adapters_safetensors = Vec::new();
-        let adapter_order = if let Some(ref a) = xlora_config.adapters {
-            a.clone()
-        } else {
-            if xlora_order.as_ref().unwrap().adapters.is_none() {
-                return Err(anyhow::Error::msg(
-                    "Must specify adapters in ordering.".to_string(),
-                ));
-            }
-            xlora_order
-                .as_ref()
-                .unwrap()
-                .adapters
-                .as_ref()
-                .unwrap()
-                .clone()
-        };
-        for name in &adapter_order {
-            let paths = adapters_paths.get(name).unwrap();
-            for path in paths {
-                if path.extension().unwrap() == "safetensors" {
-                    adapters_safetensors.push((name.clone(), path.to_owned()));
-                } else {
-                    let conf = fs::read_to_string(path)?;
-                    let lora_config: LoraConfig = serde_json::from_str(&conf)?;
-                    adapters_configs.push((name.clone(), lora_config));
-                }
-            }
-        }
-        XLoraPaths {
-            adapter_configs: Some(adapters_configs),
-            adapter_safetensors: Some(adapters_safetensors),
-            classifier_path: Some(classifier_path),
-            xlora_order: xlora_order.clone(),
-            xlora_config: Some(xlora_config),
-        }
-    } else {
-        XLoraPaths {
-            adapter_configs: None,
-            adapter_safetensors: None,
-            classifier_path: None,
-            xlora_order: None,
-            xlora_config: None,
-        }
-    })
+    Tensor::cat(&padded_x[..], 0)
 }
 
 fn get_model_paths(

@@ -8,7 +8,7 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::layer_norm::RmsNormQuantized;
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 
-use super::Cache;
+use crate::pa::InputMetadata;
 
 pub const MAX_SEQ_LEN: u32 = 4096;
 
@@ -163,6 +163,7 @@ struct LayerWeights {
     span_attn: tracing::Span,
     span_mlp: tracing::Span,
     rotary: RotaryEmbedding,
+    attn: PagedAttention,
 }
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
@@ -177,9 +178,9 @@ impl LayerWeights {
         &mut self,
         x: &Tensor,
         mask: &Option<Tensor>,
-        start_offsets: &[usize],
-        start_offsets_kernel: Tensor,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        positions: &Tensor,
+        cache: &(Tensor, Tensor),
+        input_metadata: &mut InputMetadata,
     ) -> Result<Tensor> {
         let _enter = self.span_attn.enter();
         let (b_sz, seq_len, n_embd) = x.dims3()?;
@@ -194,7 +195,7 @@ impl LayerWeights {
             .transpose(1, 2)?;
 
         self.rotary
-            .forward(start_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
+            .forward(&[usize::MAX], &positions, &mut q, &mut k, b_sz)?;
 
         if q.rank() == 3 {
             q = q
@@ -206,32 +207,28 @@ impl LayerWeights {
                 .transpose(1, 2)?;
         }
 
-        let (k, v) = match &*kv_cache {
-            None => (k, v),
-            Some((k_cache, v_cache)) => {
-                let k = candle_nn::ops::kvconcat(k_cache, &k, 2)?.contiguous()?;
-                let v = candle_nn::ops::kvconcat(v_cache, &v, 2)?.contiguous()?;
-                (k, v)
-            }
-        };
-        *kv_cache = Some((k.clone(), v.clone()));
+        let dtype = q.dtype();
+        let device = q.device().clone();
+        let key_cache = &cache.0;
+        let value_cache = &cache.1;
+        let scale = 1. / (self.head_dim as f32).sqrt();
+        candle_paged_attention::reshape_and_cache(
+            k,
+            v,
+            key_cache,
+            value_cache,
+            &input_metadata.slot_mapping,
+        );
+        candle_paged_attention::paged_attention(
+            q,
+            key_cache,
+            value_cache,
+            &input_metadata.block_tables,
+            &input_metadata.context_lens,
+            &input_metadata.max_context_len,
+            scale,
+        );
 
-        // Support for MQA, useful for 70B models.
-        let k = self.repeat_kv(k)?;
-        let v = self.repeat_kv(v)?;
-
-        let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-        let att = match mask {
-            None => att,
-            Some(mask) => {
-                let mask = mask.broadcast_as(att.shape())?;
-                masked_fill(&att, &mask, f32::NEG_INFINITY)?
-            }
-        };
-        let att = candle_nn::ops::softmax_last_dim(&att)?;
-        // Convert to contiguous as matmul doesn't support strided vs for now.
-        let y = att.matmul(&v.contiguous()?)?;
-        let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = self.attention_wo.forward(&y)?;
         Ok(y)
     }
@@ -261,7 +258,6 @@ pub struct ModelWeights {
     span: tracing::Span,
     span_output: tracing::Span,
     pub device: Device,
-    pub cache: Cache,
 }
 
 impl ModelWeights {
@@ -315,6 +311,15 @@ impl ModelWeights {
                 span_attn,
                 span_mlp,
                 rotary: rotary.clone(),
+                attn: PagedAttention::new(
+                    cfg.num_attention_heads,
+                    head_dim,
+                    1. / ((head_dim as f32).sqrt()),
+                    Some(cfg.num_key_value_heads),
+                    None,
+                    vb.device().clone(),
+                    None,
+                ),
             })
         }
         let span = tracing::span!(tracing::Level::TRACE, "model");
@@ -328,7 +333,6 @@ impl ModelWeights {
             span,
             span_output,
             device: ct.device.clone(),
-            cache: Cache::new(ct.hparams.n_layer as usize, false),
         })
     }
 
@@ -439,6 +443,15 @@ impl ModelWeights {
                 span_attn,
                 span_mlp,
                 rotary: rotary.clone(),
+                attn: PagedAttention::new(
+                    cfg.num_attention_heads,
+                    head_dim,
+                    1. / ((head_dim as f32).sqrt()),
+                    Some(cfg.num_key_value_heads),
+                    None,
+                    vb.device().clone(),
+                    None,
+                ),
             })
         }
         let span = tracing::span!(tracing::Level::TRACE, "model");
@@ -452,7 +465,6 @@ impl ModelWeights {
             span,
             span_output,
             device: device.clone(),
-            cache: Cache::new(block_count, false),
         })
     }
 
@@ -472,8 +484,9 @@ impl ModelWeights {
     pub fn forward(
         &mut self,
         x: &Tensor,
-        start_offsets: &[usize],
-        start_offsets_kernel: Tensor,
+        positions: &Tensor,
+        kv_caches: &[(Tensor, Tensor)],
+        input_metadata: &mut InputMetadata,
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
         let mask = if seq_len == 1 {
@@ -483,7 +496,6 @@ impl ModelWeights {
         };
         let _enter = self.span.enter();
         let mut layer_in = self.tok_embeddings.forward(x)?;
-        let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
             let x = layer_in;
             let residual = &x;

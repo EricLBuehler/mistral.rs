@@ -7,18 +7,22 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use candle_core::{Device, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_sampling::logits_processor::{LogitsProcessor, SamplingMethod};
 
 use crate::{
     deref_mut_refcell, deref_refcell, get_mut_arcmutex, handle_seq_error,
     handle_seq_error_stateaware,
-    pipeline::Pipeline,
+    pa::{
+        cache_engine::{self, CacheConfig, CacheEngine},
+        InputMetadata, PreparedInputs, _PAD_SLOT_ID,
+    },
+    pipeline::{Pipeline, _make_tensor_with_pad},
     request::Request,
     response::{
         ChatCompletionResponse, Choice, Logprobs, Response, ResponseLogprob, ResponseMessage,
     },
-    scheduler::{Scheduler, SchedulerMethod},
+    scheduler::{Scheduler, SchedulerMethod, SchedulerOutput},
     sequence::{Sequence, SequenceGroup, SequenceState, StopReason},
     StopTokens,
 };
@@ -28,10 +32,13 @@ const SEED: u64 = 0;
 pub struct Engine {
     rx: Receiver<Request>,
     pipeline: Box<Mutex<dyn Pipeline>>,
-    scheduler: Scheduler<VecDeque<Rc<RefCell<Sequence>>>>,
+    scheduler: Scheduler,
     id: usize,
     truncate_sequence: bool,
     no_kv_cache: bool,
+    cache_config: CacheConfig,
+    cache_engine: CacheEngine,
+    sliding_window: usize,
 }
 
 impl Engine {
@@ -42,6 +49,15 @@ impl Engine {
         truncate_sequence: bool,
         no_kv_cache: bool,
     ) -> Self {
+        let sliding_window = pipeline.get_model_config().get_sliding_window();
+        let conf = CacheConfig {
+            block_size: 123,
+            num_cpu_blocks: Some(1234),
+            num_gpu_blocks: Some(124),
+            fully_init: bool,
+        };
+        let cache_engine =
+            CacheEngine::new(deref_mut_refcell!(pipeline).config(), conf, DType::F32);
         Self {
             rx,
             pipeline,
@@ -49,6 +65,9 @@ impl Engine {
             id: 0,
             truncate_sequence,
             no_kv_cache,
+            sliding_window,
+            cache_config: conf,
+            cache_engine: cache_engine.unwrap(),
         }
     }
 
@@ -57,61 +76,48 @@ impl Engine {
             if let Ok(request) = self.rx.try_recv() {
                 self.add_request(request);
             }
-            let scheduled = self.scheduler.schedule();
+            let scheduler_outputs = self.scheduler.schedule();
 
-            if scheduled.completion.len() > 0 {
+            let scheduled = &*scheduler_outputs.scheduled;
+
+            let seqs = scheduled
+                .iter()
+                .flat_map(|group| deref_refcell!(group).get_seqs())
+                .collect::<Vec<_>>();
+
+            if scheduled.len() > 0 {
+                // NOTE(EricLBuehler): assume all are prompts or completions
+                let firstseq = deref_refcell!(scheduled.first().unwrap())
+                    .get_seqs()
+                    .values()
+                    .nth(0)
+                    .unwrap();
+                let PreparedInputs {
+                    tokens,
+                    positions,
+                    metadata,
+                } = if deref_refcell!(firstseq).is_prompt() {
+                    self.prepare_prompt(scheduled).unwrap()
+                } else {
+                    // Because of the KV cache, we only need to take
+                    // the last token.
+                    self.prepare_completion(scheduled).unwrap()
+                };
+
                 // Run the completion seqs
-                if !self.no_kv_cache {
-                    self.clone_in_cache(&scheduled.completion);
-                }
-                let logits =
-                    get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
+                let logits = get_mut_arcmutex!(self.pipeline).forward(
+                    tokens,
+                    positions,
+                    &*self.cache_engine.get_kv_cache(),
+                    metadata,
+                );
                 self.synchronize(get_mut_arcmutex!(self.pipeline).device());
 
                 let before_sample = Instant::now();
-                self.sample_seqs(&scheduled.completion, logits);
+                self.sample_seqs(&scheduled, logits);
                 let sampling_time = before_sample.elapsed().as_millis();
-                for seq in scheduled.completion.iter() {
+                for seq in scheduled.iter() {
                     deref_mut_refcell!(seq).total_sampling_time += sampling_time;
-                }
-
-                if !self.no_kv_cache {
-                    self.clone_out_cache(&scheduled.completion);
-                } else {
-                    self.set_none_cache();
-                }
-            }
-
-            if scheduled.prompt.len() > 0 {
-                // Run the prompt seqs
-                self.set_none_cache();
-                let logits =
-                    get_mut_arcmutex!(self.pipeline).forward(scheduled.prompt.clone(), true);
-                self.synchronize(get_mut_arcmutex!(self.pipeline).device());
-                for seq in scheduled.prompt.iter() {
-                    deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
-                    let now = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .expect("Time travel has occurred!")
-                        .as_millis();
-                    #[allow(clippy::cast_precision_loss)]
-                    let prompt_tok_per_sec = deref_refcell!(seq).len() as f32
-                        / (now - deref_refcell!(seq).timestamp()) as f32;
-                    deref_mut_refcell!(seq).prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
-                    deref_mut_refcell!(seq).prompt_timestamp = Some(now);
-                }
-
-                let before_sample = Instant::now();
-                self.sample_seqs(&scheduled.prompt, logits);
-                let sampling_time = before_sample.elapsed().as_millis();
-                for seq in scheduled.prompt.iter() {
-                    deref_mut_refcell!(seq).total_sampling_time += sampling_time;
-                }
-
-                if !self.no_kv_cache {
-                    self.clone_out_cache(&scheduled.prompt);
-                } else {
-                    self.set_none_cache();
                 }
             }
         }
@@ -195,8 +201,9 @@ impl Engine {
         };
         deref_mut_refcell!(seq).add_choice_to_group(choice);
 
+        let group = deref_refcell!(seq).get_group();
         // Is the group done?
-        if !deref_refcell!(seq).get_group().is_done() {
+        if !deref_refcell!(group).is_done() {
             return;
         }
 
@@ -205,147 +212,220 @@ impl Engine {
             .responder()
             .send(Response::Done(ChatCompletionResponse {
                 id: deref_refcell!(seq).id().to_string(),
-                choices: deref_refcell!(seq).get_group().get_choices().to_vec(),
+                choices: deref_refcell!(group).get_choices().to_vec(),
                 created: deref_refcell!(seq).timestamp(),
                 model: get_mut_arcmutex!(self.pipeline).name(),
                 system_fingerprint: "local".to_string(),
                 object: "chat.completion".to_string(),
-                usage: deref_refcell!(seq).get_group().get_usage(),
+                usage: deref_refcell!(group).get_usage(),
             }))
             .unwrap();
     }
 
-    /// Clone the cache FROM the sequences' cache TO the model cache. Only used for completion seqs.
-    fn clone_in_cache(&self, seqs: &[Rc<RefCell<Sequence>>]) {
-        let mut new_cache = Vec::new();
-        for layer in 0..get_mut_arcmutex!(self.pipeline).num_hidden_layers() {
-            let mut k_vec = Vec::new();
-            let mut v_vec = Vec::new();
-            for seq in seqs.iter() {
-                let mut seq = deref_mut_refcell!(seq);
-                let seq_cache = &*seq.cache();
-                let cache = seq_cache.get(layer).unwrap();
-                // Note(EricLBuehler): Unwrap reasoning: We are handling completions seqs so unwrap is OK.
-                let cache = cache.as_ref().unwrap();
-                k_vec.push(cache.0.clone());
-                v_vec.push(cache.1.clone());
-            }
-            // NOTE(EricLBuehler): Unwrap reasoning: We have the correct dims
-            new_cache.push(Some((
-                if k_vec.len() > 1 {
-                    Tensor::cat(&k_vec, 0).unwrap()
-                } else {
-                    k_vec[0].clone()
-                },
-                if v_vec.len() > 1 {
-                    Tensor::cat(&v_vec, 0).unwrap()
-                } else {
-                    v_vec[0].clone()
-                },
-            )));
-        }
-        if get_mut_arcmutex!(self.pipeline).is_xlora()
-            && !get_mut_arcmutex!(self.pipeline).has_no_kv_cache()
-        {
-            let mut new_cache = Vec::new();
-            for layer in 0..get_mut_arcmutex!(self.pipeline).num_hidden_layers() {
-                let mut k_vec = Vec::new();
-                let mut v_vec = Vec::new();
-                for seq in seqs.iter() {
-                    let mut seq = deref_mut_refcell!(seq);
-                    let seq_cache = &*seq.xlora_cache();
-                    let cache = seq_cache.get(layer).unwrap();
-                    // Note(EricLBuehler): Unwrap reasoning: We are handling completions seqs so unwrap is OK.
-                    let cache = cache.as_ref().unwrap();
-                    k_vec.push(cache.0.clone());
-                    v_vec.push(cache.1.clone());
-                }
-                // NOTE(EricLBuehler): Unwrap reasoning: We have the correct dims
-                new_cache.push(Some((
-                    if k_vec.len() > 1 {
-                        Tensor::cat(&k_vec, 0).unwrap()
-                    } else {
-                        k_vec[0].clone()
-                    },
-                    if v_vec.len() > 1 {
-                        Tensor::cat(&v_vec, 0).unwrap()
-                    } else {
-                        v_vec[0].clone()
-                    },
-                )));
-            }
-            *get_mut_arcmutex!(self.pipeline).cache().xlora_lock() = new_cache;
-        }
-        if get_mut_arcmutex!(self.pipeline).is_xlora() {
-            *get_mut_arcmutex!(self.pipeline)
-                .cache()
-                .get_scalings_cache() = deref_mut_refcell!(seqs[0]).scaling_cache().clone();
-        }
-        *get_mut_arcmutex!(self.pipeline).cache().lock() = new_cache;
+    fn execute_scheduler_ops(&mut self, scheduler_output: &SchedulerOutput) -> Result<()> {
+        self.cache_engine
+            .swap_in(scheduler_output.blocks_to_swap_in.clone())?;
+        self.cache_engine
+            .swap_out(scheduler_output.blocks_to_swap_out.clone())?;
+        self.cache_engine
+            .copy(scheduler_output.blocks_to_copy.clone())?;
+        Ok(())
     }
 
-    /// Set the model cache to all None. Only used for prompt seqs.
-    fn set_none_cache(&self) {
-        let mut new_cache = Vec::new();
-        for _ in 0..get_mut_arcmutex!(self.pipeline).num_hidden_layers() {
-            new_cache.push(None);
+    fn prepare_prompt(&self, groups: &[Rc<RefCell<SequenceGroup>>]) -> Result<PreparedInputs> {
+        let mut prompt_lens = Vec::new();
+        let mut input_tokens = Vec::new();
+        let mut input_positions = Vec::new();
+        let mut slot_mappings = Vec::new();
+        for group in groups {
+            for seq in deref_refcell!(group).get_seqs().values() {
+                let prompt_ids = deref_refcell!(seq).get_toks();
+
+                let prompt_len = prompt_ids.len();
+                prompt_lens.push(prompt_len);
+
+                input_tokens.push(prompt_ids);
+                input_positions.push((0..prompt_len).collect::<Vec<_>>());
+                let table = self
+                    .scheduler
+                    .block_engine
+                    .block_tables
+                    .get(&deref_refcell!(seq).id());
+                if table.is_none() {
+                    // Will be None during profiling.
+                    slot_mappings.push([_PAD_SLOT_ID].repeat(prompt_len));
+                    continue;
+                }
+                let table = table
+                    .unwrap()
+                    .iter()
+                    .map(|block| block.deref_mut().block_id)
+                    .collect::<Vec<_>>();
+
+                let start_idx = if let Some(sliding_window) = self.sliding_window {
+                    0.min(prompt_len - sliding_window)
+                } else {
+                    0
+                };
+
+                let mut slot_mapping = Vec::new();
+                for i in 0..prompt_len {
+                    if i < start_idx {
+                        // Pad [0,start_idx) with _PAD_TOKEN_ID
+                        slot_mapping.push(_PAD_SLOT_ID);
+                    }
+
+                    let block_number = table.get(i / self.cache_config.block_size).unwrap();
+                    let block_offset = i % self.cache_config.block_size;
+                    let slot = block_number * self.cache_config.block_size + block_offset;
+                    slot_mapping.push(slot.try_into().unwrap());
+                }
+                slot_mappings.push(slot_mapping);
+            }
         }
-        *get_mut_arcmutex!(self.pipeline).cache().lock() = new_cache.clone();
-        if get_mut_arcmutex!(self.pipeline).cache().is_xlora() {
-            *get_mut_arcmutex!(self.pipeline).cache().xlora_lock() = new_cache;
-        }
+
+        let max_prompt_len = prompt_lens.iter().max().unwrap();
+        let dev = get_mut_arcmutex!(self.pipeline).device();
+        let input_tokens = _make_tensor_with_pad(
+            input_tokens
+                .iter()
+                .map(|x| x.iter().map(|x| *x as i64).collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            *max_prompt_len,
+            0,
+            &dev,
+        )?;
+        let input_positions = _make_tensor_with_pad(
+            input_positions
+                .iter()
+                .map(|x| x.iter().map(|x| *x as i64).collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            *max_prompt_len,
+            0,
+            &dev,
+        )?;
+        let slot_mapping =
+            _make_tensor_with_pad(slot_mappings, *max_prompt_len, _PAD_SLOT_ID, &dev)?;
+
+        Ok(PreparedInputs {
+            tokens: input_tokens,
+            positions: input_positions,
+            metadata: InputMetadata {
+                prompt_lens,
+                slot_mapping,
+                max_context_len: None,
+                context_lens: None,
+                block_tables: None,
+                is_prompt: true,
+                kv_cache_dtype: "auto".to_string(), // TODO(EricLBuehler): specialize for models
+            },
+        })
     }
 
-    /// Clone the cache FROM the model cache TO the sequences. Used for prompt, completion seqs.
-    fn clone_out_cache(&self, seqs: &[Rc<RefCell<Sequence>>]) {
-        let num_hidden_layers = get_mut_arcmutex!(self.pipeline).num_hidden_layers();
-        for layer in 0..num_hidden_layers {
-            let pipeline = get_mut_arcmutex!(self.pipeline);
-            let cache = pipeline.cache().lock();
-            let cache = cache.get(layer).unwrap();
-            let k_cache = cache.as_ref().unwrap().0.clone();
-            let v_cache = cache.as_ref().unwrap().1.clone();
+    fn prepare_completion(&self, groups: &[Rc<RefCell<SequenceGroup>>]) -> Result<PreparedInputs> {
+        let mut input_tokens = Vec::new();
+        let mut input_positions = Vec::new();
+        let mut context_lens = Vec::new();
+        let mut slot_mappings = Vec::new();
+        let mut block_tables = Vec::new();
+        for group in groups {
+            for seq in deref_refcell!(group).get_seqs().values() {
+                let last_token_id = deref_mut_refcell!(seq).get_toks().last().unwrap();
+                input_tokens.push(vec![last_token_id]);
 
-            let k_caches = k_cache.chunk(seqs.len(), 0).unwrap();
-            debug_assert_eq!(k_caches.len(), seqs.len());
-            let v_caches = v_cache.chunk(seqs.len(), 0).unwrap();
-            debug_assert_eq!(v_caches.len(), seqs.len());
+                let position = deref_refcell!(seq).len() - 1;
+                input_positions.push(vec![position]);
 
-            for (seq_i, seq) in seqs.iter().enumerate() {
-                let mut seq = deref_mut_refcell!(seq);
-                let seq_cache = seq.cache();
-                let seq_cache = seq_cache.get_mut(layer).unwrap();
-                *seq_cache = Some((
-                    k_caches.get(seq_i).unwrap().clone(),
-                    v_caches.get(seq_i).unwrap().clone(),
-                ));
-            }
-            if pipeline.is_xlora() && !pipeline.has_no_kv_cache() {
-                let cache = pipeline.cache().xlora_lock();
-                let cache = cache.get(layer).unwrap();
-                let k_cache = cache.as_ref().unwrap().0.clone();
-                let v_cache = cache.as_ref().unwrap().1.clone();
+                let context_len = if let Some(sliding_window) = self.sliding_window {
+                    deref_refcell!(seq).len().min(sliding_window)
+                } else {
+                    deref_refcell!(seq).len()
+                };
+                context_lens.push(context_len);
 
-                let k_caches = k_cache.chunk(seqs.len(), 0).unwrap();
-                debug_assert_eq!(k_caches.len(), seqs.len());
-                let v_caches = v_cache.chunk(seqs.len(), 0).unwrap();
-                debug_assert_eq!(v_caches.len(), seqs.len());
+                let table = self
+                    .scheduler
+                    .block_engine
+                    .block_tables
+                    .get(&deref_refcell!(seq).id())
+                    .unwrap();
+                let table = table
+                    .iter()
+                    .map(|block| block.deref_mut().block_id)
+                    .collect::<Vec<_>>();
 
-                for (seq_i, seq) in seqs.iter().enumerate() {
-                    let mut seq = deref_mut_refcell!(seq);
-                    let seq_cache = seq.xlora_cache();
-                    let seq_cache = seq_cache.get_mut(layer).unwrap();
-                    *seq_cache = Some((
-                        k_caches.get(seq_i).unwrap().clone(),
-                        v_caches.get(seq_i).unwrap().clone(),
-                    ));
+                let block_number = table.get(position / self.cache_config.block_size).unwrap();
+                let block_offset = position % self.cache_config.block_size;
+                let slot = block_number * self.cache_config.block_size + block_offset;
+                let slot = slot.try_into().unwrap();
+                slot_mappings.push(vec![slot]);
+
+                if let Some(sliding_window) = self.sliding_window {
+                    let sliding_window_blocks = sliding_window / self.cache_config.block_size;
+                    block_tables.push(
+                        table
+                            .get(table.len() - sliding_window_blocks..)
+                            .unwrap()
+                            .to_vec(),
+                    );
+                } else {
+                    block_tables.push(table);
                 }
             }
-            if pipeline.is_xlora() {
-                *deref_mut_refcell!(seqs[0]).scaling_cache() =
-                    pipeline.cache().get_scalings_cache().clone();
-            }
         }
+
+        let dev = get_mut_arcmutex!(self.pipeline).device();
+        let input_tokens = _make_tensor_with_pad(
+            input_tokens
+                .iter()
+                .map(|x| x.iter().map(|x| **x as i64).collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            1,
+            0,
+            &dev,
+        )?;
+        let input_positions = _make_tensor_with_pad(
+            input_positions
+                .iter()
+                .map(|x| x.iter().map(|x| *x as i64).collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            1,
+            0,
+            &dev,
+        )?;
+        let slot_mapping = _make_tensor_with_pad(slot_mappings, 1, _PAD_SLOT_ID, &dev)?;
+
+        let max_context_len = context_lens.iter().max().unwrap();
+        let context_lens = Tensor::from_vec(
+            context_lens.iter().map(|x| *x as i64).collect::<Vec<_>>(),
+            (context_lens.len(),),
+            &dev,
+        )?;
+
+        let max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
+        let block_tables = _make_tensor_with_pad(
+            block_tables
+                .iter()
+                .map(|x| x.iter().map(|x| *x as i64).collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            max_block_table_len,
+            0,
+            &dev,
+        )?;
+
+        Ok(PreparedInputs {
+            tokens: input_tokens,
+            positions: input_positions,
+            metadata: InputMetadata {
+                prompt_lens: vec![],
+                slot_mapping,
+                max_context_len: Some(*max_context_len),
+                context_lens: Some(context_lens),
+                block_tables: Some(block_tables),
+                is_prompt: false,
+                kv_cache_dtype: "auto".to_string(), // TODO(EricLBuehler): specialize for models
+            },
+        })
     }
 
     fn add_request(&mut self, request: Request) {
@@ -464,10 +544,13 @@ impl Engine {
                 request.sampling_params.max_len,
                 request.return_logprobs,
                 get_mut_arcmutex!(self.pipeline).is_xlora(),
-                group.clone(),
+                Rc::downgrade(&group),
+                todo!(),
             );
             self.id += 1;
-            self.scheduler.add_seq(seq);
+            let seq = Rc::new(RefCell::new(seq));
+            deref_mut_refcell!(group).add_seq(seq);
         }
+        self.scheduler.add_seq(group);
     }
 }

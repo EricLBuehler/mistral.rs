@@ -1,6 +1,7 @@
 use std::{
-    cell::{Cell, Ref, RefCell},
-    rc::Rc,
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    rc::{Rc, Weak},
     sync::mpsc::Sender,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -10,6 +11,7 @@ use candle_sampling::logits_processor::{LogitsProcessor, Logprobs};
 
 use crate::{
     deref_mut_refcell, deref_refcell,
+    pa::block_engine::LogicalTokenBlock,
     response::{Choice, Response},
     ChatCompletionUsage,
 };
@@ -25,10 +27,12 @@ pub enum StopReason {
 #[derive(Clone, Copy, PartialEq)]
 pub enum SequenceState {
     Done(StopReason),
-    RunningPrompt,
-    RunningCompletion,
+    Running,
     Waiting,
     Error,
+    DoneIgnored,
+    Swapped,
+    DoneAborted,
 }
 
 pub struct Sequence {
@@ -41,6 +45,7 @@ pub struct Sequence {
     stop_tokens: Vec<u32>,
     return_logprobs: bool,
     responder: Sender<Response>,
+    group: Weak<RefCell<SequenceGroup>>,
 
     // Cache
     scaling_cache: Option<Tensor>,
@@ -54,9 +59,12 @@ pub struct Sequence {
     // GPU things
     pub prompt_tok_per_sec: f32,
     pub prompt_timestamp: Option<u128>,
-    group: Rc<RefCell<SequenceGroup>>,
     pub total_sampling_time: u128,
     state: Cell<SequenceState>,
+
+    // PA things
+    logical_token_blocks: Vec<LogicalTokenBlock>,
+    block_size: usize,
 }
 
 impl Sequence {
@@ -72,11 +80,12 @@ impl Sequence {
         max_len: Option<usize>,
         return_logprobs: bool,
         is_xlora: bool,
-        group: Rc<RefCell<SequenceGroup>>,
+        group: Weak<RefCell<SequenceGroup>>,
+        block_size: usize,
     ) -> Self {
         let prompt_len = tokens.len();
-        Self {
-            tokens,
+        let mut this = Self {
+            tokens: tokens.clone(),
             logprobs: Vec::new(),
             prompt_len,
             id,
@@ -95,10 +104,14 @@ impl Sequence {
             return_logprobs,
             prompt_tok_per_sec: 0.,
             prompt_timestamp: None,
-            group,
             scaling_cache: None,
             total_sampling_time: 0,
-        }
+            group,
+            logical_token_blocks: Vec::new(),
+            block_size,
+        };
+        this.append_tokens_to_blocks(tokens);
+        this
     }
 
     pub fn len(&self) -> usize {
@@ -110,16 +123,7 @@ impl Sequence {
     }
 
     pub fn is_running(&self) -> bool {
-        self.state.get() == SequenceState::RunningCompletion
-            || self.state.get() == SequenceState::RunningPrompt
-    }
-
-    pub fn is_completion(&self) -> bool {
-        self.state.get() == SequenceState::RunningCompletion
-    }
-
-    pub fn is_prompt(&self) -> bool {
-        self.state.get() == SequenceState::RunningPrompt
+        self.state.get() == SequenceState::Running
     }
 
     pub fn is_waiting(&self) -> bool {
@@ -151,6 +155,7 @@ impl Sequence {
     }
 
     pub fn add_token(&mut self, tok: Logprobs) {
+        self.append_token_to_blocks(tok.token);
         self.tokens.push(tok.token);
         self.logprobs.push(tok);
     }
@@ -173,6 +178,9 @@ impl Sequence {
         {
             // add_token was already called
             Some(StopReason::Length(self.max_len.unwrap()))
+        } else if self.state.get() == SequenceState::DoneIgnored {
+            // add_token was already called
+            Some(StopReason::Length(self.len()))
         } else if self.tokens.len().saturating_sub(self.prompt_len) == max_model_len {
             Some(StopReason::ModelLength(max_model_len))
         } else {
@@ -201,31 +209,81 @@ impl Sequence {
     }
 
     pub fn add_choice_to_group(&self, choice: Choice) {
-        deref_mut_refcell!(self.group).done_count += 1;
-        deref_mut_refcell!(self.group).choices.push(choice);
+        let group = self.group.upgrade().unwrap();
+        deref_mut_refcell!(group).done_count += 1;
+        deref_mut_refcell!(group).choices.push(choice);
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time travel has occurred!")
             .as_millis();
 
-        deref_mut_refcell!(self.group).total_comple_time += now - self.prompt_timestamp.unwrap();
-        deref_mut_refcell!(self.group).total_prompt_time +=
+        deref_mut_refcell!(group).total_comple_time += now - self.prompt_timestamp.unwrap();
+        deref_mut_refcell!(group).total_prompt_time +=
             self.prompt_timestamp.unwrap() - self.timestamp;
-        deref_mut_refcell!(self.group).total_time += now - self.timestamp;
+        deref_mut_refcell!(group).total_time += now - self.timestamp;
 
-        deref_mut_refcell!(self.group).total_prompt_toks += self.prompt_len;
-        deref_mut_refcell!(self.group).total_toks += self.len();
+        deref_mut_refcell!(group).total_prompt_toks += self.prompt_len;
+        deref_mut_refcell!(group).total_toks += self.len();
 
-        deref_mut_refcell!(self.group).total_sampling_time += self.total_sampling_time;
+        deref_mut_refcell!(group).total_sampling_time += self.total_sampling_time;
     }
 
     pub fn get_next_choice_index(&self) -> usize {
-        deref_refcell!(self.group).choices.len()
+        let group = self.group.upgrade().unwrap();
+        let choices = &deref_refcell!(group).choices;
+        choices.len()
     }
 
-    pub fn get_group(&self) -> Ref<'_, SequenceGroup> {
-        deref_refcell!(self.group)
+    pub fn get_group(&self) -> Rc<RefCell<SequenceGroup>> {
+        self.group.upgrade().unwrap()
+    }
+
+    pub fn blocks_to_add_new_tok(&self) -> usize {
+        let last = self.logical_token_blocks.last();
+        if !last.is_some_and(|last| last.is_full()) {
+            // If we have space
+            0
+        } else {
+            1
+        }
+    }
+
+    pub fn get_logical_token_blocks(&self) -> usize {
+        self.logical_token_blocks.len()
+    }
+
+    fn append_tokens_to_blocks(&mut self, tokens: Vec<u32>) {
+        for tok in tokens {
+            self.append_token_to_blocks(tok);
+        }
+    }
+
+    fn append_token_to_blocks(&mut self, token: u32) {
+        let last = self.logical_token_blocks.last_mut();
+        if !last.as_ref().is_some_and(|last| last.is_full()) {
+            // If we have space
+            let last = last.unwrap();
+            last.append_token_id(token);
+        } else {
+            self.logical_token_blocks
+                .push(LogicalTokenBlock::new(self.block_size));
+            self.logical_token_blocks
+                .last_mut()
+                .unwrap()
+                .append_token_id(token);
+        }
+    }
+
+    pub fn is_finished(&self) -> bool {
+        matches!(
+            self.state.get(),
+            SequenceState::Done(_) | SequenceState::DoneAborted | SequenceState::DoneIgnored
+        )
+    }
+
+    pub fn is_prompt(&self) -> bool {
+        self.len() == self.prompt_len
     }
 }
 
@@ -239,6 +297,7 @@ pub struct SequenceGroup {
     pub total_comple_time: u128,
     pub total_sampling_time: u128,
     choices: Vec<Choice>,
+    seqs: HashMap<usize, Rc<RefCell<Sequence>>>,
 }
 
 impl SequenceGroup {
@@ -253,6 +312,7 @@ impl SequenceGroup {
             total_time: 0,
             total_comple_time: 0,
             total_sampling_time: 0,
+            seqs: HashMap::new(),
         }
     }
 
@@ -279,5 +339,53 @@ impl SequenceGroup {
             avg_sample_tok_per_sec: (self.total_toks as f32 / self.total_sampling_time as f32)
                 * 1000.,
         }
+    }
+
+    pub fn add_seq(&mut self, seq: Rc<RefCell<Sequence>>) {
+        let id = *deref_refcell!(seq).id();
+        self.seqs.insert(id, seq);
+    }
+
+    pub fn get_seqs(&self) -> &HashMap<usize, Rc<RefCell<Sequence>>> {
+        &self.seqs
+    }
+
+    /// Blocks to add one new token to each sequence
+    pub fn total_blocks_to_add_new_tok(&self) -> usize {
+        self.seqs
+            .values()
+            .map(|seq| deref_refcell!(seq).blocks_to_add_new_tok())
+            .sum()
+    }
+
+    pub fn get_total_logical_token_blocks(&self) -> usize {
+        self.seqs
+            .values()
+            .map(|seq| deref_refcell!(seq).get_logical_token_blocks())
+            .sum()
+    }
+
+    pub fn id(&self) -> usize {
+        todo!()
+    }
+
+    pub fn timestamp(&self) -> u128 {
+        todo!()
+    }
+
+    pub fn set_state(&self, status: SequenceState) {
+        for seq in self.seqs.values() {
+            deref_mut_refcell!(seq).set_state(status.clone());
+        }
+    }
+
+    pub fn get_prompt_len(&self) -> usize {
+        deref_refcell!(self.seqs.iter().nth(0).unwrap().1).prompt_len
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.seqs
+            .iter()
+            .all(|(_, x)| deref_refcell!(x).is_finished())
     }
 }

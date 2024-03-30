@@ -16,6 +16,7 @@ pub use pipeline::Pipeline;
 
 mod engine;
 mod models;
+mod pa;
 mod pipeline;
 mod request;
 mod response;
@@ -23,12 +24,8 @@ mod sampling;
 mod scheduler;
 mod sequence;
 mod utils;
-mod xlora_models;
 
-pub use pipeline::{
-    GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader, MistralLoader,
-    MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind, TokenSource,
-};
+pub use pipeline::{Loader, MistralLoader, MistralSpecificConfig, ModelKind, TokenSource};
 pub use request::Request;
 pub use response::Response;
 pub use response::{ChatCompletionResponse, ChatCompletionUsage};

@@ -4,11 +4,9 @@
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{layer_norm::RmsNormNonQuantized, Activation, RotaryEmbedding, VarBuilder};
 use candle_transformers::models::with_tracing::{linear_no_bias, Linear};
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use crate::pipeline::MISTRAL_IS_GPTX;
-
-use super::Cache;
+use crate::pipeline::{ConfigLike, MISTRAL_IS_GPTX};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -24,6 +22,27 @@ pub struct Config {
     pub(crate) rope_theta: f64,
     pub(crate) sliding_window: usize,
     pub(crate) use_flash_attn: bool,
+}
+
+impl ConfigLike for Config {
+    fn get_hidden_size(&self) -> usize {
+        self.hidden_size
+    }
+    fn get_num_attention_heads(&self) -> usize {
+        self.num_attention_heads
+    }
+    fn get_num_hidden_layers(&self) -> usize {
+        self.num_hidden_layers
+    }
+    fn get_num_kv_heads(&self) -> usize {
+        self.num_key_value_heads
+    }
+    fn get_sliding_window(&self) -> Option<usize> {
+        Some(self.sliding_window)
+    }
+    fn get_vocab_size(&self) -> usize {
+        self.vocab_size
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -288,8 +307,8 @@ pub struct Model {
     sliding_window: usize,
     dtype: DType,
     pub device: Device,
-    pub cache: Cache,
     pub max_seq_len: usize,
+    masks: HashMap<usize, Tensor>,
 }
 
 impl Model {
@@ -322,53 +341,21 @@ impl Model {
             sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
             dtype: vb.dtype(),
-            cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: cfg.max_position_embeddings,
+            masks: HashMap::new(),
         })
     }
 
-    fn prepare_decoder_attention_mask(
-        &self,
-        b_size: usize,
-        tgt_len: usize,
-        seqlen_offset: usize,
-    ) -> Result<Tensor> {
-        // Sliding window mask?
-        let mask: Vec<_> = (0..tgt_len)
-            .flat_map(|i| {
-                (0..tgt_len).map(move |j| {
-                    if i < j || j + self.sliding_window < i {
-                        f32::NEG_INFINITY
-                    } else {
-                        0.
-                    }
-                })
-            })
-            .collect();
-        let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
-        let mask = if seqlen_offset > 0 {
-            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, &self.device)?;
-            Tensor::cat(&[&mask0, &mask], D::Minus1)?
+    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
+        if let Some(mask) = self.masks.get(&t) {
+            Ok(mask.clone())
         } else {
-            mask
-        };
-        mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
-            .to_dtype(self.dtype)
-    }
-
-    fn calculate_past_kv_len(&mut self, seq_len: usize) -> Result<usize> {
-        let cache = self.cache.lock();
-        let kv_cache_1 = cache.first().unwrap();
-        if kv_cache_1.is_none() {
-            return Ok(0);
-        }
-        let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
-        if k_cache_1.dims()[0] <= seq_len {
-            Ok(0)
-        } else {
-            let indexed = k_cache_1.i(seq_len)?;
-            let dims = indexed.dims();
-            Ok(dims[dims.len() - 2])
+            let mask: Vec<_> = (0..t)
+                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
+                .collect();
+            let mask = Tensor::from_slice(&mask, (t, t), device)?;
+            self.masks.insert(t, mask.clone());
+            Ok(mask)
         }
     }
 
@@ -382,14 +369,10 @@ impl Model {
         if seqlen_offsets.len() > b_size {
             candle_core::bail!("Expected seqlen offsets have length equal to batch size.")
         }
-
-        let past_key_values_length = self.calculate_past_kv_len(seq_len)?;
-        let attention_mask = if seq_len <= 1 {
+        let attention_mask = if seq_len == 1 {
             None
         } else {
-            let mask =
-                self.prepare_decoder_attention_mask(b_size, seq_len, past_key_values_length)?;
-            Some(mask)
+            Some(self.mask(seq_len, input_ids.device())?)
         };
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let mut cache = self.cache.lock();

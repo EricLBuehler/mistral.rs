@@ -1,10 +1,7 @@
-use super::{
-    calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
-    Pipeline, TokenSource, XLoraPaths,
-};
+use super::{get_model_paths, ConfigLike, Loader, ModelKind, ModelPaths, Pipeline, TokenSource};
 use crate::models::{quantized_llama, Cache};
+use crate::pa::InputMetadata;
 use crate::pipeline::ChatTemplate;
-use crate::xlora_models::{NonGranularState, XLoraConfig, XLoraMistral, XLoraModelWeights};
 use crate::{deref_mut_refcell, deref_refcell, deserialize_chat_template};
 use crate::{
     models::mistral::{Config, Model as NormalModel},
@@ -27,7 +24,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::{rc::Rc, sync::Mutex};
 use thiserror::Error;
 use tokenizers::Tokenizer;
@@ -35,8 +31,6 @@ use tokenizers::Tokenizer;
 enum Model {
     Normal(NormalModel),
     Quantized(QModelWeights),
-    XLoraQuantized(XLoraModelWeights),
-    XLoraNormal(XLoraMistral),
 }
 pub const MISTRAL_IS_GPTX: bool = true;
 
@@ -45,11 +39,6 @@ pub struct MistralModelPaths<P> {
     config_filename: P,
     template_filename: P,
     filenames: Vec<P>,
-    xlora_adapter_filenames: Option<Vec<(String, P)>>,
-    xlora_adapter_configs: Option<Vec<(String, LoraConfig)>>,
-    classifier_path: Option<P>,
-    classifier_config: Option<XLoraConfig>,
-    xlora_ordering: Option<Ordering>,
 }
 
 impl ModelPaths for MistralModelPaths<PathBuf> {
@@ -68,9 +57,6 @@ impl ModelPaths for MistralModelPaths<PathBuf> {
     fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>> {
         &self.xlora_adapter_configs
     }
-    fn get_classifier_config(&self) -> &Option<XLoraConfig> {
-        &self.classifier_config
-    }
     fn get_classifier_path(&self) -> &Option<PathBuf> {
         &self.classifier_path
     }
@@ -88,7 +74,7 @@ pub struct MistralPipeline {
     config: MistralSpecificConfig,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
-    non_granular_state: Option<NonGranularState>,
+    config_like: Box<dyn ConfigLike>,
 }
 
 pub struct MistralLoader {
@@ -197,30 +183,12 @@ impl Loader for MistralLoader {
             &api,
         )?;
 
-        let XLoraPaths {
-            adapter_configs,
-            adapter_safetensors,
-            classifier_path,
-            xlora_order,
-            xlora_config,
-        } = get_xlora_paths(
-            &self.xlora_model_id,
-            &token_source,
-            revision.clone(),
-            &self.xlora_order,
-        )?;
-
         let template_filename = api.get("tokenizer_config.json")?;
 
         Ok(Box::new(MistralModelPaths {
             tokenizer_filename,
             config_filename,
             filenames,
-            xlora_adapter_configs: adapter_configs,
-            xlora_adapter_filenames: adapter_safetensors,
-            classifier_path,
-            classifier_config: xlora_config,
-            xlora_ordering: xlora_order,
             template_filename,
         }))
     }
@@ -275,64 +243,8 @@ impl Loader for MistralLoader {
                 let model = NormalModel::new(&config, vb)?;
                 Model::Normal(model)
             }
-            ModelKind::XLoraNormal => {
-                let mut safetensors_paths = paths.get_weight_filenames().iter().collect::<Vec<_>>();
-                safetensors_paths.push(paths.get_classifier_path().as_ref().unwrap());
-                let vb = from_mmaped_safetensors(
-                    safetensors_paths
-                        .iter()
-                        .map(|x| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    paths
-                        .get_adapter_filenames()
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(|(_, x)| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    dtype.unwrap_or(default_dtype),
-                    device,
-                    false,
-                )?;
-
-                let model = XLoraMistral::new(
-                    &config,
-                    vb,
-                    paths.get_adapter_configs().as_ref().unwrap(),
-                    paths.get_classifier_config().as_ref().unwrap().clone(),
-                    paths.get_ordering().as_ref().unwrap().clone(),
-                )?;
-                Model::XLoraNormal(model)
-            }
-            ModelKind::XLoraGGUF => {
-                let vb = from_mmaped_safetensors(
-                    vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()],
-                    paths
-                        .get_adapter_filenames()
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(|(_, x)| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    dtype.unwrap_or(default_dtype),
-                    device,
-                    false,
-                )?;
-
-                let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
-                let model = gguf_file::Content::read(&mut file)
-                    .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
-                let model = XLoraModelWeights::from_gguf(
-                    model,
-                    &mut file,
-                    device,
-                    paths.get_adapter_configs().as_ref().unwrap(),
-                    &vb,
-                    paths.get_ordering().as_ref().unwrap(),
-                    paths.get_classifier_config().as_ref().unwrap().clone(),
-                )?;
-                Model::XLoraQuantized(model)
-            }
+            ModelKind::XLoraNormal => unreachable!(),
+            ModelKind::XLoraGGUF => unreachable!(),
             ModelKind::XLoraGGML => unreachable!(),
         };
         println!("Model loaded.");
@@ -348,59 +260,28 @@ impl Loader for MistralLoader {
             config: self.config,
             no_kv_cache: self.no_kv_cache,
             chat_template,
-            non_granular_state: self.tgt_non_granular_index.map(|tgt_non_granular_index| {
-                NonGranularState {
-                    non_granular_index: Arc::new(Mutex::new(0)),
-                    tgt_non_granular_index,
-                }
-            }),
+            config_like: Box::new(config),
         })))
     }
 }
 
 impl Pipeline for MistralPipeline {
-    fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor {
-        let ModelInputs {
-            input_ids,
-            input_ids_full,
-            seqlen_offsets,
-            seqlen_offsets_full,
-            seqlen_offsets_kernel,
-            seqlen_offsets_kernel_full,
-        } = calculate_inputs(
-            input_toks,
-            is_prompt,
-            self.is_xlora(),
-            self.device(),
-            self.no_kv_cache,
-        )
-        .unwrap();
+    fn forward(
+        &mut self,
+        input_tokens: Tensor,
+        input_positions: Tensor,
+        kv_cache: &[(Tensor, Tensor)],
+        mut input_metadata: InputMetadata,
+    ) -> Tensor {
         let result = match self.model {
             Model::Normal(ref mut model) => {
-                model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)
+                todo!()
             }
-            Model::Quantized(ref mut model) => {
-                model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)
-            }
-            Model::XLoraNormal(ref mut model) => model.forward(
-                &input_ids,
-                input_ids_full.as_ref().unwrap(),
-                &seqlen_offsets,
-                seqlen_offsets_full.as_ref().unwrap(),
-                seqlen_offsets_kernel,
-                seqlen_offsets_kernel_full.unwrap(),
-                self.no_kv_cache,
-                &self.non_granular_state,
-            ),
-            Model::XLoraQuantized(ref mut model) => model.forward(
-                &input_ids,
-                input_ids_full.as_ref().unwrap(),
-                &seqlen_offsets,
-                seqlen_offsets_full.as_ref().unwrap(),
-                seqlen_offsets_kernel,
-                seqlen_offsets_kernel_full.unwrap(),
-                self.no_kv_cache,
-                &self.non_granular_state,
+            Model::Quantized(ref mut model) => model.forward(
+                &input_tokens,
+                &input_positions,
+                kv_cache,
+                &mut input_metadata,
             ),
         };
         match result {
@@ -414,20 +295,10 @@ impl Pipeline for MistralPipeline {
         match self.model {
             Model::Normal(ref model) => &model.device,
             Model::Quantized(ref model) => &model.device,
-            Model::XLoraNormal(ref model) => &model.device,
-            Model::XLoraQuantized(ref model) => &model.device,
         }
     }
     fn num_hidden_layers(&self) -> usize {
         self.cache().lock().len()
-    }
-    fn cache(&self) -> &Cache {
-        match self.model {
-            Model::Normal(ref model) => &model.cache,
-            Model::Quantized(ref model) => &model.cache,
-            Model::XLoraNormal(ref model) => &model.cache,
-            Model::XLoraQuantized(ref model) => &model.cache,
-        }
     }
     fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs> {
         let logits = logits
@@ -468,14 +339,11 @@ impl Pipeline for MistralPipeline {
         match &self.model {
             Model::Normal(model) => model.max_seq_len,
             Model::Quantized(_) => quantized_llama::MAX_SEQ_LEN as usize,
-            Model::XLoraNormal(model) => model.max_seq_len,
-            Model::XLoraQuantized(_) => quantized_llama::MAX_SEQ_LEN as usize,
         }
     }
     fn is_xlora(&self) -> bool {
         match &self.model {
             Model::Normal(_) | Model::Quantized(_) => false,
-            Model::XLoraNormal(_) | Model::XLoraQuantized(_) => true,
         }
     }
     fn has_no_kv_cache(&self) -> bool {
@@ -484,7 +352,5 @@ impl Pipeline for MistralPipeline {
     fn get_chat_template(&self) -> &ChatTemplate {
         &self.chat_template
     }
-    fn get_non_granular_state(&self) -> &Option<NonGranularState> {
-        &self.non_granular_state
-    }
+    fn config(&self) -> Box<dyn ConfigLike> {}
 }

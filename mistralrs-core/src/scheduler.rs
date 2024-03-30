@@ -6,180 +6,336 @@ use std::{
 
 use crate::{
     deref_mut_refcell, deref_refcell,
-    sequence::{Sequence, SequenceState},
+    pa::block_engine::{AllocStatus, BlockEngine},
+    sequence::{Sequence, SequenceGroup, SequenceState},
 };
 use range_checked::UsizeBounded;
 
-pub trait FcfsBacker {
-    fn new() -> Self;
-    fn next(&mut self) -> Option<Rc<RefCell<Sequence>>>;
-    fn add(&mut self, item: Rc<RefCell<Sequence>>);
-    fn iter(&self) -> impl Iterator<Item = &Rc<RefCell<Sequence>>>;
-    fn sort_ascending_ids(&mut self);
-}
-
-impl FcfsBacker for VecDeque<Rc<RefCell<Sequence>>> {
-    fn new() -> Self {
-        Self::new()
-    }
-    fn add(&mut self, item: Rc<RefCell<Sequence>>) {
-        self.push_back(item)
-    }
-    fn next(&mut self) -> Option<Rc<RefCell<Sequence>>> {
-        self.pop_front()
-    }
-    fn iter(&self) -> Iter<'_, Rc<RefCell<Sequence>>> {
-        self.iter()
-    }
-    fn sort_ascending_ids(&mut self) {
-        let slice = self.make_contiguous();
-        slice.sort_by_key(|seq| *deref_refcell!(seq).id());
-    }
-}
+type CPUBlockFrom = usize;
+type GPUBlockFrom = usize;
+type CPUBlockTo = usize;
+type GPUBlockTo = usize;
+type SrcBlockFrom = usize;
+type DstBlocksTo = Vec<usize>;
 
 pub struct SchedulerOutput {
-    pub completion: Box<[Rc<RefCell<Sequence>>]>,
-    pub prompt: Box<[Rc<RefCell<Sequence>>]>,
+    pub scheduled: Box<[Rc<RefCell<SequenceGroup>>]>,
+    pub blocks_to_swap_in: HashMap<CPUBlockFrom, GPUBlockTo>,
+    pub blocks_to_swap_out: HashMap<GPUBlockFrom, CPUBlockTo>,
+    pub blocks_to_copy: HashMap<SrcBlockFrom, DstBlocksTo>,
+    pub ignored_seq_groups: Box<[Rc<RefCell<SequenceGroup>>]>,
 }
 
 pub enum SchedulerMethod {
     Fixed(UsizeBounded<1, { usize::MAX }, false>),
 }
 
-pub struct Scheduler<Backer: FcfsBacker> {
-    waiting: Backer,
-    running: Vec<Rc<RefCell<Sequence>>>,
-    method: SchedulerMethod,
+pub struct Scheduler {
+    waiting: VecDeque<Rc<RefCell<SequenceGroup>>>,
+    running: VecDeque<Rc<RefCell<SequenceGroup>>>,
+    swapped_out: VecDeque<Rc<RefCell<SequenceGroup>>>,
+    pub block_engine: BlockEngine,
+    pub max_num_seqs: usize,
 }
 
-impl<Backer: FcfsBacker> Scheduler<Backer> {
-    pub fn new(method: SchedulerMethod) -> Self {
+impl Scheduler {
+    pub fn new(max_num_seqs: usize) -> Self {
         Self {
-            running: Vec::new(),
-            waiting: Backer::new(),
-            method,
+            running: VecDeque::new(),
+            waiting: VecDeque::new(),
+            swapped_out: VecDeque::new(),
+            block_engine: todo!(),
+            max_num_seqs,
         }
     }
 
-    pub fn add_seq(&mut self, seq: Sequence) {
-        self.waiting.add(Rc::new(RefCell::new(seq)))
+    pub fn add_seq(&mut self, seq: Rc<RefCell<SequenceGroup>>) {
+        self.waiting.push_back(seq)
     }
 
     /// Schedule all sequences based on their state and the available space.
     pub fn schedule(&mut self) -> SchedulerOutput {
-        // Filter out all done sequences
-        let running = self.running.clone();
-        let mut running = running
-            .iter()
-            .filter(|seq| deref_refcell!(seq).is_running())
-            .cloned()
-            .collect::<Vec<_>>();
+        // If there are no swapped seqs (they have higher priority), add seqs that are in the
+        // waiting queue to the running queue.
+        if self.swapped_out.is_empty() {
+            let mut scheduled = VecDeque::new();
+            let mut ignored_seq_groups = VecDeque::new();
+            while !self.waiting.is_empty() {
+                let seq_group = self.waiting.front().unwrap().clone();
 
-        match (self.waiting.iter().count(), running.len()) {
-            (0, 0) => {
-                self.running = running;
+                // If adding this seq means we will have too many, stop as no more could be added.
+                if self.max_num_seqs
+                    == self
+                        .running
+                        .iter()
+                        .map(|group| deref_refcell!(group).get_seqs().len())
+                        .sum::<usize>()
+                        + 1
+                {
+                    break;
+                }
+
+                // If we cannot allocate either now or in the future, either do not continue or remove the sequence.
+                let can_allocate = self.block_engine.can_allocate(&*deref_refcell!(seq_group));
+                match can_allocate {
+                    AllocStatus::Later => break, //If we can only allocate later, do not bother iterating over the rest.
+                    AllocStatus::Impossible => {
+                        eprintln!("Input prompt with length of {} tokens is too long and exceeds capacity of block engine.",
+                            deref_refcell!(seq_group).get_prompt_len()
+                        );
+                        deref_refcell!(seq_group).set_state(SequenceState::DoneIgnored);
+                        ignored_seq_groups.push_back(self.waiting.pop_front().unwrap());
+                    }
+                    _ => {}
+                }
+
+                deref_refcell!(seq_group).set_state(SequenceState::Running);
+                self._allocate(&*deref_refcell!(seq_group));
+
+                let seq_group = self.waiting.pop_front().unwrap();
+                self.running.push_back(seq_group.clone());
+                scheduled.push_back(seq_group);
+            }
+
+            // If we did schedule, or we ignored sequences.
+            if !scheduled.is_empty() || !ignored_seq_groups.is_empty() {
                 return SchedulerOutput {
-                    prompt: vec![].into(),
-                    completion: vec![].into(),
+                    scheduled: scheduled.iter().cloned().collect::<Vec<_>>().into(),
+                    blocks_to_swap_in: HashMap::new(),
+                    blocks_to_copy: HashMap::new(),
+                    blocks_to_swap_out: HashMap::new(),
+                    ignored_seq_groups: ignored_seq_groups
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .into(),
                 };
             }
-            (_, 0) => {
-                for seq in self.waiting.iter() {
-                    deref_mut_refcell!(seq).set_state(SequenceState::RunningPrompt);
-                    self.running.push(seq.clone());
-                }
-                self.waiting = Backer::new();
-                return SchedulerOutput {
-                    prompt: self.running.clone().into(),
-                    completion: vec![].into(),
-                };
-            }
-            (0, _) => {
-                self.running = running;
-                return SchedulerOutput {
-                    prompt: vec![].into(),
-                    completion: self.running.clone().into(),
-                };
-            }
-            _ => {}
         }
 
-        // Sort the waiting seqs
-        self.waiting.sort_ascending_ids();
+        let mut blocks_to_swap_out = HashMap::new();
+        let mut blocks_to_swap_in = HashMap::new();
+        let mut blocks_to_copy = HashMap::new();
 
-        // If the waiting sequence will fit, add it. Keep track of its id.
-        let mut waiting_to_remove = Vec::new();
-        for seq in self.waiting.iter() {
-            if self.sequence_fits(&running, &*deref_refcell!(seq)) {
-                waiting_to_remove.push(*deref_refcell!(seq).id());
-                if deref_refcell!(seq).is_waiting() {
-                    deref_mut_refcell!(seq).set_state(SequenceState::RunningPrompt);
-                }
-                running.push(seq.clone());
-            }
-        }
+        // Reserve token slots for the running sequence groups, preempting the lowest (earliest) first.
+        // Preempt lowest priority sequences that are in the running queue, forming a
+        // new running queue that has the actually running sequences. Remember the preempted
+        // sequences, which will be put into the waiting or swapped out state depending on
+        // the preemption method (recompute or swap, respectively).
 
-        // Remove sequences moved from waiting -> running.
-        let mut waiting = Backer::new();
-        for seq in self.waiting.iter() {
-            if !waiting_to_remove.contains(deref_refcell!(seq).id()) {
-                waiting.add(seq.clone());
-            }
-        }
+        // Sorts by creation time, in descending order so that earliest are latest (first come first serve).
+        self.sort_running_by_priority_fcfs();
 
-        // Now, get the sequences with the smallest sequence lengths, and allow them to catch up.
-        let mut seq_buckets: HashMap<usize, Vec<Rc<RefCell<Sequence>>>> = HashMap::new();
-        let mut min_len = usize::MAX;
-        for seq in &running {
-            let len = deref_refcell!(seq).len();
-            if len < min_len {
-                min_len = len;
-            }
-            match seq_buckets.get_mut(&len) {
-                Some(bucket) => bucket.push(seq.clone()),
-                None => {
-                    seq_buckets.insert(len, vec![seq.clone()]);
+        let mut running = VecDeque::new();
+        let mut preempted = VecDeque::new();
+        while !self.running.is_empty() {
+            let seq_group = self.running.pop_front().unwrap();
+            let mut finished_with_break = false;
+            while !self
+                .block_engine
+                .can_append_token_to_seq(&*deref_refcell!(seq_group))
+            {
+                // If we cannot, now we need to preempt some seqs
+                if !self.running.is_empty() {
+                    // There is something to preempt.
+                    let seq_to_preempt = self.running.pop_back().unwrap();
+                    self._preempt(seq_to_preempt.clone(), &mut blocks_to_swap_out);
+                    preempted.push_back(seq_to_preempt);
+                } else {
+                    // Nothing to preempt, preempt ourselves. Also, do not bother looking at anything else.
+                    self._preempt(seq_group.clone(), &mut blocks_to_swap_out);
+                    preempted.push_back(seq_group.clone());
+                    finished_with_break = true;
+                    break;
                 }
             }
-        }
-        let (running, waiting) = if seq_buckets.len() <= 1 {
-            // Full steam ahead or have everything
-            (running, waiting)
-        } else {
-            // Set the min seqs to be the running ones, and the rest to be waiting (but their states are not changed!)
-            // Allow the min seqs to catch up.
-            let min_seqs = seq_buckets.remove(&min_len).unwrap();
-            for (_, seqs) in seq_buckets {
-                for seq in seqs {
-                    waiting.add(seq);
-                }
-            }
-            // Know min_seqs.len < running.len() <= max
-            (min_seqs, waiting)
-        };
-
-        let mut completion = Vec::new();
-        let mut prompt = Vec::new();
-        for seq in &running {
-            if deref_refcell!(seq).is_completion() {
-                completion.push(seq.clone());
-            } else {
-                prompt.push(seq.clone());
+            if !finished_with_break {
+                // If we need to, append physical blocks for a new token. We do not need to if there is enough space.
+                // If we just got preempted, there is no reason to allocate
+                self._append_token_slot_to_seq_group(
+                    &*deref_refcell!(seq_group),
+                    &mut blocks_to_copy,
+                );
+                running.push_back(seq_group);
             }
         }
-
-        self.waiting = waiting;
         self.running = running;
 
+        // Try to swap in the swapped out sequences and add these to the
+        // running state if possible.
+
+        // Sorts by creation time, in descending order so that earliest are latest (first come first serve).
+        self.sort_swapped_out_by_priority_fcfs();
+
+        if preempted.is_empty() {
+            while !self.swapped_out.is_empty() {
+                let seq_group = self.swapped_out.front().unwrap();
+
+                // If the GPU cannot handle the group being swapped in, stop
+                if !self
+                    .block_engine
+                    .can_swap_in_seq_group(&*deref_refcell!(seq_group))
+                {
+                    break;
+                }
+
+                let seq_group = self.swapped_out.pop_front().unwrap();
+                // Swap in the blocks
+                let to_swap_in = self.block_engine.swap_in(&*deref_refcell!(seq_group));
+                blocks_to_swap_in.extend(to_swap_in);
+                // Reserve a new slot
+                self._append_token_slot_to_seq_group(
+                    &*deref_refcell!(seq_group),
+                    &mut blocks_to_copy,
+                );
+                self.running.push_back(seq_group);
+            }
+        }
+
         SchedulerOutput {
-            completion: completion.into(),
-            prompt: prompt.into(),
+            scheduled: self.running.iter().cloned().collect::<Vec<_>>().into(),
+            blocks_to_swap_in,
+            blocks_to_copy,
+            blocks_to_swap_out,
+            ignored_seq_groups: Vec::new().into(),
         }
     }
 
-    fn sequence_fits(&self, running: &[Rc<RefCell<Sequence>>], _seq: &Sequence) -> bool {
-        match &self.method {
-            SchedulerMethod::Fixed(n) => (running.len() + 1) <= **n,
+    pub fn free_finished_sequence_groups(&mut self) {
+        let mut to_free = Vec::new();
+        let clone = self.running.clone();
+        self.running = clone
+            .iter()
+            .filter(|group| {
+                if deref_refcell!(group).is_finished() {
+                    to_free.push((*group).clone());
+                    false
+                } else {
+                    true
+                }
+            })
+            .cloned()
+            .collect::<VecDeque<_>>();
+        for group in to_free {
+            self._free(group);
         }
+    }
+}
+
+impl Scheduler {
+    fn remove_seq_group(&mut self, seq_group: &SequenceGroup) {
+        // Remove it if it is in waiting
+        if let Some(idx) = self
+            .waiting
+            .iter()
+            .position(|grp| deref_refcell!(grp).id() == seq_group.id())
+        {
+            self.waiting.remove(idx);
+        };
+        // Remove it if it is in running
+        if let Some(idx) = self
+            .running
+            .iter()
+            .position(|grp| deref_refcell!(grp).id() == seq_group.id())
+        {
+            self.running.remove(idx);
+        };
+        // Remove it if it is in swapped out
+        if let Some(idx) = self
+            .swapped_out
+            .iter()
+            .position(|grp| deref_refcell!(grp).id() == seq_group.id())
+        {
+            self.swapped_out.remove(idx);
+        };
+    }
+
+    fn _append_token_slot_to_seq_group(
+        &mut self,
+        seq_group: &SequenceGroup,
+        blocks_to_copy: &mut HashMap<usize, Vec<usize>>,
+    ) {
+        for seq in seq_group.get_seqs().values() {
+            let op = self
+                .block_engine
+                .append_token_slot_to_seq(&*deref_refcell!(seq));
+            if let Some((src_block, dst_block)) = op {
+                if let std::collections::hash_map::Entry::Vacant(e) =
+                    blocks_to_copy.entry(src_block)
+                {
+                    e.insert(vec![dst_block]);
+                } else {
+                    blocks_to_copy.get_mut(&src_block).unwrap().push(dst_block);
+                }
+            }
+        }
+    }
+
+    fn _abort_seq_group(&mut self, seq_group: Rc<RefCell<SequenceGroup>>) {
+        self.remove_seq_group(&*deref_refcell!(seq_group));
+        deref_refcell!(seq_group).set_state(SequenceState::DoneAborted);
+        self._free(seq_group);
+    }
+
+    /// Preempt either by recomputation (for single sequence), or by swapping (for multiple).
+    fn _preempt(
+        &mut self,
+        seq_group: Rc<RefCell<SequenceGroup>>,
+        blocks_to_swap_out: &mut HashMap<usize, usize>,
+    ) {
+        match deref_refcell!(seq_group).get_seqs().len() {
+            1 => self._preempt_by_recompute(seq_group),
+            _ => self._preempt_by_swap(seq_group, blocks_to_swap_out),
+        }
+    }
+
+    fn _preempt_by_recompute(&mut self, seq_group: Rc<RefCell<SequenceGroup>>) {
+        deref_refcell!(seq_group).set_state(SequenceState::Waiting);
+        self._free(seq_group.clone());
+        self.waiting.push_front(seq_group);
+    }
+
+    fn _preempt_by_swap(
+        &mut self,
+        seq_group: Rc<RefCell<SequenceGroup>>,
+        blocks_to_swap_out: &mut HashMap<usize, usize>,
+    ) {
+        if !self
+            .block_engine
+            .can_swap_out_seq_group(&*deref_refcell!(seq_group))
+        {
+            // If we cannot swap it out, abort the sequence group.
+            self._abort_seq_group(seq_group);
+            return;
+        }
+        let new_to_swap = self.block_engine.swap_out(&*deref_refcell!(seq_group));
+        blocks_to_swap_out.extend(new_to_swap);
+        deref_refcell!(seq_group).set_state(SequenceState::Swapped);
+
+        self.swapped_out.push_back(seq_group);
+    }
+
+    fn _allocate(&mut self, seq_group: &SequenceGroup) {
+        self.block_engine.allocate(seq_group)
+    }
+
+    fn _free(&mut self, seq_group: Rc<RefCell<SequenceGroup>>) {
+        for seq in deref_refcell!(seq_group).get_seqs().values() {
+            self.block_engine.free_sequence(&*deref_refcell!(seq));
+        }
+    }
+
+    fn sort_running_by_priority_fcfs(&mut self) {
+        self.running
+            .make_contiguous()
+            .sort_by_key(|seq_group| deref_refcell!(seq_group).timestamp());
+        self.running.make_contiguous().reverse();
+    }
+
+    fn sort_swapped_out_by_priority_fcfs(&mut self) {
+        self.swapped_out
+            .make_contiguous()
+            .sort_by_key(|seq_group| deref_refcell!(seq_group).timestamp());
+        self.swapped_out.make_contiguous().reverse();
     }
 }
