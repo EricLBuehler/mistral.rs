@@ -26,10 +26,6 @@ pub struct SchedulerOutput {
     pub ignored_seq_groups: Box<[Rc<RefCell<SequenceGroup>>]>,
 }
 
-pub enum SchedulerMethod {
-    Fixed(UsizeBounded<1, { usize::MAX }, false>),
-}
-
 pub struct Scheduler {
     waiting: VecDeque<Rc<RefCell<SequenceGroup>>>,
     running: VecDeque<Rc<RefCell<SequenceGroup>>>,

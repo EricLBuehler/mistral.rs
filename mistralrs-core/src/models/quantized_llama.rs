@@ -6,9 +6,47 @@ use candle_core::quantized::QTensor;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::layer_norm::RmsNormQuantized;
-use candle_nn::{Embedding, Module, RotaryEmbedding};
+use candle_nn::{Activation, Embedding, Module, RotaryEmbedding};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Config {
+    pub(crate) vocab_size: usize,
+    pub(crate) hidden_size: usize,
+    pub(crate) intermediate_size: usize,
+    pub(crate) num_hidden_layers: usize,
+    pub(crate) num_attention_heads: usize,
+    pub(crate) num_key_value_heads: usize,
+    pub(crate) hidden_act: Activation,
+    pub(crate) max_position_embeddings: usize,
+    pub(crate) rms_norm_eps: f64,
+    pub(crate) rope_theta: f64,
+    pub(crate) sliding_window: usize,
+    pub(crate) use_flash_attn: bool,
+}
+
+impl ConfigLike for Config {
+    fn get_hidden_size(&self) -> usize {
+        self.hidden_size
+    }
+    fn get_num_attention_heads(&self) -> usize {
+        self.num_attention_heads
+    }
+    fn get_num_hidden_layers(&self) -> usize {
+        self.num_hidden_layers
+    }
+    fn get_num_kv_heads(&self) -> usize {
+        self.num_key_value_heads
+    }
+    fn get_sliding_window(&self) -> Option<usize> {
+        Some(self.sliding_window)
+    }
+    fn get_vocab_size(&self) -> usize {
+        self.vocab_size
+    }
+}
 
 use crate::pa::InputMetadata;
+use crate::pipeline::ConfigLike;
 
 pub const MAX_SEQ_LEN: u32 = 4096;
 
@@ -228,7 +266,7 @@ impl LayerWeights {
             scale,
         );
 
-        let y = self.attention_wo.forward(&y)?;
+        let y = self.attention_wo.forward(&q)?;
         Ok(y)
     }
 
@@ -481,13 +519,7 @@ impl ModelWeights {
             let x = layer_in;
             let residual = &x;
             let x = layer.attention_norm.forward(&x)?;
-            let attn = layer.forward_attn(
-                &x,
-                &mask,
-                start_offsets,
-                start_offsets_kernel.clone(),
-                cache.get_mut(i).unwrap(),
-            )?;
+            let attn = layer.forward_attn(&x, &mask, positions, &kv_caches[i], input_metadata)?;
             let x = (attn + residual)?;
 
             // MLP

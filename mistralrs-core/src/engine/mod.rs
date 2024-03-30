@@ -22,7 +22,7 @@ use crate::{
     response::{
         ChatCompletionResponse, Choice, Logprobs, Response, ResponseLogprob, ResponseMessage,
     },
-    scheduler::{Scheduler, SchedulerMethod, SchedulerOutput},
+    scheduler::{Scheduler, SchedulerOutput},
     sequence::{Sequence, SequenceGroup, SequenceState, StopReason},
     StopTokens,
 };
@@ -38,36 +38,39 @@ pub struct Engine {
     no_kv_cache: bool,
     cache_config: CacheConfig,
     cache_engine: CacheEngine,
-    sliding_window: usize,
 }
 
 impl Engine {
     pub fn new(
         rx: Receiver<Request>,
         pipeline: Box<Mutex<dyn Pipeline>>,
-        method: SchedulerMethod,
+        max_num_seqs: usize,
         truncate_sequence: bool,
         no_kv_cache: bool,
     ) -> Self {
-        let sliding_window = pipeline.get_model_config().get_sliding_window();
-        let conf = CacheConfig {
-            block_size: 123,
-            num_cpu_blocks: Some(1234),
-            num_gpu_blocks: Some(124),
-            fully_init: bool,
+        let (cache_engine, conf) = {
+            let pipeline = get_mut_arcmutex!(pipeline);
+            // todo!("this is todo")
+            let conf = CacheConfig {
+                block_size: 123,
+                num_cpu_blocks: Some(1234),
+                num_gpu_blocks: Some(124),
+                fully_init: true,
+            };
+            (
+                CacheEngine::new(&*pipeline.config(), conf, DType::F32).unwrap(),
+                conf,
+            )
         };
-        let cache_engine =
-            CacheEngine::new(deref_mut_refcell!(pipeline).config(), conf, DType::F32);
         Self {
             rx,
             pipeline,
-            scheduler: Scheduler::new(method),
+            scheduler: Scheduler::new(max_num_seqs),
             id: 0,
             truncate_sequence,
             no_kv_cache,
-            sliding_window,
             cache_config: conf,
-            cache_engine: cache_engine.unwrap(),
+            cache_engine,
         }
     }
 
@@ -82,7 +85,7 @@ impl Engine {
 
             let seqs = scheduled
                 .iter()
-                .flat_map(|group| deref_refcell!(group).get_seqs())
+                .flat_map(|group| deref_refcell!(group).get_seqs().values().cloned())
                 .collect::<Vec<_>>();
 
             if scheduled.len() > 0 {
@@ -114,7 +117,7 @@ impl Engine {
                 self.synchronize(get_mut_arcmutex!(self.pipeline).device());
 
                 let before_sample = Instant::now();
-                self.sample_seqs(&scheduled, logits);
+                self.sample_seqs(&seqs, logits);
                 let sampling_time = before_sample.elapsed().as_millis();
                 for seq in scheduled.iter() {
                     deref_mut_refcell!(seq).total_sampling_time += sampling_time;
@@ -149,7 +152,6 @@ impl Engine {
             );
             if let Some(reason) = is_done {
                 self.finish_seq(seq, reason);
-                get_mut_arcmutex!(self.pipeline).reset_non_granular_state();
             }
         }
     }
@@ -262,7 +264,10 @@ impl Engine {
                     .map(|block| block.deref_mut().block_id)
                     .collect::<Vec<_>>();
 
-                let start_idx = if let Some(sliding_window) = self.sliding_window {
+                let start_idx = if let Some(sliding_window) = get_mut_arcmutex!(self.pipeline)
+                    .config()
+                    .get_sliding_window()
+                {
                     0.min(prompt_len - sliding_window)
                 } else {
                     0
@@ -336,7 +341,10 @@ impl Engine {
                 let position = deref_refcell!(seq).len() - 1;
                 input_positions.push(vec![position]);
 
-                let context_len = if let Some(sliding_window) = self.sliding_window {
+                let context_len = if let Some(sliding_window) = get_mut_arcmutex!(self.pipeline)
+                    .config()
+                    .get_sliding_window()
+                {
                     deref_refcell!(seq).len().min(sliding_window)
                 } else {
                     deref_refcell!(seq).len()
@@ -360,7 +368,10 @@ impl Engine {
                 let slot = slot.try_into().unwrap();
                 slot_mappings.push(vec![slot]);
 
-                if let Some(sliding_window) = self.sliding_window {
+                if let Some(sliding_window) = get_mut_arcmutex!(self.pipeline)
+                    .config()
+                    .get_sliding_window()
+                {
                     let sliding_window_blocks = sliding_window / self.cache_config.block_size;
                     block_tables.push(
                         table

@@ -30,7 +30,6 @@ pub use request::Request;
 pub use response::Response;
 pub use response::{ChatCompletionResponse, ChatCompletionUsage};
 pub use sampling::{SamplingParams, StopTokens};
-pub use scheduler::SchedulerMethod;
 
 pub struct MistralRs {
     sender: Sender<Request>,
@@ -40,7 +39,7 @@ pub struct MistralRs {
 impl MistralRs {
     pub fn new(
         pipeline: Box<Mutex<dyn Pipeline>>,
-        method: SchedulerMethod,
+        max_num_seqs: usize,
         log: Option<String>,
         truncate_sequence: bool,
         no_kv_cache: bool,
@@ -50,7 +49,8 @@ impl MistralRs {
         let this = Arc::new(Self { sender: tx, log });
 
         thread::spawn(move || {
-            let mut engine = Engine::new(rx, pipeline, method, truncate_sequence, no_kv_cache);
+            let mut engine =
+                Engine::new(rx, pipeline, max_num_seqs, truncate_sequence, no_kv_cache);
             engine.run();
         });
 

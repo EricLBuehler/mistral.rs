@@ -1,10 +1,9 @@
 use super::{get_model_paths, ConfigLike, Loader, ModelKind, ModelPaths, Pipeline, TokenSource};
-use crate::models::{quantized_llama, Cache};
+use crate::models::quantized_llama::{self, Config};
 use crate::pa::InputMetadata;
 use crate::pipeline::ChatTemplate;
 use crate::{deref_mut_refcell, deref_refcell, deserialize_chat_template};
 use crate::{
-    models::mistral::{Config, Model as NormalModel},
     models::quantized_llama::ModelWeights as QModelWeights,
     sequence::Sequence,
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
@@ -29,7 +28,6 @@ use thiserror::Error;
 use tokenizers::Tokenizer;
 
 enum Model {
-    Normal(NormalModel),
     Quantized(QModelWeights),
 }
 pub const MISTRAL_IS_GPTX: bool = true;
@@ -219,18 +217,7 @@ impl Loader for MistralLoader {
                 Model::Quantized(model)
             }
             ModelKind::QuantizedGGML => unreachable!(),
-            ModelKind::Normal => {
-                let vb = from_mmaped_safetensors(
-                    paths.get_weight_filenames().to_vec(),
-                    Vec::new(),
-                    dtype.unwrap_or(default_dtype),
-                    device,
-                    false,
-                )?;
-
-                let model = NormalModel::new(&config, vb)?;
-                Model::Normal(model)
-            }
+            ModelKind::Normal => unreachable!(),
             ModelKind::XLoraNormal => unreachable!(),
             ModelKind::XLoraGGUF => unreachable!(),
             ModelKind::XLoraGGML => unreachable!(),
@@ -262,9 +249,6 @@ impl Pipeline for MistralPipeline {
         mut input_metadata: InputMetadata,
     ) -> Tensor {
         let result = match self.model {
-            Model::Normal(ref mut model) => {
-                todo!()
-            }
             Model::Quantized(ref mut model) => model.forward(
                 &input_tokens,
                 &input_positions,
@@ -281,7 +265,6 @@ impl Pipeline for MistralPipeline {
     }
     fn device(&self) -> &Device {
         match self.model {
-            Model::Normal(ref model) => &model.device,
             Model::Quantized(ref model) => &model.device,
         }
     }
@@ -325,13 +308,12 @@ impl Pipeline for MistralPipeline {
     }
     fn get_max_seq_len(&self) -> usize {
         match &self.model {
-            Model::Normal(model) => model.max_seq_len,
             Model::Quantized(_) => quantized_llama::MAX_SEQ_LEN as usize,
         }
     }
     fn is_xlora(&self) -> bool {
         match &self.model {
-            Model::Normal(_) | Model::Quantized(_) => false,
+            Model::Quantized(_) => false,
         }
     }
     fn has_no_kv_cache(&self) -> bool {
