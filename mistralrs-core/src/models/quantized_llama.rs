@@ -163,7 +163,6 @@ struct LayerWeights {
     span_attn: tracing::Span,
     span_mlp: tracing::Span,
     rotary: RotaryEmbedding,
-    attn: PagedAttention,
 }
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
@@ -311,15 +310,6 @@ impl ModelWeights {
                 span_attn,
                 span_mlp,
                 rotary: rotary.clone(),
-                attn: PagedAttention::new(
-                    cfg.num_attention_heads,
-                    head_dim,
-                    1. / ((head_dim as f32).sqrt()),
-                    Some(cfg.num_key_value_heads),
-                    None,
-                    vb.device().clone(),
-                    None,
-                ),
             })
         }
         let span = tracing::span!(tracing::Level::TRACE, "model");
@@ -443,15 +433,6 @@ impl ModelWeights {
                 span_attn,
                 span_mlp,
                 rotary: rotary.clone(),
-                attn: PagedAttention::new(
-                    cfg.num_attention_heads,
-                    head_dim,
-                    1. / ((head_dim as f32).sqrt()),
-                    Some(cfg.num_key_value_heads),
-                    None,
-                    vb.device().clone(),
-                    None,
-                ),
             })
         }
         let span = tracing::span!(tracing::Level::TRACE, "model");

@@ -160,7 +160,7 @@ fn raise_exception(msg: String) -> Result<String, minijinja::Error> {
     Err(minijinja::Error::new(ErrorKind::InvalidOperation, msg))
 }
 
-pub trait ConfigLike {
+pub trait ConfigLike: Send + Sync {
     fn get_num_kv_heads(&self) -> usize;
     fn get_hidden_size(&self) -> usize;
     fn get_num_hidden_layers(&self) -> usize;
