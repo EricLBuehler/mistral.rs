@@ -78,7 +78,7 @@ impl LlamaLoader {
         } else {
             None
         };
-        let kind = Python::with_gil(|py| match &*kind.as_ref(py).borrow() {
+        let kind = Python::with_gil(|py| match &*kind.bind(py).borrow() {
             ModelKind::Normal => _ModelKind::Normal,
             ModelKind::XLoraNormal => _ModelKind::XLoraNormal,
             ModelKind::QuantizedGGUF => _ModelKind::QuantizedGGUF,

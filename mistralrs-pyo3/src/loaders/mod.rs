@@ -66,7 +66,7 @@ impl NormalLoader {
                 chat_template.into_py(py),
                 tokenizer_json.into_py(py),
             ];
-            let args = PyTuple::new(py, elems);
+            let args = PyTuple::new_bound(py, elems);
 
             class.call1(py, args)
         })?;
@@ -119,7 +119,7 @@ impl NormalLoader {
                 token_source_value.into_py(py),
                 dtype.into_py(py),
             ];
-            let args = PyTuple::new(py, elems);
+            let args = PyTuple::new_bound(py, elems);
 
             self.inner.call_method1(py, intern!(py, "load"), args)
         })
@@ -191,7 +191,7 @@ impl XLoraLoader {
                 tokenizer_json.into_py(py),
                 tgt_non_granular_index.into_py(py),
             ];
-            let args = PyTuple::new(py, elems);
+            let args = PyTuple::new_bound(py, elems);
 
             class.call1(py, args)
         })?;
@@ -244,7 +244,7 @@ impl XLoraLoader {
                 token_source_value.into_py(py),
                 dtype.into_py(py),
             ];
-            let args = PyTuple::new(py, elems);
+            let args = PyTuple::new_bound(py, elems);
 
             self.inner.call_method1(py, intern!(py, "load"), args)
         })
@@ -319,7 +319,7 @@ impl QuantizedLoader {
                 chat_template.into_py(py),
                 tokenizer_json.into_py(py),
             ];
-            let args = PyTuple::new(py, elems);
+            let args = PyTuple::new_bound(py, elems);
 
             class.call1(py, args)
         })?;
@@ -372,7 +372,7 @@ impl QuantizedLoader {
                 token_source_value.into_py(py),
                 dtype.into_py(py),
             ];
-            let args = PyTuple::new(py, elems);
+            let args = PyTuple::new_bound(py, elems);
 
             self.inner.call_method1(py, intern!(py, "load"), args)
         })
@@ -456,7 +456,7 @@ impl XLoraQuantizedLoader {
                 tokenizer_json.into_py(py),
                 tgt_non_granular_index.into_py(py),
             ];
-            let args = PyTuple::new(py, elems);
+            let args = PyTuple::new_bound(py, elems);
 
             class.call1(py, args)
         })?;
@@ -509,7 +509,7 @@ impl XLoraQuantizedLoader {
                 token_source_value.into_py(py),
                 dtype.into_py(py),
             ];
-            let args = PyTuple::new(py, elems);
+            let args = PyTuple::new_bound(py, elems);
 
             self.inner.call_method1(py, intern!(py, "load"), args)
         })

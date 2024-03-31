@@ -89,7 +89,7 @@ impl Runner {
     ) -> PyResult<String> {
         let (tx, rx) = channel();
         Python::with_gil(|py| {
-            let request = request.as_ref(py).borrow();
+            let request = request.bind(py).borrow();
             let stop_toks = request
                 .stop_token_ids
                 .as_ref()
@@ -170,7 +170,7 @@ impl ChatCompletionRequest {
         let mut messages_vec = Vec::new();
         for message in messages {
             let messages_map = Python::with_gil(|py| {
-                let mapping = message.as_ref(py).as_mapping();
+                let mapping = message.bind(py).as_mapping();
                 let mut messages_map = IndexMap::new();
                 for i in 0..mapping.len()? {
                     let k = mapping
@@ -208,7 +208,7 @@ impl ChatCompletionRequest {
 }
 
 #[pymodule]
-fn mistralrs(_py: Python, m: &PyModule) -> PyResult<()> {
+fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Runner>()?;
     m.add_class::<MistralLoader>()?;
     m.add_class::<MixtralLoader>()?;
