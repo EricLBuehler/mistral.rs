@@ -26,3 +26,6 @@ serde = "1.0.197"
 serde_json = "1.0.114"
 indexmap = { version = "2.2.5", features = ["serde"] }
 either = { version = "1.10.0", features = ["serde"] }
+accelerate-src = { version = "0.3.2" }
+intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
+libc = { version = "0.2.147" }

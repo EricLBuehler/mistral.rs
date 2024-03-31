@@ -22,9 +22,13 @@ serde.workspace = true
 serde_json.workspace = true
 candle-core.workspace = true
 indexmap.workspace = true
+accelerate-src = { workspace = true, optional = true }
+intel-mkl-src = { workspace = true, optional = true }
 
 [features]
 cuda = ["candle-core/cuda", "mistralrs/cuda"]
 cudnn = ["candle-core/cudnn", "mistralrs/cudnn"]
 metal = ["candle-core/metal", "mistralrs/metal"]
 flash-attn = ["cuda", "mistralrs/flash-attn"]
+accelerate = ["mistralrs/accelerate"]
+mkl = ["mistralrs/mkl"]

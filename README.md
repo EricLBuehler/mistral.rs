@@ -147,13 +147,15 @@ To start an X-LoRA server with the default weights and ordering (exactly as pres
 `./mistralrs-server --port 1234 x-lora-mistral -o x-lora-orderings/default-ordering.json`
 
 
-### Building for GPU, Metal or enabling other features
+### Building for GPU, Metal, faster inference on CPU, or enabling other features
 Rust uses a feature flag system during build to implement compile-time build options. As such, the following is a list of features
 which may be specified using the `--features` command.
 1) `cuda`
 2) `cudnn` (if installed, to be used with `cuda`)
 2) `metal` (mutally excl. to `cuda`)
 3) `flash-attn` (mutally excl. to `metal`, only has an affect on non-quantized models)
+4) `mkl`
+5) `accelerate`
 
 ### X-LoRA
 **Preparing the X-LoRA Ordering File**

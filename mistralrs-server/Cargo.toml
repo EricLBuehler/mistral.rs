@@ -22,9 +22,14 @@ mistralrs-core = { version = "0.1.0", path = "../mistralrs-core" }
 tokio = { version = "1.36.0", features = ["rt-multi-thread"] }
 dyn-fmt = "0.4.0"
 indexmap.workspace = true
+accelerate-src = { workspace = true, optional = true }
+intel-mkl-src = { workspace = true, optional = true }
+
 
 [features]
 cuda = ["mistralrs-core/cuda"]
 cudnn = ["mistralrs-core/cudnn"]
 metal = ["mistralrs-core/metal"]
 flash-attn = ["cuda", "mistralrs-core/flash-attn"]
+accelerate = ["mistralrs-core/accelerate"]
+mkl = ["mistralrs-core/mkl"]
