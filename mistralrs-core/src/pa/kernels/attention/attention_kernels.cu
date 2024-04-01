@@ -24,7 +24,7 @@
 // #include <ATen/cuda/CUDAContext.h>
 // #include <c10/cuda/CUDAGuard.h>
 
-#include "../cuda_ext.h"
+#include "../headers/cuda_ext.h"
 #include "attention_dtypes.h"
 #include "attention_utils.cuh"
 #include <algorithm>
