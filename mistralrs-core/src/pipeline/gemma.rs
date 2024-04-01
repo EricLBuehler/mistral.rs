@@ -255,7 +255,6 @@ impl Loader for GemmaLoader {
             DType::F32
         };
 
-        println!("Loading model on {device:?}...");
         let model = match self.kind {
             ModelKind::QuantizedGGUF => unreachable!(),
             ModelKind::QuantizedGGML => unreachable!(),
@@ -303,7 +302,6 @@ impl Loader for GemmaLoader {
             ModelKind::XLoraGGUF => unreachable!(),
             ModelKind::XLoraGGML => unreachable!(),
         };
-        println!("Model loaded.");
 
         let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
@@ -323,6 +321,10 @@ impl Loader for GemmaLoader {
                 }
             }),
         })))
+    }
+
+    fn get_id(&self) -> &str {
+        &self.model_id
     }
 }
 

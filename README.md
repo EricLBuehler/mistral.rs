@@ -4,10 +4,11 @@
 Mistral.rs is a LLM inference platform written in pure, safe Rust.
 
 ## Upcoming features
-- Falcon model.
-- X-LoRA: Scalings `topk`.
-- X-LoRA: Softmax `topk`.
-- Fused kernel for softmax
+- More models: please submit requests [here](https://github.com/EricLBuehler/mistral.rs/issues/49).
+- X-LoRA: Scalings `topk` ([#48](https://github.com/EricLBuehler/mistral.rs/issues/48)).
+- X-LoRA: Softmax `topk` ([#48](https://github.com/EricLBuehler/mistral.rs/issues/48)).
+- PagedAttention ([#47](https://github.com/EricLBuehler/mistral.rs/pull/47)) ⭐ Active work.
+- Specialize quantized matmul ⭐ Active work.
 
 ## Description
 - Fast performance with per-sequence and catch-up KV cache management technique.
@@ -146,13 +147,15 @@ To start an X-LoRA server with the default weights and ordering (exactly as pres
 `./mistralrs-server --port 1234 x-lora-mistral -o x-lora-orderings/default-ordering.json`
 
 
-### Building for GPU, Metal or enabling other features
+### Building for GPU, Metal, faster inference on CPU, or enabling other features
 Rust uses a feature flag system during build to implement compile-time build options. As such, the following is a list of features
 which may be specified using the `--features` command.
 1) `cuda`
 2) `cudnn` (if installed, to be used with `cuda`)
 2) `metal` (mutally excl. to `cuda`)
 3) `flash-attn` (mutally excl. to `metal`, only has an affect on non-quantized models)
+4) `mkl`
+5) `accelerate`
 
 ### X-LoRA
 **Preparing the X-LoRA Ordering File**

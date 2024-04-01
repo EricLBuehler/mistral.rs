@@ -167,6 +167,8 @@ pub trait Loader {
         let paths = self.download_model(revision, token_source)?;
         self._setup_model(&*paths, dtype, device)
     }
+
+    fn get_id(&self) -> &str;
 }
 
 fn raise_exception(msg: String) -> Result<String, minijinja::Error> {
@@ -198,6 +200,10 @@ pub trait Pipeline: Send + Sync {
         add_generation_prompt: bool,
     ) -> Result<String> {
         let mut env = Environment::new();
+        // https://github.com/huggingface/transformers/blob/76a33a10923ccc1074917f6b6a1e719e626b7dc9/src/transformers/tokenization_utils_base.py#L1842
+        env.set_lstrip_blocks(true);
+        env.set_trim_blocks(true);
+
         let template = self
             .get_chat_template()
             .chat_template
@@ -562,7 +568,7 @@ macro_rules! deserialize_chat_template {
             bos_token: Option<String>,
             eos_token: Option<String>,
         }
-        let mut template = match template.chat_template {
+        match template.chat_template {
             Some(_) => template,
             None => {
                 println!("`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
@@ -611,9 +617,6 @@ macro_rules! deserialize_chat_template {
                 let ser = serde_json::to_string_pretty(&deser).unwrap();
                 serde_json::from_str(&ser).unwrap()
             }
-        };
-        // TODO(EricLBuehler): Pending on https://github.com/mitsuhiko/minijinja/issues/446
-        template.chat_template = Some(template.chat_template.unwrap().replace("%}\n", "%}"));
-        template
+        }
     }};
 }

@@ -20,9 +20,12 @@ license = "MIT"
 
 [workspace.dependencies]
 anyhow = { version = "1.0.80", feature = "std" }
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.4.0" }
-candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.4.0" }
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.4.2" }
+candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.4.2" }
 serde = "1.0.197"
 serde_json = "1.0.114"
 indexmap = { version = "2.2.5", features = ["serde"] }
 either = { version = "1.10.0", features = ["serde"] }
+accelerate-src = { version = "0.3.2" }
+intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
+libc = { version = "0.2.147" }

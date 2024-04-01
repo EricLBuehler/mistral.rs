@@ -203,8 +203,7 @@ impl LayerWeights {
                 .contiguous()?;
             k = k
                 .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
+                .transpose(1, 2)?;
         }
 
         let (k, v) = match &*kv_cache {

@@ -67,21 +67,6 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
 
     /// Schedule all sequences based on their state and the available space.
     pub fn schedule(&mut self) -> SchedulerOutput {
-        if self.waiting.iter().count() == 1 && self.running.is_empty() {
-            let seq = self.waiting.next().unwrap();
-            deref_mut_refcell!(seq).set_state(SequenceState::RunningPrompt);
-            self.running.push(seq);
-            return SchedulerOutput {
-                prompt: self.running.clone().into(),
-                completion: vec![].into(),
-            };
-        }
-        if self.running.len() == 1 && self.waiting.iter().count() == 0 {
-            return SchedulerOutput {
-                prompt: vec![].into(),
-                completion: self.running.clone().into(),
-            };
-        }
         // Filter out all done sequences
         let running = self.running.clone();
         let mut running = running
@@ -89,6 +74,35 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             .filter(|seq| deref_refcell!(seq).is_running())
             .cloned()
             .collect::<Vec<_>>();
+
+        match (self.waiting.iter().count(), running.len()) {
+            (0, 0) => {
+                self.running = running;
+                return SchedulerOutput {
+                    prompt: vec![].into(),
+                    completion: vec![].into(),
+                };
+            }
+            (_, 0) => {
+                for seq in self.waiting.iter() {
+                    deref_mut_refcell!(seq).set_state(SequenceState::RunningPrompt);
+                    self.running.push(seq.clone());
+                }
+                self.waiting = Backer::new();
+                return SchedulerOutput {
+                    prompt: self.running.clone().into(),
+                    completion: vec![].into(),
+                };
+            }
+            (0, _) => {
+                self.running = running;
+                return SchedulerOutput {
+                    prompt: vec![].into(),
+                    completion: self.running.clone().into(),
+                };
+            }
+            _ => {}
+        }
 
         // Sort the waiting seqs
         self.waiting.sort_ascending_ids();
