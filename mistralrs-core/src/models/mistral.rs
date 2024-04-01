@@ -2,11 +2,14 @@
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{layer_norm::RmsNormNonQuantized, Activation, RotaryEmbedding, VarBuilder};
+use candle_nn::{layer_norm::RmsNormNonQuantized, Activation, VarBuilder};
 use candle_transformers::models::with_tracing::{linear_no_bias, Linear};
 
 use crate::{
-    pa::{layers::attention::PagedAttention, InputMetadata},
+    pa::{
+        layers::{attention::PagedAttention, rope::RotaryEmbedding},
+        InputMetadata,
+    },
     pipeline::{ConfigLike, MISTRAL_IS_GPTX},
 };
 
@@ -193,7 +196,7 @@ impl Attention {
         let k = self.k_proj.forward(&input_tokens)?;
         let v = self.v_proj.forward(&input_tokens)?;
 
-        // TODO! ROPE HERE
+        self.rotary_emb.forward(input_positions, &q, &k)?;
 
         let dtype = q.dtype();
         let attn_output = self.attn.forward(
@@ -279,12 +282,13 @@ impl Model {
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let rotary_emb = RotaryEmbedding::new(
-            cfg.rope_theta as f32,
+            vb.device(),
+            vb.dtype(),
+            head_dim,
             head_dim,
             cfg.max_position_embeddings,
-            vb.device(),
+            cfg.rope_theta as f32,
             MISTRAL_IS_GPTX,
-            vb.dtype(),
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");

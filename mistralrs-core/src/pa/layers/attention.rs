@@ -199,7 +199,7 @@ impl PagedAttention {
             )?;
         }
 
-        let output: Tensor = if input_metadata.is_prompt {
+        let output: Tensor = if input_metadata.is_prompt || true {
             // Prompt run.
             self.prompt_attention(batch_size, seq_len, hidden_size, query, key, value)?
         } else {

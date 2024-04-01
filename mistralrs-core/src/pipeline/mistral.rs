@@ -249,7 +249,7 @@ impl Pipeline for MistralPipeline {
         input_tokens: Tensor,
         input_positions: Tensor,
         kv_cache: Option<&[(candle_core::Tensor, candle_core::Tensor)]>,
-        mut input_metadata: InputMetadata,
+        input_metadata: InputMetadata,
     ) -> Tensor {
         let result = match self.model {
             Model::Normal(ref mut model) => {

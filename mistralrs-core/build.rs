@@ -7,9 +7,10 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::SystemTime;
 
-const KERNEL_FILES: [&str; 2] = [
+const KERNEL_FILES: [&str; 3] = [
     "cache/cache_kernels.cu",
     "attention/attention_kernels.cu",
+    "pos_encoding/pos_encoding_kernels.cu",
 ];
 
 const PATH: &str = "src/pa/kernels";
@@ -71,6 +72,8 @@ fn main() -> Result<()> {
     std::fs::create_dir_all(out_dir.join("attention"))
         .expect("Failed to create output attention directory");
     std::fs::create_dir_all(out_dir.join("cache"))
+        .expect("Failed to create output attention directory");
+    std::fs::create_dir_all(out_dir.join("pos_encoding"))
         .expect("Failed to create output attention directory");
 
     let ccbin_env = std::env::var("CANDLE_NVCC_CCBIN");

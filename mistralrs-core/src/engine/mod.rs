@@ -14,6 +14,7 @@ use crate::{
     handle_seq_error_stateaware,
     pa::{
         cache_engine::{CacheConfig, CacheEngine},
+        kernels::{cuda_get_mem_usage, cuda_stream_synchronize},
         InputMetadata, PreparedInputs, _PAD_SLOT_ID,
     },
     pipeline::{Pipeline, _make_tensor_with_pad},
@@ -40,11 +41,8 @@ pub struct Engine {
 }
 
 const BLOCK_SIZE: usize = 16;
-const CPU_SWAP_SPACE: usize = 1024 * 128; // 128 kb
-const GPU_UTILIZATION: usize = 1024 * 1024 * 1024 * 80; // 80gb
-const BLOCK_SIZE_BYTES: usize = BLOCK_SIZE * 4; // Assume f32
-const NUM_CPU_BLOCKS: usize = CPU_SWAP_SPACE / BLOCK_SIZE_BYTES;
-const NUM_GPU_BLOCKS: usize = GPU_UTILIZATION / BLOCK_SIZE_BYTES;
+const CPU_SWAP_SPACE: usize = 1024 * 1024 * 1024; // 1 gb
+const GPU_UTILIZATION: usize = 1024 * 1024 * 1024 * 10; // 10gb
 
 impl Engine {
     pub fn new(
@@ -54,23 +52,38 @@ impl Engine {
         truncate_sequence: bool,
         no_kv_cache: bool,
     ) -> Self {
-        let (cache_engine, conf) = {
+        let (cache_engine, conf, num_cpu, num_gpu) = {
             let pipeline = get_mut_arcmutex!(pipeline);
+            let key_cache_block = BLOCK_SIZE
+                * pipeline.config().get_num_attention_heads()
+                * pipeline.config().get_head_size();
+            let value_cache_block = key_cache_block;
+            let total =
+                pipeline.config().get_num_hidden_layers() * (key_cache_block + value_cache_block);
+            let cache_block_size = DType::BF16.size_in_bytes() * total;
+            let num_cpu_blocks = CPU_SWAP_SPACE / cache_block_size;
+            let num_gpu_blocks = GPU_UTILIZATION / cache_block_size;
             let conf = CacheConfig {
                 block_size: BLOCK_SIZE,
-                num_cpu_blocks: Some(NUM_CPU_BLOCKS),
-                num_gpu_blocks: Some(NUM_GPU_BLOCKS),
+                num_cpu_blocks: Some(num_cpu_blocks),
+                num_gpu_blocks: Some(num_gpu_blocks),
                 fully_init: true,
             };
+            dbg!(pipeline.device());
+            dbg!(CPU_SWAP_SPACE);
+            dbg!(cache_block_size);
             (
-                CacheEngine::new(&*pipeline.config(), conf, DType::F32, pipeline.device()).unwrap(),
+                CacheEngine::new(&*pipeline.config(), conf, DType::BF16, pipeline.device())
+                    .unwrap(),
                 conf,
+                num_cpu_blocks,
+                num_gpu_blocks,
             )
         };
         Self {
             rx,
             pipeline,
-            scheduler: Scheduler::new(max_num_seqs, BLOCK_SIZE, NUM_CPU_BLOCKS, NUM_GPU_BLOCKS),
+            scheduler: Scheduler::new(max_num_seqs, BLOCK_SIZE, num_gpu, num_cpu),
             id: 0,
             truncate_sequence,
             no_kv_cache,
@@ -136,6 +149,8 @@ impl Engine {
                 for seq in scheduled.iter() {
                     deref_mut_refcell!(seq).total_sampling_time += sampling_time;
                 }
+
+                self.scheduler.free_finished_sequence_groups();
             }
         }
     }
@@ -158,6 +173,14 @@ impl Engine {
             let sampled = get_mut_arcmutex!(self.pipeline).sample(logits_per_seq, seq.clone());
             let next_token = handle_seq_error_stateaware!(sampled, seq);
             let next_token_id = next_token.token;
+            if deref_refcell!(seq).is_prompt() {
+                deref_mut_refcell!(seq).prompt_timestamp = Some(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .expect("Time travel has occurred!")
+                        .as_millis(),
+                );
+            }
             deref_mut_refcell!(seq).add_token(next_token);
             let is_done = deref_refcell!(seq).is_done(
                 next_token_id,
@@ -263,14 +286,18 @@ impl Engine {
 
                 input_tokens.push(prompt_ids);
                 input_positions.push((0..prompt_len).collect::<Vec<_>>());
-                let table = self.scheduler.block_engine.block_tables.get(&seq.id());
-                if table.is_none() {
+                let table = self
+                    .scheduler
+                    .block_engine
+                    .block_tables
+                    .get(&seq.id())
+                    .unwrap();
+                if table.is_empty() {
                     // Will be None during profiling.
                     slot_mappings.push([_PAD_SLOT_ID].repeat(prompt_len));
                     continue;
                 }
                 let table = table
-                    .unwrap()
                     .iter()
                     .map(|block| block.deref_mut().block_id)
                     .collect::<Vec<_>>();
@@ -279,10 +306,10 @@ impl Engine {
                     .config()
                     .get_sliding_window()
                 {
-                    0.min(prompt_len - sliding_window)
+                    0.max(prompt_len as i64 - sliding_window as i64)
                 } else {
                     0
-                };
+                } as usize;
 
                 let mut slot_mapping = Vec::new();
                 for i in 0..prompt_len {
@@ -373,7 +400,7 @@ impl Engine {
                     .map(|block| block.deref_mut().block_id)
                     .collect::<Vec<_>>();
 
-                let block_number = table.get(position / self.cache_config.block_size).unwrap();
+                let block_number = table[position / self.cache_config.block_size];
                 let block_offset = position % self.cache_config.block_size;
                 let slot = block_number * self.cache_config.block_size + block_offset;
                 let slot = slot.try_into().unwrap();
@@ -384,12 +411,16 @@ impl Engine {
                     .get_sliding_window()
                 {
                     let sliding_window_blocks = sliding_window / self.cache_config.block_size;
-                    block_tables.push(
-                        table
-                            .get(table.len() - sliding_window_blocks..)
-                            .unwrap()
-                            .to_vec(),
-                    );
+                    if sliding_window_blocks > table.len() {
+                        block_tables.push(table);
+                    } else {
+                        block_tables.push(
+                            table
+                                .get(table.len() - sliding_window_blocks..)
+                                .unwrap()
+                                .to_vec(),
+                        );
+                    }
                 } else {
                     block_tables.push(table);
                 }

@@ -1,5 +1,6 @@
 pub mod attention;
 pub mod cache;
+pub mod rope;
 
 use crate::pa::kernels::sys::CUstream;
 use candle_core::{

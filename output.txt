@@ -30,3 +30,151 @@ Request at 2024-04-01 12:19:07.696982878 +00:00: {"messages":[{"content":"What i
 
 Response at 2024-04-01 12:19:09.494621714 +00:00: {"id":"0","choices":[{"finish_reason":"stop","index":0,"message":{"content":"Graphene is a material that is made of a single layer of carbon atoms arranged in a hexagonal lattice. It is a two-dimensional material with extraordinary physical and chemical properties, including high strength, flexibility, and conductivity. Graphene is considered to be one of the most promising materials for various applications, including electronics, energy storage, and composites. It is also being researched for its potential use in medical applications, such as drug delivery and tissue engineering.</s>","role":"assistant"},"logprobs":null}],"created":1711973947709,"model":"mistral","system_fingerprint":"local","object":"chat.completion","usage":{"completion_tokens":102,"prompt_tokens":14,"total_tokens":116,"avg_tok_per_sec":64.986,"avg_prompt_tok_per_sec":33.175358,"avg_compl_tok_per_sec":74.83492,"avg_sample_tok_per_sec":7250.0}}
 
+Request at 2024-04-01 21:15:06.041662056 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:15:06.816950936 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:20:17.790972583 +00:00: {"messages":[{"content":"hello","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:20:18.678821788 +00:00: {"messages":[{"content":"hello","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:23:03.769566392 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:23:04.781264985 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:23:06.289604680 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:24:18.771818636 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:24:19.610695034 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:25:19.708712362 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:25:20.679507745 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:26:57.501782492 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:26:58.399742986 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:31:29.269288815 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:31:30.189417401 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:32:44.557188742 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:32:46.054581269 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:33:35.778331392 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:33:37.214273374 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:33:38.771298130 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:34:40.059735790 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:34:41.624821582 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:35:41.654879688 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:35:42.990872448 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:35:44.897654672 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:36:28.995823942 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:36:30.528949498 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:36:32.401192931 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:37:30.609840617 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:37:31.998234537 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:37:33.649237735 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:48:34.474928055 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:48:35.893650622 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:48:37.466812390 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:53:56.365654032 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":10,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:53:58.629336957 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":10,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:58:02.393128034 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":10,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:58:03.896177782 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":10,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:58:05.569351463 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":10,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 21:59:47.498051921 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":10,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Response at 2024-04-01 21:59:48.765250984 +00:00: {"id":"1","choices":[{"finish_reason":"length","index":0,"message":{"content":". What is 1]: Let h = -","role":"assistant"},"logprobs":null}],"created":1712008787519,"model":"mistral","system_fingerprint":"local","object":"chat.completion","usage":{"completion_tokens":10,"prompt_tokens":9,"total_tokens":19,"avg_tok_per_sec":15.2487955,"avg_prompt_tok_per_sec":14.634147,"avg_compl_tok_per_sec":15.84786,"avg_sample_tok_per_sec":65.97222}}
+
+Request at 2024-04-01 22:04:53.887481857 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":10,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Response at 2024-04-01 22:04:55.153441283 +00:00: {"id":"1","choices":[{"finish_reason":"length","index":0,"message":{"content":". What is 1]: Let h = -","role":"assistant"},"logprobs":null}],"created":1712009093908,"model":"mistral","system_fingerprint":"local","object":"chat.completion","usage":{"completion_tokens":10,"prompt_tokens":9,"total_tokens":19,"avg_tok_per_sec":15.261044,"avg_prompt_tok_per_sec":14.950167,"avg_compl_tok_per_sec":15.5521,"avg_sample_tok_per_sec":63.333332}}
+
+Request at 2024-04-01 22:05:01.155454024 +00:00: {"messages":[{"content":"hi","role":"user","name":null},{"content":". What is 1]: Let h = -","role":"assistant","name":null},{"content":"What is 1+2","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":10,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Response at 2024-04-01 22:05:01.956886147 +00:00: {"id":"3","choices":[{"finish_reason":"length","index":0,"message":{"content":"of the rest of all the first,\n\n","role":"assistant"},"logprobs":null}],"created":1712009101176,"model":"mistral","system_fingerprint":"local","object":"chat.completion","usage":{"completion_tokens":10,"prompt_tokens":33,"total_tokens":43,"avg_tok_per_sec":55.128204,"avg_prompt_tok_per_sec":423.07693,"avg_compl_tok_per_sec":14.245014,"avg_sample_tok_per_sec":115.5914}}
+
+Request at 2024-04-01 22:06:42.136693188 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":10,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Response at 2024-04-01 22:06:43.110929224 +00:00: {"id":"1","choices":[{"finish_reason":"length","index":0,"message":{"content":". What is 1]: Let h = -","role":"assistant"},"logprobs":null}],"created":1712009202146,"model":"mistral","system_fingerprint":"local","object":"chat.completion","usage":{"completion_tokens":10,"prompt_tokens":9,"total_tokens":19,"avg_tok_per_sec":19.709545,"avg_prompt_tok_per_sec":15.789474,"avg_compl_tok_per_sec":25.38071,"avg_sample_tok_per_sec":250.0}}
+
+Request at 2024-04-01 22:08:05.995228463 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":10,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Response at 2024-04-01 22:08:06.920901496 +00:00: {"id":"1","choices":[{"finish_reason":"length","index":0,"message":{"content":". What is 1]: Let h = -","role":"assistant"},"logprobs":null}],"created":1712009286004,"model":"mistral","system_fingerprint":"local","object":"chat.completion","usage":{"completion_tokens":10,"prompt_tokens":9,"total_tokens":19,"avg_tok_per_sec":20.74236,"avg_prompt_tok_per_sec":16.129032,"avg_compl_tok_per_sec":27.93296,"avg_sample_tok_per_sec":500.0}}
+
+Request at 2024-04-01 22:08:09.835257422 +00:00: {"messages":[{"content":"hi","role":"user","name":null},{"content":". What is 1]: Let h = -","role":"assistant","name":null},{"content":"What is graphene","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":10,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 22:08:10.758863125 +00:00: {"messages":[{"content":"hi","role":"user","name":null},{"content":". What is 1]: Let h = -","role":"assistant","name":null},{"content":"What is graphene","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":10,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 22:08:12.353561774 +00:00: {"messages":[{"content":"hi","role":"user","name":null},{"content":". What is 1]: Let h = -","role":"assistant","name":null},{"content":"What is graphene","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":10,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Request at 2024-04-01 22:08:52.703348819 +00:00: {"messages":[{"content":"Hello","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":10,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Response at 2024-04-01 22:08:53.624138746 +00:00: {"id":"1","choices":[{"finish_reason":"length","index":0,"message":{"content":"of the 20: What is a:","role":"assistant"},"logprobs":null}],"created":1712009332712,"model":"mistral","system_fingerprint":"local","object":"chat.completion","usage":{"completion_tokens":10,"prompt_tokens":9,"total_tokens":19,"avg_tok_per_sec":20.856201,"avg_prompt_tok_per_sec":16.304348,"avg_compl_tok_per_sec":27.855154,"avg_sample_tok_per_sec":475.0}}
+
+Request at 2024-04-01 22:24:30.160134660 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":10,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Response at 2024-04-01 22:24:31.079250243 +00:00: {"id":"1","choices":[{"finish_reason":"length","index":0,"message":{"content":"(https://www.reddit.com/r","role":"assistant"},"logprobs":null}],"created":1712010270169,"model":"mistral","system_fingerprint":"local","object":"chat.completion","usage":{"completion_tokens":10,"prompt_tokens":9,"total_tokens":19,"avg_tok_per_sec":20.879122,"avg_prompt_tok_per_sec":16.157988,"avg_compl_tok_per_sec":28.328613,"avg_sample_tok_per_sec":542.8572}}
+
+Request at 2024-04-01 22:25:08.795976380 +00:00: {"messages":[{"content":"hi","role":"user","name":null},{"content":"(https://www.reddit.com/r","role":"assistant","name":null},{"content":"Hello","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":10,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Response at 2024-04-01 22:25:09.191160589 +00:00: {"id":"3","choices":[{"finish_reason":"length","index":0,"message":{"content":": What is not sure,2: Let'","role":"assistant"},"logprobs":null}],"created":1712010308805,"model":"mistral","system_fingerprint":"local","object":"chat.completion","usage":{"completion_tokens":10,"prompt_tokens":28,"total_tokens":38,"avg_tok_per_sec":98.7013,"avg_prompt_tok_per_sec":608.6956,"avg_compl_tok_per_sec":29.498526,"avg_sample_tok_per_sec":1027.027}}
+
+Request at 2024-04-01 22:25:20.954653378 +00:00: {"messages":[{"content":"What is 1+2?","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":10,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Response at 2024-04-01 22:25:21.346462547 +00:00: {"id":"5","choices":[{"finish_reason":"length","index":0,"message":{"content":"\n\nWhat is not sure, I's","role":"assistant"},"logprobs":null}],"created":1712010320964,"model":"mistral","system_fingerprint":"local","object":"chat.completion","usage":{"completion_tokens":10,"prompt_tokens":15,"total_tokens":25,"avg_tok_per_sec":65.44503,"avg_prompt_tok_per_sec":333.33334,"avg_compl_tok_per_sec":29.673592,"avg_sample_tok_per_sec":675.6757}}
+
+Request at 2024-04-01 22:25:27.579860614 +00:00: {"messages":[{"content":"What is 1+2?","role":"user","name":null},{"content":"\n\nWhat is not sure, I's","role":"assistant","name":null},{"content":"How can I build a website?","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":10,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Response at 2024-04-01 22:25:27.984089735 +00:00: {"id":"7","choices":[{"finish_reason":"length","index":0,"message":{"content":"\" href=\"\"](n[/What is","role":"assistant"},"logprobs":null}],"created":1712010327589,"model":"mistral","system_fingerprint":"local","object":"chat.completion","usage":{"completion_tokens":10,"prompt_tokens":41,"total_tokens":51,"avg_tok_per_sec":129.44162,"avg_prompt_tok_per_sec":803.9216,"avg_compl_tok_per_sec":29.154518,"avg_sample_tok_per_sec":1186.0465}}
+
+Request at 2024-04-01 22:25:51.772388636 +00:00: {"messages":[{"content":"hello","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":100,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Response at 2024-04-01 22:25:52.382005657 +00:00: {"id":"9","choices":[{"finish_reason":"stop","index":0,"message":{"content":"([/instantiation])\n\n[/instantiation])</s>","role":"assistant"},"logprobs":null}],"created":1712010351782,"model":"mistral","system_fingerprint":"local","object":"chat.completion","usage":{"completion_tokens":16,"prompt_tokens":10,"total_tokens":26,"avg_tok_per_sec":43.405674,"avg_prompt_tok_per_sec":227.27274,"avg_compl_tok_per_sec":28.828829,"avg_sample_tok_per_sec":440.67798}}
+
+Request at 2024-04-01 22:25:55.663525198 +00:00: {"messages":[{"content":"hello","role":"user","name":null},{"content":"([/instantiation])\n\n[/instantiation])</s>","role":"assistant","name":null},{"content":"What is 1+2","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":100,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Response at 2024-04-01 22:25:57.588749736 +00:00: {"id":"11","choices":[{"finish_reason":"stop","index":0,"message":{"content":"3: Let's-1: Suppose -4]: What is not sure, -2. Let ffication].\n\n```enterprise], and ISTACKNOWikstillustration(4[/instant1</s>","role":"assistant"},"logprobs":null}],"created":1712010355673,"model":"mistral","system_fingerprint":"local","object":"chat.completion","usage":{"completion_tokens":51,"prompt_tokens":40,"total_tokens":91,"avg_tok_per_sec":47.519585,"avg_prompt_tok_per_sec":800.0,"avg_compl_tok_per_sec":27.345844,"avg_sample_tok_per_sec":388.8889}}
+
+Request at 2024-04-01 22:33:31.522883025 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":100,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Response at 2024-04-01 22:33:33.617413519 +00:00: {"id":"1","choices":[{"finish_reason":"stop","index":0,"message":{"content":"(https://www.reddit.com/r/r/hi)\n[120)\n\nUser 1209986: What is a](https://www.</s>","role":"assistant"},"logprobs":null}],"created":1712010811532,"model":"mistral","system_fingerprint":"local","object":"chat.completion","usage":{"completion_tokens":42,"prompt_tokens":9,"total_tokens":51,"avg_tok_per_sec":24.460432,"avg_prompt_tok_per_sec":16.014235,"avg_compl_tok_per_sec":27.57715,"avg_sample_tok_per_sec":301.77515}}
+
+Request at 2024-04-01 22:33:49.686786183 +00:00: {"messages":[{"content":"What is 1+2?","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":100,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Response at 2024-04-01 22:33:50.483508204 +00:00: {"id":"3","choices":[{"finish_reason":"stop","index":0,"message":{"content":"\n\nWhat is not sure, I's the answer: Let f/What is a.</s>","role":"assistant"},"logprobs":null}],"created":1712010829696,"model":"mistral","system_fingerprint":"local","object":"chat.completion","usage":{"completion_tokens":21,"prompt_tokens":15,"total_tokens":36,"avg_tok_per_sec":45.74333,"avg_prompt_tok_per_sec":333.33334,"avg_compl_tok_per_sec":28.301888,"avg_sample_tok_per_sec":428.57144}}
+
+Request at 2024-04-01 22:34:20.674348510 +00:00: {"messages":[{"content":"hi","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":100,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Response at 2024-04-01 22:34:25.173315924 +00:00: {"id":"1","choices":[{"finish_reason":"length","index":0,"message":{"content":"( -. Question\n  Q1201, Question: Q. Question\n- Q to Question = Q302451 and # is a the ( Question: import--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------================                67, # - in Qi. User9 for question_ consts\n  \"\"201 -, Question: Q. Question\n- Q to Question = Q30241 and Question is a the","role":"assistant"},"logprobs":null}],"created":1712010860683,"model":"mistral","system_fingerprint":"local","object":"chat.completion","usage":{"completion_tokens":100,"prompt_tokens":9,"total_tokens":109,"avg_tok_per_sec":24.276169,"avg_prompt_tok_per_sec":16.544119,"avg_compl_tok_per_sec":25.342117,"avg_sample_tok_per_sec":199.6337}}
+
+Request at 2024-04-01 22:35:13.588902941 +00:00: {"messages":[{"content":"1+2=","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":100,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.1,"top_p":0.1,"top_k":null}
+
+Response at 2024-04-01 22:35:17.568427724 +00:00: {"id":"3","choices":[{"finish_reason":"length","index":0,"message":{"content":"you. Question\n -, Q01. Question: Q to Question\n- Q302451 and Question = Q a the # is, Question ( import--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------================                67*83021  \"s for question. # - in Qi. Question\n +01 -: Q to Question\n- Q, Question: Q2451 and Question = Q a the \\, Question","role":"assistant"},"logprobs":null}],"created":1712010913598,"model":"mistral","system_fingerprint":"local","object":"chat.completion","usage":{"completion_tokens":100,"prompt_tokens":13,"total_tokens":113,"avg_tok_per_sec":28.463476,"avg_prompt_tok_per_sec":282.60867,"avg_compl_tok_per_sec":25.484201,"avg_sample_tok_per_sec":207.33945}}
+

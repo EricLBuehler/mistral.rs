@@ -189,6 +189,7 @@ pub struct BlockEngine {
 impl BlockEngine {
     #[must_use]
     pub fn new(block_size: usize, num_gpu_blocks: usize, num_cpu_blocks: usize) -> Self {
+        dbg!(num_gpu_blocks);
         Self {
             num_gpu_blocks,
             gpu_allocator: Allocator::<GPUAllocator>::new(block_size, num_gpu_blocks),
@@ -200,6 +201,8 @@ impl BlockEngine {
     pub fn can_allocate(&self, seq_group: &SequenceGroup) -> AllocStatus {
         let num_required_blocks = seq_group.get_total_logical_token_blocks();
         let num_free_gpu_blocks = self.gpu_allocator.get_num_free_blocks();
+        dbg!(num_required_blocks);
+        dbg!(*num_free_gpu_blocks);
 
         if self.num_gpu_blocks > *num_free_gpu_blocks + num_required_blocks {
             AllocStatus::Later

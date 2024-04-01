@@ -15,7 +15,7 @@ while True:
     completion = openai.chat.completions.create(
         model="mistral",
         messages=messages,
-        max_tokens=256,
+        max_tokens=100,
         frequency_penalty=1.0,
         top_p=0.1,  # top_k=32,
         temperature=0.1,

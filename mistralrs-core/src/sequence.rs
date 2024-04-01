@@ -110,6 +110,8 @@ impl Sequence {
             logical_token_blocks: Vec::new(),
             block_size,
         };
+        this.logical_token_blocks
+            .push(LogicalTokenBlock::new(this.block_size));
         this.append_tokens_to_blocks(tokens);
         this
     }
@@ -255,23 +257,25 @@ impl Sequence {
 
     fn append_tokens_to_blocks(&mut self, tokens: Vec<u32>) {
         for tok in tokens {
+            println!("Adding token {tok}");
             self.append_token_to_blocks(tok);
         }
+        dbg!(&self.get_logical_token_blocks());
     }
 
     fn append_token_to_blocks(&mut self, token: u32) {
-        let last = self.logical_token_blocks.last_mut();
-        if !last.as_ref().is_some_and(|last| last.is_full()) {
-            // If we have space
-            let last = last.unwrap();
-            last.append_token_id(token);
-        } else {
+        let last = self.logical_token_blocks.last_mut().unwrap();
+        if last.is_full() {
             self.logical_token_blocks
                 .push(LogicalTokenBlock::new(self.block_size));
             self.logical_token_blocks
                 .last_mut()
                 .unwrap()
                 .append_token_id(token);
+            println!("Adding logical tokem block");
+        } else {
+            // If we have space
+            last.append_token_id(token);
         }
     }
 

@@ -621,7 +621,7 @@ async fn main() -> Result<()> {
     let args = args;
 
     let loader: Box<dyn Loader> = match args.model {
-        /*ModelSelected::Mistral {
+        ModelSelected::Mistral {
             model_id,
             repeat_last_n,
             tokenizer_json,
@@ -640,8 +640,8 @@ async fn main() -> Result<()> {
             args.chat_template,
             tokenizer_json,
             None,
-        )),*/
-        ModelSelected::MistralGGUF {
+        )),
+        /*ModelSelected::MistralGGUF {
             tok_model_id,
             quantized_model_id,
             quantized_filename,
@@ -663,7 +663,7 @@ async fn main() -> Result<()> {
             tokenizer_json,
             None,
         )),
-        /*ModelSelected::XLoraMistral {
+        ModelSelected::XLoraMistral {
             model_id,
             xlora_model_id,
             repeat_last_n,
