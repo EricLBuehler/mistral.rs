@@ -1,21 +1,19 @@
 use super::{get_model_paths, ConfigLike, Loader, ModelKind, ModelPaths, Pipeline, TokenSource};
-use crate::models::quantized_llama::{self, Config};
+use crate::models::mistral::{Config, Model as NormalModel};
 use crate::pa::InputMetadata;
 use crate::pipeline::ChatTemplate;
 use crate::{deref_mut_refcell, deref_refcell, deserialize_chat_template};
 use crate::{
-    models::quantized_llama::ModelWeights as QModelWeights,
     sequence::Sequence,
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
 };
 use anyhow::Result;
-use candle_core::quantized::gguf_file;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Activation;
 use candle_sampling::logits_processor::Logprobs;
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use mistralrs_lora::{LoraConfig, Ordering};
+use mistralrs_lora::Ordering;
 use serde::Deserialize;
 use serde_json::Value;
 use std::cell::RefCell;
@@ -28,7 +26,7 @@ use thiserror::Error;
 use tokenizers::Tokenizer;
 
 enum Model {
-    Quantized(QModelWeights),
+    Normal(NormalModel),
 }
 pub const MISTRAL_IS_GPTX: bool = true;
 
@@ -209,15 +207,20 @@ impl Loader for MistralLoader {
 
         println!("Loading model on {device:?}...");
         let model = match self.kind {
-            ModelKind::QuantizedGGUF => {
-                let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
-                let model = gguf_file::Content::read(&mut file)
-                    .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
-                let model = QModelWeights::from_gguf(model, &mut file, device)?;
-                Model::Quantized(model)
-            }
+            ModelKind::QuantizedGGUF => unreachable!(),
             ModelKind::QuantizedGGML => unreachable!(),
-            ModelKind::Normal => unreachable!(),
+            ModelKind::Normal => {
+                let vb = from_mmaped_safetensors(
+                    paths.get_weight_filenames().to_vec(),
+                    Vec::new(),
+                    dtype.unwrap_or(default_dtype),
+                    device,
+                    false,
+                )?;
+
+                let model = NormalModel::new(&config, vb)?;
+                Model::Normal(model)
+            }
             ModelKind::XLoraNormal => unreachable!(),
             ModelKind::XLoraGGUF => unreachable!(),
             ModelKind::XLoraGGML => unreachable!(),
@@ -245,16 +248,13 @@ impl Pipeline for MistralPipeline {
         &mut self,
         input_tokens: Tensor,
         input_positions: Tensor,
-        kv_cache: &[(Tensor, Tensor)],
+        kv_cache: Option<&[(candle_core::Tensor, candle_core::Tensor)]>,
         mut input_metadata: InputMetadata,
     ) -> Tensor {
         let result = match self.model {
-            Model::Quantized(ref mut model) => model.forward(
-                &input_tokens,
-                &input_positions,
-                kv_cache,
-                &mut input_metadata,
-            ),
+            Model::Normal(ref mut model) => {
+                model.forward(&input_tokens, &input_positions, kv_cache, input_metadata)
+            }
         };
         match result {
             Ok(v) => v,
@@ -265,7 +265,7 @@ impl Pipeline for MistralPipeline {
     }
     fn device(&self) -> &Device {
         match self.model {
-            Model::Quantized(ref model) => &model.device,
+            Model::Normal(ref model) => &model.device,
         }
     }
     fn num_hidden_layers(&self) -> usize {
@@ -308,12 +308,12 @@ impl Pipeline for MistralPipeline {
     }
     fn get_max_seq_len(&self) -> usize {
         match &self.model {
-            Model::Quantized(_) => quantized_llama::MAX_SEQ_LEN as usize,
+            Model::Normal(m) => m.max_seq_len,
         }
     }
     fn is_xlora(&self) -> bool {
         match &self.model {
-            Model::Quantized(_) => false,
+            Model::Normal(_) => false,
         }
     }
     fn has_no_kv_cache(&self) -> bool {

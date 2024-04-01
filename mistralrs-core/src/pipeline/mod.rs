@@ -9,12 +9,8 @@ use hf_hub::{
 use indexmap::IndexMap;
 use minijinja::{context, Environment, ErrorKind};
 pub use mistral::{MistralLoader, MistralSpecificConfig, MISTRAL_IS_GPTX};
-use mistralrs_lora::{LoraConfig, Ordering};
 use serde::Deserialize;
-use std::{
-    cell::RefCell, collections::HashMap, fs, iter::repeat, path::PathBuf, rc::Rc, str::FromStr,
-    sync::Mutex,
-};
+use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc, str::FromStr, sync::Mutex};
 use tokenizers::Tokenizer;
 
 use anyhow::Result;
@@ -173,7 +169,7 @@ pub trait Pipeline: Send + Sync {
         &mut self,
         input_tokens: Tensor,
         input_positions: Tensor,
-        kv_cache: &[(Tensor, Tensor)],
+        kv_cache: Option<&[(candle_core::Tensor, candle_core::Tensor)]>,
         input_metadata: InputMetadata,
     ) -> Tensor;
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {

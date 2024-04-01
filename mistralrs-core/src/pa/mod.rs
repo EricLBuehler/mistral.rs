@@ -1,3 +1,5 @@
+// Some of the impls in this directory come from https://github.com/yinqiwen/lmsf.
+
 //! The Scheduler uses a BlockEngine to schedule and automatically batch sequences. The
 //! primary method `schedule` returns the batched sequences as inputs, as well as the
 //! operations to be executed on the cache by the CacheEngine.
@@ -11,6 +13,9 @@ pub mod block_engine;
 /// actually allocates the KV cache for the CPU and GPU. It is used by the LLMEngine to execute
 /// operations issued by the scheduler.
 pub mod cache_engine;
+
+pub mod kernels;
+pub mod layers;
 
 pub const _PAD_SLOT_ID: i64 = -1;
 

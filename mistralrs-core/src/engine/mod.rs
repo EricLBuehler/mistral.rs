@@ -1,7 +1,5 @@
 use std::{
-    arch::global_asm,
     cell::RefCell,
-    collections::VecDeque,
     iter::zip,
     rc::Rc,
     sync::{mpsc::Receiver, Mutex},
@@ -15,7 +13,7 @@ use crate::{
     deref_mut_refcell, deref_refcell, get_mut_arcmutex, handle_seq_error,
     handle_seq_error_stateaware,
     pa::{
-        cache_engine::{self, CacheConfig, CacheEngine},
+        cache_engine::{CacheConfig, CacheEngine},
         InputMetadata, PreparedInputs, _PAD_SLOT_ID,
     },
     pipeline::{Pipeline, _make_tensor_with_pad},
@@ -65,7 +63,7 @@ impl Engine {
                 fully_init: true,
             };
             (
-                CacheEngine::new(&*pipeline.config(), conf, DType::F32).unwrap(),
+                CacheEngine::new(&*pipeline.config(), conf, DType::F32, pipeline.device()).unwrap(),
                 conf,
             )
         };
@@ -102,6 +100,8 @@ impl Engine {
                 .collect::<Vec<_>>();
 
             if scheduled.len() > 0 {
+                self.execute_scheduler_ops(&scheduler_outputs);
+
                 // NOTE(EricLBuehler): assume all are prompts or completions
                 let firstseq = deref_refcell!(scheduled.first().unwrap())
                     .get_seqs()
@@ -125,7 +125,7 @@ impl Engine {
                 let logits = get_mut_arcmutex!(self.pipeline).forward(
                     tokens,
                     positions,
-                    &*self.cache_engine.get_kv_cache(),
+                    Some(&*self.cache_engine.get_kv_cache()),
                     metadata,
                 );
                 self.synchronize(get_mut_arcmutex!(self.pipeline).device());

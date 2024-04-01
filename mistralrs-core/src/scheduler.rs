@@ -1,15 +1,14 @@
 use std::{
     cell::RefCell,
-    collections::{vec_deque::Iter, HashMap, VecDeque},
+    collections::{HashMap, VecDeque},
     rc::Rc,
 };
 
 use crate::{
-    deref_mut_refcell, deref_refcell,
+    deref_refcell,
     pa::block_engine::{AllocStatus, BlockEngine},
-    sequence::{Sequence, SequenceGroup, SequenceState},
+    sequence::{SequenceGroup, SequenceState},
 };
-use range_checked::UsizeBounded;
 
 type CPUBlockFrom = usize;
 type GPUBlockFrom = usize;

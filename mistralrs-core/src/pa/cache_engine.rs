@@ -3,9 +3,14 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{cuda_backend::cudarc::driver::CudaStream, DType, Device, Result, Tensor};
 
 use crate::pipeline::ConfigLike;
+
+use super::kernels::{
+    cache::{apply_copy_blocks, swap_blocks},
+    cuda_stream_synchronize,
+};
 
 #[derive(Clone, Copy)]
 pub struct CacheConfig {
@@ -36,6 +41,7 @@ pub struct CacheEngine {
     gpu_cache: Arc<Mutex<Vec<KVCache>>>,
     cpu_cache: Vec<KVCache>,
     num_layers: usize,
+    cache_stream: CudaStream,
 }
 
 impl CacheEngine {
@@ -43,15 +49,21 @@ impl CacheEngine {
         model_config: &dyn ConfigLike,
         cache_config: CacheConfig,
         dtype: DType,
+        cuda_device: &Device,
     ) -> Result<Self> {
         Ok(Self {
             gpu_cache: Arc::new(Mutex::new(Self::allocate_gpu_cache(
                 model_config,
                 &cache_config,
                 dtype,
+                &cuda_device,
             )?)),
-            cpu_cache: Self::allocate_cpu_cache(model_config, &cache_config, dtype)?,
+            cpu_cache: Self::allocate_cpu_cache(model_config, &cache_config, dtype, &cuda_device)?,
             num_layers: model_config.get_num_hidden_layers(),
+            cache_stream: match cuda_device {
+                Device::Cuda(d) => d.fork_default_stream().unwrap(),
+                _ => candle_core::bail!("Unexpected device"),
+            },
         })
     }
 
@@ -67,6 +79,7 @@ impl CacheEngine {
         model_config: &dyn ConfigLike,
         cache_config: &CacheConfig,
         dtype: DType,
+        cuda_device: &Device,
     ) -> Result<Vec<KVCache>> {
         assert!(cache_config.fully_init);
 
@@ -76,7 +89,6 @@ impl CacheEngine {
             Self::calculate_value_block_shape(model_config, cache_config.block_size);
         let mut gpu_cache = Vec::new();
         for _ in 0..model_config.get_num_hidden_layers() {
-            let cuda_device = Device::new_cuda(0)?;
             let key_blocks = Tensor::zeros(
                 (
                     cache_config.num_gpu_blocks.unwrap(),
@@ -107,6 +119,7 @@ impl CacheEngine {
         model_config: &dyn ConfigLike,
         cache_config: &CacheConfig,
         dtype: DType,
+        cuda_device: &Device,
     ) -> Result<Vec<KVCache>> {
         assert!(cache_config.fully_init);
 
@@ -116,7 +129,6 @@ impl CacheEngine {
             Self::calculate_value_block_shape(model_config, cache_config.block_size);
         let mut cpu_cache = Vec::new();
         for _ in 0..model_config.get_num_hidden_layers() {
-            let cuda_device = Device::new_cuda(0)?;
             let key_blocks = Tensor::zeros(
                 (
                     cache_config.num_cpu_blocks.unwrap(),
@@ -173,15 +185,53 @@ impl CacheEngine {
 }
 
 impl CacheEngine {
-    pub fn swap_in(&self, _src_to_dst: HashMap<usize, usize>) -> Result<()> {
-        todo!()
+    fn swap(
+        &self,
+        src: &Vec<KVCache>,
+        dst: &Vec<KVCache>,
+        src_to_dst: &HashMap<usize, usize>,
+    ) -> Result<()> {
+        for i in 0..self.num_layers {
+            let (src_key_cache, src_value_cache) = &src[i];
+            let (dst_key_cache, dst_value_cache) = &dst[i];
+            swap_blocks(
+                src_key_cache,
+                dst_key_cache,
+                src_to_dst,
+                self.cache_stream.stream,
+            )?;
+            swap_blocks(
+                src_value_cache,
+                dst_value_cache,
+                src_to_dst,
+                self.cache_stream.stream,
+            )?;
+        }
+        cuda_stream_synchronize(self.cache_stream.stream)?;
+        Ok(())
     }
 
-    pub fn swap_out(&mut self, _src_to_dst: HashMap<usize, usize>) -> Result<()> {
-        todo!()
+    pub fn swap_in(&self, src_to_dst: HashMap<usize, usize>) -> Result<()> {
+        self.swap(&self.cpu_cache, &self.get_kv_cache(), &src_to_dst)
     }
 
-    pub fn copy(&mut self, _src_to_dst: HashMap<usize, Vec<usize>>) -> Result<()> {
-        todo!()
+    pub fn swap_out(&mut self, src_to_dst: HashMap<usize, usize>) -> Result<()> {
+        self.swap(&self.get_kv_cache(), &self.cpu_cache, &src_to_dst)
+    }
+
+    pub fn copy(&mut self, block_mapping: HashMap<usize, Vec<usize>>) -> Result<()> {
+        let gpu_cache = self.get_kv_cache();
+
+        let key_caches = gpu_cache
+            .iter()
+            .map(|(key_cache, _)| key_cache)
+            .collect::<Vec<&Tensor>>();
+        let value_caches = gpu_cache
+            .iter()
+            .map(|(_, value_cache)| value_cache)
+            .collect::<Vec<&Tensor>>();
+
+        apply_copy_blocks(key_caches, value_caches, &block_mapping)?;
+        Ok(())
     }
 }
