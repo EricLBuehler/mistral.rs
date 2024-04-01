@@ -1,5 +1,10 @@
 use std::{
-    cell::RefCell, collections::VecDeque, iter::zip, rc::Rc, sync::{mpsc::Receiver, Mutex}, time::{Instant, SystemTime, UNIX_EPOCH}
+    cell::RefCell,
+    collections::VecDeque,
+    iter::zip,
+    rc::Rc,
+    sync::{mpsc::Receiver, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use candle_core::{Result, Tensor};
@@ -60,14 +65,12 @@ impl Engine {
                 if !self.no_kv_cache {
                     self.clone_in_cache(&scheduled.completion);
                 }
-                let before = Instant::now();
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
-                #[cfg(feature="cuda")]
+                #[cfg(feature = "cuda")]
                 if let candle_core::Device::Cuda(dev) = get_mut_arcmutex!(self.pipeline).device() {
                     dev.synchronize().unwrap();
                 }
-                println!("Comple = {}", before.elapsed().as_millis());
                 let start = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .expect("Time travel has occurred!")
@@ -85,21 +88,17 @@ impl Engine {
                 } else {
                     self.set_none_cache();
                 }
-                println!();
-                println!();
             }
 
             if scheduled.prompt.len() > 0 {
                 // Run the prompt seqs
                 self.set_none_cache();
-                let before = Instant::now();
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.prompt.clone(), true);
-                #[cfg(feature="cuda")]
+                #[cfg(feature = "cuda")]
                 if let candle_core::Device::Cuda(dev) = get_mut_arcmutex!(self.pipeline).device() {
                     dev.synchronize().unwrap();
                 }
-                println!("Prompt = {}", before.elapsed().as_millis());
                 for seq in scheduled.prompt.iter() {
                     deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
                     let now = SystemTime::now()
@@ -129,8 +128,6 @@ impl Engine {
                 } else {
                     self.set_none_cache();
                 }
-                println!();
-                println!();
             }
         }
     }

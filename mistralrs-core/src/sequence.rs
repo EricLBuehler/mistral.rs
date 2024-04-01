@@ -253,10 +253,6 @@ impl Sequence {
         deref_mut_refcell!(self.group).total_prompt_toks += self.prompt_len;
         deref_mut_refcell!(self.group).total_toks += self.len();
         deref_mut_refcell!(self.group).total_sampling_time += self.total_sampling_time;
-        println!("Added the choice");
-        dbg!(deref_mut_refcell!(self.group).total_prompt_toks);
-        dbg!(deref_mut_refcell!(self.group).total_toks);
-        dbg!(deref_mut_refcell!(self.group).total_comple_time);
     }
 
     pub fn get_group(&self) -> Ref<'_, SequenceGroup> {
