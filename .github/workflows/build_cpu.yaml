@@ -46,7 +46,7 @@ jobs:
               uses: docker/metadata-action@v4.3.0
               with:
                   images: |
-                    ghcr.io/{{GITHUB_REPOSITORY_OWNER_PART}}/{{GITHUB_REPOSITORY_NAME_PART}}
+                    ghcr.io/${{env.GITHUB_REPOSITORY_OWNER_PART}}/${{env.GITHUB_REPOSITORY_NAME_PART}}
                   flavor: |
                     latest=false
                   tags: |
