@@ -10,6 +10,12 @@ pub struct ResponseMessage {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct Delta {
+    pub content: String,
+    pub role: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ResponseLogprob {
     pub token: String,
     pub logprob: f32,
@@ -28,6 +34,15 @@ pub struct Choice {
     pub stopreason: String,
     pub index: usize,
     pub message: ResponseMessage,
+    pub logprobs: Option<Logprobs>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChunkChoice {
+    #[serde(rename = "finish_reason")]
+    pub stopreason: String,
+    pub index: usize,
+    pub delta: Delta,
     pub logprobs: Option<Logprobs>,
 }
 
@@ -51,6 +66,16 @@ pub struct ChatCompletionResponse {
     pub system_fingerprint: String,
     pub object: String,
     pub usage: ChatCompletionUsage,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatCompletionChunkResponse {
+    pub id: String,
+    pub choices: Vec<ChunkChoice>,
+    pub created: u128,
+    pub model: &'static str,
+    pub system_fingerprint: String,
+    pub object: String,
 }
 
 pub enum Response {

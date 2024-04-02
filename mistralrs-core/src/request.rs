@@ -8,6 +8,7 @@ pub struct Request {
     pub sampling_params: SamplingParams,
     pub response: Sender<Response>,
     pub return_logprobs: bool,
+    pub is_streaming: bool,
 }
 
 impl Debug for Request {
