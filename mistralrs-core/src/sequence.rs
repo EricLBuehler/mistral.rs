@@ -221,7 +221,7 @@ impl Sequence {
             .expect("Time travel has occurred!")
             .as_millis();
 
-        deref_mut_refcell!(self.group).total_comple_time += now - self.prompt_timestamp.unwrap();
+        deref_mut_refcell!(self.group).total_completiontime += now - self.prompt_timestamp.unwrap();
         deref_mut_refcell!(self.group).total_prompt_time +=
             self.prompt_timestamp.unwrap() - self.timestamp;
         deref_mut_refcell!(self.group).total_time += now - self.timestamp;
@@ -251,7 +251,7 @@ pub struct SequenceGroup {
     pub total_toks: usize,
     pub total_prompt_time: u128,
     pub total_time: u128,
-    pub total_comple_time: u128,
+    pub total_completiontime: u128,
     pub total_sampling_time: u128,
     choices: Vec<Choice>,
     pub streaming_chunks: Vec<ChunkChoice>,
@@ -267,7 +267,7 @@ impl SequenceGroup {
             total_toks: 0,
             total_prompt_time: 0,
             total_time: 0,
-            total_comple_time: 0,
+            total_completiontime: 0,
             total_sampling_time: 0,
             streaming_chunks: Vec::new(),
             is_streaming,
@@ -288,7 +288,7 @@ impl SequenceGroup {
             avg_prompt_tok_per_sec: (self.total_prompt_toks as f32 / self.total_prompt_time as f32)
                 * 1000.,
             avg_compl_tok_per_sec: ((self.total_toks - self.total_prompt_toks) as f32
-                / self.total_comple_time as f32)
+                / self.total_completiontime as f32)
                 * 1000.,
             avg_sample_tok_per_sec: (self.total_toks as f32 / self.total_sampling_time as f32)
                 * 1000.,
