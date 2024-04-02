@@ -133,6 +133,7 @@ impl Engine {
         debug_assert_eq!(logits_seq.len(), seqs_len);
         let eos_tok = get_mut_arcmutex!(self.pipeline).eos_tok();
         for (logits_per_seq, seq) in zip(logits_seq, seqs.iter()) {
+            // Sample and extract next token
             let sampled = get_mut_arcmutex!(self.pipeline).sample(logits_per_seq, seq.clone());
             let next_token = handle_seq_error_stateaware!(sampled, seq);
             let next_token_id = next_token.token;
@@ -142,6 +143,7 @@ impl Engine {
                 eos_tok,
                 get_mut_arcmutex!(self.pipeline).get_max_seq_len(),
             );
+            // Handle streaming requests
             if deref_refcell!(seq).get_group().is_streaming {
                 let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer().clone();
                 let logprob = ResponseLogprob {
@@ -173,8 +175,7 @@ impl Engine {
                         &*deref_refcell!(seq),
                         get_mut_arcmutex!(self.pipeline).name(),
                     );
-            }
-            if let Some(reason) = is_done {
+            } else if let Some(reason) = is_done {
                 self.finish_seq(seq, reason);
                 get_mut_arcmutex!(self.pipeline).reset_non_granular_state();
             }
