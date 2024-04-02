@@ -1,5 +1,5 @@
 use std::{
-    cell::{Cell, Ref, RefCell, RefMut},
+    cell::{Cell, Ref, RefCell},
     rc::Rc,
     sync::mpsc::Sender,
     time::{SystemTime, UNIX_EPOCH},
@@ -173,6 +173,9 @@ impl Sequence {
     }
 
     pub fn set_state(&self, state: SequenceState) {
+        if matches!(state, SequenceState::Error) {
+            deref_mut_refcell!(self.group).n_choices -= 1;
+        }
         self.state.set(state);
     }
 
@@ -221,7 +224,8 @@ impl Sequence {
             .expect("Time travel has occurred!")
             .as_millis();
 
-        deref_mut_refcell!(self.group).total_completiontime += now - self.prompt_timestamp.unwrap();
+        deref_mut_refcell!(self.group).total_completion_time +=
+            now - self.prompt_timestamp.unwrap();
         deref_mut_refcell!(self.group).total_prompt_time +=
             self.prompt_timestamp.unwrap() - self.timestamp;
         deref_mut_refcell!(self.group).total_time += now - self.timestamp;
@@ -240,18 +244,18 @@ impl Sequence {
         deref_refcell!(self.group)
     }
 
-    pub fn get_mut_group(&self) -> RefMut<'_, SequenceGroup> {
-        deref_mut_refcell!(self.group)
+    pub fn add_streaming_chunk_choice_to_group(&self, chunk: ChunkChoice) {
+        deref_mut_refcell!(self.group).streaming_chunks.push(chunk);
     }
 }
 
 pub struct SequenceGroup {
-    n_choices: usize,
+    n_choices: usize, // The target number of choices to return. Can be decreased if an error is thrown.
     pub total_prompt_toks: usize,
     pub total_toks: usize,
     pub total_prompt_time: u128,
     pub total_time: u128,
-    pub total_completiontime: u128,
+    pub total_completion_time: u128,
     pub total_sampling_time: u128,
     choices: Vec<Choice>,
     pub streaming_chunks: Vec<ChunkChoice>,
@@ -267,7 +271,7 @@ impl SequenceGroup {
             total_toks: 0,
             total_prompt_time: 0,
             total_time: 0,
-            total_completiontime: 0,
+            total_completion_time: 0,
             total_sampling_time: 0,
             streaming_chunks: Vec::new(),
             is_streaming,
@@ -288,7 +292,7 @@ impl SequenceGroup {
             avg_prompt_tok_per_sec: (self.total_prompt_toks as f32 / self.total_prompt_time as f32)
                 * 1000.,
             avg_compl_tok_per_sec: ((self.total_toks - self.total_prompt_toks) as f32
-                / self.total_completiontime as f32)
+                / self.total_completion_time as f32)
                 * 1000.,
             avg_sample_tok_per_sec: (self.total_toks as f32 / self.total_sampling_time as f32)
                 * 1000.,

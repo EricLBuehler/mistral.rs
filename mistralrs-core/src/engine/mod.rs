@@ -153,22 +153,19 @@ impl Engine {
                     logprob: next_token.logprob,
                     top_logprobs: next_token.top_logprobs.clone(),
                 };
-                deref_refcell!(seq)
-                    .get_mut_group()
-                    .streaming_chunks
-                    .push(ChunkChoice {
-                        delta: Delta {
-                            content: logprob.token.clone(),
-                            role: "assistant".to_string(),
-                        },
-                        index: deref_refcell!(seq).get_response_index(),
-                        stopreason: is_done.map(|x| x.to_string()),
-                        logprobs: if deref_refcell!(seq).return_logprobs() {
-                            Some(logprob)
-                        } else {
-                            None
-                        },
-                    });
+                deref_refcell!(seq).add_streaming_chunk_choice_to_group(ChunkChoice {
+                    delta: Delta {
+                        content: logprob.token.clone(),
+                        role: "assistant".to_string(),
+                    },
+                    index: deref_refcell!(seq).get_response_index(),
+                    stopreason: is_done.map(|x| x.to_string()),
+                    logprobs: if deref_refcell!(seq).return_logprobs() {
+                        Some(logprob)
+                    } else {
+                        None
+                    },
+                });
 
                 deref_refcell!(seq)
                     .get_group()
