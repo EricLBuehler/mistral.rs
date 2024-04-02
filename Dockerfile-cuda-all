@@ -22,8 +22,9 @@ COPY Cargo.toml ./
 
 ARG CUDA_COMPUTE_CAP=80
 ENV CUDA_COMPUTE_CAP=${CUDA_COMPUTE_CAP}
+ARG FEATURES="cuda cudnn"
 ENV RAYON_NUM_THREADS=4
-RUN RUSTFLAGS="-Z threads=4" cargo build --release --workspace --exclude mistralrs-pyo3 --features "cuda cudnn flash-attn"
+RUN RUSTFLAGS="-Z threads=4" cargo build --release --workspace --exclude mistralrs-pyo3 --features "${FEATURES}"
 
 FROM nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04 as base
 
