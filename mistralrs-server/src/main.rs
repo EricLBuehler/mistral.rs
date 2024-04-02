@@ -7,6 +7,7 @@ use std::{
         Arc,
     },
     task::{Context, Poll},
+    time::Duration,
 };
 
 use anyhow::Result;
@@ -91,25 +92,25 @@ impl futures::Stream for Streamer {
     type Item = Result<Event, axum::Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if !self.is_done {
+        //return Poll::Ready(Some(Ok(Event::default().data(r#"{"id":"chatcmpl-123","object":"chat.completion.chunk","created":1694268190,"model":"gpt-3.5-turbo-0125", "system_fingerprint": "fp_44709d6fcb", "choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}]}"#))));
+        if self.is_done {
             return Poll::Ready(None);
         }
-
         match self.rx.try_recv() {
-            Ok(resp) => {
-                self.is_done = true;
-                match resp {
-                    Response::Error(e) => {
-                        MistralRs::maybe_log_error(self.state.clone(), &*e);
-                        Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
-                    }
-                    Response::Chunk(response) => {
-                        MistralRs::maybe_log_response(self.state.clone(), &response);
-                        Poll::Ready(Some(Event::default().json_data(response)))
-                    }
-                    _ => unreachable!(),
+            Ok(resp) => match resp {
+                Response::Error(e) => {
+                    MistralRs::maybe_log_error(self.state.clone(), &*e);
+                    Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
                 }
-            }
+                Response::Chunk(response) => {
+                    if response.choices.iter().all(|x| x.stopreason.is_some()) {
+                        self.is_done = true;
+                    }
+                    MistralRs::maybe_log_response(self.state.clone(), &response);
+                    Poll::Ready(Some(Event::default().json_data(response)))
+                }
+                _ => unreachable!(),
+            },
             Err(_) => Poll::Pending,
         }
     }
@@ -170,7 +171,7 @@ fn parse_request(
         },
         response: tx,
         return_logprobs: oairequest.logprobs,
-        is_streaming: oairequest.stream,
+        is_streaming: oairequest.stream.unwrap_or(false),
     }
 }
 
@@ -179,8 +180,8 @@ async fn chatcompletions(
     Json(oairequest): Json<ChatCompletionRequest>,
 ) -> ChatCompletionResponder {
     let (tx, rx) = channel();
-    let is_streaming = oairequest.stream;
     let request = parse_request(oairequest, state.clone(), tx);
+    let is_streaming = request.is_streaming;
     let sender = state.get_sender();
     sender.send(request).unwrap();
 
@@ -191,7 +192,13 @@ async fn chatcompletions(
             state,
         };
 
-        ChatCompletionResponder::Sse(Sse::new(streamer).keep_alive(KeepAlive::new()))
+        ChatCompletionResponder::Sse(
+            Sse::new(streamer).keep_alive(
+                KeepAlive::new()
+                    .interval(Duration::from_secs(1))
+                    .text("keep-alive-text"),
+            ),
+        )
     } else {
         let response = rx.recv().unwrap();
 

@@ -1,5 +1,5 @@
 use std::{
-    cell::{Cell, Ref, RefCell},
+    cell::{Cell, Ref, RefCell, RefMut},
     rc::Rc,
     sync::mpsc::Sender,
     time::{SystemTime, UNIX_EPOCH},
@@ -244,6 +244,10 @@ impl Sequence {
         deref_refcell!(self.group)
     }
 
+    pub fn get_mut_group(&self) -> RefMut<'_, SequenceGroup> {
+        deref_mut_refcell!(self.group)
+    }
+
     pub fn add_streaming_chunk_choice_to_group(&self, chunk: ChunkChoice) {
         deref_mut_refcell!(self.group).streaming_chunks.push(chunk);
     }
@@ -310,7 +314,7 @@ impl SequenceGroup {
         }
     }
 
-    pub fn maybe_send_streaming_request(&self, seq: &Sequence, model: String) {
+    pub fn maybe_send_streaming_response(&mut self, seq: &Sequence, model: String) {
         if self.streaming_chunks.len() == self.n_choices && self.is_streaming {
             seq.responder()
                 .send(Response::Chunk(ChatCompletionChunkResponse {
@@ -322,6 +326,7 @@ impl SequenceGroup {
                     object: "chat.completion.chunk".to_string(),
                 }))
                 .unwrap();
+            self.streaming_chunks.clear();
         }
     }
 }

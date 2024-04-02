@@ -169,9 +169,13 @@ impl Engine {
                     },
                 });
 
+                if let Some(reason) = is_done {
+                    deref_mut_refcell!(seq).set_state(SequenceState::Done(reason));
+                }
+
                 deref_refcell!(seq)
-                    .get_group()
-                    .maybe_send_streaming_request(
+                    .get_mut_group()
+                    .maybe_send_streaming_response(
                         &*deref_refcell!(seq),
                         get_mut_arcmutex!(self.pipeline).name(),
                     );
@@ -404,36 +408,10 @@ impl Engine {
             }
         }
 
-        let sampling_method = match (
-            request.sampling_params.top_k,
-            request.sampling_params.top_p,
-            request.sampling_params.temperature,
-        ) {
-            (Some(topk), None, Some(_)) => SamplingMethod::TopK(topk),
-            (None, Some(topp), Some(_)) => SamplingMethod::TopP(topp),
-            (Some(topk), Some(topp), Some(_)) => SamplingMethod::TopKP((topk, topp)),
-            (None, None, None) => SamplingMethod::Multinomial,
-            (Some(_), Some(_), None) | (None, Some(_), None) | (Some(_), None, None) => {
-                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                request
-                    .response
-                    .send(Response::Error(
-                        "If topp or topk are specified and temperature is not specified then argmax sampling will be used. Consider using a temperature of 1.".into(),
-                    ))
-                    .unwrap();
-                return;
-            }
-            (None, None, Some(_)) => {
-                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                request
-                    .response
-                    .send(Response::Error(
-                        "If topp and topk are not specified but temperature is set then argmax sampling will be used.".into(),
-                    ))
-                    .unwrap();
-                return;
-            }
-        };
+        let sampling_method = SamplingMethod::TopKP((
+            request.sampling_params.top_k.unwrap_or(32),
+            request.sampling_params.top_p.unwrap_or(1.0),
+        ));
         let num_hidden_layers = get_mut_arcmutex!(self.pipeline).num_hidden_layers();
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
 
@@ -477,7 +455,7 @@ impl Engine {
                 request.response.clone(),
                 LogitsProcessor::new(
                     SEED,
-                    request.sampling_params.temperature,
+                    Some(request.sampling_params.temperature.unwrap_or(1.0)),
                     sampling_method.clone(),
                     request.sampling_params.top_n_logprobs,
                     tokenizer.clone(),

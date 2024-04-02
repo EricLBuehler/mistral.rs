@@ -67,8 +67,11 @@ pub struct ChatCompletionRequest {
     pub presence_penalty: Option<f32>,
     pub frequency_penalty: Option<f32>,
     pub stop: Option<StopTokens>,
+    // Default 1
     pub temperature: Option<f64>,
+    // Default 1
     pub top_p: Option<f64>,
+    // Default 32
     pub top_k: Option<usize>,
     pub stream: bool,
 }

@@ -4,31 +4,20 @@ openai.api_key = "EMPTY"
 
 openai.base_url = "http://localhost:1234/v1/"
 
-messages = []
-prompt = input("Enter system prompt >>> ")
-if len(prompt) > 0:
-    messages.append({"role": "system", "content": prompt})
+# Example of an OpenAI ChatCompletion request with stream=True
+# https://platform.openai.com/docs/api-reference/streaming#chat/create-stream
 
-while True:
-    prompt = input(">>> ")
-    messages.append({"role": "user", "content": prompt})
-    resp = ""
-    response = openai.chat.completions.create(
-        model="mistral",
-        messages=messages,
-        max_tokens=256,
-        frequency_penalty=1.0,
-        top_p=0.1,  # top_k=32,
-        temperature=0.1,
-        stream=True,
-    )
-    for chunk in response:
-        delta = chunk.choices[0].delta.content
-        if delta != "</s>" and delta != "<eos>":
-            print(delta, end="")
-        resp += delta
-    if not resp.endswith("</s>") or (not resp.endswith("<eos>")):
-        print("...")
-    else:
-        print() 
-    messages.append({"role": "assistant", "content": resp})
+# a ChatCompletion request
+response = openai.chat.completions.create(
+    model='gpt-3.5-turbo',
+    messages=[
+        {'role': 'user', 'content': "What's 1+1? Answer in one word."}
+    ],
+    temperature=0,
+    stream=True  # this time, we set stream=True
+)
+
+for chunk in response:
+    print(chunk)
+    print(chunk.choices[0].delta.content)
+    print("****************")

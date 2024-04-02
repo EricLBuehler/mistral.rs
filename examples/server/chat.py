@@ -17,8 +17,8 @@ while True:
         messages=messages,
         max_tokens=256,
         frequency_penalty=1.0,
-        top_p=0.1,  # top_k=32,
-        temperature=0.1,
+        top_p=0.1,
+        temperature=0,
     )
     resp = completion.choices[0].message.content
     if resp.endswith("</s>"):
