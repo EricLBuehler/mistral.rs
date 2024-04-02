@@ -16,7 +16,9 @@ jobs:
         strategy:
           matrix:
             compute_capability: [75, 80, 86, 89, 90]
+          fail-fast: false
         runs-on: [ubuntu-latest]
+        
         permissions:
             contents: write
             packages: write
