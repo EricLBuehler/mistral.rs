@@ -24,7 +24,7 @@ pub enum StopReason {
 
 impl ToString for StopReason {
     fn to_string(&self) -> String {
-        match &*self {
+        match self {
             StopReason::Eos => "stop".to_string(),
             StopReason::Length(_) | StopReason::ModelLength(_) => "length".to_string(),
             StopReason::StopTok(_) => "stop".to_string(),

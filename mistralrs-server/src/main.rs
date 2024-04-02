@@ -1,4 +1,5 @@
 use std::{
+    error::Error,
     fs::File,
     pin::Pin,
     sync::{
@@ -532,7 +533,7 @@ impl futures::Stream for Streamer {
                 self.is_done = true;
                 match resp {
                     Response::Error(e) => {
-                        dbg!(&e);
+                        MistralRs::maybe_log_error(self.state.clone(), &*e);
                         Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
                     }
                     Response::Chunk(response) => {
@@ -550,6 +551,7 @@ impl futures::Stream for Streamer {
 enum ChatCompletionResponder {
     Sse(Sse<Streamer>),
     String(String),
+    Error(Box<dyn Error>),
 }
 
 impl IntoResponse for ChatCompletionResponder {
@@ -557,6 +559,7 @@ impl IntoResponse for ChatCompletionResponder {
         match self {
             ChatCompletionResponder::Sse(s) => s.into_response(),
             ChatCompletionResponder::String(s) => s.into_response(),
+            ChatCompletionResponder::Error(e) => e.to_string().into_response(),
         }
     }
 }
@@ -627,8 +630,8 @@ async fn chatcompletions(
 
         match response {
             Response::Error(e) => {
-                dbg!(&e);
-                ChatCompletionResponder::String(e.to_string())
+                MistralRs::maybe_log_error(state, &*e);
+                ChatCompletionResponder::Error(e)
             }
             Response::Done(response) => {
                 MistralRs::maybe_log_response(state, &response);
