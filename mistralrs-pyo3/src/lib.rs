@@ -110,7 +110,7 @@ impl Runner {
                 },
                 response: tx,
                 return_logprobs: request.logprobs,
-                is_streaming: false,
+                is_streaming: request.stream,
             };
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -146,13 +146,14 @@ struct ChatCompletionRequest {
     stop_token_ids: Option<Vec<u32>>,
     temperature: Option<f64>,
     top_p: Option<f64>,
+    stream: bool,
     top_k: Option<usize>,
 }
 
 #[pymethods]
 impl ChatCompletionRequest {
     #[new]
-    #[pyo3(signature = (messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, repetition_penalty = None, stop_token_ids = None, temperature = None, top_p = None, top_k = None))]
+    #[pyo3(signature = (messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, repetition_penalty = None, stop_token_ids = None, temperature = None, top_p = None, top_k = None, stream=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         messages: Vec<Py<PyDict>>,
@@ -168,6 +169,7 @@ impl ChatCompletionRequest {
         temperature: Option<f64>,
         top_p: Option<f64>,
         top_k: Option<usize>,
+        stream: Option<bool>,
     ) -> PyResult<Self> {
         let mut messages_vec = Vec::new();
         for message in messages {
@@ -205,6 +207,7 @@ impl ChatCompletionRequest {
             temperature,
             top_p,
             top_k,
+            stream: stream.unwrap_or(false),
         })
     }
 }
