@@ -1,4 +1,4 @@
-name: Build and push Cuda docker image to registry
+name: Build and push Cuda docker images to registry
 
 on:
     workflow_dispatch:
@@ -13,6 +13,9 @@ on:
 
 jobs:
     build-and-push-image:
+        strategy:
+          matrix:
+            compute_capability: [75, 80, 86, 89, 90]
         runs-on: [ubuntu-latest]
         permissions:
             contents: write
@@ -50,10 +53,10 @@ jobs:
                   flavor: |
                     latest=false
                   tags: |
-                    type=semver,pattern=cuda-{{version}}
-                    type=semver,pattern=cuda-{{major}}.{{minor}}
-                    type=raw,value=cuda-latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-                    type=raw,value=cuda-sha-${{ env.GITHUB_SHA_SHORT }}
+                    type=semver,pattern=cuda-${{matrix.compute_capability}}-{{version}}
+                    type=semver,pattern=cuda-${{matrix.compute_capability}}-{{major}}.{{minor}}
+                    type=raw,value=cuda-${{matrix.compute_capability}}-latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+                    type=raw,value=cuda-${{matrix.compute_capability}}-sha-${{ env.GITHUB_SHA_SHORT }}
             - name: Build and push Docker image
               id: build-and-push-cuda
               uses: docker/build-push-action@v4
@@ -64,5 +67,7 @@ jobs:
                 platforms: 'linux/amd64'
                 tags: ${{ steps.meta-cuda.outputs.tags }}
                 labels: ${{ steps.meta-cuda.outputs.labels }}
+                build-args: |
+                  CUDA_COMPUTE_CAP=${{matrix.compute_capability}}
             
             

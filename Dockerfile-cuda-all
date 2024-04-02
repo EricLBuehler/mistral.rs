@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.2.0-devel-ubuntu22.04 AS builder
+FROM nvidia/cuda:12.3.2-cudnn9-devel-ubuntu22.04 AS builder
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     curl \
@@ -20,10 +20,12 @@ COPY mistralrs-pyo3 mistralrs-pyo3
 COPY mistralrs-server mistralrs-server
 COPY Cargo.toml ./
 
-ENV CUDA_COMPUTE_CAP=86
-RUN RUSTFLAGS="-Z threads=8" cargo build --release --workspace --exclude mistralrs-pyo3 --features cuda
+ARG CUDA_COMPUTE_CAP=80
+ENV CUDA_COMPUTE_CAP=${CUDA_COMPUTE_CAP}
+ENV RAYON_NUM_THREADS=8
+RUN RUSTFLAGS="-Z threads=8" cargo build --release --workspace --exclude mistralrs-pyo3 --features "cuda cudnn flash-attn"
 
-FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04 as base
+FROM nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04 as base
 
 ENV HUGGINGFACE_HUB_CACHE=/data \
     PORT=80 \
