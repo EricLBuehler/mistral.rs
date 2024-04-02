@@ -110,6 +110,7 @@ impl Runner {
                 },
                 response: tx,
                 return_logprobs: request.logprobs,
+                is_streaming: false,
             };
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));

@@ -241,10 +241,11 @@ pub struct SequenceGroup {
     pub total_sampling_time: u128,
     choices: Vec<Choice>,
     token_count: usize,
+    is_streaming: bool,
 }
 
 impl SequenceGroup {
-    pub fn new(n_choices: usize) -> Self {
+    pub fn new(n_choices: usize, is_streaming: bool) -> Self {
         Self {
             done_count: 0,
             choices: Vec::new(),
@@ -256,6 +257,7 @@ impl SequenceGroup {
             total_comple_time: 0,
             total_sampling_time: 0,
             token_count: 0,
+            is_streaming,
         }
     }
 
@@ -300,7 +302,7 @@ impl SequenceGroup {
     }
 
     pub fn maybe_send_streaming_request(&self, _sender: Sender<Response>) {
-        if self.all_token_counts_same() {
+        if self.all_token_counts_same() && self.is_streaming {
             todo!()
         }
     }

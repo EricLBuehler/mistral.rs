@@ -540,6 +540,7 @@ async fn chatcompletions(
         },
         response: tx,
         return_logprobs: oairequest.logprobs,
+        is_streaming: false,
     };
 
     MistralRs::maybe_log_request(state.clone(), repr);

@@ -435,6 +435,7 @@ impl Engine {
 
         let group = Rc::new(RefCell::new(SequenceGroup::new(
             request.sampling_params.n_choices,
+            request.is_streaming,
         )));
         // Add sequences
         for _ in 0..request.sampling_params.n_choices {
