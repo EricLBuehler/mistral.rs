@@ -32,12 +32,6 @@ impl LogicalTokenBlock {
         self.tokens[self.num_tokens] = token;
         self.num_tokens += 1;
     }
-
-    pub fn append_tokens(&mut self, tokens: &[u32]) {
-        for token in tokens {
-            self.append_token_id(*token);
-        }
-    }
 }
 
 #[derive(Hash, PartialEq, Eq)]

@@ -212,14 +212,20 @@ impl CacheEngine {
     }
 
     pub fn swap_in(&self, src_to_dst: HashMap<usize, usize>) -> Result<()> {
+        println!("swap in");
+        dbg!(&src_to_dst);
         self.swap(&self.cpu_cache, &self.get_kv_cache(), &src_to_dst)
     }
 
     pub fn swap_out(&mut self, src_to_dst: HashMap<usize, usize>) -> Result<()> {
+        println!("swap out");
+        dbg!(&src_to_dst);
         self.swap(&self.get_kv_cache(), &self.cpu_cache, &src_to_dst)
     }
 
     pub fn copy(&mut self, block_mapping: HashMap<usize, Vec<usize>>) -> Result<()> {
+        println!("copy");
+        dbg!(&block_mapping);
         let gpu_cache = self.get_kv_cache();
 
         let key_caches = gpu_cache

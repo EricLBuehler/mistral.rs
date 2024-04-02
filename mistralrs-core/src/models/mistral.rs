@@ -1,8 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
-use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{layer_norm::RmsNormNonQuantized, Activation, VarBuilder};
+use candle_core::{Device, Module, Result, Tensor};
+use candle_nn::{
+    layer_norm::RmsNormNonQuantized, Activation, RotaryEmbedding as RotaryEmbeddingNN, VarBuilder,
+};
 use candle_transformers::models::with_tracing::{linear_no_bias, Linear};
 
 use crate::{
@@ -104,44 +106,31 @@ impl Module for MLP {
     }
 }
 
-#[cfg(feature = "flash-attn")]
-fn flash_attn(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    softmax_scale: f32,
-    causal: bool,
-) -> Result<Tensor> {
-    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
-}
-
-#[cfg(not(feature = "flash-attn"))]
-fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
-    unimplemented!("compile with '--features flash-attn'")
-}
-
 #[derive(Debug, Clone)]
 struct Attention {
     q_proj: Linear,
     k_proj: Linear,
     v_proj: Linear,
     o_proj: Linear,
-    num_heads: usize,
-    num_kv_heads: usize,
-    num_kv_groups: usize,
-    head_dim: usize,
     hidden_size: usize,
     rotary_emb: RotaryEmbedding,
-    use_flash_attn: bool,
     attn: PagedAttention,
+    nnrope: RotaryEmbeddingNN,
+    num_heads: usize,
+    num_kv_heads: usize,
+    head_dim: usize,
 }
 
 impl Attention {
-    fn new(rotary_emb: RotaryEmbedding, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(
+        rotary_emb: RotaryEmbedding,
+        cfg: &Config,
+        vb: VarBuilder,
+        nnrope: RotaryEmbeddingNN,
+    ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
-        let num_kv_groups = num_heads / num_kv_heads;
         let head_dim = hidden_sz / num_heads;
         let q_proj = linear_no_bias(hidden_sz, num_heads * head_dim, vb.pp("q_proj"))?;
         let k_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("k_proj"))?;
@@ -152,13 +141,8 @@ impl Attention {
             k_proj,
             v_proj,
             o_proj,
-            num_heads,
-            num_kv_heads,
-            num_kv_groups,
-            head_dim,
             hidden_size: hidden_sz,
             rotary_emb,
-            use_flash_attn: cfg.use_flash_attn,
             attn: PagedAttention::new(
                 vb.device(),
                 num_heads,
@@ -168,19 +152,11 @@ impl Attention {
                 Some(cfg.sliding_window),
                 None,
             )?,
+            nnrope,
+            num_heads,
+            num_kv_heads,
+            head_dim,
         })
-    }
-
-    fn repeat_kv(&self, xs: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_kv_groups;
-        if n_rep == 1 {
-            Ok(xs)
-        } else {
-            let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
-            xs.unsqueeze(2)?
-                .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
-        }
     }
 
     fn forward(
@@ -196,6 +172,32 @@ impl Attention {
         let k = self.k_proj.forward(&input_tokens)?;
         let v = self.v_proj.forward(&input_tokens)?;
 
+        //dbg!(&input_positions.to_vec2::<i64>());
+        //dbg!(&input_metadata.slot_mapping.to_vec2::<i64>());
+
+        /*let mut q =
+            q.reshape((b_sz * q_len, self.num_heads, self.head_dim))?;
+        let mut k =
+            k.reshape((b_sz * q_len, self.num_kv_heads, self.head_dim))?;
+
+        self.nnrope.forward(
+            &[usize::MAX],
+            &input_positions,
+            &mut q,
+            &mut k,
+            b_sz,
+        )?;
+
+        if q.rank() == 3 {
+            q = q
+                .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
+                .transpose(1, 2)?
+                .contiguous()?;
+            k = k
+                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+                .transpose(1, 2)?
+                .contiguous()?;
+        }*/
         self.rotary_emb.forward(input_positions, &q, &k)?;
 
         let dtype = q.dtype();
@@ -207,7 +209,6 @@ impl Attention {
             cache.map(|(_, v)| v),
             input_metadata,
             dtype,
-            false,
         )?;
 
         attn_output
@@ -226,8 +227,13 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn new(rotary_emb: RotaryEmbedding, cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
+    fn new(
+        rotary_emb: RotaryEmbedding,
+        cfg: &Config,
+        vb: VarBuilder,
+        nnrope: RotaryEmbeddingNN,
+    ) -> Result<Self> {
+        let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"), nnrope)?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
         let input_layernorm =
             RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
@@ -269,8 +275,6 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Linear,
-    sliding_window: usize,
-    dtype: DType,
     pub device: Device,
     pub max_seq_len: usize,
 }
@@ -290,10 +294,23 @@ impl Model {
             cfg.rope_theta as f32,
             MISTRAL_IS_GPTX,
         )?;
+        let nnrotary_emb = RotaryEmbeddingNN::new(
+            cfg.rope_theta as f32,
+            head_dim,
+            cfg.max_position_embeddings,
+            vb.device(),
+            MISTRAL_IS_GPTX,
+            vb.dtype(),
+        )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
-            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
+            let layer = DecoderLayer::new(
+                rotary_emb.clone(),
+                cfg,
+                vb_l.pp(layer_idx),
+                nnrotary_emb.clone(),
+            )?;
             layers.push(layer)
         }
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
@@ -303,9 +320,7 @@ impl Model {
             layers,
             norm,
             lm_head,
-            sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
-            dtype: vb.dtype(),
             max_seq_len: cfg.max_position_embeddings,
         })
     }

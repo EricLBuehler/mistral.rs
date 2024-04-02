@@ -14,7 +14,6 @@ use crate::{
     handle_seq_error_stateaware,
     pa::{
         cache_engine::{CacheConfig, CacheEngine},
-        kernels::{cuda_get_mem_usage, cuda_stream_synchronize},
         InputMetadata, PreparedInputs, _PAD_SLOT_ID,
     },
     pipeline::{Pipeline, _make_tensor_with_pad},
@@ -113,7 +112,7 @@ impl Engine {
                 .collect::<Vec<_>>();
 
             if scheduled.len() > 0 {
-                self.execute_scheduler_ops(&scheduler_outputs);
+                self.execute_scheduler_ops(&scheduler_outputs).unwrap();
 
                 // NOTE(EricLBuehler): assume all are prompts or completions
                 let firstseq = deref_refcell!(scheduled.first().unwrap())
@@ -318,7 +317,7 @@ impl Engine {
                         slot_mapping.push(_PAD_SLOT_ID);
                     }
 
-                    let block_number = table.get(i / self.cache_config.block_size).unwrap();
+                    let block_number = table[i / self.cache_config.block_size];
                     let block_offset = i % self.cache_config.block_size;
                     let slot = block_number * self.cache_config.block_size + block_offset;
                     slot_mapping.push(slot.try_into().unwrap());
@@ -347,6 +346,7 @@ impl Engine {
             0,
             &dev,
         )?;
+        dbg!(&slot_mappings);
         let slot_mapping =
             _make_tensor_with_pad(slot_mappings, *max_prompt_len, _PAD_SLOT_ID, &dev)?;
 
@@ -446,6 +446,7 @@ impl Engine {
             0,
             &dev,
         )?;
+        dbg!(&slot_mappings);
         let slot_mapping = _make_tensor_with_pad(slot_mappings, 1, _PAD_SLOT_ID, &dev)?;
 
         let max_context_len = context_lens.iter().max().unwrap();
@@ -454,6 +455,7 @@ impl Engine {
             (context_lens.len(),),
             &dev,
         )?;
+        dbg!(&context_lens.to_vec1::<i64>());
 
         let max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
         let block_tables = _make_tensor_with_pad(

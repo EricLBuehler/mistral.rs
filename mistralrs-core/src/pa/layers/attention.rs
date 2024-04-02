@@ -178,7 +178,6 @@ impl PagedAttention {
         value_cache: Option<&Tensor>,
         input_metadata: &mut InputMetadata,
         _dtype: DType,
-        log_enable: bool,
     ) -> candle_core::Result<Tensor> {
         let (batch_size, seq_len, hidden_size) = query.shape().dims3()?;
 
@@ -199,24 +198,19 @@ impl PagedAttention {
             )?;
         }
 
-        let output: Tensor = if input_metadata.is_prompt || true {
+        let output: Tensor = if input_metadata.is_prompt {
             // Prompt run.
             self.prompt_attention(batch_size, seq_len, hidden_size, query, key, value)?
         } else {
             match (key_cache, value_cache) {
                 (Some(key_cache), Some(value_cache)) => {
                     let _max_context_len = input_metadata.max_context_len.unwrap();
-                    self.paged_attention(
-                        &query,
-                        key_cache,
-                        value_cache,
-                        input_metadata,
-                        log_enable,
-                    )?
+                    self.paged_attention(&query, key_cache, value_cache, input_metadata)?
                 }
                 _ => query.zeros_like()?,
             }
         };
+        //dbg!(output.mean_all());
 
         output.reshape((batch_size, seq_len, hidden_size))
     }
@@ -227,7 +221,6 @@ impl PagedAttention {
         key_cache: &Tensor,
         value_cache: &Tensor,
         input_metadata: &mut InputMetadata,
-        log_enable: bool,
     ) -> candle_core::Result<Tensor> {
         let num_seqs = query.shape().dims()[0];
         let num_heads = query.shape().dims()[1];

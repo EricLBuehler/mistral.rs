@@ -130,7 +130,7 @@ impl Scheduler {
         let mut preempted = VecDeque::new();
         while !self.running.is_empty() {
             let seq_group = self.running.pop_front().unwrap();
-            let mut finished_with_break = false;
+            let mut append_slot = true;
             while !self
                 .block_engine
                 .can_append_token_to_seq(&*deref_refcell!(seq_group))
@@ -145,11 +145,11 @@ impl Scheduler {
                     // Nothing to preempt, preempt ourselves. Also, do not bother looking at anything else.
                     self._preempt(seq_group.clone(), &mut blocks_to_swap_out);
                     preempted.push_back(seq_group.clone());
-                    finished_with_break = true;
+                    append_slot = false;
                     break;
                 }
             }
-            if !finished_with_break {
+            if append_slot {
                 // If we need to, append physical blocks for a new token. We do not need to if there is enough space.
                 // If we just got preempted, there is no reason to allocate
                 self._append_token_slot_to_seq_group(
