@@ -51,7 +51,7 @@ pub struct Sequence {
     stop_tokens: Vec<u32>,
     return_logprobs: bool,
     responder: Sender<Response>,
-    reponse_index: usize,
+    response_index: usize,
 
     // Cache
     scaling_cache: Option<Tensor>,
@@ -84,7 +84,7 @@ impl Sequence {
         return_logprobs: bool,
         is_xlora: bool,
         group: Rc<RefCell<SequenceGroup>>,
-        reponse_index: usize,
+        response_index: usize,
     ) -> Self {
         let prompt_len = tokens.len();
         Self {
@@ -110,7 +110,7 @@ impl Sequence {
             group,
             scaling_cache: None,
             total_sampling_time: 0,
-            reponse_index,
+            response_index,
         }
     }
 
@@ -232,8 +232,8 @@ impl Sequence {
         deref_mut_refcell!(self.group).total_sampling_time += self.total_sampling_time;
     }
 
-    pub fn get_reponse_index(&self) -> usize {
-        self.reponse_index
+    pub fn get_response_index(&self) -> usize {
+        self.response_index
     }
 
     pub fn get_group(&self) -> Ref<'_, SequenceGroup> {

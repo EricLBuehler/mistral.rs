@@ -161,7 +161,7 @@ impl Engine {
                             content: logprob.token.clone(),
                             role: "assistant".to_string(),
                         },
-                        index: deref_refcell!(seq).get_reponse_index(),
+                        index: deref_refcell!(seq).get_response_index(),
                         stopreason: is_done.map(|x| x.to_string()),
                         logprobs: if deref_refcell!(seq).return_logprobs() {
                             Some(logprob)
@@ -212,7 +212,7 @@ impl Engine {
 
         let choice = Choice {
             stopreason: reason.to_string(),
-            index: deref_refcell!(seq).get_reponse_index(),
+            index: deref_refcell!(seq).get_response_index(),
             message: ResponseMessage {
                 content: res,
                 role: "assistant".to_string(),
@@ -467,7 +467,7 @@ impl Engine {
             request.is_streaming,
         )));
         // Add sequences
-        for reponse_index in 0..request.sampling_params.n_choices {
+        for response_index in 0..request.sampling_params.n_choices {
             let seq = Sequence::new_waiting(
                 prompt.clone(),
                 self.id,
@@ -492,7 +492,7 @@ impl Engine {
                 request.return_logprobs,
                 get_mut_arcmutex!(self.pipeline).is_xlora(),
                 group.clone(),
-                reponse_index,
+                response_index,
             );
             self.id += 1;
             self.scheduler.add_seq(seq);
