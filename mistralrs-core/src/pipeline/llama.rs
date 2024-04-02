@@ -87,6 +87,7 @@ pub struct LlamaPipeline {
     no_kv_cache: bool,
     chat_template: ChatTemplate,
     non_granular_state: Option<NonGranularState>,
+    model_id: String,
 }
 
 pub struct LlamaLoader {
@@ -363,6 +364,7 @@ impl Loader for LlamaLoader {
                     tgt_non_granular_index,
                 }
             }),
+            model_id: self.model_id.clone(),
         })))
     }
 
@@ -474,8 +476,8 @@ impl Pipeline for LlamaPipeline {
             .copied()
             .unwrap_or_else(|| panic!("Unable to extract `{eos_tok}` EOS token."))
     }
-    fn name(&self) -> &'static str {
-        "llama"
+    fn name(&self) -> String {
+        self.model_id.clone()
     }
     fn get_max_seq_len(&self) -> usize {
         match &self.model {

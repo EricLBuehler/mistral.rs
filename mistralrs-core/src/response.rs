@@ -3,6 +3,8 @@ use std::error::Error;
 use candle_sampling::logits_processor::TopLogprob;
 use serde::Serialize;
 
+pub const SYSTEM_FINGERPRINT: &str = "local";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ResponseMessage {
     pub content: String,
@@ -40,10 +42,10 @@ pub struct Choice {
 #[derive(Debug, Clone, Serialize)]
 pub struct ChunkChoice {
     #[serde(rename = "finish_reason")]
-    pub stopreason: String,
+    pub stopreason: Option<String>,
     pub index: usize,
     pub delta: Delta,
-    pub logprobs: Option<Logprobs>,
+    pub logprobs: Option<ResponseLogprob>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -62,7 +64,7 @@ pub struct ChatCompletionResponse {
     pub id: String,
     pub choices: Vec<Choice>,
     pub created: u128,
-    pub model: &'static str,
+    pub model: String,
     pub system_fingerprint: String,
     pub object: String,
     pub usage: ChatCompletionUsage,
@@ -73,7 +75,7 @@ pub struct ChatCompletionChunkResponse {
     pub id: String,
     pub choices: Vec<ChunkChoice>,
     pub created: u128,
-    pub model: &'static str,
+    pub model: String,
     pub system_fingerprint: String,
     pub object: String,
 }

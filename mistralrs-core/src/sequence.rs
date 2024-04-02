@@ -1,5 +1,5 @@
 use std::{
-    cell::{Cell, Ref, RefCell},
+    cell::{Cell, Ref, RefCell, RefMut},
     rc::Rc,
     sync::mpsc::Sender,
     time::{SystemTime, UNIX_EPOCH},
@@ -10,7 +10,7 @@ use candle_sampling::logits_processor::{LogitsProcessor, Logprobs};
 
 use crate::{
     deref_mut_refcell, deref_refcell,
-    response::{Choice, Response},
+    response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     ChatCompletionResponse, ChatCompletionUsage,
 };
 
@@ -20,6 +20,16 @@ pub enum StopReason {
     StopTok(u32),
     Length(usize),
     ModelLength(usize),
+}
+
+impl ToString for StopReason {
+    fn to_string(&self) -> String {
+        match &*self {
+            StopReason::Eos => "stop".to_string(),
+            StopReason::Length(_) | StopReason::ModelLength(_) => "length".to_string(),
+            StopReason::StopTok(_) => "stop".to_string(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -153,7 +163,6 @@ impl Sequence {
     pub fn add_token(&mut self, tok: Logprobs) {
         self.tokens.push(tok.token);
         self.logprobs.push(tok);
-        deref_mut_refcell!(self.group).token_count += 1;
     }
 
     pub fn responder(&self) -> Sender<Response> {
@@ -202,7 +211,6 @@ impl Sequence {
     }
 
     pub fn add_choice_to_group(&self, choice: Choice) {
-        deref_mut_refcell!(self.group).done_count += 1;
         deref_mut_refcell!(self.group).choices.push(choice);
 
         let now = SystemTime::now()
@@ -228,10 +236,13 @@ impl Sequence {
     pub fn get_group(&self) -> Ref<'_, SequenceGroup> {
         deref_refcell!(self.group)
     }
+
+    pub fn get_mut_group(&self) -> RefMut<'_, SequenceGroup> {
+        deref_mut_refcell!(self.group)
+    }
 }
 
 pub struct SequenceGroup {
-    done_count: usize,
     n_choices: usize,
     pub total_prompt_toks: usize,
     pub total_toks: usize,
@@ -240,14 +251,13 @@ pub struct SequenceGroup {
     pub total_comple_time: u128,
     pub total_sampling_time: u128,
     choices: Vec<Choice>,
-    token_count: usize,
-    is_streaming: bool,
+    pub streaming_chunks: Vec<ChunkChoice>,
+    pub is_streaming: bool,
 }
 
 impl SequenceGroup {
     pub fn new(n_choices: usize, is_streaming: bool) -> Self {
         Self {
-            done_count: 0,
             choices: Vec::new(),
             n_choices,
             total_prompt_toks: 0,
@@ -256,21 +266,13 @@ impl SequenceGroup {
             total_time: 0,
             total_comple_time: 0,
             total_sampling_time: 0,
-            token_count: 0,
+            streaming_chunks: Vec::new(),
             is_streaming,
         }
     }
 
-    fn is_done(&self) -> bool {
-        self.done_count == self.n_choices
-    }
-
     pub fn get_choices(&self) -> &[Choice] {
         &self.choices
-    }
-
-    fn all_token_counts_same(&self) -> bool {
-        self.token_count % self.n_choices == 0
     }
 
     pub fn get_usage(&self) -> ChatCompletionUsage {
@@ -295,15 +297,24 @@ impl SequenceGroup {
         response: ChatCompletionResponse,
         sender: Sender<Response>,
     ) {
-        if self.is_done() {
+        if self.choices.len() == self.n_choices {
             // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
             sender.send(Response::Done(response)).unwrap();
         }
     }
 
-    pub fn maybe_send_streaming_request(&self, _sender: Sender<Response>) {
-        if self.all_token_counts_same() && self.is_streaming {
-            todo!()
+    pub fn maybe_send_streaming_request(&self, seq: &Sequence, model: String) {
+        if self.streaming_chunks.len() == self.n_choices && self.is_streaming {
+            seq.responder()
+                .send(Response::Chunk(ChatCompletionChunkResponse {
+                    id: seq.id.to_string(),
+                    choices: self.streaming_chunks.clone(),
+                    created: seq.timestamp,
+                    model: model.clone(),
+                    system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                    object: "chat.completion.chunk".to_string(),
+                }))
+                .unwrap();
         }
     }
 }

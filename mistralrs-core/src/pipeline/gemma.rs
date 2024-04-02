@@ -85,6 +85,7 @@ pub struct GemmaPipeline {
     no_kv_cache: bool,
     chat_template: ChatTemplate,
     non_granular_state: Option<NonGranularState>,
+    model_id: String,
 }
 
 pub struct GemmaLoader {
@@ -320,6 +321,7 @@ impl Loader for GemmaLoader {
                     tgt_non_granular_index,
                 }
             }),
+            model_id: self.model_id.clone(),
         })))
     }
 
@@ -414,8 +416,8 @@ impl Pipeline for GemmaPipeline {
             .copied()
             .unwrap_or_else(|| panic!("Unable to extract `{eos_tok}` EOS token."))
     }
-    fn name(&self) -> &'static str {
-        "gemma"
+    fn name(&self) -> String {
+        self.model_id.clone()
     }
     fn get_max_seq_len(&self) -> usize {
         match &self.model {

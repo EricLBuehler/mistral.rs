@@ -190,7 +190,7 @@ pub trait Pipeline: Send + Sync {
     fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs>;
     fn tokenizer(&self) -> Tokenizer;
     fn eos_tok(&self) -> u32;
-    fn name(&self) -> &'static str;
+    fn name(&self) -> String;
     fn get_max_seq_len(&self) -> usize;
     fn is_xlora(&self) -> bool;
     fn has_no_kv_cache(&self) -> bool;
