@@ -7,6 +7,9 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN rustup update nightly
+RUN rustup default nightly
 
 WORKDIR /mistralrs
 
@@ -17,7 +20,8 @@ COPY mistralrs-pyo3 mistralrs-pyo3
 COPY mistralrs-server mistralrs-server
 COPY Cargo.toml ./
 
-RUN cargo build --release --features cuda cudnn flash-attn
+ENV CUDA_COMPUTE_CAP=86
+RUN RUSTFLAGS="-Z threads=8" cargo build --release --workspace --exclude mistralrs-pyo3 --features cuda
 
 FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04 as base
 

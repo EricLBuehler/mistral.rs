@@ -9,7 +9,7 @@ COPY mistralrs-pyo3 mistralrs-pyo3
 COPY mistralrs-server mistralrs-server
 COPY Cargo.toml ./
 
-RUN cargo build --release
+RUN cargo build --release --workspace --exclude mistralrs-pyo3
 
 FROM debian:bookworm-slim as base
 
