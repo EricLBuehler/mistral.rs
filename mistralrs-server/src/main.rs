@@ -1,11 +1,20 @@
 use std::{
     fs::File,
-    sync::{mpsc::channel, Arc},
+    pin::Pin,
+    sync::{
+        mpsc::{channel, Receiver, Sender},
+        Arc,
+    },
+    task::{Context, Poll},
 };
 
 use anyhow::Result;
 use axum::{
     extract::{Json, State},
+    response::{
+        sse::{Event, KeepAlive},
+        IntoResponse, Sse,
+    },
     routing::post,
     Router,
 };
@@ -504,12 +513,62 @@ struct Args {
     token_source: TokenSource,
 }
 
-async fn chatcompletions(
-    State(state): State<Arc<MistralRs>>,
-    Json(oairequest): Json<ChatCompletionRequest>,
-) -> String {
-    let (tx, rx) = channel();
+struct Streamer {
+    rx: Receiver<Response>,
+    is_done: bool,
+    state: Arc<MistralRs>,
+}
+
+impl futures::Stream for Streamer {
+    type Item = Result<Event, axum::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if !self.is_done {
+            return Poll::Ready(None);
+        }
+
+        match self.rx.try_recv() {
+            Ok(resp) => {
+                self.is_done = true;
+                match resp {
+                    Response::Error(e) => {
+                        dbg!(&e);
+                        Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
+                    }
+                    Response::Chunk(response) => {
+                        MistralRs::maybe_log_response(self.state.clone(), &response);
+                        Poll::Ready(Some(Event::default().json_data(response)))
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            Err(_) => Poll::Pending,
+        }
+    }
+}
+
+enum ChatCompletionResponder {
+    Sse(Sse<Streamer>),
+    String(String),
+}
+
+impl IntoResponse for ChatCompletionResponder {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            ChatCompletionResponder::Sse(s) => s.into_response(),
+            ChatCompletionResponder::String(s) => s.into_response(),
+        }
+    }
+}
+
+fn parse_request(
+    oairequest: ChatCompletionRequest,
+    state: Arc<MistralRs>,
+    tx: Sender<Response>,
+) -> Request {
     let repr = serde_json::to_string(&oairequest).unwrap();
+    MistralRs::maybe_log_request(state.clone(), repr);
+
     let stop_toks = match oairequest.stop_seqs {
         Some(StopTokens::Multi(m)) => Some(InternalStopTokens::Seqs(m)),
         Some(StopTokens::Single(s)) => Some(InternalStopTokens::Seqs(vec![s])),
@@ -524,7 +583,8 @@ async fn chatcompletions(
         message_map.insert("content".to_string(), message.content);
         messages.push(message_map);
     }
-    let request = Request {
+
+    Request {
         messages,
         sampling_params: SamplingParams {
             temperature: oairequest.temperature,
@@ -540,24 +600,42 @@ async fn chatcompletions(
         },
         response: tx,
         return_logprobs: oairequest.logprobs,
-        is_streaming: false,
-    };
+        is_streaming: oairequest.stream,
+    }
+}
 
-    MistralRs::maybe_log_request(state.clone(), repr);
+async fn chatcompletions(
+    State(state): State<Arc<MistralRs>>,
+    Json(oairequest): Json<ChatCompletionRequest>,
+) -> ChatCompletionResponder {
+    let (tx, rx) = channel();
+    let is_streaming = oairequest.stream;
+    let request = parse_request(oairequest, state.clone(), tx);
     let sender = state.get_sender();
     sender.send(request).unwrap();
-    let response = rx.recv().unwrap();
 
-    match response {
-        Response::Error(e) => {
-            dbg!(&e);
-            e.to_string()
+    if is_streaming {
+        let streamer = Streamer {
+            rx,
+            is_done: false,
+            state,
+        };
+
+        ChatCompletionResponder::Sse(Sse::new(streamer).keep_alive(KeepAlive::new()))
+    } else {
+        let response = rx.recv().unwrap();
+
+        match response {
+            Response::Error(e) => {
+                dbg!(&e);
+                ChatCompletionResponder::String(e.to_string())
+            }
+            Response::Done(response) => {
+                MistralRs::maybe_log_response(state, &response);
+                ChatCompletionResponder::String(serde_json::to_string(&response).unwrap())
+            }
+            Response::Chunk(_) => unreachable!(),
         }
-        Response::Done(response) => {
-            MistralRs::maybe_log_response(state, &response);
-            serde_json::to_string(&response).unwrap()
-        }
-        Response::Chunk(_) => unreachable!(),
     }
 }
 

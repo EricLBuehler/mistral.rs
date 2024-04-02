@@ -34,6 +34,7 @@ pub use response::Response;
 pub use response::{ChatCompletionResponse, ChatCompletionUsage};
 pub use sampling::{SamplingParams, StopTokens};
 pub use scheduler::SchedulerMethod;
+use serde::Serialize;
 
 pub struct MistralRs {
     sender: Sender<Request>,
@@ -77,7 +78,7 @@ impl MistralRs {
         }
     }
 
-    pub fn maybe_log_response(this: Arc<Self>, resp: &ChatCompletionResponse) {
+    pub fn maybe_log_response<T: Serialize>(this: Arc<Self>, resp: &T) {
         if let Some(file) = &this.log {
             let mut f = OpenOptions::new()
                 .append(true)
