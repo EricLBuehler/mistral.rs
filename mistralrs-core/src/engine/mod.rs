@@ -141,6 +141,9 @@ impl Engine {
                 eos_tok,
                 get_mut_arcmutex!(self.pipeline).get_max_seq_len(),
             );
+            deref_refcell!(seq)
+                .get_group()
+                .maybe_send_streaming_request(deref_refcell!(seq).responder());
             if let Some(reason) = is_done {
                 self.finish_seq(seq, reason);
                 get_mut_arcmutex!(self.pipeline).reset_non_granular_state();
@@ -195,15 +198,8 @@ impl Engine {
         };
         deref_mut_refcell!(seq).add_choice_to_group(choice);
 
-        // Is the group done?
-        if !deref_refcell!(seq).get_group().is_done() {
-            return;
-        }
-
-        // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-        deref_refcell!(seq)
-            .responder()
-            .send(Response::Done(ChatCompletionResponse {
+        deref_refcell!(seq).get_group().maybe_send_done_response(
+            ChatCompletionResponse {
                 id: deref_refcell!(seq).id().to_string(),
                 choices: deref_refcell!(seq).get_group().get_choices().to_vec(),
                 created: deref_refcell!(seq).timestamp(),
@@ -211,8 +207,9 @@ impl Engine {
                 system_fingerprint: "local".to_string(),
                 object: "chat.completion".to_string(),
                 usage: deref_refcell!(seq).get_group().get_usage(),
-            }))
-            .unwrap();
+            },
+            deref_refcell!(seq).responder(),
+        );
     }
 
     /// Clone the cache FROM the sequences' cache TO the model cache. Only used for completion seqs.

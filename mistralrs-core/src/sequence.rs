@@ -11,7 +11,7 @@ use candle_sampling::logits_processor::{LogitsProcessor, Logprobs};
 use crate::{
     deref_mut_refcell, deref_refcell,
     response::{Choice, Response},
-    ChatCompletionUsage,
+    ChatCompletionResponse, ChatCompletionUsage,
 };
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -153,6 +153,7 @@ impl Sequence {
     pub fn add_token(&mut self, tok: Logprobs) {
         self.tokens.push(tok.token);
         self.logprobs.push(tok);
+        deref_mut_refcell!(self.group).n_choices += 1;
     }
 
     pub fn responder(&self) -> Sender<Response> {
@@ -239,6 +240,7 @@ pub struct SequenceGroup {
     pub total_comple_time: u128,
     pub total_sampling_time: u128,
     choices: Vec<Choice>,
+    token_count: usize,
 }
 
 impl SequenceGroup {
@@ -253,15 +255,20 @@ impl SequenceGroup {
             total_time: 0,
             total_comple_time: 0,
             total_sampling_time: 0,
+            token_count: 0,
         }
     }
 
-    pub fn is_done(&self) -> bool {
+    fn is_done(&self) -> bool {
         self.done_count == self.n_choices
     }
 
     pub fn get_choices(&self) -> &[Choice] {
         &self.choices
+    }
+
+    fn all_token_counts_same(&self) -> bool {
+        self.token_count % self.n_choices == 0
     }
 
     pub fn get_usage(&self) -> ChatCompletionUsage {
@@ -278,6 +285,23 @@ impl SequenceGroup {
                 * 1000.,
             avg_sample_tok_per_sec: (self.total_toks as f32 / self.total_sampling_time as f32)
                 * 1000.,
+        }
+    }
+
+    pub fn maybe_send_done_response(
+        &self,
+        response: ChatCompletionResponse,
+        sender: Sender<Response>,
+    ) {
+        if self.is_done() {
+            // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
+            sender.send(Response::Done(response)).unwrap();
+        }
+    }
+
+    pub fn maybe_send_streaming_request(&self, _sender: Sender<Response>) {
+        if self.all_token_counts_same() {
+            todo!()
         }
     }
 }
