@@ -124,6 +124,7 @@ impl Runner {
                     MistralRs::maybe_log_response(self.runner.clone(), &response);
                     Ok(serde_json::to_string(&response).unwrap())
                 }
+                Response::Chunk(_) => unreachable!(),
             }
         })
     }

@@ -557,6 +557,7 @@ async fn chatcompletions(
             MistralRs::maybe_log_response(state, &response);
             serde_json::to_string(&response).unwrap()
         }
+        Response::Chunk(_) => unreachable!(),
     }
 }
 

@@ -81,4 +81,5 @@ pub struct ChatCompletionChunkResponse {
 pub enum Response {
     Error(Box<dyn Error + Send + Sync>),
     Done(ChatCompletionResponse),
+    Chunk(ChatCompletionChunkResponse),
 }

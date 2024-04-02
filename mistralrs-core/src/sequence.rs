@@ -153,7 +153,7 @@ impl Sequence {
     pub fn add_token(&mut self, tok: Logprobs) {
         self.tokens.push(tok.token);
         self.logprobs.push(tok);
-        deref_mut_refcell!(self.group).n_choices += 1;
+        deref_mut_refcell!(self.group).token_count += 1;
     }
 
     pub fn responder(&self) -> Sender<Response> {
