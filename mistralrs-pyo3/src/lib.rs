@@ -157,7 +157,7 @@ struct ChatCompletionRequest {
     temperature: Option<f64>,
     top_p: Option<f64>,
     stream: bool,
-    top_k: Option<usize>,
+    top_k: Option<i64>,
 }
 
 #[pymethods]
@@ -178,7 +178,7 @@ impl ChatCompletionRequest {
         stop_token_ids: Option<Vec<u32>>,
         temperature: Option<f64>,
         top_p: Option<f64>,
-        top_k: Option<usize>,
+        top_k: Option<i64>,
         stream: Option<bool>,
     ) -> PyResult<Self> {
         let mut messages_vec = Vec::new();

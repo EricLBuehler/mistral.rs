@@ -4,7 +4,6 @@ use std::collections::HashMap;
 
 use candle_core::{DType, Result, Tensor, D};
 use rand::SeedableRng;
-use tokenizers::Tokenizer;
 
 #[derive(Clone, Debug)]
 pub enum StopTokens {
@@ -15,7 +14,7 @@ pub enum StopTokens {
 #[derive(Clone, Debug)]
 pub struct SamplingParams {
     pub temperature: Option<f64>,
-    pub top_k: Option<usize>,
+    pub top_k: Option<i64>,
     pub top_p: Option<f64>,
     pub top_n_logprobs: usize,
     pub freq_penalty: Option<f32>,
@@ -30,14 +29,7 @@ pub struct SamplingParams {
 #[derive(Clone)]
 pub struct Sampler {
     rng: rand::rngs::StdRng,
-    temperature: Option<f64>,
-    top_n_logprobs: usize,
-    tokenizer: Tokenizer,
-    freq_penalty: Option<f32>,
-    presence_penalty: Option<f32>,
-    logits_bias: Option<HashMap<u32, f32>>,
-    topk: i64,
-    topp: f64,
+    params: SamplingParams,
 }
 
 #[derive(Debug, Clone)]
@@ -58,32 +50,10 @@ pub struct Logprobs {
 
 impl Sampler {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        seed: u64,
-        temperature: Option<f64>,
-        top_n_logprobs: usize,
-        tokenizer: Tokenizer,
-        freq_penalty: Option<f32>,
-        presence_penalty: Option<f32>,
-        logits_bias: Option<HashMap<u32, f32>>,
-        topk: i64,
-        topp: f64,
-    ) -> Self {
-        let temperature = if temperature.map_or(true, |v| v < 1e-7) {
-            None
-        } else {
-            temperature
-        };
+    pub fn new(seed: u64, params: SamplingParams) -> Self {
         Self {
             rng: rand::rngs::StdRng::seed_from_u64(seed),
-            temperature,
-            top_n_logprobs,
-            tokenizer,
-            freq_penalty,
-            presence_penalty,
-            logits_bias,
-            topk,
-            topp,
+            params,
         }
     }
 
@@ -95,7 +65,7 @@ impl Sampler {
     pub fn sample(&mut self, logits: &Tensor, _penalty_ctxt: Option<&Tensor>) -> Result<Logprobs> {
         let logits = logits.to_dtype(DType::F32)?;
 
-        let next_token = match self.temperature {
+        let next_token = match self.params.temperature {
             None => logits.argmax(D::Minus1)?,
             Some(temperature) => {
                 let logits = (&logits / temperature)?;

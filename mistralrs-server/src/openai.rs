@@ -48,7 +48,7 @@ pub struct ChatCompletionRequest {
     pub stream: Option<bool>,
 
     // mistral.rs additional
-    pub top_k: Option<usize>,
+    pub top_k: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]

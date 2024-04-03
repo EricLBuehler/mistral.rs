@@ -22,7 +22,7 @@ use crate::{
     sampler::Sampler,
     scheduler::{Scheduler, SchedulerMethod},
     sequence::{Sequence, SequenceGroup, SequenceState, StopReason},
-    StopTokens,
+    SamplingParams, StopTokens,
 };
 
 const SEED: u64 = 0;
@@ -434,12 +434,6 @@ impl Engine {
             }
         }
 
-        let topk = request
-            .sampling_params
-            .top_k
-            .map(|x| x as i64)
-            .unwrap_or(-1);
-        let topp = request.sampling_params.top_p.unwrap_or(1.0);
         let num_hidden_layers = get_mut_arcmutex!(self.pipeline).num_hidden_layers();
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
 
@@ -473,17 +467,18 @@ impl Engine {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time travel has occurred!");
-        let sampler = Sampler::new(
-            SEED,
-            Some(request.sampling_params.temperature.unwrap_or(1.0)),
-            request.sampling_params.top_n_logprobs,
-            tokenizer.clone(),
-            request.sampling_params.freq_penalty,
-            request.sampling_params.presence_penalty,
-            request.sampling_params.logits_bias.clone(),
-            topk,
-            topp,
-        );
+        let params = SamplingParams {
+            top_k: Some(
+                request
+                    .sampling_params
+                    .top_k
+                    .map(|x| x as i64)
+                    .unwrap_or(-1),
+            ),
+            top_p: Some(request.sampling_params.top_p.unwrap_or(1.0)),
+            ..request.sampling_params.clone()
+        };
+        let sampler = Sampler::new(SEED, params);
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {
             let device = get_mut_arcmutex!(self.pipeline).device().clone();
