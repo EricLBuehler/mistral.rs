@@ -7,11 +7,10 @@ use std::{
 
 use candle_core::Tensor;
 use candle_sampling::logits_processor::{LogitsProcessor, Logprobs};
+use tokenizers::Tokenizer;
 
 use crate::{
-    deref_mut_refcell, deref_refcell,
-    response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
-    ChatCompletionResponse, ChatCompletionUsage,
+    deref_mut_refcell, deref_refcell, response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT}, ChatCompletionResponse, ChatCompletionUsage
 };
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -61,6 +60,7 @@ pub struct Sequence {
 
     // Mutables
     tokens: Vec<u32>,
+    decoded_tokens: Vec<u8>,
     logprobs: Vec<Logprobs>,
 
     // GPU things
@@ -75,6 +75,7 @@ impl Sequence {
     #[allow(clippy::too_many_arguments)]
     pub fn new_waiting(
         tokens: Vec<u32>,
+        decoded_tokens: Vec<u8>,
         id: usize,
         timestamp: u128,
         layers: usize,
@@ -91,6 +92,7 @@ impl Sequence {
         let prompt_len = tokens.len();
         Self {
             tokens,
+            decoded_tokens,
             logprobs: Vec::new(),
             prompt_len,
             id,
@@ -213,6 +215,23 @@ impl Sequence {
 
     pub fn prompt_tokens(&self) -> usize {
         self.prompt_len
+    }
+
+    pub fn get_delta(&mut self, tokenizer:&Tokenizer) -> Option<String>{
+        //We need to decode incrementally to handle streaming requests, see: https://github.com/huggingface/tokenizers/issues/1141
+        let tokens = self.tokens.clone();
+        let new_decoded_bytes = tokenizer.decode(&tokens, false).unwrap_or("".to_string());
+        let new_decoded_bytes = new_decoded_bytes.as_bytes();
+
+        let new_decoded = unsafe { String::from_utf8_unchecked(new_decoded_bytes.to_vec()) };
+        if new_decoded.ends_with('�') {
+            // no valid text was generated from this token => Skip it for now
+            return None;
+        }
+
+        let delta = String::from_utf8_lossy(&new_decoded_bytes[self.decoded_tokens.len()..]).into_owned();
+        self.decoded_tokens = new_decoded_bytes.to_vec();
+        Some(delta)
     }
 
     pub fn timestamp(&self) -> u128 {
