@@ -1,6 +1,6 @@
 use indexmap::IndexMap;
 
-use crate::{response::Response, sampling::SamplingParams};
+use crate::{response::Response, sampler::SamplingParams};
 use std::{fmt::Debug, sync::mpsc::Sender};
 
 pub struct Request {

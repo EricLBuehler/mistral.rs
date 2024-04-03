@@ -1,7 +1,8 @@
 use std::error::Error;
 
-use candle_sampling::logits_processor::TopLogprob;
 use serde::Serialize;
+
+use crate::sampler::TopLogprob;
 
 pub const SYSTEM_FINGERPRINT: &str = "local";
 

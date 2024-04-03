@@ -4,6 +4,7 @@ use super::{
 };
 use crate::models::Cache;
 use crate::pipeline::ChatTemplate;
+use crate::sampler::Logprobs;
 use crate::xlora_models::{NonGranularState, XLoraConfig, XLoraGemma};
 use crate::{deref_mut_refcell, deref_refcell, deserialize_chat_template};
 use crate::{
@@ -13,7 +14,6 @@ use crate::{
 };
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
-use candle_sampling::logits_processor::Logprobs;
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
@@ -400,7 +400,7 @@ impl Pipeline for GemmaPipeline {
         let ctxt = deref_refcell!(seq).get_toks()[start_at..].to_vec();
 
         Ok(deref_mut_refcell!(seq)
-            .logits_processor()
+            .sampler()
             .sample(&logits, Some(&ctxt))?)
     }
     fn tokenizer(&self) -> Tokenizer {

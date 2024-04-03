@@ -22,7 +22,7 @@ mod models;
 mod pipeline;
 mod request;
 mod response;
-mod sampling;
+mod sampler;
 mod scheduler;
 mod sequence;
 mod utils;
@@ -35,7 +35,7 @@ pub use pipeline::{
 pub use request::Request;
 pub use response::Response;
 pub use response::{ChatCompletionResponse, ChatCompletionUsage};
-pub use sampling::{SamplingParams, StopTokens};
+pub use sampler::{SamplingParams, StopTokens};
 pub use scheduler::SchedulerMethod;
 use serde::Serialize;
 

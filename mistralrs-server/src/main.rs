@@ -673,6 +673,7 @@ async fn main() -> Result<()> {
         candle_core::utils::with_simd128(),
         candle_core::utils::with_f16c()
     );
+    info!("Sampling method: topk -> topp -> multinomial");
     info!("Loading model `{}` on {device:?}...", loader.get_id());
     let pipeline = loader.load_model(None, args.token_source, None, &device)?;
     info!("Model loaded.");
