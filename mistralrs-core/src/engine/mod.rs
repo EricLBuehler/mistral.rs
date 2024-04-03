@@ -146,9 +146,11 @@ impl Engine {
             // Handle streaming requests
             if deref_refcell!(seq).get_group().is_streaming {
                 let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer().clone();
+                let fully_decoded = tokenizer.decode( deref_refcell!(seq).get_toks(), false);
+                
                 let logprob = ResponseLogprob {
                     token: handle_seq_error!(
-                        tokenizer.decode(&[next_token.token], false),
+                        fully_decoded,
                         deref_refcell!(seq).responder()
                     ),
                     bytes: next_token.bytes.clone().into_bytes(),
