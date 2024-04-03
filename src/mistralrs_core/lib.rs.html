@@ -108,6 +108,25 @@
 <a href="#106" id="106">106</a>
 <a href="#107" id="107">107</a>
 <a href="#108" id="108">108</a>
+<a href="#109" id="109">109</a>
+<a href="#110" id="110">110</a>
+<a href="#111" id="111">111</a>
+<a href="#112" id="112">112</a>
+<a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+<a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -119,6 +138,7 @@
         Arc, Mutex,
     },
     thread,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 <span class="kw">use </span>engine::Engine;
@@ -150,6 +170,8 @@
 <span class="kw">pub struct </span>MistralRs {
     sender: Sender&lt;Request&gt;,
     log: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    id: String,
+    creation_time: u64,
 }
 
 <span class="kw">impl </span>MistralRs {
@@ -162,7 +184,15 @@
     ) -&gt; Arc&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>(tx, rx) = channel();
 
-        <span class="kw">let </span>this = Arc::new(<span class="self">Self </span>{ sender: tx, log });
+        <span class="kw">let </span>this = Arc::new(<span class="self">Self </span>{
+            sender: tx,
+            log,
+            id: pipeline.lock().unwrap().name(),
+            creation_time: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect(<span class="string">"Time travel has occurred!"</span>)
+                .as_secs(),
+        });
 
         thread::spawn(<span class="kw">move </span>|| {
             <span class="kw">let </span><span class="kw-2">mut </span>engine = Engine::new(rx, pipeline, method, truncate_sequence, no_kv_cache);
@@ -174,6 +204,14 @@
 
     <span class="kw">pub fn </span>get_sender(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Sender&lt;Request&gt; {
         <span class="self">self</span>.sender.clone()
+    }
+
+    <span class="kw">pub fn </span>get_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+        <span class="self">self</span>.id.clone()
+    }
+
+    <span class="kw">pub fn </span>get_creation_time(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
+        <span class="self">self</span>.creation_time
     }
 
     <span class="kw">pub fn </span>maybe_log_request(this: Arc&lt;<span class="self">Self</span>&gt;, repr: String) {

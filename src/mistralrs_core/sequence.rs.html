@@ -332,6 +332,13 @@
 <a href="#330" id="330">330</a>
 <a href="#331" id="331">331</a>
 <a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::{Cell, Ref, RefCell, RefMut},
     rc::Rc,
@@ -386,6 +393,7 @@
     return_logprobs: bool,
     responder: Sender&lt;Response&gt;,
     response_index: usize,
+    creation_time: u64,
 
     <span class="comment">// Cache
     </span>scaling_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
@@ -419,6 +427,7 @@
         is_xlora: bool,
         group: Rc&lt;RefCell&lt;SequenceGroup&gt;&gt;,
         response_index: usize,
+        creation_time: u64,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>prompt_len = tokens.len();
         <span class="self">Self </span>{
@@ -445,6 +454,7 @@
             scaling_cache: <span class="prelude-val">None</span>,
             total_sampling_time: <span class="number">0</span>,
             response_index,
+            creation_time,
         }
     }
 
@@ -504,6 +514,10 @@
 
     <span class="kw">pub fn </span>responder(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Sender&lt;Response&gt; {
         <span class="self">self</span>.responder.clone()
+    }
+
+    <span class="kw">pub fn </span>creation_time(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
+        <span class="self">self</span>.creation_time
     }
 
     <span class="kw">pub fn </span>set_state(<span class="kw-2">&amp;</span><span class="self">self</span>, state: SequenceState) {

@@ -477,6 +477,7 @@
 <a href="#475" id="475">475</a>
 <a href="#476" id="476">476</a>
 <a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -712,7 +713,7 @@
             ChatCompletionResponse {
                 id: <span class="macro">deref_refcell!</span>(seq).id().to_string(),
                 choices: <span class="macro">deref_refcell!</span>(seq).get_group().get_choices().to_vec(),
-                created: <span class="macro">deref_refcell!</span>(seq).timestamp(),
+                created: <span class="macro">deref_refcell!</span>(seq).creation_time(),
                 model: <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).name(),
                 system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                 object: <span class="string">"chat.completion"</span>.to_string(),
@@ -921,15 +922,15 @@
             request.sampling_params.n_choices,
             request.is_streaming,
         )));
+        <span class="kw">let </span>now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect(<span class="string">"Time travel has occurred!"</span>);
         <span class="comment">// Add sequences
         </span><span class="kw">for </span>response_index <span class="kw">in </span><span class="number">0</span>..request.sampling_params.n_choices {
             <span class="kw">let </span>seq = Sequence::new_waiting(
                 prompt.clone(),
                 <span class="self">self</span>.id,
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect(<span class="string">"Time travel has occurred!"</span>)
-                    .as_millis(),
+                now.as_millis(),
                 num_hidden_layers,
                 request.response.clone(),
                 LogitsProcessor::new(
@@ -948,6 +949,7 @@
                 <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).is_xlora(),
                 group.clone(),
                 response_index,
+                now.as_secs(),
             );
             <span class="self">self</span>.id += <span class="number">1</span>;
             <span class="self">self</span>.scheduler.add_seq(seq);

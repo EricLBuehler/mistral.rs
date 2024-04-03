@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["StopTokens"],"fn":["default_1usize","default_false"],"struct":["ChatCompletionRequest","Message"]};
+window.SIDEBAR_ITEMS = {"enum":["StopTokens"],"fn":["default_1usize","default_false"],"struct":["ChatCompletionRequest","Message","ModelObject","ModelObjects"]};

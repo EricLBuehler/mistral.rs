@@ -52,6 +52,20 @@
 <a href="#50" id="50">50</a>
 <a href="#51" id="51">51</a>
 <a href="#52" id="52">52</a>
+<a href="#53" id="53">53</a>
+<a href="#54" id="54">54</a>
+<a href="#55" id="55">55</a>
+<a href="#56" id="56">56</a>
+<a href="#57" id="57">57</a>
+<a href="#58" id="58">58</a>
+<a href="#59" id="59">59</a>
+<a href="#60" id="60">60</a>
+<a href="#61" id="61">61</a>
+<a href="#62" id="62">62</a>
+<a href="#63" id="63">63</a>
+<a href="#64" id="64">64</a>
+<a href="#65" id="65">65</a>
+<a href="#66" id="66">66</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>serde::{Deserialize, Serialize};
@@ -103,5 +117,19 @@
 
     <span class="comment">// mistral.rs additional
     </span><span class="kw">pub </span>top_k: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+}
+
+<span class="attr">#[derive(Debug, Serialize)]
+</span><span class="kw">pub struct </span>ModelObject {
+    <span class="kw">pub </span>id: String,
+    <span class="kw">pub </span>object: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str,
+    <span class="kw">pub </span>created: u64,
+    <span class="kw">pub </span>owned_by: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str,
+}
+
+<span class="attr">#[derive(Debug, Serialize)]
+</span><span class="kw">pub struct </span>ModelObjects {
+    <span class="kw">pub </span>object: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str,
+    <span class="kw">pub </span>data: Vec&lt;ModelObject&gt;,
 }
 </code></pre></div></section></main></body></html>
