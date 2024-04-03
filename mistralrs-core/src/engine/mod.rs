@@ -16,7 +16,8 @@ use crate::{
     pipeline::Pipeline,
     request::Request,
     response::{
-        ChatCompletionResponse, Choice, Logprobs, Response, ResponseLogprob, ResponseMessage,
+        ChatCompletionResponse, Choice, ChunkChoice, Delta, Logprobs, Response, ResponseLogprob,
+        ResponseMessage, SYSTEM_FINGERPRINT,
     },
     scheduler::{Scheduler, SchedulerMethod},
     sequence::{Sequence, SequenceGroup, SequenceState, StopReason},
@@ -132,19 +133,53 @@ impl Engine {
         debug_assert_eq!(logits_seq.len(), seqs_len);
         let eos_tok = get_mut_arcmutex!(self.pipeline).eos_tok();
         for (logits_per_seq, seq) in zip(logits_seq, seqs.iter()) {
+            // Sample and extract next token
             let sampled = get_mut_arcmutex!(self.pipeline).sample(logits_per_seq, seq.clone());
             let next_token = handle_seq_error_stateaware!(sampled, seq);
             let next_token_id = next_token.token;
-            deref_mut_refcell!(seq).add_token(next_token);
+            deref_mut_refcell!(seq).add_token(next_token.clone());
             let is_done = deref_refcell!(seq).is_done(
                 next_token_id,
                 eos_tok,
                 get_mut_arcmutex!(self.pipeline).get_max_seq_len(),
             );
-            deref_refcell!(seq)
-                .get_group()
-                .maybe_send_streaming_request(deref_refcell!(seq).responder());
-            if let Some(reason) = is_done {
+            // Handle streaming requests
+            if deref_refcell!(seq).get_group().is_streaming {
+                let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer().clone();
+                let logprob = ResponseLogprob {
+                    token: handle_seq_error!(
+                        tokenizer.decode(&[next_token.token], false),
+                        deref_refcell!(seq).responder()
+                    ),
+                    bytes: next_token.bytes.clone().into_bytes(),
+                    logprob: next_token.logprob,
+                    top_logprobs: next_token.top_logprobs.clone(),
+                };
+                deref_refcell!(seq).add_streaming_chunk_choice_to_group(ChunkChoice {
+                    delta: Delta {
+                        content: logprob.token.clone(),
+                        role: "assistant".to_string(),
+                    },
+                    index: deref_refcell!(seq).get_response_index(),
+                    stopreason: is_done.map(|x| x.to_string()),
+                    logprobs: if deref_refcell!(seq).return_logprobs() {
+                        Some(logprob)
+                    } else {
+                        None
+                    },
+                });
+
+                if let Some(reason) = is_done {
+                    deref_mut_refcell!(seq).set_state(SequenceState::Done(reason));
+                }
+
+                deref_refcell!(seq)
+                    .get_mut_group()
+                    .maybe_send_streaming_response(
+                        &*deref_refcell!(seq),
+                        get_mut_arcmutex!(self.pipeline).name(),
+                    );
+            } else if let Some(reason) = is_done {
                 self.finish_seq(seq, reason);
                 get_mut_arcmutex!(self.pipeline).reset_non_granular_state();
             }
@@ -178,12 +213,8 @@ impl Engine {
         );
 
         let choice = Choice {
-            stopreason: match reason {
-                StopReason::Eos => "stop".to_string(),
-                StopReason::Length(_) | StopReason::ModelLength(_) => "length".to_string(),
-                StopReason::StopTok(_) => "stop".to_string(),
-            },
-            index: deref_refcell!(seq).get_next_choice_index(),
+            stopreason: reason.to_string(),
+            index: deref_refcell!(seq).get_response_index(),
             message: ResponseMessage {
                 content: res,
                 role: "assistant".to_string(),
@@ -204,7 +235,7 @@ impl Engine {
                 choices: deref_refcell!(seq).get_group().get_choices().to_vec(),
                 created: deref_refcell!(seq).timestamp(),
                 model: get_mut_arcmutex!(self.pipeline).name(),
-                system_fingerprint: "local".to_string(),
+                system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                 object: "chat.completion".to_string(),
                 usage: deref_refcell!(seq).get_group().get_usage(),
             },
@@ -377,36 +408,10 @@ impl Engine {
             }
         }
 
-        let sampling_method = match (
-            request.sampling_params.top_k,
-            request.sampling_params.top_p,
-            request.sampling_params.temperature,
-        ) {
-            (Some(topk), None, Some(_)) => SamplingMethod::TopK(topk),
-            (None, Some(topp), Some(_)) => SamplingMethod::TopP(topp),
-            (Some(topk), Some(topp), Some(_)) => SamplingMethod::TopKP((topk, topp)),
-            (None, None, None) => SamplingMethod::Multinomial,
-            (Some(_), Some(_), None) | (None, Some(_), None) | (Some(_), None, None) => {
-                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                request
-                    .response
-                    .send(Response::Error(
-                        "If topp or topk are specified and temperature is not specified then argmax sampling will be used. Consider using a temperature of 1.".into(),
-                    ))
-                    .unwrap();
-                return;
-            }
-            (None, None, Some(_)) => {
-                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                request
-                    .response
-                    .send(Response::Error(
-                        "If topp and topk are not specified but temperature is set then argmax sampling will be used.".into(),
-                    ))
-                    .unwrap();
-                return;
-            }
-        };
+        let sampling_method = SamplingMethod::TopKP((
+            request.sampling_params.top_k.unwrap_or(32),
+            request.sampling_params.top_p.unwrap_or(1.0),
+        ));
         let num_hidden_layers = get_mut_arcmutex!(self.pipeline).num_hidden_layers();
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
 
@@ -438,7 +443,7 @@ impl Engine {
             request.is_streaming,
         )));
         // Add sequences
-        for _ in 0..request.sampling_params.n_choices {
+        for response_index in 0..request.sampling_params.n_choices {
             let seq = Sequence::new_waiting(
                 prompt.clone(),
                 self.id,
@@ -450,7 +455,7 @@ impl Engine {
                 request.response.clone(),
                 LogitsProcessor::new(
                     SEED,
-                    request.sampling_params.temperature,
+                    Some(request.sampling_params.temperature.unwrap_or(1.0)),
                     sampling_method.clone(),
                     request.sampling_params.top_n_logprobs,
                     tokenizer.clone(),
@@ -463,6 +468,7 @@ impl Engine {
                 request.return_logprobs,
                 get_mut_arcmutex!(self.pipeline).is_xlora(),
                 group.clone(),
+                response_index,
             );
             self.id += 1;
             self.scheduler.add_seq(seq);

@@ -3,7 +3,7 @@ import openai
 openai.api_key = "EMPTY"
 
 openai.base_url = "http://localhost:1234/v1/"
-
+# """
 messages = []
 prompt = input("Enter system prompt >>> ")
 if len(prompt) > 0:
@@ -12,21 +12,20 @@ if len(prompt) > 0:
 while True:
     prompt = input(">>> ")
     messages.append({"role": "user", "content": prompt})
-    completion = openai.chat.completions.create(
+    resp = ""
+    response = openai.chat.completions.create(
         model="mistral",
         messages=messages,
         max_tokens=256,
-        frequency_penalty=1.0,
-        top_p=0.1,
-        temperature=0,
+        stream=True,
     )
-    resp = completion.choices[0].message.content
-    if resp.endswith("</s>"):
-        out = resp[:-4]
-        print(out)
-    elif resp.endswith("<eos>"):
-        out = resp[:-5]
-        print(out)
+    for chunk in response:
+        delta = chunk.choices[0].delta.content
+        if (delta != "</s>") and (delta != "<eos>"):
+            print(delta, end="")
+        resp += delta
+    if (not resp.endswith("</s>")) and (not resp.endswith("<eos>")):
+        print("...")
     else:
-        print(resp + "...")
+        print()
     messages.append({"role": "assistant", "content": resp})

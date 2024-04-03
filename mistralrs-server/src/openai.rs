@@ -45,6 +45,7 @@ pub struct ChatCompletionRequest {
     pub stop_seqs: Option<StopTokens>,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
+    pub stream: Option<bool>,
 
     // mistral.rs additional
     pub top_k: Option<usize>,

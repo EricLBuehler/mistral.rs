@@ -1,6 +1,7 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use std::{
+    error::Error,
     fs::OpenOptions,
     io::Write,
     sync::{
@@ -34,6 +35,7 @@ pub use response::Response;
 pub use response::{ChatCompletionResponse, ChatCompletionUsage};
 pub use sampling::{SamplingParams, StopTokens};
 pub use scheduler::SchedulerMethod;
+use serde::Serialize;
 
 pub struct MistralRs {
     sender: Sender<Request>,
@@ -77,7 +79,7 @@ impl MistralRs {
         }
     }
 
-    pub fn maybe_log_response(this: Arc<Self>, resp: &ChatCompletionResponse) {
+    pub fn maybe_log_response<T: Serialize>(this: Arc<Self>, resp: &T) {
         if let Some(file) = &this.log {
             let mut f = OpenOptions::new()
                 .append(true)
@@ -87,6 +89,19 @@ impl MistralRs {
             let time = chrono::offset::Local::now();
             let repr = serde_json::to_string(resp).unwrap();
             f.write_all(format!("Response at {time}: {repr}\n\n").as_bytes())
+                .expect("Unable to write data");
+        }
+    }
+
+    pub fn maybe_log_error(this: Arc<Self>, err: &dyn Error) {
+        if let Some(file) = &this.log {
+            let mut f = OpenOptions::new()
+                .append(true)
+                .create(true) // Optionally create the file if it doesn't already exist
+                .open(file)
+                .expect("Unable to open file");
+            let time = chrono::offset::Local::now();
+            f.write_all(format!("Error response at {time}: {err}\n\n").as_bytes())
                 .expect("Unable to write data");
         }
     }

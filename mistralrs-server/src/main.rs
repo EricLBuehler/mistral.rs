@@ -1,459 +1,37 @@
 use std::{
+    error::Error,
     fs::File,
-    sync::{mpsc::channel, Arc},
+    pin::Pin,
+    sync::{
+        mpsc::{channel, Receiver, Sender},
+        Arc,
+    },
+    task::{Context, Poll},
+    time::Duration,
 };
 
 use anyhow::Result;
 use axum::{
     extract::{Json, State},
+    response::{
+        sse::{Event, KeepAlive},
+        IntoResponse, Sse,
+    },
     routing::post,
     Router,
 };
 use candle_core::Device;
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use indexmap::IndexMap;
 use mistralrs_core::{
     GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader, MistralLoader,
     MistralRs, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind, Request,
     Response, SamplingParams, SchedulerMethod, StopTokens as InternalStopTokens, TokenSource,
 };
+use model_selected::ModelSelected;
 use openai::{ChatCompletionRequest, StopTokens};
+mod model_selected;
 mod openai;
-
-#[derive(Debug, Subcommand)]
-pub enum ModelSelected {
-    /// Select the mistral model.
-    Mistral {
-        /// Model ID to load from
-        #[arg(short, long, default_value = "mistralai/Mistral-7B-Instruct-v0.1")]
-        model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-    },
-
-    /// Select the quantized mistral model with gguf.
-    MistralGGUF {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "mistralai/Mistral-7B-Instruct-v0.1")]
-        tok_model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(long)]
-        tokenizer_json: Option<String>,
-
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
-        #[arg(
-            short = 'm',
-            long,
-            default_value = "TheBloke/Mistral-7B-Instruct-v0.1-GGUF"
-        )]
-        quantized_model_id: Option<String>,
-
-        /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(
-            short = 'f',
-            long,
-            default_value = "mistral-7b-instruct-v0.1.Q4_K_M.gguf"
-        )]
-        quantized_filename: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-    },
-
-    /// Select the mistral model, with X-LoRA.
-    XLoraMistral {
-        /// Model ID to load from
-        #[arg(short, long, default_value = "HuggingFaceH4/zephyr-7b-beta")]
-        model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Model ID to load Xlora from
-        #[arg(short, long, default_value = "lamm-mit/x-lora")]
-        xlora_model_id: String,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
-
-        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        #[arg(long)]
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    /// Select the gemma model.
-    Gemma {
-        /// Model ID to load from
-        #[arg(short, long, default_value = "google/gemma-7b-it")]
-        model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-    },
-
-    /// Select the gemma model, with X-LoRA.
-    XLoraGemma {
-        /// Model ID to load from
-        #[arg(short, long)]
-        model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Model ID to load Xlora from
-        #[arg(short, long)]
-        xlora_model_id: String,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
-
-        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        #[arg(long)]
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    /// Select the llama model.
-    Llama {
-        /// Model ID to load from
-        #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
-        model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-    },
-
-    /// Select the quantized llama model with gguf.
-    LlamaGGUF {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
-        tok_model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(long)]
-        tokenizer_json: Option<String>,
-
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
-        #[arg(short = 'm', long, default_value = "TheBloke/Llama-2-13B-chat-GGUF")]
-        quantized_model_id: Option<String>,
-
-        /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(short = 'f', long, default_value = "llama-2-13b-chat.Q4_K_M.gguf")]
-        quantized_filename: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-    },
-
-    /// Select the quantized llama model with gguf.
-    LlamaGGML {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
-        tok_model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(long)]
-        tokenizer_json: Option<String>,
-
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGML file.
-        #[arg(short = 'm', long, default_value = "TheBloke/Llama-2-13B-chat-GGML")]
-        quantized_model_id: Option<String>,
-
-        /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(
-            short = 'f',
-            long,
-            default_value = "llama-2-13b-chat.ggmlv3.q4_K_M.bin"
-        )]
-        quantized_filename: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// GQA
-        #[arg(long, default_value_t = 1)]
-        gqa: usize,
-    },
-
-    /// Select the llama model, with X-LoRA.
-    XLoraLlama {
-        /// Model ID to load from
-        #[arg(short, long)]
-        model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Model ID to load Xlora from
-        #[arg(short, long)]
-        xlora_model_id: String,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
-
-        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        #[arg(long)]
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    /// Select the mixtral model.
-    Mixtral {
-        /// Model ID to load from
-        #[arg(short, long, default_value = "mistralai/Mixtral-8x7B-Instruct-v0.1")]
-        model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-    },
-
-    /// Select the quantized mixtral model with gguf.
-    MixtralGGUF {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "mistralai/Mixtral-8x7B-Instruct-v0.1")]
-        tok_model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(long)]
-        tokenizer_json: Option<String>,
-
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
-        #[arg(short = 'm', long, default_value = "TheBloke/Mixtral-8x7B-v0.1-GGUF")]
-        quantized_model_id: Option<String>,
-
-        /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(short = 'f', long, default_value = "mixtral-8x7b-v0.1.Q4_K_M.gguf")]
-        quantized_filename: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-    },
-
-    /// Select the mixtral model, with X-LoRA.
-    XLoraMixtral {
-        /// Model ID to load from
-        #[arg(short, long)]
-        model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Model ID to load Xlora from
-        #[arg(short, long)]
-        xlora_model_id: String,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
-
-        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        #[arg(long)]
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    /// Select the quantized mistral model with gguf and X-LoRA.
-    XLoraMistralGGUF {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "HuggingFaceH4/zephyr-7b-beta")]
-        tok_model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(long)]
-        tokenizer_json: Option<String>,
-
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
-        #[arg(short = 'm', long, default_value = "TheBloke/zephyr-7B-beta-GGUF")]
-        quantized_model_id: Option<String>,
-
-        /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(short = 'f', long, default_value = "zephyr-7b-beta.Q8_0.gguf")]
-        quantized_filename: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Model ID to load Xlora from
-        #[arg(short, long, default_value = "lamm-mit/x-lora")]
-        xlora_model_id: String,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
-
-        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        #[arg(long)]
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    /// Select the quantized mistral model with gguf and X-LoRA.
-    XLoraLlamaGGUF {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
-        tok_model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(long)]
-        tokenizer_json: Option<String>,
-
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
-        #[arg(short = 'm', long, default_value = "TheBloke/Llama-2-13B-chat-GGUF")]
-        quantized_model_id: Option<String>,
-
-        /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(short = 'f', long, default_value = "llama-2-13b-chat.Q4_K_M.gguf")]
-        quantized_filename: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Model ID to load Xlora from
-        #[arg(short, long)]
-        xlora_model_id: String,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
-
-        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        #[arg(long)]
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    /// Select the quantized mistral model with gguf and X-LoRA.
-    XLoraLlamaGGML {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
-        tok_model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(long)]
-        tokenizer_json: Option<String>,
-
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGML file.
-        #[arg(short = 'm', long, default_value = "TheBloke/Llama-2-13B-chat-GGML")]
-        quantized_model_id: Option<String>,
-
-        /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(
-            short = 'f',
-            long,
-            default_value = "llama-2-13b-chat.ggmlv3.q4_K_M.bin"
-        )]
-        quantized_filename: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Model ID to load Xlora from
-        #[arg(short, long)]
-        xlora_model_id: String,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
-
-        /// GQA
-        #[arg(long, default_value_t = 1)]
-        gqa: usize,
-
-        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        #[arg(long)]
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    /// Select the quantized mistral model with gguf and X-LoRA.
-    XLoraMixtralGGUF {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "mistralai/Mixtral-8x7B-Instruct-v0.1")]
-        tok_model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(long)]
-        tokenizer_json: Option<String>,
-
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
-        #[arg(short = 'm', long, default_value = "TheBloke/Mixtral-8x7B-v0.1-GGUF")]
-        quantized_model_id: Option<String>,
-
-        /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(short = 'f', long, default_value = "mixtral-8x7b-v0.1.Q4_K_M.gguf")]
-        quantized_filename: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Model ID to load Xlora from
-        #[arg(short, long)]
-        xlora_model_id: String,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
-
-        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        #[arg(long)]
-        tgt_non_granular_index: Option<usize>,
-    },
-}
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
@@ -504,12 +82,63 @@ struct Args {
     token_source: TokenSource,
 }
 
-async fn chatcompletions(
-    State(state): State<Arc<MistralRs>>,
-    Json(oairequest): Json<ChatCompletionRequest>,
-) -> String {
-    let (tx, rx) = channel();
+struct Streamer {
+    rx: Receiver<Response>,
+    is_done: bool,
+    state: Arc<MistralRs>,
+}
+
+impl futures::Stream for Streamer {
+    type Item = Result<Event, axum::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.is_done {
+            return Poll::Ready(None);
+        }
+        match self.rx.try_recv() {
+            Ok(resp) => match resp {
+                Response::Error(e) => {
+                    MistralRs::maybe_log_error(self.state.clone(), &*e);
+                    Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
+                }
+                Response::Chunk(response) => {
+                    if response.choices.iter().all(|x| x.stopreason.is_some()) {
+                        self.is_done = true;
+                    }
+                    MistralRs::maybe_log_response(self.state.clone(), &response);
+                    Poll::Ready(Some(Event::default().json_data(response)))
+                }
+                _ => unreachable!(),
+            },
+            Err(_) => Poll::Pending,
+        }
+    }
+}
+
+enum ChatCompletionResponder {
+    Sse(Sse<Streamer>),
+    String(String),
+    Error(Box<dyn Error>),
+}
+
+impl IntoResponse for ChatCompletionResponder {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            ChatCompletionResponder::Sse(s) => s.into_response(),
+            ChatCompletionResponder::String(s) => s.into_response(),
+            ChatCompletionResponder::Error(e) => e.to_string().into_response(),
+        }
+    }
+}
+
+fn parse_request(
+    oairequest: ChatCompletionRequest,
+    state: Arc<MistralRs>,
+    tx: Sender<Response>,
+) -> Request {
     let repr = serde_json::to_string(&oairequest).unwrap();
+    MistralRs::maybe_log_request(state.clone(), repr);
+
     let stop_toks = match oairequest.stop_seqs {
         Some(StopTokens::Multi(m)) => Some(InternalStopTokens::Seqs(m)),
         Some(StopTokens::Single(s)) => Some(InternalStopTokens::Seqs(vec![s])),
@@ -524,7 +153,8 @@ async fn chatcompletions(
         message_map.insert("content".to_string(), message.content);
         messages.push(message_map);
     }
-    let request = Request {
+
+    Request {
         messages,
         sampling_params: SamplingParams {
             temperature: oairequest.temperature,
@@ -540,22 +170,47 @@ async fn chatcompletions(
         },
         response: tx,
         return_logprobs: oairequest.logprobs,
-        is_streaming: false,
-    };
+        is_streaming: oairequest.stream.unwrap_or(false),
+    }
+}
 
-    MistralRs::maybe_log_request(state.clone(), repr);
+async fn chatcompletions(
+    State(state): State<Arc<MistralRs>>,
+    Json(oairequest): Json<ChatCompletionRequest>,
+) -> ChatCompletionResponder {
+    let (tx, rx) = channel();
+    let request = parse_request(oairequest, state.clone(), tx);
+    let is_streaming = request.is_streaming;
     let sender = state.get_sender();
     sender.send(request).unwrap();
-    let response = rx.recv().unwrap();
 
-    match response {
-        Response::Error(e) => {
-            dbg!(&e);
-            e.to_string()
-        }
-        Response::Done(response) => {
-            MistralRs::maybe_log_response(state, &response);
-            serde_json::to_string(&response).unwrap()
+    if is_streaming {
+        let streamer = Streamer {
+            rx,
+            is_done: false,
+            state,
+        };
+
+        ChatCompletionResponder::Sse(
+            Sse::new(streamer).keep_alive(
+                KeepAlive::new()
+                    .interval(Duration::from_secs(1))
+                    .text("keep-alive-text"),
+            ),
+        )
+    } else {
+        let response = rx.recv().unwrap();
+
+        match response {
+            Response::Error(e) => {
+                MistralRs::maybe_log_error(state, &*e);
+                ChatCompletionResponder::Error(e)
+            }
+            Response::Done(response) => {
+                MistralRs::maybe_log_response(state, &response);
+                ChatCompletionResponder::String(serde_json::to_string(&response).unwrap())
+            }
+            Response::Chunk(_) => unreachable!(),
         }
     }
 }
