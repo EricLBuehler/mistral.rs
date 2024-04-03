@@ -19,7 +19,7 @@ use crate::{
         ChatCompletionResponse, Choice, ChunkChoice, Delta, Logprobs, Response, ResponseLogprob,
         ResponseMessage, SYSTEM_FINGERPRINT,
     },
-    sampler::{Sampler, SamplingMethod},
+    sampler::Sampler,
     scheduler::{Scheduler, SchedulerMethod},
     sequence::{Sequence, SequenceGroup, SequenceState, StopReason},
     StopTokens,
@@ -414,10 +414,20 @@ impl Engine {
             }
         }
 
-        let sampling_method = SamplingMethod::TopKP((
-            request.sampling_params.top_k.unwrap_or(32),
-            request.sampling_params.top_p.unwrap_or(1.0),
-        ));
+        let topk = request.sampling_params.top_k.unwrap_or_else(|| {
+            warn!(
+                "Request {} did not specify topk. A topk value of 32 will be used.",
+                request.id
+            );
+            32
+        });
+        let topp = request.sampling_params.top_p.unwrap_or_else(|| {
+            warn!(
+                "Request {} did not specify topp. A topk value of 1.0 will be used.",
+                request.id
+            );
+            1.0
+        });
         let num_hidden_layers = get_mut_arcmutex!(self.pipeline).num_hidden_layers();
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
 
@@ -454,12 +464,13 @@ impl Engine {
         let sampler = Sampler::new(
             SEED,
             Some(request.sampling_params.temperature.unwrap_or(1.0)),
-            sampling_method.clone(),
             request.sampling_params.top_n_logprobs,
             tokenizer.clone(),
             request.sampling_params.repeat_penalty,
             request.sampling_params.presence_penalty,
             request.sampling_params.logits_bias.clone(),
+            topk,
+            topp,
         );
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {

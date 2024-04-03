@@ -33,26 +33,13 @@ pub struct SamplingParams {
 pub struct Sampler {
     rng: rand::rngs::StdRng,
     temperature: Option<f64>,
-    sampling_method: SamplingMethod,
     top_n_logprobs: usize,
     tokenizer: Tokenizer,
     repeat_penalty: Option<f32>,
     presence_penalty: Option<f32>,
     logits_bias: Option<HashMap<u32, f32>>,
-}
-
-/// Sampling method for `Sampler`.
-///
-/// - Multinomial (sample over all tokens)
-/// - Top-P (nucleus sampling)
-/// - Top-K (top-k sampling)
-/// - Top-KP (both, top k first then top p)
-#[derive(Debug, Clone)]
-pub enum SamplingMethod {
-    Multinomial,
-    TopP(f64),
-    TopK(usize),
-    TopKP((usize, f64)),
+    topk: usize,
+    topp: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,12 +63,13 @@ impl Sampler {
     pub fn new(
         seed: u64,
         temperature: Option<f64>,
-        sampling_method: SamplingMethod,
         top_n_logprobs: usize,
         tokenizer: Tokenizer,
         repeat_penalty: Option<f32>,
         presence_penalty: Option<f32>,
         logits_bias: Option<HashMap<u32, f32>>,
+        topk: usize,
+        topp: f64,
     ) -> Self {
         let temperature = if temperature.map_or(true, |v| v < 1e-7) {
             None
@@ -91,12 +79,13 @@ impl Sampler {
         Self {
             rng: rand::rngs::StdRng::seed_from_u64(seed),
             temperature,
-            sampling_method,
             top_n_logprobs,
             tokenizer,
             repeat_penalty,
             presence_penalty,
             logits_bias,
+            topk,
+            topp,
         }
     }
 
@@ -228,46 +217,6 @@ impl Sampler {
         })
     }
 
-    fn sample_topp(&mut self, probs: &mut Vec<f32>, top_p: f32) -> Result<Logprobs> {
-        // top-p sampling (or "nucleus sampling") samples from the smallest set of
-        // tokens that exceed probability top_p. This way we never sample tokens that
-        // have very low probabilities and are less likely to go "off the rails".
-        let mut argsort_indices = (0..probs.len()).collect::<Vec<_>>();
-
-        // Sort by descending probability.
-        argsort_indices.sort_by(|&i, &j| probs[j].partial_cmp(&probs[i]).unwrap());
-
-        // Clamp smaller probabilities to zero.
-        let mut cumsum = 0.;
-        for index in &argsort_indices {
-            if cumsum >= top_p {
-                probs[*index] = 0.0;
-            } else {
-                cumsum += probs[*index];
-            }
-        }
-
-        // Sample with clamped probabilities.
-        self.sample_multinomial(probs, argsort_indices)
-    }
-
-    fn sample_topk(&mut self, probs: &mut Vec<f32>, top_k: usize) -> Result<Logprobs> {
-        let mut argsort_indices = (0..probs.len()).collect::<Vec<_>>();
-
-        // Sort by descending probability.
-        argsort_indices.sort_by(|&i, &j| probs[j].partial_cmp(&probs[i]).unwrap());
-
-        // Clamp smaller probabilities to zero.
-        for (index, val) in argsort_indices.iter().enumerate() {
-            if index >= top_k {
-                probs[*val] = 0.0;
-            }
-        }
-
-        // Sample with clamped probabilities.
-        self.sample_multinomial(probs, argsort_indices)
-    }
-
     fn sample_topkp(&mut self, probs: &mut Vec<f32>, top_k: usize, top_p: f32) -> Result<Logprobs> {
         let mut argsort_indices = (0..probs.len()).collect::<Vec<_>>();
 
@@ -351,31 +300,7 @@ impl Sampler {
                 let logits = (&logits / temperature)?;
                 let probs = candle_nn::ops::softmax_last_dim(&logits)?;
                 let mut probs: Vec<f32> = probs.to_vec1()?;
-                match self.sampling_method {
-                    SamplingMethod::Multinomial => {
-                        let mut argsort_indices = (0..probs.len()).collect::<Vec<_>>();
-                        // Sort by descending probability.
-                        argsort_indices.sort_by(|&i, &j| probs[j].partial_cmp(&probs[i]).unwrap());
-                        self.sample_multinomial(&mut probs, argsort_indices)?
-                    }
-                    SamplingMethod::TopP(top_p) => {
-                        if top_p <= 0.0 || top_p >= 1.0 {
-                            let mut argsort_indices = (0..probs.len()).collect::<Vec<_>>();
-                            // Sort by descending probability.
-                            argsort_indices
-                                .sort_by(|&i, &j| probs[j].partial_cmp(&probs[i]).unwrap());
-                            // simply sample from the predicted probability distribution
-                            self.sample_multinomial(&mut probs, argsort_indices)?
-                        } else {
-                            // top-p (nucleus) sampling, clamping the least likely tokens to zero
-                            self.sample_topp(&mut probs, top_p as f32)?
-                        }
-                    }
-                    SamplingMethod::TopK(top_k) => self.sample_topk(&mut probs, top_k)?,
-                    SamplingMethod::TopKP((top_k, top_p)) => {
-                        self.sample_topkp(&mut probs, top_k, top_p as f32)?
-                    }
-                }
+                self.sample_topkp(&mut probs, self.topk, self.topp as f32)?
             }
         };
         Ok(next_token)
