@@ -61,7 +61,7 @@ impl MistralRs {
             id: pipeline.lock().unwrap().name(),
             creation_time: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .expect("Time travel has occured!")
+                .expect("Time travel has occurred!")
                 .as_secs(),
         });
 
