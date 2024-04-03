@@ -52,6 +52,7 @@ pub struct Sequence {
     return_logprobs: bool,
     responder: Sender<Response>,
     response_index: usize,
+    creation_time: u64,
 
     // Cache
     scaling_cache: Option<Tensor>,
@@ -85,6 +86,7 @@ impl Sequence {
         is_xlora: bool,
         group: Rc<RefCell<SequenceGroup>>,
         response_index: usize,
+        creation_time: u64,
     ) -> Self {
         let prompt_len = tokens.len();
         Self {
@@ -111,6 +113,7 @@ impl Sequence {
             scaling_cache: None,
             total_sampling_time: 0,
             response_index,
+            creation_time,
         }
     }
 
@@ -170,6 +173,10 @@ impl Sequence {
 
     pub fn responder(&self) -> Sender<Response> {
         self.responder.clone()
+    }
+
+    pub fn creation_time(&self) -> u64 {
+        self.creation_time
     }
 
     pub fn set_state(&self, state: SequenceState) {

@@ -106,7 +106,7 @@ The OpenAI compatible chat completion response.
 pub struct ChatCompletionResponse {
     pub id: String,
     pub choices: Vec<Choice>,
-    pub created: u128,
+    pub created: u64,
     pub model: &'static str,
     pub system_fingerprint: String,
     pub object: String,

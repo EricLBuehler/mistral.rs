@@ -63,7 +63,7 @@ pub struct ChatCompletionUsage {
 pub struct ChatCompletionResponse {
     pub id: String,
     pub choices: Vec<Choice>,
-    pub created: u128,
+    pub created: u64,
     pub model: String,
     pub system_fingerprint: String,
     pub object: String,

@@ -50,3 +50,17 @@ pub struct ChatCompletionRequest {
     // mistral.rs additional
     pub top_k: Option<usize>,
 }
+
+#[derive(Debug, Serialize)]
+pub struct ModelObject {
+    pub id: String,
+    pub object: &'static str,
+    pub created: u64,
+    pub owned_by: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModelObjects {
+    pub object: &'static str,
+    pub data: Vec<ModelObject>,
+}
