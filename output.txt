@@ -1,4 +1,0 @@
-Request at 2024-04-03 01:11:44.812761437 +00:00: {"messages":[{"content":"Hello!","role":"user","name":null}],"model":"mistral","logit_bias":null,"logprobs":false,"top_logprobs":null,"max_tokens":256,"n":1,"presence_penalty":null,"frequency_penalty":1.0,"stop":null,"temperature":0.0,"top_p":0.1,"stream":null,"top_k":null}
-
-Response at 2024-04-03 01:11:45.440869141 +00:00: {"id":"0","choices":[{"finish_reason":"stop","index":0,"message":{"content":"Hey there! How can I help you today?</s>","role":"assistant"},"logprobs":null}],"created":1712106704,"model":"mistralai/Mistral-7B-Instruct-v0.1","system_fingerprint":"local","object":"chat.completion","usage":{"completion_tokens":11,"prompt_tokens":10,"total_tokens":21,"avg_tok_per_sec":34.09091,"avg_prompt_tok_per_sec":23.696684,"avg_compl_tok_per_sec":56.70103,"avg_sample_tok_per_sec":477.2727}}
-
