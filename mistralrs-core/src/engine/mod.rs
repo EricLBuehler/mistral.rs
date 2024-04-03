@@ -486,11 +486,12 @@ impl Engine {
         );
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {
+            let device = get_mut_arcmutex!(self.pipeline).device().clone();
             let seq = Sequence::new_waiting(
                 Tensor::from_slice(
                     &prompt,
                     prompt.len(),
-                    get_mut_arcmutex!(self.pipeline).device(),
+                    &device,
                 )
                 .unwrap(),
                 self.id,
@@ -500,7 +501,7 @@ impl Engine {
                 sampler.clone(),
                 stop_toks
                     .iter()
-                    .map(|x| Tensor::new(*x, get_mut_arcmutex!(self.pipeline).device()).unwrap())
+                    .map(|x| Tensor::new(*x, &device).unwrap())
                     .collect::<Vec<_>>(),
                 request.sampling_params.max_len,
                 request.return_logprobs,
@@ -508,7 +509,7 @@ impl Engine {
                 group.clone(),
                 response_index,
                 now.as_secs(),
-                get_mut_arcmutex!(self.pipeline).device(),
+                &device,
             );
             self.id += 1;
             self.scheduler.add_seq(seq);
