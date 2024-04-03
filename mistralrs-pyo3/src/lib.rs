@@ -111,7 +111,7 @@ impl Runner {
                     top_k: request.top_k,
                     top_p: request.top_p,
                     top_n_logprobs: request.top_logprobs.unwrap_or(1),
-                    repeat_penalty: request.repetition_penalty,
+                    freq_penalty: request.freq_penalty,
                     presence_penalty: request.presence_penalty,
                     max_len: request.max_tokens,
                     stop_toks,
@@ -152,7 +152,7 @@ struct ChatCompletionRequest {
     max_tokens: Option<usize>,
     n_choices: usize,
     presence_penalty: Option<f32>,
-    repetition_penalty: Option<f32>,
+    freq_penalty: Option<f32>,
     stop_token_ids: Option<Vec<u32>>,
     temperature: Option<f64>,
     top_p: Option<f64>,
@@ -163,7 +163,7 @@ struct ChatCompletionRequest {
 #[pymethods]
 impl ChatCompletionRequest {
     #[new]
-    #[pyo3(signature = (messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, repetition_penalty = None, stop_token_ids = None, temperature = None, top_p = None, top_k = None, stream=false))]
+    #[pyo3(signature = (messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, freq_penalty = None, stop_token_ids = None, temperature = None, top_p = None, top_k = None, stream=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         messages: Vec<Py<PyDict>>,
@@ -174,7 +174,7 @@ impl ChatCompletionRequest {
         top_logprobs: Option<usize>,
         max_tokens: Option<usize>,
         presence_penalty: Option<f32>,
-        repetition_penalty: Option<f32>,
+        freq_penalty: Option<f32>,
         stop_token_ids: Option<Vec<u32>>,
         temperature: Option<f64>,
         top_p: Option<f64>,
@@ -212,7 +212,7 @@ impl ChatCompletionRequest {
             max_tokens,
             n_choices,
             presence_penalty,
-            repetition_penalty,
+            freq_penalty,
             stop_token_ids,
             temperature,
             top_p,

@@ -18,7 +18,7 @@ pub struct SamplingParams {
     pub top_k: Option<usize>,
     pub top_p: Option<f64>,
     pub top_n_logprobs: usize,
-    pub repeat_penalty: Option<f32>,
+    pub freq_penalty: Option<f32>,
     pub presence_penalty: Option<f32>,
     pub stop_toks: Option<StopTokens>,
     pub max_len: Option<usize>,
@@ -33,7 +33,7 @@ pub struct Sampler {
     temperature: Option<f64>,
     top_n_logprobs: usize,
     tokenizer: Tokenizer,
-    repeat_penalty: Option<f32>,
+    freq_penalty: Option<f32>,
     presence_penalty: Option<f32>,
     logits_bias: Option<HashMap<u32, f32>>,
     topk: i64,
@@ -63,7 +63,7 @@ impl Sampler {
         temperature: Option<f64>,
         top_n_logprobs: usize,
         tokenizer: Tokenizer,
-        repeat_penalty: Option<f32>,
+        freq_penalty: Option<f32>,
         presence_penalty: Option<f32>,
         logits_bias: Option<HashMap<u32, f32>>,
         topk: i64,
@@ -79,7 +79,7 @@ impl Sampler {
             temperature,
             top_n_logprobs,
             tokenizer,
-            repeat_penalty,
+            freq_penalty,
             presence_penalty,
             logits_bias,
             topk,
@@ -91,7 +91,7 @@ impl Sampler {
     ///
     /// If the temperature is `None`, argmax sampling is used. Otherwise, the selected sampling is used.
     /// With `top-p` sampling, if the `top-p` value is `<= 0.0` or `>= 1.0`, multinomial sampling is used.
-    /// If `repeat_penalty.is_some()` or `presence_penalty.is_some()`, then `penalty_ctxt` must be provided.
+    /// If `freq_penalty.is_some()` or `presence_penalty.is_some()`, then `penalty_ctxt` must be provided.
     pub fn sample(&mut self, logits: &Tensor, _penalty_ctxt: Option<&Tensor>) -> Result<Logprobs> {
         let logits = logits.to_dtype(DType::F32)?;
 

@@ -40,7 +40,7 @@ pub struct ChatCompletionRequest {
     pub n_choices: usize,
     pub presence_penalty: Option<f32>,
     #[serde(rename = "frequency_penalty")]
-    pub repetition_penalty: Option<f32>,
+    pub frequency_penalty: Option<f32>,
     #[serde(rename = "stop")]
     pub stop_seqs: Option<StopTokens>,
     pub temperature: Option<f64>,

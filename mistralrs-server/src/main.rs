@@ -165,7 +165,7 @@ fn parse_request(
             top_k: oairequest.top_k,
             top_p: oairequest.top_p,
             top_n_logprobs: oairequest.top_logprobs.unwrap_or(1),
-            repeat_penalty: oairequest.repetition_penalty,
+            freq_penalty: oairequest.frequency_penalty,
             presence_penalty: oairequest.presence_penalty,
             max_len: oairequest.max_tokens,
             stop_toks,
