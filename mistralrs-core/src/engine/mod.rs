@@ -146,25 +146,40 @@ impl Engine {
             // Handle streaming requests
             if deref_refcell!(seq).get_group().is_streaming {
                 let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer().clone();
-                let fully_decoded = tokenizer.decode( deref_refcell!(seq).get_toks(), false);
+                //We need to decode incrementally to handle streaming requests, see: https://github.com/huggingface/tokenizers/issues/1141
                 
+                let mut_seq = deref_refcell!(seq);
+                let tokens = mut_seq.get_toks();
+                let old_tokens = &tokens[0..tokens.len()-1];
+                
+                let old_decoded = handle_seq_error!(tokenizer.decode(old_tokens, false),deref_refcell!(seq).responder()).as_bytes()
+                .to_vec();
+                let new_decoded = handle_seq_error!(tokenizer.decode(tokens, false),deref_refcell!(seq).responder()).as_bytes()
+                .to_vec();
+
+                let all_bytes  = unsafe { String::from_utf8_unchecked(new_decoded) };
+                let old_bytes = unsafe { String::from_utf8_unchecked(old_decoded) };
+
+                let mut next_token_string = "".to_string();
+                if !all_bytes.ends_with('�') {
+                    // Return an empty vector: no valid text was generated from this token.
+                    next_token_string = String::from_utf8_lossy(&all_bytes.as_bytes()[old_bytes.as_bytes().len()..]).into_owned();
+                }
+
                 let logprob = ResponseLogprob {
-                    token: handle_seq_error!(
-                        fully_decoded,
-                        deref_refcell!(seq).responder()
-                    ),
+                    token: next_token_string,
                     bytes: next_token.bytes.clone().into_bytes(),
                     logprob: next_token.logprob,
                     top_logprobs: next_token.top_logprobs.clone(),
                 };
-                deref_refcell!(seq).add_streaming_chunk_choice_to_group(ChunkChoice {
+                mut_seq.add_streaming_chunk_choice_to_group(ChunkChoice {
                     delta: Delta {
                         content: logprob.token.clone(),
                         role: "assistant".to_string(),
                     },
-                    index: deref_refcell!(seq).get_response_index(),
+                    index: mut_seq.get_response_index(),
                     stopreason: is_done.map(|x| x.to_string()),
-                    logprobs: if deref_refcell!(seq).return_logprobs() {
+                    logprobs: if mut_seq.return_logprobs() {
                         Some(logprob)
                     } else {
                         None
