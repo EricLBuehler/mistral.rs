@@ -51,18 +51,15 @@ impl Cache {
 #[derive(Debug, Clone)]
 struct RmsNorm {
     inner: candle_nn::RmsNorm<RmsNormNonQuantized>,
-    span: tracing::Span,
 }
 
 impl RmsNorm {
     fn load(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
         let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
-        Ok(Self { inner, span })
+        Ok(Self { inner })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
         self.inner.forward(x)
     }
 }
@@ -77,7 +74,6 @@ struct CausalSelfAttention {
     num_key_value_heads: usize,
     head_dim: usize,
     use_flash_attn: bool,
-    span: tracing::Span,
     rotary_emb: Arc<RotaryEmbedding>,
 }
 
@@ -111,7 +107,6 @@ impl CausalSelfAttention {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let _enter = self.span.enter();
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
         let q = self.q_proj.lora_forward(
             x,
@@ -225,7 +220,6 @@ impl CausalSelfAttention {
         count: &mut usize,
         ord: &Ordering,
     ) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "attn");
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
@@ -251,7 +245,6 @@ impl CausalSelfAttention {
             num_key_value_heads: cfg.num_key_value_heads,
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             use_flash_attn: cfg.use_flash_attn,
-            span,
             rotary_emb,
         })
     }
@@ -269,7 +262,6 @@ struct Mlp {
     c_fc1: Arc<dyn LinearLayerLike + Send + Sync>,
     c_fc2: Arc<dyn LinearLayerLike + Send + Sync>,
     c_proj: Arc<dyn LinearLayerLike + Send + Sync>,
-    span: tracing::Span,
 }
 
 impl Mlp {
@@ -280,7 +272,6 @@ impl Mlp {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let _enter = self.span.enter();
         let x = (candle_nn::ops::silu(&self.c_fc1.lora_forward(
             x,
             scalings.clone(),
@@ -303,7 +294,6 @@ impl Mlp {
         count: &mut usize,
         ord: &Ordering,
     ) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "mlp");
         let h_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
         let c_fc1 = linear(h_size, i_size, vb.pp("gate_proj"), lora_config, count, ord)?;
@@ -313,7 +303,6 @@ impl Mlp {
             c_fc1,
             c_fc2,
             c_proj,
-            span,
         })
     }
 }
@@ -324,7 +313,6 @@ struct Block {
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
     mlp: Mlp,
-    span: tracing::Span,
 }
 
 impl Block {
@@ -341,7 +329,6 @@ impl Block {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let _enter = self.span.enter();
         let residual = x;
         let x = self.rms_1.forward(x)?;
         let x = (self.attn.forward(
@@ -372,7 +359,6 @@ impl Block {
         count: &mut usize,
         ord: &Ordering,
     ) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "block");
         let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg, lora_config, count, ord)?;
         let mlp = Mlp::load(vb.pp("mlp"), cfg, lora_config, count, ord)?;
         let rms_1 = RmsNorm::load(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
@@ -386,7 +372,6 @@ impl Block {
             attn,
             rms_2,
             mlp,
-            span,
         })
     }
 }

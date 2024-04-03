@@ -35,20 +35,17 @@ pub struct Config {
 #[derive(Debug, Clone)]
 struct RmsNorm {
     inner: candle_nn::RmsNorm<RmsNormNonQuantized>,
-    span: tracing::Span,
 }
 
 impl RmsNorm {
     fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
         let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
-        Ok(Self { inner, span })
+        Ok(Self { inner })
     }
 }
 
 impl Module for RmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
         self.inner.forward(x)
     }
 }
