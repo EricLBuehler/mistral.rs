@@ -233,7 +233,7 @@ impl Engine {
             ChatCompletionResponse {
                 id: deref_refcell!(seq).id().to_string(),
                 choices: deref_refcell!(seq).get_group().get_choices().to_vec(),
-                created: deref_refcell!(seq).timestamp(),
+                created: deref_refcell!(seq).creation_time(),
                 model: get_mut_arcmutex!(self.pipeline).name(),
                 system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                 object: "chat.completion".to_string(),
@@ -442,15 +442,15 @@ impl Engine {
             request.sampling_params.n_choices,
             request.is_streaming,
         )));
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time travel has occurred!");
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {
             let seq = Sequence::new_waiting(
                 prompt.clone(),
                 self.id,
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Time travel has occurred!")
-                    .as_millis(),
+                now.as_millis(),
                 num_hidden_layers,
                 request.response.clone(),
                 LogitsProcessor::new(
@@ -469,6 +469,7 @@ impl Engine {
                 get_mut_arcmutex!(self.pipeline).is_xlora(),
                 group.clone(),
                 response_index,
+                now.as_secs(),
             );
             self.id += 1;
             self.scheduler.add_seq(seq);

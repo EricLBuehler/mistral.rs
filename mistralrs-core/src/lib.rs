@@ -9,6 +9,7 @@ use std::{
         Arc, Mutex,
     },
     thread,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use engine::Engine;
@@ -40,6 +41,8 @@ use serde::Serialize;
 pub struct MistralRs {
     sender: Sender<Request>,
     log: Option<String>,
+    id: String,
+    creation_time: u64,
 }
 
 impl MistralRs {
@@ -52,7 +55,15 @@ impl MistralRs {
     ) -> Arc<Self> {
         let (tx, rx) = channel();
 
-        let this = Arc::new(Self { sender: tx, log });
+        let this = Arc::new(Self {
+            sender: tx,
+            log,
+            id: pipeline.lock().unwrap().name(),
+            creation_time: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Time travel has occurred!")
+                .as_secs(),
+        });
 
         thread::spawn(move || {
             let mut engine = Engine::new(rx, pipeline, method, truncate_sequence, no_kv_cache);
@@ -64,6 +75,14 @@ impl MistralRs {
 
     pub fn get_sender(&self) -> Sender<Request> {
         self.sender.clone()
+    }
+
+    pub fn get_id(&self) -> String {
+        self.id.clone()
+    }
+
+    pub fn get_creation_time(&self) -> u64 {
+        self.creation_time
     }
 
     pub fn maybe_log_request(this: Arc<Self>, repr: String) {

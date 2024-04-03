@@ -17,7 +17,7 @@ use axum::{
         sse::{Event, KeepAlive},
         IntoResponse, Sse,
     },
-    routing::post,
+    routing::{get, post},
     Router,
 };
 use candle_core::Device;
@@ -29,7 +29,9 @@ use mistralrs_core::{
     Response, SamplingParams, SchedulerMethod, StopTokens as InternalStopTokens, TokenSource,
 };
 use model_selected::ModelSelected;
-use openai::{ChatCompletionRequest, StopTokens};
+use openai::{ChatCompletionRequest, ModelObjects, StopTokens};
+
+use crate::openai::ModelObject;
 mod model_selected;
 mod openai;
 
@@ -215,9 +217,23 @@ async fn chatcompletions(
     }
 }
 
+async fn models(State(state): State<Arc<MistralRs>>) -> String {
+    serde_json::to_string(&ModelObjects {
+        object: "list",
+        data: vec![ModelObject {
+            id: state.get_id(),
+            object: "model",
+            created: state.get_creation_time(),
+            owned_by: "local",
+        }],
+    })
+    .unwrap()
+}
+
 fn get_router(state: Arc<MistralRs>) -> Router {
     Router::new()
         .route("/v1/chat/completions", post(chatcompletions))
+        .route("/v1/models", get(models))
         .with_state(state)
 }
 

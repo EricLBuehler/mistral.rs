@@ -50,6 +50,14 @@ curl http://localhost:8080/v1/chat/completions \
 
 A streaming request can also be created by setting `"stream": true` in the request JSON. Please see [this](https://cookbook.openai.com/examples/how_to_stream_completions) guide.
 
+## `GET`: `/v1/models`
+Returns the running models. 
+
+Example with `curl`:
+```bash
+curl http://localhost:1234/v1/models
+```
+
 ## Request
 ### `ChatCompletionRequest`
 OpenAI compatible request.
@@ -106,7 +114,7 @@ The OpenAI compatible chat completion response.
 pub struct ChatCompletionResponse {
     pub id: String,
     pub choices: Vec<Choice>,
-    pub created: u128,
+    pub created: u64,
     pub model: &'static str,
     pub system_fingerprint: String,
     pub object: String,
