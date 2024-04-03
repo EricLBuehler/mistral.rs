@@ -450,6 +450,7 @@
 };
 <span class="kw">use </span><span class="kw">crate</span>::models::Cache;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
+<span class="kw">use </span><span class="kw">crate</span>::sampler::Logprobs;
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::{NonGranularState, XLoraConfig, XLoraGemma};
 <span class="kw">use crate</span>::{deref_mut_refcell, deref_refcell, deserialize_chat_template};
 <span class="kw">use crate</span>::{
@@ -459,7 +460,6 @@
 };
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
-<span class="kw">use </span>candle_sampling::logits_processor::Logprobs;
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
@@ -846,7 +846,7 @@
         <span class="kw">let </span>ctxt = <span class="macro">deref_refcell!</span>(seq).get_toks()[start_at..].to_vec();
 
         <span class="prelude-val">Ok</span>(<span class="macro">deref_mut_refcell!</span>(seq)
-            .logits_processor()
+            .sampler()
             .sample(<span class="kw-2">&amp;</span>logits, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>ctxt))<span class="question-mark">?</span>)
     }
     <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Tokenizer {

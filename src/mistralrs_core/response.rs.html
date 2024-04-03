@@ -87,10 +87,12 @@
 <a href="#85" id="85">85</a>
 <a href="#86" id="86">86</a>
 <a href="#87" id="87">87</a>
+<a href="#88" id="88">88</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::error::Error;
 
-<span class="kw">use </span>candle_sampling::logits_processor::TopLogprob;
 <span class="kw">use </span>serde::Serialize;
+
+<span class="kw">use </span><span class="kw">crate</span>::sampler::TopLogprob;
 
 <span class="kw">pub const </span>SYSTEM_FINGERPRINT: <span class="kw-2">&amp;</span>str = <span class="string">"local"</span>;
 

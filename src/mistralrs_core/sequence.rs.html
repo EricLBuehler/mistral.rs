@@ -347,11 +347,11 @@
 };
 
 <span class="kw">use </span>candle_core::Tensor;
-<span class="kw">use </span>candle_sampling::logits_processor::{LogitsProcessor, Logprobs};
 
 <span class="kw">use crate</span>::{
     deref_mut_refcell, deref_refcell,
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
+    sampler::{Logprobs, Sampler},
     ChatCompletionResponse, ChatCompletionUsage,
 };
 
@@ -388,7 +388,7 @@
     prompt_len: usize,
     max_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     timestamp: u128,
-    logits_processor: LogitsProcessor,
+    sampler: Sampler,
     stop_tokens: Vec&lt;u32&gt;,
     return_logprobs: bool,
     responder: Sender&lt;Response&gt;,
@@ -420,7 +420,7 @@
         timestamp: u128,
         layers: usize,
         responder: Sender&lt;Response&gt;,
-        logits_processor: LogitsProcessor,
+        sampler: Sampler,
         stop_tokens: Vec&lt;u32&gt;,
         max_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
         return_logprobs: bool,
@@ -444,7 +444,7 @@
                 <span class="prelude-val">None
             </span>},
             responder,
-            logits_processor,
+            sampler,
             stop_tokens,
             max_len,
             return_logprobs,
@@ -503,8 +503,8 @@
         <span class="self">self</span>.xlora_cache.is_some()
     }
 
-    <span class="kw">pub fn </span>logits_processor(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>LogitsProcessor {
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>.logits_processor
+    <span class="kw">pub fn </span>sampler(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>Sampler {
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>.sampler
     }
 
     <span class="kw">pub fn </span>add_token(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tok: Logprobs) {

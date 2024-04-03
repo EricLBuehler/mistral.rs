@@ -484,6 +484,10 @@
 <a href="#482" id="482">482</a>
 <a href="#483" id="483">483</a>
 <a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -494,7 +498,6 @@
 };
 
 <span class="kw">use </span>candle_core::{Device, Tensor};
-<span class="kw">use </span>candle_sampling::logits_processor::{LogitsProcessor, SamplingMethod};
 <span class="kw">use </span>tracing::warn;
 
 <span class="kw">use crate</span>::{
@@ -506,6 +509,7 @@
         ChatCompletionResponse, Choice, ChunkChoice, Delta, Logprobs, Response, ResponseLogprob,
         ResponseMessage, SYSTEM_FINGERPRINT,
     },
+    sampler::Sampler,
     scheduler::{Scheduler, SchedulerMethod},
     sequence::{Sequence, SequenceGroup, SequenceState, StopReason},
     StopTokens,
@@ -900,10 +904,12 @@
             }
         }
 
-        <span class="kw">let </span>sampling_method = SamplingMethod::TopKP((
-            request.sampling_params.top_k.unwrap_or(<span class="number">32</span>),
-            request.sampling_params.top_p.unwrap_or(<span class="number">1.0</span>),
-        ));
+        <span class="kw">let </span>topk = request
+            .sampling_params
+            .top_k
+            .map(|x| x <span class="kw">as </span>i64)
+            .unwrap_or(-<span class="number">1</span>);
+        <span class="kw">let </span>topp = request.sampling_params.top_p.unwrap_or(<span class="number">1.0</span>);
         <span class="kw">let </span>num_hidden_layers = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).num_hidden_layers();
         <span class="kw">let </span>tokenizer = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenizer();
 
@@ -937,6 +943,17 @@
         <span class="kw">let </span>now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect(<span class="string">"Time travel has occurred!"</span>);
+        <span class="kw">let </span>sampler = Sampler::new(
+            SEED,
+            <span class="prelude-val">Some</span>(request.sampling_params.temperature.unwrap_or(<span class="number">1.0</span>)),
+            request.sampling_params.top_n_logprobs,
+            tokenizer.clone(),
+            request.sampling_params.repeat_penalty,
+            request.sampling_params.presence_penalty,
+            request.sampling_params.logits_bias.clone(),
+            topk,
+            topp,
+        );
         <span class="comment">// Add sequences
         </span><span class="kw">for </span>response_index <span class="kw">in </span><span class="number">0</span>..request.sampling_params.n_choices {
             <span class="kw">let </span>seq = Sequence::new_waiting(
@@ -945,16 +962,7 @@
                 now.as_millis(),
                 num_hidden_layers,
                 request.response.clone(),
-                LogitsProcessor::new(
-                    SEED,
-                    <span class="prelude-val">Some</span>(request.sampling_params.temperature.unwrap_or(<span class="number">1.0</span>)),
-                    sampling_method.clone(),
-                    request.sampling_params.top_n_logprobs,
-                    tokenizer.clone(),
-                    request.sampling_params.repeat_penalty,
-                    request.sampling_params.presence_penalty,
-                    request.sampling_params.logits_bias.clone(),
-                ),
+                sampler.clone(),
                 stop_toks.clone(),
                 request.sampling_params.max_len,
                 request.return_logprobs,
