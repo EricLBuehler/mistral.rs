@@ -488,12 +488,7 @@ impl Engine {
         for response_index in 0..request.sampling_params.n_choices {
             let device = get_mut_arcmutex!(self.pipeline).device().clone();
             let seq = Sequence::new_waiting(
-                Tensor::from_slice(
-                    &prompt,
-                    prompt.len(),
-                    &device,
-                )
-                .unwrap(),
+                Tensor::from_slice(&prompt, prompt.len(), &device).unwrap(),
                 self.id,
                 now.as_millis(),
                 num_hidden_layers,
