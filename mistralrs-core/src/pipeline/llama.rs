@@ -29,6 +29,7 @@ use std::sync::Arc;
 use std::{rc::Rc, sync::Mutex};
 use thiserror::Error;
 use tokenizers::Tokenizer;
+use tracing::info;
 
 enum Model {
     Normal(NormalModel),
@@ -166,7 +167,7 @@ impl Loader for LlamaLoader {
         ));
 
         let tokenizer_filename = if let Some(ref p) = self.tokenizer_json {
-            println!("Using tokenizer.json at `{p}`");
+            info!("Using tokenizer.json at `{p}`");
             PathBuf::from_str(p)?
         } else {
             api.get("tokenizer.json")?

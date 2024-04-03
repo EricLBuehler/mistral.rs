@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
-use candle_core::quantized::QTensor;
 use candle_core::quantized::{ggml_file, gguf_file};
+use candle_core::quantized::{QMatMul, QTensor};
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::layer_norm::RmsNormQuantized;
 use candle_nn::{Embedding, Module, RotaryEmbedding};
@@ -15,40 +15,17 @@ pub const MAX_SEQ_LEN: u32 = 4096;
 #[derive(Debug, Clone)]
 struct RmsNorm {
     inner: candle_nn::RmsNorm<RmsNormQuantized>,
-    span: tracing::Span,
 }
 
 impl RmsNorm {
     fn new(scale: QTensor, eps: f32) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
         let scale = scale.dequantize(&scale.device())?;
         let inner = candle_nn::RmsNorm::<RmsNormQuantized>::new(scale, eps as f64);
-        Ok(Self { inner, span })
+        Ok(Self { inner })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
         self.inner.forward(x)
-    }
-}
-
-// QMatMul wrapper adding some tracing.
-#[derive(Debug, Clone)]
-struct QMatMul {
-    inner: candle_core::quantized::QMatMul,
-    span: tracing::Span,
-}
-
-impl QMatMul {
-    fn from_qtensor(qtensor: QTensor) -> Result<Self> {
-        let inner = candle_core::quantized::QMatMul::from_qtensor(qtensor)?;
-        let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
-        Ok(Self { inner, span })
-    }
-
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        self.inner.forward(xs)
     }
 }
 
@@ -160,8 +137,6 @@ struct LayerWeights {
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
-    span_attn: tracing::Span,
-    span_mlp: tracing::Span,
     rotary: RotaryEmbedding,
 }
 
@@ -181,7 +156,6 @@ impl LayerWeights {
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
-        let _enter = self.span_attn.enter();
         let (b_sz, seq_len, n_embd) = x.dims3()?;
         let q = self.attention_wq.forward(x)?;
         let k = self.attention_wk.forward(x)?;
@@ -258,8 +232,6 @@ pub struct ModelWeights {
     norm: RmsNorm,
     output: QMatMul,
     masks: HashMap<usize, Tensor>,
-    span: tracing::Span,
-    span_output: tracing::Span,
     pub device: Device,
     pub cache: Cache,
 }
@@ -299,8 +271,6 @@ impl ModelWeights {
             };
             let attention_norm = ct.remove(&format!("{prefix}.attention_norm.weight"))?;
             let ffn_norm = ct.remove(&format!("{prefix}.ffn_norm.weight"))?;
-            let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
-            let span_mlp = tracing::span!(tracing::Level::TRACE, "attn-mlp");
             layers.push(LayerWeights {
                 attention_wq: QMatMul::from_qtensor(attention_wq)?,
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,
@@ -312,21 +282,15 @@ impl ModelWeights {
                 n_head: ct.hparams.n_head as usize,
                 n_kv_head: ct.hparams.n_head as usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
-                span_attn,
-                span_mlp,
                 rotary: rotary.clone(),
             })
         }
-        let span = tracing::span!(tracing::Level::TRACE, "model");
-        let span_output = tracing::span!(tracing::Level::TRACE, "output");
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, ct.hparams.n_embd as usize),
             layers,
             norm,
             output: QMatMul::from_qtensor(output)?,
             masks: HashMap::new(),
-            span,
-            span_output,
             device: ct.device.clone(),
             cache: Cache::new(ct.hparams.n_layer as usize, false),
         })
@@ -423,8 +387,6 @@ impl ModelWeights {
             let attention_norm =
                 ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?;
             let ffn_norm = ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?;
-            let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
-            let span_mlp = tracing::span!(tracing::Level::TRACE, "attn-mlp");
             layers.push(LayerWeights {
                 attention_wq: QMatMul::from_qtensor(attention_wq)?,
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,
@@ -436,21 +398,15 @@ impl ModelWeights {
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim,
-                span_attn,
-                span_mlp,
                 rotary: rotary.clone(),
             })
         }
-        let span = tracing::span!(tracing::Level::TRACE, "model");
-        let span_output = tracing::span!(tracing::Level::TRACE, "output");
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
             layers,
             norm,
             output: QMatMul::from_qtensor(output)?,
             masks: HashMap::new(),
-            span,
-            span_output,
             device: device.clone(),
             cache: Cache::new(block_count, false),
         })
@@ -481,7 +437,6 @@ impl ModelWeights {
         } else {
             Some(self.mask(seq_len, x.device())?)
         };
-        let _enter = self.span.enter();
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
@@ -498,7 +453,6 @@ impl ModelWeights {
             let x = (attn + residual)?;
 
             // MLP
-            let _enter = layer.span_mlp.enter();
             let residual = &x;
             let x = layer.ffn_norm.forward(&x)?;
             let x = layer.mlp_or_moe.forward(&x)?;
@@ -507,7 +461,6 @@ impl ModelWeights {
         }
         let x = self.norm.forward(&layer_in)?;
         let x = x.i((.., seq_len - 1, ..))?;
-        let _enter = self.span_output.enter();
         self.output.forward(&x.contiguous()?)
     }
 }

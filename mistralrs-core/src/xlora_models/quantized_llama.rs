@@ -19,19 +19,16 @@ pub const MAX_SEQ_LEN: u32 = 4096;
 #[derive(Debug, Clone)]
 struct RmsNorm {
     inner: candle_nn::RmsNorm<RmsNormQuantized>,
-    span: tracing::Span,
 }
 
 impl RmsNorm {
     fn new(scale: QTensor, eps: f32) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
         let scale = scale.dequantize(&scale.device())?;
         let inner = candle_nn::RmsNorm::<RmsNormQuantized>::new(scale, eps as f64);
-        Ok(Self { inner, span })
+        Ok(Self { inner })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
         self.inner.forward(x)
     }
 }
@@ -177,8 +174,6 @@ struct LayerWeights {
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
-    span_attn: tracing::Span,
-    span_mlp: tracing::Span,
     rotary: RotaryEmbedding,
 }
 
@@ -202,7 +197,6 @@ impl LayerWeights {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let _enter = self.span_attn.enter();
         let (b_sz, seq_len, n_embd) = x.dims3()?;
         let q = self.attention_wq.lora_forward(
             x,
@@ -298,7 +292,6 @@ pub struct ModelWeights {
     norm: RmsNorm,
     output: QMatMul,
     masks: HashMap<usize, Tensor>,
-    span: tracing::Span,
     pub device: Device,
     pub cache: Cache,
     xlora_classifier: XLoraClassifier,
@@ -373,8 +366,6 @@ impl ModelWeights {
             };
             let attention_norm = ct.remove(&format!("{prefix}.attention_norm.weight"))?;
             let ffn_norm = ct.remove(&format!("{prefix}.ffn_norm.weight"))?;
-            let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
-            let span_mlp = tracing::span!(tracing::Level::TRACE, "attn-mlp");
             let cfgq = get_lora_cfg(&attention_wq);
             let cfgk = get_lora_cfg(&attention_wk);
             let cfgv = get_lora_cfg(&attention_wv);
@@ -422,19 +413,15 @@ impl ModelWeights {
                 n_head: ct.hparams.n_head as usize,
                 n_kv_head: ct.hparams.n_head as usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
-                span_attn,
-                span_mlp,
                 rotary: rotary.clone(),
             })
         }
-        let span = tracing::span!(tracing::Level::TRACE, "model");
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, ct.hparams.n_embd as usize),
             layers,
             norm,
             output: QMatMul::from_qtensor(output)?,
             masks: HashMap::new(),
-            span,
             device: ct.device.clone(),
             cache: Cache::new(ct.hparams.n_layer as usize, true),
             xlora_classifier: XLoraClassifier::new(
@@ -597,8 +584,6 @@ impl ModelWeights {
             let attention_norm =
                 ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?;
             let ffn_norm = ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?;
-            let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
-            let span_mlp = tracing::span!(tracing::Level::TRACE, "attn-mlp");
             let cfgq = get_lora_cfg(&attention_wq);
             let cfgk = get_lora_cfg(&attention_wk);
             let cfgv = get_lora_cfg(&attention_wv);
@@ -646,19 +631,15 @@ impl ModelWeights {
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
-                span_attn,
-                span_mlp,
                 rotary: rotary.clone(),
             })
         }
-        let span = tracing::span!(tracing::Level::TRACE, "model");
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
             layers,
             norm,
             output: QMatMul::from_qtensor(output)?,
             masks: HashMap::new(),
-            span,
             device: device.clone(),
             cache: Cache::new(block_count, true),
             xlora_classifier: XLoraClassifier::new(
@@ -701,7 +682,6 @@ impl ModelWeights {
         } else {
             Some(self.mask(seq_len, x.device())?)
         };
-        let _enter = self.span.enter();
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = if is_full_pass {
             if no_kv_cache {
@@ -733,7 +713,6 @@ impl ModelWeights {
             let x = (attn + residual)?;
 
             // MLP
-            let _enter = layer.span_mlp.enter();
             let residual = &x;
             let x = layer.ffn_norm.forward(&x)?;
             let x = layer.mlp_or_moe.forward(

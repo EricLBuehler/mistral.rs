@@ -90,18 +90,15 @@ impl Cache {
 #[derive(Debug, Clone)]
 struct RmsNorm {
     inner: candle_nn::RmsNorm<RmsNormNonQuantized>,
-    span: tracing::Span,
 }
 
 impl RmsNorm {
     fn load(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
         let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
-        Ok(Self { inner, span })
+        Ok(Self { inner })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
         self.inner.forward(x)
     }
 }
@@ -116,7 +113,6 @@ struct CausalSelfAttention {
     num_key_value_heads: usize,
     head_dim: usize,
     use_flash_attn: bool,
-    span: tracing::Span,
     rotary_emb: Arc<RotaryEmbedding>,
 }
 
@@ -146,7 +142,6 @@ impl CausalSelfAttention {
         kv_cache: &mut super::LayerCaches,
         cache: &mut Cache,
     ) -> Result<Tensor> {
-        let _enter = self.span.enter();
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
         let q = self.q_proj.forward(x)?;
         let k = self.k_proj.forward(x)?;
@@ -234,7 +229,6 @@ impl CausalSelfAttention {
     }
 
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "attn");
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
@@ -260,7 +254,6 @@ impl CausalSelfAttention {
             num_key_value_heads: cfg.num_key_value_heads,
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             use_flash_attn: cfg.use_flash_attn,
-            span,
             rotary_emb,
         })
     }
@@ -278,18 +271,15 @@ struct Mlp {
     c_fc1: Linear,
     c_fc2: Linear,
     c_proj: Linear,
-    span: tracing::Span,
 }
 
 impl Mlp {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
         let x = (candle_nn::ops::silu(&self.c_fc1.forward(x)?)? * self.c_fc2.forward(x)?)?;
         self.c_proj.forward(&x)
     }
 
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "mlp");
         let h_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
         let c_fc1 = linear(h_size, i_size, vb.pp("gate_proj"))?;
@@ -299,7 +289,6 @@ impl Mlp {
             c_fc1,
             c_fc2,
             c_proj,
-            span,
         })
     }
 }
@@ -310,7 +299,6 @@ struct Block {
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
     mlp: Mlp,
-    span: tracing::Span,
 }
 
 impl Block {
@@ -323,7 +311,6 @@ impl Block {
         kv_cache: &mut super::LayerCaches,
         cache: &mut Cache,
     ) -> Result<Tensor> {
-        let _enter = self.span.enter();
         let residual = x;
         let x = self.rms_1.forward(x)?;
         let x = (self.attn.forward(
@@ -340,7 +327,6 @@ impl Block {
     }
 
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "block");
         let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg)?;
         let mlp = Mlp::load(vb.pp("mlp"), cfg)?;
         let rms_1 = RmsNorm::load(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
@@ -354,7 +340,6 @@ impl Block {
             attn,
             rms_2,
             mlp,
-            span,
         })
     }
 }
