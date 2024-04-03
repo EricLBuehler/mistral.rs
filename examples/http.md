@@ -79,8 +79,8 @@ pub struct ChatCompletionRequest {
     pub temperature: Option<f64>,
     // Default 1
     pub top_p: Option<f64>,
-    // Default 32
-    pub top_k: Option<usize>,
+    // Default -1 to consider all
+    pub top_k: Option<i64>,
     pub stream: bool,
 }
 ```

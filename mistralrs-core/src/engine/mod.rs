@@ -414,20 +414,12 @@ impl Engine {
             }
         }
 
-        let topk = request.sampling_params.top_k.unwrap_or_else(|| {
-            warn!(
-                "Request {} did not specify topk. A topk value of 32 will be used.",
-                request.id
-            );
-            32
-        });
-        let topp = request.sampling_params.top_p.unwrap_or_else(|| {
-            warn!(
-                "Request {} did not specify topp. A topk value of 1.0 will be used.",
-                request.id
-            );
-            1.0
-        });
+        let topk = request
+            .sampling_params
+            .top_k
+            .map(|x| x as i64)
+            .unwrap_or(-1);
+        let topp = request.sampling_params.top_p.unwrap_or(1.0);
         let num_hidden_layers = get_mut_arcmutex!(self.pipeline).num_hidden_layers();
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
 

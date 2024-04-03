@@ -38,7 +38,7 @@ pub struct Sampler {
     repeat_penalty: Option<f32>,
     presence_penalty: Option<f32>,
     logits_bias: Option<HashMap<u32, f32>>,
-    topk: usize,
+    topk: i64,
     topp: f64,
 }
 
@@ -68,7 +68,7 @@ impl Sampler {
         repeat_penalty: Option<f32>,
         presence_penalty: Option<f32>,
         logits_bias: Option<HashMap<u32, f32>>,
-        topk: usize,
+        topk: i64,
         topp: f64,
     ) -> Self {
         let temperature = if temperature.map_or(true, |v| v < 1e-7) {
@@ -217,16 +217,18 @@ impl Sampler {
         })
     }
 
-    fn sample_topkp(&mut self, probs: &mut Vec<f32>, top_k: usize, top_p: f32) -> Result<Logprobs> {
+    fn sample_topkp(&mut self, probs: &mut Vec<f32>, top_k: i64, top_p: f32) -> Result<Logprobs> {
         let mut argsort_indices = (0..probs.len()).collect::<Vec<_>>();
 
         // Sort by descending probability.
         argsort_indices.sort_by(|&i, &j| probs[j].partial_cmp(&probs[i]).unwrap());
 
-        // Clamp smaller probabilities to zero.
-        for (index, val) in argsort_indices.iter().enumerate() {
-            if index >= top_k {
-                probs[*val] = 0.0;
+        if top_k > 0 {
+            // Clamp smaller probabilities to zero.
+            for (index, val) in argsort_indices.iter().enumerate() {
+                if index >= top_k as usize {
+                    probs[*val] = 0.0;
+                }
             }
         }
 
