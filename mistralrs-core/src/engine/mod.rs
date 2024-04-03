@@ -147,11 +147,18 @@ impl Engine {
             // Handle streaming requests
             if deref_refcell!(seq).get_group().is_streaming {
                 let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer().clone();
+                let tok = handle_seq_error!(
+                    tokenizer.decode(&[next_token.token], false),
+                    deref_refcell!(seq).responder()
+                );
+                let tok = if deref_refcell!(seq).n_streaming_responses != 0 {
+                    " ".to_string() + &tok
+                } else {
+                    tok
+                };
+                deref_mut_refcell!(seq).n_streaming_responses += 1;
                 let logprob = ResponseLogprob {
-                    token: handle_seq_error!(
-                        tokenizer.decode(&[next_token.token], false),
-                        deref_refcell!(seq).responder()
-                    ),
+                    token: tok,
                     bytes: next_token.bytes.clone().into_bytes(),
                     logprob: next_token.logprob,
                     top_logprobs: next_token.top_logprobs.clone(),

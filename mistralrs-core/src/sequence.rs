@@ -53,6 +53,7 @@ pub struct Sequence {
     responder: Sender<Response>,
     response_index: usize,
     creation_time: u64,
+    pub n_streaming_responses: usize,
 
     // Cache
     scaling_cache: Option<Tensor>,
@@ -114,6 +115,7 @@ impl Sequence {
             total_sampling_time: 0,
             response_index,
             creation_time,
+            n_streaming_responses: 0,
         }
     }
 
