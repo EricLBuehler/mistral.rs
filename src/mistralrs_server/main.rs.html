@@ -1375,7 +1375,7 @@
         candle_core::utils::with_simd128(),
         candle_core::utils::with_f16c()
     );
-    <span class="macro">info!</span>(<span class="string">"Sampling method: topk -&gt; topp -&gt; multinomial"</span>);
+    <span class="macro">info!</span>(<span class="string">"Sampling method: penalties -&gt; temperature -&gt; topk -&gt; topp -&gt; multinomial"</span>);
     <span class="macro">info!</span>(<span class="string">"Loading model `{}` on {device:?}..."</span>, loader.get_id());
     <span class="kw">let </span>pipeline = loader.load_model(<span class="prelude-val">None</span>, args.token_source, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>;
     <span class="macro">info!</span>(<span class="string">"Model loaded."</span>);
