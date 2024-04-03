@@ -817,27 +817,6 @@
 <a href="#815" id="815">815</a>
 <a href="#816" id="816">816</a>
 <a href="#817" id="817">817</a>
-<a href="#818" id="818">818</a>
-<a href="#819" id="819">819</a>
-<a href="#820" id="820">820</a>
-<a href="#821" id="821">821</a>
-<a href="#822" id="822">822</a>
-<a href="#823" id="823">823</a>
-<a href="#824" id="824">824</a>
-<a href="#825" id="825">825</a>
-<a href="#826" id="826">826</a>
-<a href="#827" id="827">827</a>
-<a href="#828" id="828">828</a>
-<a href="#829" id="829">829</a>
-<a href="#830" id="830">830</a>
-<a href="#831" id="831">831</a>
-<a href="#832" id="832">832</a>
-<a href="#833" id="833">833</a>
-<a href="#834" id="834">834</a>
-<a href="#835" id="835">835</a>
-<a href="#836" id="836">836</a>
-<a href="#837" id="837">837</a>
-<a href="#838" id="838">838</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -859,19 +838,16 @@
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">struct </span>RmsNorm {
     inner: candle_nn::RmsNorm&lt;RmsNormQuantized&gt;,
-    span: tracing::Span,
 }
 
 <span class="kw">impl </span>RmsNorm {
     <span class="kw">fn </span>new(scale: QTensor, eps: f32) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>span = <span class="macro">tracing::span!</span>(tracing::Level::TRACE, <span class="string">"rms-norm"</span>);
         <span class="kw">let </span>scale = scale.dequantize(<span class="kw-2">&amp;</span>scale.device())<span class="question-mark">?</span>;
         <span class="kw">let </span>inner = candle_nn::RmsNorm::&lt;RmsNormQuantized&gt;::new(scale, eps <span class="kw">as </span>f64);
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ inner, span })
+        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ inner })
     }
 
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>_enter = <span class="self">self</span>.span.enter();
         <span class="self">self</span>.inner.forward(x)
     }
 }
@@ -1017,8 +993,6 @@
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
-    span_attn: tracing::Span,
-    span_mlp: tracing::Span,
     rotary: RotaryEmbedding,
 }
 
@@ -1042,7 +1016,6 @@
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>_enter = <span class="self">self</span>.span_attn.enter();
         <span class="kw">let </span>(b_sz, seq_len, n_embd) = x.dims3()<span class="question-mark">?</span>;
         <span class="kw">let </span>q = <span class="self">self</span>.attention_wq.lora_forward(
             x,
@@ -1138,7 +1111,6 @@
     norm: RmsNorm,
     output: QMatMul,
     masks: HashMap&lt;usize, Tensor&gt;,
-    span: tracing::Span,
     <span class="kw">pub </span>device: Device,
     <span class="kw">pub </span>cache: Cache,
     xlora_classifier: XLoraClassifier,
@@ -1213,8 +1185,6 @@
             };
             <span class="kw">let </span>attention_norm = ct.remove(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attention_norm.weight"</span>))<span class="question-mark">?</span>;
             <span class="kw">let </span>ffn_norm = ct.remove(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_norm.weight"</span>))<span class="question-mark">?</span>;
-            <span class="kw">let </span>span_attn = <span class="macro">tracing::span!</span>(tracing::Level::TRACE, <span class="string">"attn"</span>);
-            <span class="kw">let </span>span_mlp = <span class="macro">tracing::span!</span>(tracing::Level::TRACE, <span class="string">"attn-mlp"</span>);
             <span class="kw">let </span>cfgq = get_lora_cfg(<span class="kw-2">&amp;</span>attention_wq);
             <span class="kw">let </span>cfgk = get_lora_cfg(<span class="kw-2">&amp;</span>attention_wk);
             <span class="kw">let </span>cfgv = get_lora_cfg(<span class="kw-2">&amp;</span>attention_wv);
@@ -1262,19 +1232,15 @@
                 n_head: ct.hparams.n_head <span class="kw">as </span>usize,
                 n_kv_head: ct.hparams.n_head <span class="kw">as </span>usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) <span class="kw">as </span>usize,
-                span_attn,
-                span_mlp,
                 rotary: rotary.clone(),
             })
         }
-        <span class="kw">let </span>span = <span class="macro">tracing::span!</span>(tracing::Level::TRACE, <span class="string">"model"</span>);
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             tok_embeddings: Embedding::new(tok_embeddings, ct.hparams.n_embd <span class="kw">as </span>usize),
             layers,
             norm,
             output: QMatMul::from_qtensor(output)<span class="question-mark">?</span>,
             masks: HashMap::new(),
-            span,
             device: ct.device.clone(),
             cache: Cache::new(ct.hparams.n_layer <span class="kw">as </span>usize, <span class="bool-val">true</span>),
             xlora_classifier: XLoraClassifier::new(
@@ -1437,8 +1403,6 @@
             <span class="kw">let </span>attention_norm =
                 ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_norm.weight"</span>), device)<span class="question-mark">?</span>;
             <span class="kw">let </span>ffn_norm = ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_norm.weight"</span>), device)<span class="question-mark">?</span>;
-            <span class="kw">let </span>span_attn = <span class="macro">tracing::span!</span>(tracing::Level::TRACE, <span class="string">"attn"</span>);
-            <span class="kw">let </span>span_mlp = <span class="macro">tracing::span!</span>(tracing::Level::TRACE, <span class="string">"attn-mlp"</span>);
             <span class="kw">let </span>cfgq = get_lora_cfg(<span class="kw-2">&amp;</span>attention_wq);
             <span class="kw">let </span>cfgk = get_lora_cfg(<span class="kw-2">&amp;</span>attention_wk);
             <span class="kw">let </span>cfgv = get_lora_cfg(<span class="kw-2">&amp;</span>attention_wv);
@@ -1486,19 +1450,15 @@
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
-                span_attn,
-                span_mlp,
                 rotary: rotary.clone(),
             })
         }
-        <span class="kw">let </span>span = <span class="macro">tracing::span!</span>(tracing::Level::TRACE, <span class="string">"model"</span>);
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
             layers,
             norm,
             output: QMatMul::from_qtensor(output)<span class="question-mark">?</span>,
             masks: HashMap::new(),
-            span,
             device: device.clone(),
             cache: Cache::new(block_count, <span class="bool-val">true</span>),
             xlora_classifier: XLoraClassifier::new(
@@ -1541,7 +1501,6 @@
         </span>} <span class="kw">else </span>{
             <span class="prelude-val">Some</span>(<span class="self">self</span>.mask(seq_len, x.device())<span class="question-mark">?</span>)
         };
-        <span class="kw">let </span>_enter = <span class="self">self</span>.span.enter();
         <span class="kw">let </span><span class="kw-2">mut </span>layer_in = <span class="self">self</span>.tok_embeddings.forward(x)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="kw">if </span>is_full_pass {
             <span class="kw">if </span>no_kv_cache {
@@ -1573,8 +1532,7 @@
             <span class="kw">let </span>x = (attn + residual)<span class="question-mark">?</span>;
 
             <span class="comment">// MLP
-            </span><span class="kw">let </span>_enter = layer.span_mlp.enter();
-            <span class="kw">let </span>residual = <span class="kw-2">&amp;</span>x;
+            </span><span class="kw">let </span>residual = <span class="kw-2">&amp;</span>x;
             <span class="kw">let </span>x = layer.ffn_norm.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>;
             <span class="kw">let </span>x = layer.mlp_or_moe.forward(
                 <span class="kw-2">&amp;</span>x,

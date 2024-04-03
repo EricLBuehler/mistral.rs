@@ -696,6 +696,9 @@
 <a href="#694" id="694">694</a>
 <a href="#695" id="695">695</a>
 <a href="#696" id="696">696</a>
+<a href="#697" id="697">697</a>
+<a href="#698" id="698">698</a>
+<a href="#699" id="699">699</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     error::Error,
     fs::File,
@@ -732,6 +735,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::openai::ModelObject;
 <span class="kw">mod </span>model_selected;
 <span class="kw">mod </span>openai;
+<span class="kw">use </span>tracing::info;
 
 <span class="kw">fn </span>parse_token_source(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;TokenSource, String&gt; {
     s.parse()
@@ -855,6 +859,7 @@
     }
 
     Request {
+        id: state.next_request_id(),
         messages,
         sampling_params: SamplingParams {
             temperature: oairequest.temperature,
@@ -1361,16 +1366,17 @@
     <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
     </span><span class="kw">let </span>device = Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?</span>;
 
-    <span class="macro">println!</span>(
+    tracing_subscriber::fmt().init();
+    <span class="macro">info!</span>(
         <span class="string">"avx: {}, neon: {}, simd128: {}, f16c: {}"</span>,
         candle_core::utils::with_avx(),
         candle_core::utils::with_neon(),
         candle_core::utils::with_simd128(),
         candle_core::utils::with_f16c()
     );
-    <span class="macro">println!</span>(<span class="string">"Loading model `{}` on {device:?}..."</span>, loader.get_id());
+    <span class="macro">info!</span>(<span class="string">"Loading model `{}` on {device:?}..."</span>, loader.get_id());
     <span class="kw">let </span>pipeline = loader.load_model(<span class="prelude-val">None</span>, args.token_source, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>;
-    <span class="macro">println!</span>(<span class="string">"Model loaded."</span>);
+    <span class="macro">info!</span>(<span class="string">"Model loaded."</span>);
     <span class="kw">let </span>mistralrs = MistralRs::new(
         pipeline,
         SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
@@ -1387,7 +1393,7 @@
         <span class="string">"0.0.0.0"</span>.to_string()
     };
     <span class="kw">let </span>listener = tokio::net::TcpListener::bind(<span class="macro">format!</span>(<span class="string">"{ip}:{}"</span>, args.port)).<span class="kw">await</span><span class="question-mark">?</span>;
-    <span class="macro">println!</span>(<span class="string">"Serving on http://{ip}:{}."</span>, args.port);
+    <span class="macro">info!</span>(<span class="string">"Serving on http://{ip}:{}."</span>, args.port);
     axum::serve(listener, app).<span class="kw">await</span><span class="question-mark">?</span>;
 
     <span class="prelude-val">Ok</span>(())

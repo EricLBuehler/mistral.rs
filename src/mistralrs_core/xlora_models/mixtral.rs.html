@@ -745,9 +745,6 @@
 <a href="#743" id="743">743</a>
 <a href="#744" id="744">744</a>
 <a href="#745" id="745">745</a>
-<a href="#746" id="746">746</a>
-<a href="#747" id="747">747</a>
-<a href="#748" id="748">748</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
@@ -768,20 +765,17 @@
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">struct </span>RmsNorm {
     inner: candle_nn::RmsNorm&lt;RmsNormNonQuantized&gt;,
-    span: tracing::Span,
 }
 
 <span class="kw">impl </span>RmsNorm {
     <span class="kw">fn </span>new(size: usize, eps: f64, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>span = <span class="macro">tracing::span!</span>(tracing::Level::TRACE, <span class="string">"rms-norm"</span>);
         <span class="kw">let </span>inner = candle_nn::rms_norm_non_quant(size, eps, vb)<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ inner, span })
+        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ inner })
     }
 }
 
 <span class="kw">impl </span>Module <span class="kw">for </span>RmsNorm {
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>_enter = <span class="self">self</span>.span.enter();
         <span class="self">self</span>.inner.forward(x)
     }
 }

@@ -503,6 +503,7 @@
 <a href="#501" id="501">501</a>
 <a href="#502" id="502">502</a>
 <a href="#503" id="503">503</a>
+<a href="#504" id="504">504</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, ChatTemplate, Loader, ModelInputs,
     ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
@@ -534,6 +535,7 @@
 <span class="kw">use </span>std::{rc::Rc, sync::Mutex};
 <span class="kw">use </span>thiserror::Error;
 <span class="kw">use </span>tokenizers::Tokenizer;
+<span class="kw">use </span>tracing::info;
 
 <span class="kw">enum </span>Model {
     Normal(NormalModel),
@@ -671,7 +673,7 @@
         ));
 
         <span class="kw">let </span>tokenizer_filename = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>p) = <span class="self">self</span>.tokenizer_json {
-            <span class="macro">println!</span>(<span class="string">"Using tokenizer.json at `{p}`"</span>);
+            <span class="macro">info!</span>(<span class="string">"Using tokenizer.json at `{p}`"</span>);
             PathBuf::from_str(p)<span class="question-mark">?
         </span>} <span class="kw">else </span>{
             api.get(<span class="string">"tokenizer.json"</span>)<span class="question-mark">?

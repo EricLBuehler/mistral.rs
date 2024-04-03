@@ -402,21 +402,6 @@
 <a href="#400" id="400">400</a>
 <a href="#401" id="401">401</a>
 <a href="#402" id="402">402</a>
-<a href="#403" id="403">403</a>
-<a href="#404" id="404">404</a>
-<a href="#405" id="405">405</a>
-<a href="#406" id="406">406</a>
-<a href="#407" id="407">407</a>
-<a href="#408" id="408">408</a>
-<a href="#409" id="409">409</a>
-<a href="#410" id="410">410</a>
-<a href="#411" id="411">411</a>
-<a href="#412" id="412">412</a>
-<a href="#413" id="413">413</a>
-<a href="#414" id="414">414</a>
-<a href="#415" id="415">415</a>
-<a href="#416" id="416">416</a>
-<a href="#417" id="417">417</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -509,18 +494,15 @@
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">struct </span>RmsNorm {
     inner: candle_nn::RmsNorm&lt;RmsNormNonQuantized&gt;,
-    span: tracing::Span,
 }
 
 <span class="kw">impl </span>RmsNorm {
     <span class="kw">fn </span>load(size: usize, eps: f64, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>span = <span class="macro">tracing::span!</span>(tracing::Level::TRACE, <span class="string">"rms-norm"</span>);
         <span class="kw">let </span>inner = candle_nn::rms_norm_non_quant(size, eps, vb)<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ inner, span })
+        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ inner })
     }
 
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>_enter = <span class="self">self</span>.span.enter();
         <span class="self">self</span>.inner.forward(x)
     }
 }
@@ -535,7 +517,6 @@
     num_key_value_heads: usize,
     head_dim: usize,
     use_flash_attn: bool,
-    span: tracing::Span,
     rotary_emb: Arc&lt;RotaryEmbedding&gt;,
 }
 
@@ -565,7 +546,6 @@
         kv_cache: <span class="kw-2">&amp;mut </span><span class="kw">super</span>::LayerCaches,
         cache: <span class="kw-2">&amp;mut </span>Cache,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>_enter = <span class="self">self</span>.span.enter();
         <span class="kw">let </span>(b_sz, seq_len, hidden_size) = x.dims3()<span class="question-mark">?</span>;
         <span class="kw">let </span>q = <span class="self">self</span>.q_proj.forward(x)<span class="question-mark">?</span>;
         <span class="kw">let </span>k = <span class="self">self</span>.k_proj.forward(x)<span class="question-mark">?</span>;
@@ -653,7 +633,6 @@
     }
 
     <span class="kw">fn </span>load(vb: VarBuilder, cfg: <span class="kw-2">&amp;</span>Config) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>span = <span class="macro">tracing::span!</span>(tracing::Level::TRACE, <span class="string">"attn"</span>);
         <span class="kw">let </span>size_in = cfg.hidden_size;
         <span class="kw">let </span>size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         <span class="kw">let </span>size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
@@ -679,7 +658,6 @@
             num_key_value_heads: cfg.num_key_value_heads,
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             use_flash_attn: cfg.use_flash_attn,
-            span,
             rotary_emb,
         })
     }
@@ -697,18 +675,15 @@
     c_fc1: Linear,
     c_fc2: Linear,
     c_proj: Linear,
-    span: tracing::Span,
 }
 
 <span class="kw">impl </span>Mlp {
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>_enter = <span class="self">self</span>.span.enter();
         <span class="kw">let </span>x = (candle_nn::ops::silu(<span class="kw-2">&amp;</span><span class="self">self</span>.c_fc1.forward(x)<span class="question-mark">?</span>)<span class="question-mark">? </span>* <span class="self">self</span>.c_fc2.forward(x)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
         <span class="self">self</span>.c_proj.forward(<span class="kw-2">&amp;</span>x)
     }
 
     <span class="kw">fn </span>load(vb: VarBuilder, cfg: <span class="kw-2">&amp;</span>Config) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>span = <span class="macro">tracing::span!</span>(tracing::Level::TRACE, <span class="string">"mlp"</span>);
         <span class="kw">let </span>h_size = cfg.hidden_size;
         <span class="kw">let </span>i_size = cfg.intermediate_size;
         <span class="kw">let </span>c_fc1 = linear(h_size, i_size, vb.pp(<span class="string">"gate_proj"</span>))<span class="question-mark">?</span>;
@@ -718,7 +693,6 @@
             c_fc1,
             c_fc2,
             c_proj,
-            span,
         })
     }
 }
@@ -729,7 +703,6 @@
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
     mlp: Mlp,
-    span: tracing::Span,
 }
 
 <span class="kw">impl </span>Block {
@@ -742,7 +715,6 @@
         kv_cache: <span class="kw-2">&amp;mut </span><span class="kw">super</span>::LayerCaches,
         cache: <span class="kw-2">&amp;mut </span>Cache,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>_enter = <span class="self">self</span>.span.enter();
         <span class="kw">let </span>residual = x;
         <span class="kw">let </span>x = <span class="self">self</span>.rms_1.forward(x)<span class="question-mark">?</span>;
         <span class="kw">let </span>x = (<span class="self">self</span>.attn.forward(
@@ -759,7 +731,6 @@
     }
 
     <span class="kw">fn </span>load(vb: VarBuilder, cfg: <span class="kw-2">&amp;</span>Config) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>span = <span class="macro">tracing::span!</span>(tracing::Level::TRACE, <span class="string">"block"</span>);
         <span class="kw">let </span>attn = CausalSelfAttention::load(vb.pp(<span class="string">"self_attn"</span>), cfg)<span class="question-mark">?</span>;
         <span class="kw">let </span>mlp = Mlp::load(vb.pp(<span class="string">"mlp"</span>), cfg)<span class="question-mark">?</span>;
         <span class="kw">let </span>rms_1 = RmsNorm::load(cfg.hidden_size, cfg.rms_norm_eps, vb.pp(<span class="string">"input_layernorm"</span>))<span class="question-mark">?</span>;
@@ -773,7 +744,6 @@
             attn,
             rms_2,
             mlp,
-            span,
         })
     }
 }

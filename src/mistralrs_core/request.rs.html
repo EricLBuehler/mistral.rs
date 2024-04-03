@@ -22,6 +22,7 @@
 <a href="#20" id="20">20</a>
 <a href="#21" id="21">21</a>
 <a href="#22" id="22">22</a>
+<a href="#23" id="23">23</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>indexmap::IndexMap;
 
 <span class="kw">use crate</span>::{response::Response, sampling::SamplingParams};
@@ -33,14 +34,15 @@
     <span class="kw">pub </span>response: Sender&lt;Response&gt;,
     <span class="kw">pub </span>return_logprobs: bool,
     <span class="kw">pub </span>is_streaming: bool,
+    <span class="kw">pub </span>id: usize,
 }
 
 <span class="kw">impl </span>Debug <span class="kw">for </span>Request {
     <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
         <span class="macro">write!</span>(
             f,
-            <span class="string">"Request {{ messages: `{:?}`, sampling_params: {:?}}}"</span>,
-            <span class="self">self</span>.messages, <span class="self">self</span>.sampling_params
+            <span class="string">"Request {} {{ messages: `{:?}`, sampling_params: {:?}}}"</span>,
+            <span class="self">self</span>.id, <span class="self">self</span>.messages, <span class="self">self</span>.sampling_params
         )
     }
 }

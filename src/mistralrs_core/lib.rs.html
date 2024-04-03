@@ -127,9 +127,21 @@
 <a href="#125" id="125">125</a>
 <a href="#126" id="126">126</a>
 <a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
+    cell::RefCell,
     error::Error,
     fs::OpenOptions,
     io::Write,
@@ -172,6 +184,7 @@
     log: <span class="prelude-ty">Option</span>&lt;String&gt;,
     id: String,
     creation_time: u64,
+    next_request_id: Mutex&lt;RefCell&lt;usize&gt;&gt;,
 }
 
 <span class="kw">impl </span>MistralRs {
@@ -192,6 +205,7 @@
                 .duration_since(UNIX_EPOCH)
                 .expect(<span class="string">"Time travel has occurred!"</span>)
                 .as_secs(),
+            next_request_id: Mutex::new(RefCell::new(<span class="number">0</span>)),
         });
 
         thread::spawn(<span class="kw">move </span>|| {
@@ -212,6 +226,14 @@
 
     <span class="kw">pub fn </span>get_creation_time(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
         <span class="self">self</span>.creation_time
+    }
+
+    <span class="kw">pub fn </span>next_request_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="kw">let </span>l = <span class="self">self</span>.next_request_id.lock().unwrap();
+        <span class="kw">let </span>last = <span class="kw-2">&amp;mut *</span>l.borrow_mut();
+        <span class="kw">let </span>last_v = <span class="kw-2">*</span>last;
+        <span class="kw-2">*</span>last += <span class="number">1</span>;
+        last_v
     }
 
     <span class="kw">pub fn </span>maybe_log_request(this: Arc&lt;<span class="self">Self</span>&gt;, repr: String) {
