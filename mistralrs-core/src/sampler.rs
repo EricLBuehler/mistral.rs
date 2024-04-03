@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::{collections::HashMap, iter::zip};
 
 use candle_core::{bail, DType, Error, Result, Tensor};
