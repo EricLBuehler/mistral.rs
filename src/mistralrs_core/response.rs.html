@@ -84,10 +84,15 @@
 <a href="#82" id="82">82</a>
 <a href="#83" id="83">83</a>
 <a href="#84" id="84">84</a>
+<a href="#85" id="85">85</a>
+<a href="#86" id="86">86</a>
+<a href="#87" id="87">87</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::error::Error;
 
 <span class="kw">use </span>candle_sampling::logits_processor::TopLogprob;
 <span class="kw">use </span>serde::Serialize;
+
+<span class="kw">pub const </span>SYSTEM_FINGERPRINT: <span class="kw-2">&amp;</span>str = <span class="string">"local"</span>;
 
 <span class="attr">#[derive(Debug, Clone, Serialize)]
 </span><span class="kw">pub struct </span>ResponseMessage {
@@ -126,10 +131,10 @@
 <span class="attr">#[derive(Debug, Clone, Serialize)]
 </span><span class="kw">pub struct </span>ChunkChoice {
     <span class="attr">#[serde(rename = <span class="string">"finish_reason"</span>)]
-    </span><span class="kw">pub </span>stopreason: String,
+    </span><span class="kw">pub </span>stopreason: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub </span>index: usize,
     <span class="kw">pub </span>delta: Delta,
-    <span class="kw">pub </span>logprobs: <span class="prelude-ty">Option</span>&lt;Logprobs&gt;,
+    <span class="kw">pub </span>logprobs: <span class="prelude-ty">Option</span>&lt;ResponseLogprob&gt;,
 }
 
 <span class="attr">#[derive(Debug, Clone, Serialize)]
@@ -148,7 +153,7 @@
     <span class="kw">pub </span>id: String,
     <span class="kw">pub </span>choices: Vec&lt;Choice&gt;,
     <span class="kw">pub </span>created: u128,
-    <span class="kw">pub </span>model: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str,
+    <span class="kw">pub </span>model: String,
     <span class="kw">pub </span>system_fingerprint: String,
     <span class="kw">pub </span>object: String,
     <span class="kw">pub </span>usage: ChatCompletionUsage,
@@ -159,7 +164,7 @@
     <span class="kw">pub </span>id: String,
     <span class="kw">pub </span>choices: Vec&lt;ChunkChoice&gt;,
     <span class="kw">pub </span>created: u128,
-    <span class="kw">pub </span>model: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str,
+    <span class="kw">pub </span>model: String,
     <span class="kw">pub </span>system_fingerprint: String,
     <span class="kw">pub </span>object: String,
 }
@@ -167,5 +172,6 @@
 <span class="kw">pub enum </span>Response {
     Error(Box&lt;<span class="kw">dyn </span>Error + Send + Sync&gt;),
     Done(ChatCompletionResponse),
+    Chunk(ChatCompletionChunkResponse),
 }
 </code></pre></div></section></main></body></html>

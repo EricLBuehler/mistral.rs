@@ -495,6 +495,8 @@
 <a href="#493" id="493">493</a>
 <a href="#494" id="494">494</a>
 <a href="#495" id="495">495</a>
+<a href="#496" id="496">496</a>
+<a href="#497" id="497">497</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -586,6 +588,7 @@
     no_kv_cache: bool,
     chat_template: ChatTemplate,
     non_granular_state: <span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
+    model_id: String,
 }
 
 <span class="kw">pub struct </span>MixtralLoader {
@@ -853,6 +856,7 @@
                     tgt_non_granular_index,
                 }
             }),
+            model_id: <span class="self">self</span>.model_id.clone(),
         })))
     }
 
@@ -964,9 +968,9 @@
             .copied()
             .unwrap_or_else(|| <span class="macro">panic!</span>(<span class="string">"Unable to extract `{eos_tok}` EOS token."</span>))
     }
-    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
-        <span class="string">"mixtral"
-    </span>}
+    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+        <span class="self">self</span>.model_id.clone()
+    }
     <span class="kw">fn </span>get_max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.model {
             Model::Normal(model) =&gt; model.max_seq_len,

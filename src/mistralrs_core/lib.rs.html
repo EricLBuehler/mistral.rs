@@ -93,9 +93,25 @@
 <a href="#91" id="91">91</a>
 <a href="#92" id="92">92</a>
 <a href="#93" id="93">93</a>
+<a href="#94" id="94">94</a>
+<a href="#95" id="95">95</a>
+<a href="#96" id="96">96</a>
+<a href="#97" id="97">97</a>
+<a href="#98" id="98">98</a>
+<a href="#99" id="99">99</a>
+<a href="#100" id="100">100</a>
+<a href="#101" id="101">101</a>
+<a href="#102" id="102">102</a>
+<a href="#103" id="103">103</a>
+<a href="#104" id="104">104</a>
+<a href="#105" id="105">105</a>
+<a href="#106" id="106">106</a>
+<a href="#107" id="107">107</a>
+<a href="#108" id="108">108</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
+    error::Error,
     fs::OpenOptions,
     io::Write,
     sync::{
@@ -129,6 +145,7 @@
 <span class="kw">pub use </span>response::{ChatCompletionResponse, ChatCompletionUsage};
 <span class="kw">pub use </span>sampling::{SamplingParams, StopTokens};
 <span class="kw">pub use </span>scheduler::SchedulerMethod;
+<span class="kw">use </span>serde::Serialize;
 
 <span class="kw">pub struct </span>MistralRs {
     sender: Sender&lt;Request&gt;,
@@ -172,7 +189,7 @@
         }
     }
 
-    <span class="kw">pub fn </span>maybe_log_response(this: Arc&lt;<span class="self">Self</span>&gt;, resp: <span class="kw-2">&amp;</span>ChatCompletionResponse) {
+    <span class="kw">pub fn </span>maybe_log_response&lt;T: Serialize&gt;(this: Arc&lt;<span class="self">Self</span>&gt;, resp: <span class="kw-2">&amp;</span>T) {
         <span class="kw">if let </span><span class="prelude-val">Some</span>(file) = <span class="kw-2">&amp;</span>this.log {
             <span class="kw">let </span><span class="kw-2">mut </span>f = OpenOptions::new()
                 .append(<span class="bool-val">true</span>)
@@ -182,6 +199,19 @@
             <span class="kw">let </span>time = chrono::offset::Local::now();
             <span class="kw">let </span>repr = serde_json::to_string(resp).unwrap();
             f.write_all(<span class="macro">format!</span>(<span class="string">"Response at {time}: {repr}\n\n"</span>).as_bytes())
+                .expect(<span class="string">"Unable to write data"</span>);
+        }
+    }
+
+    <span class="kw">pub fn </span>maybe_log_error(this: Arc&lt;<span class="self">Self</span>&gt;, err: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Error) {
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(file) = <span class="kw-2">&amp;</span>this.log {
+            <span class="kw">let </span><span class="kw-2">mut </span>f = OpenOptions::new()
+                .append(<span class="bool-val">true</span>)
+                .create(<span class="bool-val">true</span>) <span class="comment">// Optionally create the file if it doesn't already exist
+                </span>.open(file)
+                .expect(<span class="string">"Unable to open file"</span>);
+            <span class="kw">let </span>time = chrono::offset::Local::now();
+            f.write_all(<span class="macro">format!</span>(<span class="string">"Error response at {time}: {err}\n\n"</span>).as_bytes())
                 .expect(<span class="string">"Unable to write data"</span>);
         }
     }

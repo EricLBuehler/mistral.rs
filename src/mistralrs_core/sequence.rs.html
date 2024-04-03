@@ -309,8 +309,31 @@
 <a href="#307" id="307">307</a>
 <a href="#308" id="308">308</a>
 <a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
-    cell::{Cell, Ref, RefCell},
+    cell::{Cell, Ref, RefCell, RefMut},
     rc::Rc,
     sync::mpsc::Sender,
     time::{SystemTime, UNIX_EPOCH},
@@ -321,7 +344,7 @@
 
 <span class="kw">use crate</span>::{
     deref_mut_refcell, deref_refcell,
-    response::{Choice, Response},
+    response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     ChatCompletionResponse, ChatCompletionUsage,
 };
 
@@ -331,6 +354,16 @@
     StopTok(u32),
     Length(usize),
     ModelLength(usize),
+}
+
+<span class="kw">impl </span>ToString <span class="kw">for </span>StopReason {
+    <span class="kw">fn </span>to_string(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+        <span class="kw">match </span><span class="self">self </span>{
+            StopReason::Eos =&gt; <span class="string">"stop"</span>.to_string(),
+            StopReason::Length(<span class="kw">_</span>) | StopReason::ModelLength(<span class="kw">_</span>) =&gt; <span class="string">"length"</span>.to_string(),
+            StopReason::StopTok(<span class="kw">_</span>) =&gt; <span class="string">"stop"</span>.to_string(),
+        }
+    }
 }
 
 <span class="attr">#[derive(Clone, Copy, PartialEq)]
@@ -352,6 +385,7 @@
     stop_tokens: Vec&lt;u32&gt;,
     return_logprobs: bool,
     responder: Sender&lt;Response&gt;,
+    response_index: usize,
 
     <span class="comment">// Cache
     </span>scaling_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
@@ -384,6 +418,7 @@
         return_logprobs: bool,
         is_xlora: bool,
         group: Rc&lt;RefCell&lt;SequenceGroup&gt;&gt;,
+        response_index: usize,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>prompt_len = tokens.len();
         <span class="self">Self </span>{
@@ -409,6 +444,7 @@
             group,
             scaling_cache: <span class="prelude-val">None</span>,
             total_sampling_time: <span class="number">0</span>,
+            response_index,
         }
     }
 
@@ -464,7 +500,6 @@
     <span class="kw">pub fn </span>add_token(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tok: Logprobs) {
         <span class="self">self</span>.tokens.push(tok.token);
         <span class="self">self</span>.logprobs.push(tok);
-        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).token_count += <span class="number">1</span>;
     }
 
     <span class="kw">pub fn </span>responder(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Sender&lt;Response&gt; {
@@ -472,6 +507,9 @@
     }
 
     <span class="kw">pub fn </span>set_state(<span class="kw-2">&amp;</span><span class="self">self</span>, state: SequenceState) {
+        <span class="kw">if </span><span class="macro">matches!</span>(state, SequenceState::Error) {
+            <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).n_choices -= <span class="number">1</span>;
+        }
         <span class="self">self</span>.state.set(state);
     }
 
@@ -513,7 +551,6 @@
     }
 
     <span class="kw">pub fn </span>add_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, choice: Choice) {
-        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).done_count += <span class="number">1</span>;
         <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).choices.push(choice);
 
         <span class="kw">let </span>now = SystemTime::now()
@@ -521,7 +558,8 @@
             .expect(<span class="string">"Time travel has occurred!"</span>)
             .as_millis();
 
-        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).total_comple_time += now - <span class="self">self</span>.prompt_timestamp.unwrap();
+        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).total_completion_time +=
+            now - <span class="self">self</span>.prompt_timestamp.unwrap();
         <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).total_prompt_time +=
             <span class="self">self</span>.prompt_timestamp.unwrap() - <span class="self">self</span>.timestamp;
         <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).total_time += now - <span class="self">self</span>.timestamp;
@@ -532,57 +570,55 @@
         <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).total_sampling_time += <span class="self">self</span>.total_sampling_time;
     }
 
-    <span class="kw">pub fn </span>get_next_choice_index(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-        <span class="macro">deref_refcell!</span>(<span class="self">self</span>.group).choices.len()
+    <span class="kw">pub fn </span>get_response_index(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="self">self</span>.response_index
     }
 
     <span class="kw">pub fn </span>get_group(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Ref&lt;<span class="lifetime">'_</span>, SequenceGroup&gt; {
         <span class="macro">deref_refcell!</span>(<span class="self">self</span>.group)
     }
+
+    <span class="kw">pub fn </span>get_mut_group(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; RefMut&lt;<span class="lifetime">'_</span>, SequenceGroup&gt; {
+        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group)
+    }
+
+    <span class="kw">pub fn </span>add_streaming_chunk_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, chunk: ChunkChoice) {
+        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).streaming_chunks.push(chunk);
+    }
 }
 
 <span class="kw">pub struct </span>SequenceGroup {
-    done_count: usize,
-    n_choices: usize,
-    <span class="kw">pub </span>total_prompt_toks: usize,
+    n_choices: usize, <span class="comment">// The target number of choices to return. Can be decreased if an error is thrown.
+    </span><span class="kw">pub </span>total_prompt_toks: usize,
     <span class="kw">pub </span>total_toks: usize,
     <span class="kw">pub </span>total_prompt_time: u128,
     <span class="kw">pub </span>total_time: u128,
-    <span class="kw">pub </span>total_comple_time: u128,
+    <span class="kw">pub </span>total_completion_time: u128,
     <span class="kw">pub </span>total_sampling_time: u128,
     choices: Vec&lt;Choice&gt;,
-    token_count: usize,
-    is_streaming: bool,
+    <span class="kw">pub </span>streaming_chunks: Vec&lt;ChunkChoice&gt;,
+    <span class="kw">pub </span>is_streaming: bool,
 }
 
 <span class="kw">impl </span>SequenceGroup {
     <span class="kw">pub fn </span>new(n_choices: usize, is_streaming: bool) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
-            done_count: <span class="number">0</span>,
             choices: Vec::new(),
             n_choices,
             total_prompt_toks: <span class="number">0</span>,
             total_toks: <span class="number">0</span>,
             total_prompt_time: <span class="number">0</span>,
             total_time: <span class="number">0</span>,
-            total_comple_time: <span class="number">0</span>,
+            total_completion_time: <span class="number">0</span>,
             total_sampling_time: <span class="number">0</span>,
-            token_count: <span class="number">0</span>,
+            streaming_chunks: Vec::new(),
             is_streaming,
         }
-    }
-
-    <span class="kw">fn </span>is_done(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-        <span class="self">self</span>.done_count == <span class="self">self</span>.n_choices
     }
 
     <span class="kw">pub fn </span>get_choices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[Choice] {
         <span class="kw-2">&amp;</span><span class="self">self</span>.choices
     }
-
-    <span class="kw">fn </span>all_token_counts_same(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-        <span class="self">self</span>.token_count % <span class="self">self</span>.n_choices == <span class="number">0
-    </span>}
 
     <span class="kw">pub fn </span>get_usage(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ChatCompletionUsage {
         <span class="attr">#[allow(clippy::cast_precision_loss)]
@@ -594,7 +630,7 @@
             avg_prompt_tok_per_sec: (<span class="self">self</span>.total_prompt_toks <span class="kw">as </span>f32 / <span class="self">self</span>.total_prompt_time <span class="kw">as </span>f32)
                 * <span class="number">1000.</span>,
             avg_compl_tok_per_sec: ((<span class="self">self</span>.total_toks - <span class="self">self</span>.total_prompt_toks) <span class="kw">as </span>f32
-                / <span class="self">self</span>.total_comple_time <span class="kw">as </span>f32)
+                / <span class="self">self</span>.total_completion_time <span class="kw">as </span>f32)
                 * <span class="number">1000.</span>,
             avg_sample_tok_per_sec: (<span class="self">self</span>.total_toks <span class="kw">as </span>f32 / <span class="self">self</span>.total_sampling_time <span class="kw">as </span>f32)
                 * <span class="number">1000.</span>,
@@ -606,15 +642,25 @@
         response: ChatCompletionResponse,
         sender: Sender&lt;Response&gt;,
     ) {
-        <span class="kw">if </span><span class="self">self</span>.is_done() {
+        <span class="kw">if </span><span class="self">self</span>.choices.len() == <span class="self">self</span>.n_choices {
             <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
             </span>sender.send(Response::Done(response)).unwrap();
         }
     }
 
-    <span class="kw">pub fn </span>maybe_send_streaming_request(<span class="kw-2">&amp;</span><span class="self">self</span>, _sender: Sender&lt;Response&gt;) {
-        <span class="kw">if </span><span class="self">self</span>.all_token_counts_same() &amp;&amp; <span class="self">self</span>.is_streaming {
-            <span class="macro">todo!</span>()
+    <span class="kw">pub fn </span>maybe_send_streaming_response(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seq: <span class="kw-2">&amp;</span>Sequence, model: String) {
+        <span class="kw">if </span><span class="self">self</span>.streaming_chunks.len() == <span class="self">self</span>.n_choices &amp;&amp; <span class="self">self</span>.is_streaming {
+            seq.responder()
+                .send(Response::Chunk(ChatCompletionChunkResponse {
+                    id: seq.id.to_string(),
+                    choices: <span class="self">self</span>.streaming_chunks.clone(),
+                    created: seq.timestamp,
+                    model: model.clone(),
+                    system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                    object: <span class="string">"chat.completion.chunk"</span>.to_string(),
+                }))
+                .unwrap();
+            <span class="self">self</span>.streaming_chunks.clear();
         }
     }
 }

@@ -814,7 +814,7 @@
     <span class="kw">fn </span>sample(<span class="kw-2">&amp;mut </span><span class="self">self</span>, logits: Tensor, seq: Rc&lt;RefCell&lt;Sequence&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt;;
     <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Tokenizer;
     <span class="kw">fn </span>eos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u32;
-    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str;
+    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String;
     <span class="kw">fn </span>get_max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
     <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
     <span class="kw">fn </span>has_no_kv_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;

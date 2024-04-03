@@ -51,6 +51,7 @@
 <a href="#49" id="49">49</a>
 <a href="#50" id="50">50</a>
 <a href="#51" id="51">51</a>
+<a href="#52" id="52">52</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>serde::{Deserialize, Serialize};
@@ -98,6 +99,7 @@
     </span><span class="kw">pub </span>stop_seqs: <span class="prelude-ty">Option</span>&lt;StopTokens&gt;,
     <span class="kw">pub </span>temperature: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     <span class="kw">pub </span>top_p: <span class="prelude-ty">Option</span>&lt;f64&gt;,
+    <span class="kw">pub </span>stream: <span class="prelude-ty">Option</span>&lt;bool&gt;,
 
     <span class="comment">// mistral.rs additional
     </span><span class="kw">pub </span>top_k: <span class="prelude-ty">Option</span>&lt;usize&gt;,
