@@ -478,7 +478,7 @@ impl Engine {
             top_p: Some(request.sampling_params.top_p.unwrap_or(1.0)),
             ..request.sampling_params.clone()
         };
-        let sampler = Sampler::new(SEED, params);
+        let sampler = Sampler::new(SEED, params, get_mut_arcmutex!(self.pipeline).vocab_size());
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {
             let device = get_mut_arcmutex!(self.pipeline).device().clone();

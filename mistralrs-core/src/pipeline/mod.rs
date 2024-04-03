@@ -240,6 +240,7 @@ pub trait Pipeline: Send + Sync {
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
     }
+    fn vocab_size(&self) -> usize;
 }
 struct InputMetadata {
     input: Tensor,

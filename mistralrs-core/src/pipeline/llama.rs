@@ -91,6 +91,7 @@ pub struct LlamaPipeline {
     model_id: String,
     eos_token: Tensor,
     incrementor: Tensor,
+    vocab_size: usize,
 }
 
 pub struct LlamaLoader {
@@ -221,6 +222,7 @@ impl Loader for LlamaLoader {
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         let basic_config: LlamaConfig =
             serde_json::from_slice(&std::fs::read(paths.get_config_filename())?)?;
+        let vocab_size = basic_config.vocab_size;
         let default_dtype = if device.is_cuda() {
             DType::BF16
         } else {
@@ -380,6 +382,7 @@ impl Loader for LlamaLoader {
             model_id: self.model_id.clone(),
             eos_token: Tensor::new(eos_tok, device)?,
             incrementor: Tensor::new(1i64, device)?,
+            vocab_size,
         })))
     }
 
@@ -480,7 +483,7 @@ impl Pipeline for LlamaPipeline {
 
         Ok(deref_mut_refcell!(seq)
             .sampler()
-            .sample(&logits, Some(&ctxt))?)
+            .sample(logits, Some(&ctxt))?)
     }
     fn tokenizer(&self) -> Tokenizer {
         self.tokenizer.clone()
@@ -511,5 +514,8 @@ impl Pipeline for LlamaPipeline {
     }
     fn get_non_granular_state(&self) -> &Option<NonGranularState> {
         &self.non_granular_state
+    }
+    fn vocab_size(&self) -> usize {
+        self.vocab_size
     }
 }

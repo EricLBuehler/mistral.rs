@@ -89,6 +89,7 @@ pub struct GemmaPipeline {
     model_id: String,
     eos_token: Tensor,
     incrementor: Tensor,
+    vocab_size: usize,
 }
 
 pub struct GemmaLoader {
@@ -337,6 +338,7 @@ impl Loader for GemmaLoader {
             model_id: self.model_id.clone(),
             eos_token: Tensor::new(eos_tok, device)?,
             incrementor: Tensor::new(1i64, device)?,
+            vocab_size: config.vocab_size,
         })))
     }
 
@@ -420,7 +422,7 @@ impl Pipeline for GemmaPipeline {
 
         Ok(deref_mut_refcell!(seq)
             .sampler()
-            .sample(&logits, Some(&ctxt))?)
+            .sample(logits, Some(&ctxt))?)
     }
     fn tokenizer(&self) -> Tokenizer {
         self.tokenizer.clone()
@@ -451,5 +453,8 @@ impl Pipeline for GemmaPipeline {
     }
     fn get_non_granular_state(&self) -> &Option<NonGranularState> {
         &self.non_granular_state
+    }
+    fn vocab_size(&self) -> usize {
+        self.vocab_size
     }
 }
