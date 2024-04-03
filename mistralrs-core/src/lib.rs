@@ -1,6 +1,7 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use std::{
+    cell::RefCell,
     error::Error,
     fs::OpenOptions,
     io::Write,
@@ -43,6 +44,7 @@ pub struct MistralRs {
     log: Option<String>,
     id: String,
     creation_time: u64,
+    next_request_id: Mutex<RefCell<usize>>,
 }
 
 impl MistralRs {
@@ -63,6 +65,7 @@ impl MistralRs {
                 .duration_since(UNIX_EPOCH)
                 .expect("Time travel has occurred!")
                 .as_secs(),
+            next_request_id: Mutex::new(RefCell::new(0)),
         });
 
         thread::spawn(move || {
@@ -83,6 +86,14 @@ impl MistralRs {
 
     pub fn get_creation_time(&self) -> u64 {
         self.creation_time
+    }
+
+    pub fn next_request_id(&self) -> usize {
+        let l = self.next_request_id.lock().unwrap();
+        let last = &mut *l.borrow_mut();
+        let last_v = *last;
+        *last += 1;
+        last_v
     }
 
     pub fn maybe_log_request(this: Arc<Self>, repr: String) {

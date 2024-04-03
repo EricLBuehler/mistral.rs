@@ -158,6 +158,7 @@ fn parse_request(
     }
 
     Request {
+        id: state.next_request_id(),
         messages,
         sampling_params: SamplingParams {
             temperature: oairequest.temperature,

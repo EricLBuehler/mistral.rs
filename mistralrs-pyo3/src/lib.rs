@@ -1,9 +1,10 @@
 use candle_core::Result;
 use indexmap::IndexMap;
 use std::{
+    cell::RefCell,
     collections::HashMap,
     fmt::Debug,
-    sync::{mpsc::channel, Arc},
+    sync::{mpsc::channel, Arc, Mutex},
 };
 
 use ::mistralrs::{MistralRs, Request as _Request, Response, SamplingParams, StopTokens};
@@ -80,6 +81,8 @@ struct Runner {
     runner: Arc<MistralRs>,
 }
 
+static NEXT_REQUEST_ID: Mutex<RefCell<usize>> = Mutex::new(RefCell::new(0));
+
 #[pymethods]
 impl Runner {
     /// Send an OpenAI API compatible request, returning raw JSON.
@@ -95,6 +98,13 @@ impl Runner {
                 .as_ref()
                 .map(|x| StopTokens::Ids(x.to_vec()));
             let model_request = _Request {
+                id: {
+                    let l = NEXT_REQUEST_ID.lock().unwrap();
+                    let last = &mut *l.borrow_mut();
+                    let last_v = *last;
+                    *last += 1;
+                    last_v
+                },
                 messages: request.messages.clone(),
                 sampling_params: SamplingParams {
                     temperature: request.temperature,
