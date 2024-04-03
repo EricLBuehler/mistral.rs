@@ -8,7 +8,6 @@ use std::{
 };
 
 use candle_core::{Device, Tensor};
-use candle_sampling::logits_processor::{LogitsProcessor, SamplingMethod};
 use tracing::warn;
 
 use crate::{
@@ -20,6 +19,7 @@ use crate::{
         ChatCompletionResponse, Choice, ChunkChoice, Delta, Logprobs, Response, ResponseLogprob,
         ResponseMessage, SYSTEM_FINGERPRINT,
     },
+    sampler::{Sampler, SamplingMethod},
     scheduler::{Scheduler, SchedulerMethod},
     sequence::{Sequence, SequenceGroup, SequenceState, StopReason},
     StopTokens,
@@ -451,6 +451,16 @@ impl Engine {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time travel has occurred!");
+        let sampler = Sampler::new(
+            SEED,
+            Some(request.sampling_params.temperature.unwrap_or(1.0)),
+            sampling_method.clone(),
+            request.sampling_params.top_n_logprobs,
+            tokenizer.clone(),
+            request.sampling_params.repeat_penalty,
+            request.sampling_params.presence_penalty,
+            request.sampling_params.logits_bias.clone(),
+        );
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {
             let seq = Sequence::new_waiting(
@@ -459,16 +469,7 @@ impl Engine {
                 now.as_millis(),
                 num_hidden_layers,
                 request.response.clone(),
-                LogitsProcessor::new(
-                    SEED,
-                    Some(request.sampling_params.temperature.unwrap_or(1.0)),
-                    sampling_method.clone(),
-                    request.sampling_params.top_n_logprobs,
-                    tokenizer.clone(),
-                    request.sampling_params.repeat_penalty,
-                    request.sampling_params.presence_penalty,
-                    request.sampling_params.logits_bias.clone(),
-                ),
+                sampler.clone(),
                 stop_toks.clone(),
                 request.sampling_params.max_len,
                 request.return_logprobs,

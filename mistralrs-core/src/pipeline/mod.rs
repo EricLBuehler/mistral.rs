@@ -2,7 +2,7 @@ mod gemma;
 mod llama;
 mod mistral;
 mod mixtral;
-use candle_sampling::logits_processor::Logprobs;
+use crate::sampler::Logprobs;
 use core::fmt;
 use either::Either;
 pub use gemma::{GemmaLoader, GemmaSpecificConfig, GEMMA_IS_GPTX};

@@ -22,6 +22,7 @@ mod models;
 mod pipeline;
 mod request;
 mod response;
+mod sampler;
 mod sampling;
 mod scheduler;
 mod sequence;

@@ -4,6 +4,7 @@ use super::{
 };
 use crate::models::llama::MAX_SEQ_LEN;
 use crate::models::{quantized_llama, Cache};
+use crate::sampler::Logprobs;
 use crate::xlora_models::{NonGranularState, XLoraConfig, XLoraLlama, XLoraModelWeights};
 use crate::{deref_mut_refcell, deref_refcell, deserialize_chat_template};
 use crate::{
@@ -15,7 +16,6 @@ use crate::{
 use anyhow::Result;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Tensor};
-use candle_sampling::logits_processor::Logprobs;
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
@@ -460,7 +460,7 @@ impl Pipeline for LlamaPipeline {
         let ctxt = deref_refcell!(seq).get_toks()[start_at..].to_vec();
 
         Ok(deref_mut_refcell!(seq)
-            .logits_processor()
+            .sampler()
             .sample(&logits, Some(&ctxt))?)
     }
     fn tokenizer(&self) -> Tokenizer {
