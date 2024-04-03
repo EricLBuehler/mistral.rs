@@ -9,7 +9,7 @@ use std::{
 
 use candle_core::{Device, Tensor};
 use candle_sampling::logits_processor::{LogitsProcessor, SamplingMethod};
-use tracing::{event, Level};
+use tracing::warn;
 
 use crate::{
     deref_mut_refcell, deref_refcell, get_mut_arcmutex, handle_seq_error,
@@ -410,7 +410,7 @@ impl Engine {
                     10
                 };
                 prompt = prompt[(currently_over + sampling_max)..].to_vec();
-                event!(Level::WARN, "Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation.", request.id, currently_over, prompt_len - prompt.len());
+                warn!("Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation.", request.id, currently_over, prompt_len - prompt.len());
             }
         }
 

@@ -34,7 +34,7 @@ use openai::{ChatCompletionRequest, ModelObjects, StopTokens};
 use crate::openai::ModelObject;
 mod model_selected;
 mod openai;
-use tracing::{event, Level};
+use tracing::info;
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
@@ -666,21 +666,16 @@ async fn main() -> Result<()> {
     let device = Device::cuda_if_available(0)?;
 
     tracing_subscriber::fmt().init();
-    event!(
-        Level::INFO,
+    info!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
         candle_core::utils::with_avx(),
         candle_core::utils::with_neon(),
         candle_core::utils::with_simd128(),
         candle_core::utils::with_f16c()
     );
-    event!(
-        Level::INFO,
-        "Loading model `{}` on {device:?}...",
-        loader.get_id()
-    );
+    info!("Loading model `{}` on {device:?}...", loader.get_id());
     let pipeline = loader.load_model(None, args.token_source, None, &device)?;
-    event!(Level::INFO, "Model loaded.");
+    info!("Model loaded.");
     let mistralrs = MistralRs::new(
         pipeline,
         SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
@@ -697,7 +692,7 @@ async fn main() -> Result<()> {
         "0.0.0.0".to_string()
     };
     let listener = tokio::net::TcpListener::bind(format!("{ip}:{}", args.port)).await?;
-    event!(Level::INFO, "Serving on http://{ip}:{}.", args.port);
+    info!("Serving on http://{ip}:{}.", args.port);
     axum::serve(listener, app).await?;
 
     Ok(())

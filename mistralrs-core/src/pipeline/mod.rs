@@ -559,7 +559,7 @@ fn get_model_paths(
 #[macro_export]
 macro_rules! deserialize_chat_template {
     ($paths:expr, $this:ident) => {{
-        use tracing::{event, Level};
+        use tracing::info;
 
         let template: ChatTemplate = serde_json::from_str(&fs::read_to_string(
             $paths.get_template_filename(),
@@ -573,14 +573,14 @@ macro_rules! deserialize_chat_template {
         match template.chat_template {
             Some(_) => template,
             None => {
-                event!(Level::INFO, "`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
+                info!("`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
                 let mut deser: HashMap<String, Value> =
                     serde_json::from_str(&fs::read_to_string($paths.get_template_filename())?)
                         .unwrap();
                 match $this.chat_template.clone() {
                     Some(t) => {
                         if t.ends_with(".json") {
-                            event!(Level::INFO, "Loading specified loading chat template file at `{t}`.");
+                            info!("Loading specified loading chat template file at `{t}`.");
                             let templ: SpecifiedTemplate = serde_json::from_str(&fs::read_to_string(t.clone())?).unwrap();
                             deser.insert(
                                 "chat_template".to_string(),
@@ -598,22 +598,22 @@ macro_rules! deserialize_chat_template {
                                     Value::String(templ.eos_token.unwrap()),
                                 );
                             }
-                            event!(Level::INFO, "Loaded chat template file.");
+                            info!("Loaded chat template file.");
                         } else {
                             deser.insert(
                                 "chat_template".to_string(),
                                 Value::String(t),
                             );
-                            event!(Level::INFO, "Loaded specified literal chat template.");
+                            info!("Loaded specified literal chat template.");
                         }
                     },
                     None => {
-                        event!(Level::INFO, "No specified chat template, loading default chat template at `./default.json`.");
+                        info!("No specified chat template, loading default chat template at `./default.json`.");
                         deser.insert(
                             "chat_template".to_string(),
                             Value::String(fs::read_to_string("./default.json")?),
                         );
-                        event!(Level::INFO, "Default chat template loaded.");
+                        info!("Default chat template loaded.");
                     }
                 };
                 let ser = serde_json::to_string_pretty(&deser).unwrap();
