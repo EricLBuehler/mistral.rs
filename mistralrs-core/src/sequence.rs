@@ -5,7 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use candle_core::Tensor;
+use candle_core::{Device, IntDType, Result, Tensor};
 
 use crate::{
     deref_mut_refcell, deref_refcell,
@@ -48,7 +48,7 @@ pub struct Sequence {
     max_len: Option<usize>,
     timestamp: u128,
     sampler: Sampler,
-    stop_tokens: Vec<u32>,
+    stop_tokens: Vec<Tensor>, // scalar
     return_logprobs: bool,
     responder: Sender<Response>,
     response_index: usize,
@@ -60,8 +60,10 @@ pub struct Sequence {
     xlora_cache: Option<Vec<Option<(Tensor, Tensor)>>>,
 
     // Mutables
-    tokens: Vec<u32>,
+    tokens: Tensor,
     logprobs: Vec<Logprobs>,
+    position: Tensor, // scalar
+    position_usize: usize,
 
     // GPU things
     pub prompt_tok_per_sec: f32,
@@ -74,21 +76,22 @@ pub struct Sequence {
 impl Sequence {
     #[allow(clippy::too_many_arguments)]
     pub fn new_waiting(
-        tokens: Vec<u32>,
+        tokens: Tensor,
         id: usize,
         timestamp: u128,
         layers: usize,
         responder: Sender<Response>,
         sampler: Sampler,
-        stop_tokens: Vec<u32>,
+        stop_tokens: Vec<Tensor>,
         max_len: Option<usize>,
         return_logprobs: bool,
         is_xlora: bool,
         group: Rc<RefCell<SequenceGroup>>,
         response_index: usize,
         creation_time: u64,
+        device: &Device,
     ) -> Self {
-        let prompt_len = tokens.len();
+        let prompt_len = tokens.dims1().unwrap();
         Self {
             tokens,
             logprobs: Vec::new(),
@@ -114,11 +117,13 @@ impl Sequence {
             total_sampling_time: 0,
             response_index,
             creation_time,
+            position: Tensor::new(0i64, device).unwrap(),
+            position_usize: 0,
         }
     }
 
     pub fn len(&self) -> usize {
-        self.tokens.len()
+        self.tokens.dims1().unwrap()
     }
 
     pub fn id(&self) -> &usize {
@@ -142,7 +147,7 @@ impl Sequence {
         self.state.get() == SequenceState::Waiting
     }
 
-    pub fn get_toks(&self) -> &[u32] {
+    pub fn get_toks(&self) -> &Tensor {
         &self.tokens
     }
 
@@ -166,9 +171,10 @@ impl Sequence {
         &mut self.sampler
     }
 
-    pub fn add_token(&mut self, tok: Logprobs) {
-        self.tokens.push(tok.token);
+    pub fn add_token(&mut self, tok: Logprobs) -> Result<()> {
+        self.tokens = Tensor::cat(&[&self.tokens, &tok.token.unsqueeze(0)?], 0)?;
         self.logprobs.push(tok);
+        Ok(())
     }
 
     pub fn responder(&self) -> Sender<Response> {
@@ -186,17 +192,35 @@ impl Sequence {
         self.state.set(state);
     }
 
-    pub fn is_done(&self, tok: u32, eos_tok: u32, max_model_len: usize) -> Option<StopReason> {
-        if tok == eos_tok {
+    pub fn is_done(
+        &self,
+        tok: Tensor,
+        eos_tok: Tensor,
+        max_model_len: usize,
+    ) -> Option<StopReason> {
+        if eos_tok
+            .eq(&tok)
+            .unwrap()
+            .to_scalar::<u8>()
+            .unwrap()
+            .is_true()
+        {
             Some(StopReason::Eos)
-        } else if self.stop_tokens.contains(&tok) {
-            Some(StopReason::StopTok(tok))
+        } else if self.stop_tokens.iter().any(|stop_t| {
+            stop_t
+                .eq(&tok)
+                .unwrap()
+                .to_scalar::<u8>()
+                .unwrap()
+                .is_true()
+        }) {
+            Some(StopReason::StopTok(tok.to_scalar::<u32>().unwrap()))
         } else if self.max_len.is_some()
-            && self.tokens.len().saturating_sub(self.prompt_len) == self.max_len.unwrap()
+            && self.len().saturating_sub(self.prompt_len) == self.max_len.unwrap()
         {
             // add_token was already called
             Some(StopReason::Length(self.max_len.unwrap()))
-        } else if self.tokens.len().saturating_sub(self.prompt_len) == max_model_len {
+        } else if self.len().saturating_sub(self.prompt_len) == max_model_len {
             Some(StopReason::ModelLength(max_model_len))
         } else {
             None
@@ -221,6 +245,14 @@ impl Sequence {
 
     pub fn prompt_timestamp(&self) -> Option<u128> {
         self.prompt_timestamp
+    }
+
+    pub fn get_position_scalar(&mut self) -> &mut Tensor {
+        &mut self.position
+    }
+
+    pub fn get_position_usize(&mut self) -> &mut usize {
+        &mut self.position_usize
     }
 
     pub fn add_choice_to_group(&self, choice: Choice) {

@@ -2,9 +2,15 @@ use std::error::Error;
 
 use serde::Serialize;
 
-use crate::sampler::TopLogprob;
-
 pub const SYSTEM_FINGERPRINT: &str = "local";
+
+#[derive(Debug, Clone, Serialize)]
+// Top-n logprobs element
+pub struct TopLogprob {
+    pub token: u32,
+    pub logprob: f32,
+    pub bytes: String,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ResponseMessage {

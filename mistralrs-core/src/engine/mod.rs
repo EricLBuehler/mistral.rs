@@ -17,7 +17,7 @@ use crate::{
     request::Request,
     response::{
         ChatCompletionResponse, Choice, ChunkChoice, Delta, Logprobs, Response, ResponseLogprob,
-        ResponseMessage, SYSTEM_FINGERPRINT,
+        ResponseMessage, TopLogprob, SYSTEM_FINGERPRINT,
     },
     sampler::Sampler,
     scheduler::{Scheduler, SchedulerMethod},
@@ -137,11 +137,14 @@ impl Engine {
             // Sample and extract next token
             let sampled = get_mut_arcmutex!(self.pipeline).sample(logits_per_seq, seq.clone());
             let next_token = handle_seq_error_stateaware!(sampled, seq);
-            let next_token_id = next_token.token;
-            deref_mut_refcell!(seq).add_token(next_token.clone());
+            let next_token_id = next_token.token.clone();
+            handle_seq_error_stateaware!(
+                deref_mut_refcell!(seq).add_token(next_token.clone()),
+                seq
+            );
             let is_done = deref_refcell!(seq).is_done(
                 next_token_id,
-                eos_tok,
+                eos_tok.clone(),
                 get_mut_arcmutex!(self.pipeline).get_max_seq_len(),
             );
             // Handle streaming requests
@@ -149,12 +152,20 @@ impl Engine {
                 let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer().clone();
                 let logprob = ResponseLogprob {
                     token: handle_seq_error!(
-                        tokenizer.decode(&[next_token.token], false),
+                        tokenizer.decode(&[next_token.token.to_scalar::<u32>().unwrap()], false),
                         deref_refcell!(seq).responder()
                     ),
                     bytes: next_token.bytes.clone().into_bytes(),
                     logprob: next_token.logprob,
-                    top_logprobs: next_token.top_logprobs.clone(),
+                    top_logprobs: next_token
+                        .top_logprobs
+                        .iter()
+                        .map(|x| TopLogprob {
+                            token: x.token.to_scalar::<u32>().unwrap(),
+                            logprob: x.logprob,
+                            bytes: x.bytes.clone(),
+                        })
+                        .collect::<Vec<_>>(),
                 };
                 deref_refcell!(seq).add_streaming_chunk_choice_to_group(ChunkChoice {
                     delta: Delta {
@@ -195,19 +206,28 @@ impl Engine {
         for logprob in deref_refcell!(seq).logprobs() {
             let resp_logprob = ResponseLogprob {
                 token: handle_seq_error!(
-                    tokenizer.decode(&[logprob.token], false),
+                    tokenizer.decode(&[logprob.token.to_scalar::<u32>().unwrap()], false),
                     deref_refcell!(seq).responder()
                 ),
                 bytes: logprob.bytes.clone().into_bytes(),
                 logprob: logprob.logprob,
-                top_logprobs: logprob.top_logprobs.clone(),
+                top_logprobs: logprob
+                    .top_logprobs
+                    .iter()
+                    .map(|x| TopLogprob {
+                        token: x.token.to_scalar::<u32>().unwrap(),
+                        logprob: x.logprob,
+                        bytes: x.bytes.clone(),
+                    })
+                    .collect::<Vec<_>>(),
             };
             logprobs.push(resp_logprob);
         }
 
         let res = handle_seq_error!(
             get_mut_arcmutex!(self.pipeline).tokenizer().decode(
-                &deref_refcell!(seq).get_toks()[deref_refcell!(seq).prompt_tokens()..],
+                &deref_refcell!(seq).get_toks().to_vec1::<u32>().unwrap()
+                    [deref_refcell!(seq).prompt_tokens()..],
                 false
             ),
             deref_refcell!(seq).responder()
@@ -467,19 +487,28 @@ impl Engine {
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {
             let seq = Sequence::new_waiting(
-                prompt.clone(),
+                Tensor::from_slice(
+                    &prompt,
+                    prompt.len(),
+                    get_mut_arcmutex!(self.pipeline).device(),
+                )
+                .unwrap(),
                 self.id,
                 now.as_millis(),
                 num_hidden_layers,
                 request.response.clone(),
                 sampler.clone(),
-                stop_toks.clone(),
+                stop_toks
+                    .iter()
+                    .map(|x| Tensor::new(*x, get_mut_arcmutex!(self.pipeline).device()).unwrap())
+                    .collect::<Vec<_>>(),
                 request.sampling_params.max_len,
                 request.return_logprobs,
                 get_mut_arcmutex!(self.pipeline).is_xlora(),
                 group.clone(),
                 response_index,
                 now.as_secs(),
+                get_mut_arcmutex!(self.pipeline).device(),
             );
             self.id += 1;
             self.scheduler.add_seq(seq);

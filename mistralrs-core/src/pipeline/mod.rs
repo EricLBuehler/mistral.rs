@@ -2,7 +2,7 @@ mod gemma;
 mod llama;
 mod mistral;
 mod mixtral;
-use crate::sampler::Logprobs;
+use crate::{deref_mut_refcell, sampler::Logprobs};
 use core::fmt;
 use either::Either;
 pub use gemma::{GemmaLoader, GemmaSpecificConfig, GEMMA_IS_GPTX};
@@ -18,8 +18,7 @@ use mistralrs_lora::{LoraConfig, Ordering};
 pub use mixtral::{MixtralLoader, MixtralSpecificConfig, MIXTRAL_IS_GPTX};
 use serde::Deserialize;
 use std::{
-    cell::RefCell, collections::HashMap, fs, iter::repeat, path::PathBuf, rc::Rc, str::FromStr,
-    sync::Mutex,
+    cell::RefCell, collections::HashMap, fs, path::PathBuf, rc::Rc, str::FromStr, sync::Mutex,
 };
 use tokenizers::Tokenizer;
 
@@ -189,7 +188,7 @@ pub trait Pipeline: Send + Sync {
     fn cache(&self) -> &Cache;
     fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs>;
     fn tokenizer(&self) -> Tokenizer;
-    fn eos_tok(&self) -> u32;
+    fn eos_tok(&self) -> Tensor;
     fn name(&self) -> String;
     fn get_max_seq_len(&self) -> usize;
     fn is_xlora(&self) -> bool;
@@ -242,84 +241,95 @@ pub trait Pipeline: Send + Sync {
         }
     }
 }
-
 struct InputMetadata {
     input: Tensor,
     positions: Vec<usize>,
     positions_kernel: Tensor, // [bs, seq len]
 }
 
-fn get_prompt_input(
-    input_toks: &[Rc<RefCell<Sequence>>],
-    device: &Device,
-) -> Result<InputMetadata> {
+fn get_prompt_input(input_toks: &[Rc<RefCell<Sequence>>]) -> Result<InputMetadata> {
     // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
     let max_len = input_toks
         .iter()
         .map(|seq| deref_refcell!(seq).len())
         .max()
         .unwrap();
-    let padding_tok = 0;
     // Pad each sequence by the padding token to the max len.
     let mut seqs_tensors = Vec::new();
     let mut seqlen_offsets = Vec::new();
+    let mut seqlen_offsets_usize = Vec::new();
     for seq in input_toks.iter() {
-        let mut ctxt = deref_refcell!(seq).get_toks().to_vec();
-        seqlen_offsets.push(0);
-
-        ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
+        let ctxt = deref_refcell!(seq).get_toks().clone();
+        let len = deref_refcell!(seq).len();
+        let dev = deref_mut_refcell!(seq)
+            .get_position_scalar()
+            .device()
+            .clone();
+        seqlen_offsets.push(
+            Tensor::arange(0i64, max_len as i64, &dev)
+                .unwrap()
+                .unsqueeze(0)
+                .unwrap(),
+        );
+        seqlen_offsets_usize.push(*deref_mut_refcell!(seq).get_position_usize());
+        *deref_mut_refcell!(seq).get_position_scalar() = Tensor::new(len as i64, &dev).unwrap();
+        *deref_mut_refcell!(seq).get_position_usize() = len;
 
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
-        seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
+        seqs_tensors.push(
+            ctxt.pad_with_zeros(0, 0, max_len - len)?
+                .unsqueeze(0)
+                .unwrap(),
+        );
     }
 
-    let mut tmp = Vec::new();
-    for pos in (0..seqs_tensors.len())
-        .map(|_| (0..max_len).map(|x| x as i64).collect::<Vec<_>>())
-        .collect::<Vec<_>>()
-    {
-        tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
-    }
-    let positions_kernel = Tensor::cat(&tmp, 0)?;
+    let positions_kernel = Tensor::cat(&seqlen_offsets, 0)?;
     // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
     Ok(InputMetadata {
         input: Tensor::cat(&seqs_tensors, 0).unwrap(),
-        positions: seqlen_offsets,
+        positions: seqlen_offsets_usize,
         positions_kernel,
     })
 }
 
 fn get_completion_input(
     input_toks: &[Rc<RefCell<Sequence>>],
-    device: &Device,
     no_kv_cache: bool,
+    incrementor: &Tensor,
 ) -> Result<InputMetadata> {
     if no_kv_cache {
-        return get_prompt_input(input_toks, device);
+        return get_prompt_input(input_toks);
     }
-    // Pad each sequence by the padding token to the max len.
     let mut seqs_tensors = Vec::new();
     let mut seqlen_offsets = Vec::new();
+    let mut seqlen_offsets_usize = Vec::new();
     for seq in input_toks.iter() {
-        let start_pos = deref_refcell!(seq).get_toks().len().saturating_sub(1);
-        let ctxt = deref_refcell!(seq).get_toks()[start_pos..].to_vec();
-        seqlen_offsets.push(start_pos);
+        let start_pos = deref_refcell!(seq).len().saturating_sub(1);
+        let ctxt = deref_refcell!(seq).get_toks().narrow(0, start_pos, 1)?;
+
+        seqlen_offsets.push(
+            deref_mut_refcell!(seq)
+                .get_position_scalar()
+                .clone()
+                .unsqueeze(0)
+                .unwrap(),
+        );
+        seqlen_offsets_usize.push(*deref_mut_refcell!(seq).get_position_usize());
+        let new_scalar = deref_mut_refcell!(seq)
+            .get_position_scalar()
+            .add(incrementor)?;
+        *deref_mut_refcell!(seq).get_position_scalar() = new_scalar;
+        *deref_mut_refcell!(seq).get_position_usize() += 1;
 
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
-        seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
+        seqs_tensors.push(ctxt.unsqueeze(0).unwrap());
     }
+
+    let positions_kernel = Tensor::cat(&seqlen_offsets, 0)?;
     // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
-    let mut tmp = Vec::new();
-    for pos in (0..seqs_tensors.len())
-        .map(|i| vec![*seqlen_offsets.get(i).unwrap() as i64])
-        .collect::<Vec<_>>()
-    {
-        tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
-    }
-    let positions_kernel = Tensor::cat(&tmp, 0)?;
     Ok(InputMetadata {
         input: Tensor::cat(&seqs_tensors, 0).unwrap(),
-        positions: seqlen_offsets,
+        positions: seqlen_offsets_usize,
         positions_kernel,
     })
 }
@@ -337,20 +347,20 @@ fn calculate_inputs(
     input_toks: Box<[Rc<RefCell<Sequence>>]>,
     is_prompt: bool,
     is_xlora: bool,
-    device: &Device,
     no_kv_cache: bool,
+    incrementor: &Tensor,
 ) -> Result<ModelInputs> {
     if is_xlora && !is_prompt {
         let InputMetadata {
             input: input_ids_full,
             positions: seqlen_offsets_full,
             positions_kernel: seqlen_offsets_kernel_full,
-        } = get_prompt_input(&input_toks, device)?;
+        } = get_prompt_input(&input_toks)?;
         let InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_completion_input(&input_toks, device, no_kv_cache)?;
+        } = get_completion_input(&input_toks, no_kv_cache, incrementor)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: Some(input_ids_full),
@@ -364,7 +374,7 @@ fn calculate_inputs(
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_prompt_input(&input_toks, device)?;
+        } = get_prompt_input(&input_toks)?;
         Ok(ModelInputs {
             input_ids: input_ids.clone(),
             input_ids_full: Some(input_ids),
@@ -378,7 +388,7 @@ fn calculate_inputs(
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_prompt_input(&input_toks, device)?;
+        } = get_prompt_input(&input_toks)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: None,
@@ -392,7 +402,7 @@ fn calculate_inputs(
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_completion_input(&input_toks, device, no_kv_cache)?;
+        } = get_completion_input(&input_toks, no_kv_cache, incrementor)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: None,
