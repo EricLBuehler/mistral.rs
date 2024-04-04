@@ -190,7 +190,7 @@ impl Sampler {
         let logprob = probs[next_token].log(10.0);
 
         let top_logprobs = if return_logprobs {
-            Some(self.get_top_logprobs(&probs, &argsort_indices)?)
+            Some(self.get_top_logprobs(probs, &argsort_indices)?)
         } else {
             None
         };

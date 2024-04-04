@@ -226,13 +226,7 @@ impl Engine {
                 content: res,
                 role: "assistant".to_string(),
             },
-            logprobs: if let Some(logprobs) = logprobs {
-                Some(Logprobs {
-                    content: Some(logprobs),
-                })
-            } else {
-                None
-            },
+            logprobs: logprobs.map(|l| Logprobs { content: Some(l) }),
         };
         deref_mut_refcell!(seq).add_choice_to_group(choice);
 
