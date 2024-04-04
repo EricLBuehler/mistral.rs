@@ -1,4 +1,5 @@
 use std::{
+    env,
     error::Error,
     fs::File,
     pin::Pin,
@@ -198,7 +199,11 @@ async fn chatcompletions(
         ChatCompletionResponder::Sse(
             Sse::new(streamer).keep_alive(
                 KeepAlive::new()
-                    .interval(Duration::from_secs(1))
+                    .interval(Duration::from_millis(
+                        env::var("KEEP_ALIVE_INTERVAL")
+                            .map(|val| val.parse::<u64>().unwrap_or(1000))
+                            .unwrap_or(1000),
+                    ))
                     .text("keep-alive-text"),
             ),
         )
