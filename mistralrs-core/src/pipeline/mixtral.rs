@@ -235,7 +235,8 @@ impl Loader for MixtralLoader {
         dtype: Option<DType>,
         device: &Device,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
-        let basic_config: BasicConfig =
+        todo!()
+        /*let basic_config: BasicConfig =
             serde_json::from_slice(&std::fs::read(paths.get_config_filename())?)?;
         let config = Config {
             vocab_size: basic_config.vocab_size,
@@ -359,7 +360,7 @@ impl Loader for MixtralLoader {
                 }
             }),
             model_id: self.model_id.clone(),
-        })))
+        })))*/
     }
 
     fn get_id(&self) -> &str {

@@ -19,6 +19,7 @@ pub use pipeline::Pipeline;
 
 mod engine;
 mod models;
+mod parallel;
 mod pipeline;
 mod request;
 mod response;

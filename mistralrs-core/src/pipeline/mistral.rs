@@ -17,6 +17,8 @@ use anyhow::Result;
 use candle_core::quantized::gguf_file;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Activation;
+use cudarc::driver::CudaDevice;
+use cudarc::nccl::{Comm, Id};
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
@@ -273,11 +275,27 @@ impl Loader for MistralLoader {
                     false,
                 )?;
 
-                let model = NormalModel::new(&config, vb)?;
+                let shard_size = 1;
+                info!("Loading model with shard size {shard_size}.");
+
+                let model = NormalModel::new(
+                    &config,
+                    vb,
+                    Some(Arc::new(
+                        Comm::from_rank(
+                            CudaDevice::new(0).unwrap(),
+                            0,
+                            shard_size,
+                            Id::new().unwrap(),
+                        )
+                        .unwrap(),
+                    )),
+                )?;
                 Model::Normal(model)
             }
             ModelKind::XLoraNormal => {
-                let mut safetensors_paths = paths.get_weight_filenames().iter().collect::<Vec<_>>();
+                todo!()
+                /*let mut safetensors_paths = paths.get_weight_filenames().iter().collect::<Vec<_>>();
                 safetensors_paths.push(paths.get_classifier_path().as_ref().unwrap());
                 let vb = from_mmaped_safetensors(
                     safetensors_paths
@@ -303,9 +321,11 @@ impl Loader for MistralLoader {
                     paths.get_classifier_config().as_ref().unwrap().clone(),
                     paths.get_ordering().as_ref().unwrap().clone(),
                 )?;
-                Model::XLoraNormal(model)
+                Model::XLoraNormal(model)*/
             }
             ModelKind::XLoraGGUF => {
+                todo!()
+                /*
                 let vb = from_mmaped_safetensors(
                     vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()],
                     paths
@@ -332,7 +352,7 @@ impl Loader for MistralLoader {
                     paths.get_ordering().as_ref().unwrap(),
                     paths.get_classifier_config().as_ref().unwrap().clone(),
                 )?;
-                Model::XLoraQuantized(model)
+                Model::XLoraQuantized(model)*/
             }
             ModelKind::XLoraGGML => unreachable!(),
         };

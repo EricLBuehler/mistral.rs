@@ -3,15 +3,17 @@
 use std::{collections::HashMap, path::PathBuf, thread};
 
 use candle_core::{DType, Device, Result, Var};
-use candle_nn::{
-    var_builder::{SimpleBackend, VarBuilderArgs},
-    VarBuilder, VarMap,
-};
+#[cfg(feature = "nccl")]
+use candle_nn::var_builder::ShardedVarBuilder;
+#[cfg(not(feature = "nccl"))]
+use candle_nn::var_builder::{SimpleBackend, VarBuilderArgs};
+use candle_nn::{VarBuilder, VarMap};
 
 use tqdm::Iter;
 
 /// Load tensors into a VarBuilder backed by a VarMap using MmapedSafetensors.
 /// Set `silent` to not show a progress bar.
+#[cfg(not(feature = "nccl"))]
 pub(crate) fn from_mmaped_safetensors<'a>(
     paths: Vec<PathBuf>,
     xlora_paths: Vec<PathBuf>,
@@ -139,4 +141,26 @@ pub(crate) fn from_mmaped_safetensors<'a>(
     }
 
     Ok(VarBuilder::from_varmap(&map, dtype, device))
+}
+
+/// Load tensors into a VarBuilder backed by a VarMap using MmapedSafetensors.
+/// Set `silent` to not show a progress bar.
+#[cfg(feature = "nccl")]
+pub(crate) fn from_mmaped_safetensors<'a>(
+    paths: Vec<PathBuf>,
+    xlora_paths: Vec<PathBuf>,
+    dtype: DType,
+    device: &Device,
+    silent: bool,
+) -> Result<ShardedVarBuilder> {
+    use candle_nn::var_builder::ShardedSafeTensors;
+    use tracing::info;
+
+    info!("Loading weights into sharded saftensors.");
+
+    if !xlora_paths.is_empty() {
+        unimplemented!("Cannot support X-LoRA paths for nccl sharded safetensors loading");
+    }
+
+    Ok(unsafe { ShardedSafeTensors::var_builder(&paths, dtype, device)? })
 }

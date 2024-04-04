@@ -217,7 +217,8 @@ impl Loader for LlamaLoader {
         dtype: Option<DType>,
         device: &Device,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
-        let basic_config: LlamaConfig =
+        todo!()
+        /*let basic_config: LlamaConfig =
             serde_json::from_slice(&std::fs::read(paths.get_config_filename())?)?;
         let default_dtype = if device.is_cuda() {
             DType::BF16
@@ -366,7 +367,7 @@ impl Loader for LlamaLoader {
                 }
             }),
             model_id: self.model_id.clone(),
-        })))
+        })))*/
     }
 
     fn get_id(&self) -> &str {
