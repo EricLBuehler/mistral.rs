@@ -100,10 +100,10 @@ impl Sampler {
         vocab_size: usize,
     ) -> Result<BinCountsAndMask> {
         // Use vocab_size + 1 to account for padding
-        let bin_counts = Tensor::zeros(vocab_size, DType::F32, logits.device())?
+        let bin_counts = Tensor::zeros(vocab_size, DType::I64, logits.device())?
             .scatter_add(&logits, &logits.ones_like()?, 0)?
             .i((.., ..vocab_size))?;
-        let mask = bin_counts.ge(0f32)?;
+        let mask = bin_counts.ge(0i64)?;
         Ok(BinCountsAndMask { bin_counts, mask })
     }
 
@@ -116,7 +116,7 @@ impl Sampler {
         let logits = (logits
             - &presence_penalties
                 .unsqueeze(1)?
-                .broadcast_mul(&bin_counts)?)?;
+                .broadcast_mul(&bin_counts.to_dtype(DType::F32)?)?)?;
         let logits = (logits - &freq_penalties.unsqueeze(1)?.broadcast_mul(&mask)?)?;
         Ok(logits)
     }
