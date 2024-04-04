@@ -237,10 +237,15 @@ async fn models(State(state): State<Arc<MistralRs>>) -> String {
     .unwrap()
 }
 
+async fn health() -> &'static str {
+    "OK"
+}
+
 fn get_router(state: Arc<MistralRs>) -> Router {
     Router::new()
         .route("/v1/chat/completions", post(chatcompletions))
         .route("/v1/models", get(models))
+        .route("/health", get(health))
         .with_state(state)
 }
 
