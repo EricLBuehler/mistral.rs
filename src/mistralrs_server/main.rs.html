@@ -700,6 +700,7 @@
 <a href="#698" id="698">698</a>
 <a href="#699" id="699">699</a>
 <a href="#700" id="700">700</a>
+<a href="#701" id="701">701</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     error::Error,
     fs::File,
@@ -1377,6 +1378,7 @@
     );
     <span class="macro">info!</span>(<span class="string">"Sampling method: penalties -&gt; temperature -&gt; topk -&gt; topp -&gt; multinomial"</span>);
     <span class="macro">info!</span>(<span class="string">"Loading model `{}` on {device:?}..."</span>, loader.get_id());
+    <span class="macro">info!</span>(<span class="string">"Model kind is: {}"</span>, loader.get_kind().as_ref());
     <span class="kw">let </span>pipeline = loader.load_model(<span class="prelude-val">None</span>, args.token_source, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>;
     <span class="macro">info!</span>(<span class="string">"Model loaded."</span>);
     <span class="kw">let </span>mistralrs = MistralRs::new(
