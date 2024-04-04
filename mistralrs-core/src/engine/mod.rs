@@ -135,11 +135,13 @@ impl Engine {
         let eos_tok = get_mut_arcmutex!(self.pipeline).eos_tok();
         for (logits_per_seq, seq) in zip(logits_seq, seqs.iter()) {
             // Sample and extract next token
+            println!("a");
             let sampled = get_mut_arcmutex!(self.pipeline).sample(
                 logits_per_seq,
                 seq.clone(),
                 deref_refcell!(seq).return_logprobs(),
             );
+            println!("b");
             let next_token = handle_seq_error_stateaware!(sampled, seq);
             let next_token_id = next_token.token;
             deref_mut_refcell!(seq).add_token(next_token.clone());
