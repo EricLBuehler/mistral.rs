@@ -12,6 +12,7 @@ use tokenizers::Tokenizer;
 use crate::{
     deref_mut_refcell, deref_refcell,
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
+    sampler::{Logprobs, Sampler},
     ChatCompletionResponse, ChatCompletionUsage,
 };
 
@@ -49,7 +50,7 @@ pub struct Sequence {
     prompt_len: usize,
     max_len: Option<usize>,
     timestamp: u128,
-    logits_processor: LogitsProcessor,
+    sampler: Sampler,
     stop_tokens: Vec<u32>,
     return_logprobs: bool,
     responder: Sender<Response>,
@@ -83,7 +84,7 @@ impl Sequence {
         timestamp: u128,
         layers: usize,
         responder: Sender<Response>,
-        logits_processor: LogitsProcessor,
+        sampler: Sampler,
         stop_tokens: Vec<u32>,
         max_len: Option<usize>,
         return_logprobs: bool,
@@ -109,7 +110,7 @@ impl Sequence {
                 None
             },
             responder,
-            logits_processor,
+            sampler,
             stop_tokens,
             max_len,
             return_logprobs,
@@ -168,8 +169,8 @@ impl Sequence {
         self.xlora_cache.is_some()
     }
 
-    pub fn logits_processor(&mut self) -> &mut LogitsProcessor {
-        &mut self.logits_processor
+    pub fn sampler(&mut self) -> &mut Sampler {
+        &mut self.sampler
     }
 
     pub fn add_token(&mut self, tok: Logprobs) {

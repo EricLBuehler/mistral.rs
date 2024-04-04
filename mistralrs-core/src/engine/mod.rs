@@ -8,7 +8,7 @@ use std::{
 };
 
 use candle_core::{Device, Tensor};
-use candle_sampling::logits_processor::{LogitsProcessor, SamplingMethod};
+use tracing::warn;
 
 use crate::{
     deref_mut_refcell, deref_refcell, get_mut_arcmutex, handle_seq_error,
@@ -19,6 +19,7 @@ use crate::{
         ChatCompletionResponse, Choice, ChunkChoice, Delta, Logprobs, Response, ResponseLogprob,
         ResponseMessage, SYSTEM_FINGERPRINT,
     },
+    sampler::Sampler,
     scheduler::{Scheduler, SchedulerMethod},
     sequence::{Sequence, SequenceGroup, SequenceState, StopReason},
     StopTokens,
@@ -399,18 +400,25 @@ impl Engine {
                 let max_len = get_mut_arcmutex!(self.pipeline).get_max_seq_len();
                 let currently_over = prompt_len - max_len;
                 let sampling_max = if let Some(sampling_max) = request.sampling_params.max_len {
-                    sampling_max
+                    if currently_over + sampling_max >= prompt_len {
+                        10
+                    } else {
+                        sampling_max
+                    }
                 } else {
                     10
                 };
                 prompt = prompt[(currently_over + sampling_max)..].to_vec();
+                warn!("Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation.", request.id, currently_over, prompt_len - prompt.len());
             }
         }
 
-        let sampling_method = SamplingMethod::TopKP((
-            request.sampling_params.top_k.unwrap_or(32),
-            request.sampling_params.top_p.unwrap_or(1.0),
-        ));
+        let topk = request
+            .sampling_params
+            .top_k
+            .map(|x| x as i64)
+            .unwrap_or(-1);
+        let topp = request.sampling_params.top_p.unwrap_or(1.0);
         let num_hidden_layers = get_mut_arcmutex!(self.pipeline).num_hidden_layers();
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
 
@@ -444,6 +452,17 @@ impl Engine {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time travel has occurred!");
+        let sampler = Sampler::new(
+            SEED,
+            Some(request.sampling_params.temperature.unwrap_or(1.0)),
+            request.sampling_params.top_n_logprobs,
+            tokenizer.clone(),
+            request.sampling_params.repeat_penalty,
+            request.sampling_params.presence_penalty,
+            request.sampling_params.logits_bias.clone(),
+            topk,
+            topp,
+        );
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {
             let seq = Sequence::new_waiting(
@@ -453,16 +472,7 @@ impl Engine {
                 now.as_millis(),
                 num_hidden_layers,
                 request.response.clone(),
-                LogitsProcessor::new(
-                    SEED,
-                    Some(request.sampling_params.temperature.unwrap_or(1.0)),
-                    sampling_method.clone(),
-                    request.sampling_params.top_n_logprobs,
-                    tokenizer.clone(),
-                    request.sampling_params.repeat_penalty,
-                    request.sampling_params.presence_penalty,
-                    request.sampling_params.logits_bias.clone(),
-                ),
+                sampler.clone(),
                 stop_toks.clone(),
                 request.sampling_params.max_len,
                 request.return_logprobs,

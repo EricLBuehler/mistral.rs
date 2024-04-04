@@ -34,6 +34,7 @@ use openai::{ChatCompletionRequest, ModelObjects, StopTokens};
 use crate::openai::ModelObject;
 mod model_selected;
 mod openai;
+use tracing::info;
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
@@ -157,6 +158,7 @@ fn parse_request(
     }
 
     Request {
+        id: state.next_request_id(),
         messages,
         sampling_params: SamplingParams {
             temperature: oairequest.temperature,
@@ -663,16 +665,18 @@ async fn main() -> Result<()> {
     #[cfg(not(feature = "metal"))]
     let device = Device::cuda_if_available(0)?;
 
-    println!(
+    tracing_subscriber::fmt().init();
+    info!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
         candle_core::utils::with_avx(),
         candle_core::utils::with_neon(),
         candle_core::utils::with_simd128(),
         candle_core::utils::with_f16c()
     );
-    println!("Loading model `{}` on {device:?}...", loader.get_id());
+    info!("Sampling method: penalties -> temperature -> topk -> topp -> multinomial");
+    info!("Loading model `{}` on {device:?}...", loader.get_id());
     let pipeline = loader.load_model(None, args.token_source, None, &device)?;
-    println!("Model loaded.");
+    info!("Model loaded.");
     let mistralrs = MistralRs::new(
         pipeline,
         SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
@@ -689,7 +693,7 @@ async fn main() -> Result<()> {
         "0.0.0.0".to_string()
     };
     let listener = tokio::net::TcpListener::bind(format!("{ip}:{}", args.port)).await?;
-    println!("Serving on http://{ip}:{}.", args.port);
+    info!("Serving on http://{ip}:{}.", args.port);
     axum::serve(listener, app).await?;
 
     Ok(())
