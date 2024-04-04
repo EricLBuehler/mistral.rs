@@ -110,6 +110,9 @@ impl Sampler {
     fn apply_penalties(&self, logits: Tensor) -> Result<Tensor> {
         let BinCountsAndMask { bin_counts, mask } =
             self.get_bin_counts_and_mask(&logits, self.vocab_size)?;
+        dbg!(&bin_counts);
+        dbg!(&mask);
+        dbg!(&logits);
         let presence_penalties =
             Tensor::new(self.params.presence_penalty.unwrap(), logits.device())?;
         let freq_penalties = Tensor::new(self.params.freq_penalty.unwrap(), logits.device())?;
