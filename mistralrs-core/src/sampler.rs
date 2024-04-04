@@ -117,7 +117,7 @@ impl Sampler {
             - &presence_penalties
                 .unsqueeze(1)?
                 .broadcast_mul(&bin_counts.to_dtype(DType::F32)?)?)?;
-        let logits = (logits - &freq_penalties.unsqueeze(1)?.broadcast_mul(&mask)?)?;
+        let logits = (logits - &freq_penalties.unsqueeze(1)?.broadcast_mul(&mask.to_dtype(DType::F32)?)?)?;
         Ok(logits)
     }
 
