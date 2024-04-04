@@ -21,7 +21,7 @@ Mistral.rs is a LLM inference platform written in pure, safe Rust.
 - Lightweight OpenAI API compatible HTTP server.
 - Python API.
 - Apple silicon support with the Metal framework.
-- CPU inference with `mkl`, `accelerate` suport and optimized backend.
+- CPU inference with `mkl`, `accelerate` support and optimized backend.
 
 **Supported models:**
 - Mistral 7B
@@ -80,7 +80,7 @@ OpenAI API compatible API server
   - Flash attention support with `flash-attn` feature, only applicable to non-quantized models.
   - CUDNN support with `cudnn` feature.
 - Metal:
-  - Eanble with `metal` feature.
+  - Enable with `metal` feature.
 - CPU:
   - Intel MKL with `mkl` feature.
   - Apple Accelerate with `accelerate` feature.
