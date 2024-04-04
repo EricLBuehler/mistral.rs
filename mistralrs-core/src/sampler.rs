@@ -80,7 +80,7 @@ impl Sampler {
                 let logits = candle_nn::ops::softmax_last_dim(&logits)?;
 
                 // Apply topk, topp
-                let logits = self.apply_topk_topp(logits)?;
+                //let logits = self.apply_topk_topp(logits)?;
                 logits.argmax(D::Minus1)?
             }
         };
