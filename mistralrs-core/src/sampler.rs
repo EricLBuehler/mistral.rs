@@ -73,7 +73,7 @@ impl Sampler {
             None => logits.argmax(D::Minus1)?,
             Some(temperature) => {
                 // Apply penalties
-                let logits = self.apply_penalties(logits)?;
+                //let logits = self.apply_penalties(logits)?;
 
                 // Apply temperature scaling
                 let logits = (&logits / temperature)?;
@@ -99,7 +99,7 @@ impl Sampler {
         logits: &Tensor,
         vocab_size: usize,
     ) -> Result<BinCountsAndMask> {
-        // Use vocab_size + 1 to account for padding
+        // TODO(EricLBuehler): The bug is here: need to not take logits, take output token IDs.
         let bin_counts = Tensor::zeros(vocab_size, DType::I64, logits.device())?
             .scatter_add(&logits, &logits.ones_like()?, 0)?
             .i((.., ..vocab_size))?;
@@ -110,9 +110,6 @@ impl Sampler {
     fn apply_penalties(&self, logits: Tensor) -> Result<Tensor> {
         let BinCountsAndMask { bin_counts, mask } =
             self.get_bin_counts_and_mask(&logits, self.vocab_size)?;
-        dbg!(&bin_counts);
-        dbg!(&mask);
-        dbg!(&logits);
         let presence_penalties =
             Tensor::new(self.params.presence_penalty.unwrap(), logits.device())?;
         let freq_penalties = Tensor::new(self.params.freq_penalty.unwrap(), logits.device())?;
