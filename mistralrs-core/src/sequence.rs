@@ -6,7 +6,6 @@ use std::{
 };
 
 use candle_core::Tensor;
-use candle_sampling::logits_processor::{LogitsProcessor, Logprobs};
 use tokenizers::Tokenizer;
 
 use crate::{
