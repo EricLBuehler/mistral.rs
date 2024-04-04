@@ -129,6 +129,7 @@ impl fmt::Display for TokenSource {
     }
 }
 
+#[derive(Copy, Clone)]
 pub enum ModelKind {
     Normal,
     XLoraNormal,
@@ -136,6 +137,19 @@ pub enum ModelKind {
     XLoraGGML,
     QuantizedGGUF,
     QuantizedGGML,
+}
+
+impl AsRef<str> for ModelKind {
+    fn as_ref(&self) -> &str {
+        match self {
+            ModelKind::Normal => "normal (no quant, no xlora)",
+            ModelKind::QuantizedGGML => "quantized from ggml (no xlora)",
+            ModelKind::QuantizedGGUF => "quantized from gguf (no xlora)",
+            ModelKind::XLoraNormal => "x-lora (no quant)",
+            ModelKind::XLoraGGML => "x-lora, quantized from ggml",
+            ModelKind::XLoraGGUF => "x-lora, quantized from gguf",
+        }
+    }
 }
 
 /// Encapsulate downloading and setting up the model. The `load_model` method is used to create the pipeline.
@@ -169,6 +183,7 @@ pub trait Loader {
     }
 
     fn get_id(&self) -> &str;
+    fn get_kind(&self) -> ModelKind;
 }
 
 fn raise_exception(msg: String) -> Result<String, minijinja::Error> {

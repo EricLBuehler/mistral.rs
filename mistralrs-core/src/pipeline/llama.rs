@@ -372,6 +372,10 @@ impl Loader for LlamaLoader {
     fn get_id(&self) -> &str {
         &self.model_id
     }
+
+    fn get_kind(&self) -> ModelKind {
+        self.kind
+    }
 }
 
 impl Pipeline for LlamaPipeline {

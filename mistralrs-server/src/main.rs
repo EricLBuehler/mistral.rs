@@ -675,6 +675,7 @@ async fn main() -> Result<()> {
     );
     info!("Sampling method: penalties -> temperature -> topk -> topp -> multinomial");
     info!("Loading model `{}` on {device:?}...", loader.get_id());
+    info!("Model kind is: {}", loader.get_kind().as_ref());
     let pipeline = loader.load_model(None, args.token_source, None, &device)?;
     info!("Model loaded.");
     let mistralrs = MistralRs::new(

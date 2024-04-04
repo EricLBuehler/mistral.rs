@@ -365,6 +365,10 @@ impl Loader for MixtralLoader {
     fn get_id(&self) -> &str {
         &self.model_id
     }
+
+    fn get_kind(&self) -> ModelKind {
+        self.kind
+    }
 }
 
 impl Pipeline for MixtralPipeline {
