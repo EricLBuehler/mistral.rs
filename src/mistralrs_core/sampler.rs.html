@@ -306,15 +306,11 @@
 <a href="#304" id="304">304</a>
 <a href="#305" id="305">305</a>
 <a href="#306" id="306">306</a>
-<a href="#307" id="307">307</a>
-<a href="#308" id="308">308</a>
-<a href="#309" id="309">309</a>
-<a href="#310" id="310">310</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, iter::zip};
 
-<span class="kw">use </span>candle_core::{bail, DType, Error, <span class="prelude-ty">Result</span>, Tensor};
+<span class="kw">use </span>candle_core::{bail, DType, Error, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>rand::{
     distributions::{Distribution, WeightedIndex},
     SeedableRng,
@@ -464,13 +460,9 @@
 
         <span class="self">self</span>.apply_logit_bias(<span class="kw-2">&amp;mut </span>probs)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>next_token = probs
-            .iter()
-            .enumerate()
-            .max_by(|(<span class="kw">_</span>, u), (<span class="kw">_</span>, v)| u.total_cmp(v))
-            .map(|(i, <span class="kw">_</span>)| i)
-            .unwrap();
-        <span class="kw">let </span>logprob = probs[next_token].log(<span class="number">10.0</span>);
+        <span class="kw">let </span>next_token = logits.argmax(D::Minus1)<span class="question-mark">?</span>.to_scalar::&lt;u32&gt;()<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>logprob = probs[next_token <span class="kw">as </span>usize].log(<span class="number">10.0</span>);
 
         <span class="kw">let </span>top_logprobs = <span class="kw">if </span>return_logprobs {
             <span class="prelude-val">Some</span>(<span class="self">self</span>.get_top_logprobs(<span class="kw-2">&amp;</span>probs, <span class="kw-2">&amp;</span>argsort_indices)<span class="question-mark">?</span>)
@@ -479,12 +471,12 @@
         </span>};
 
         <span class="prelude-val">Ok</span>(Logprobs {
-            token: next_token <span class="kw">as </span>u32,
+            token: next_token,
             logprob,
             top_logprobs,
             bytes: <span class="self">self
                 </span>.tokenizer
-                .decode(<span class="kw-2">&amp;</span>[next_token.try_into().unwrap()], <span class="bool-val">true</span>)
+                .decode(<span class="kw-2">&amp;</span>[next_token], <span class="bool-val">true</span>)
                 .map_err(|x| Error::Msg(x.to_string()))<span class="question-mark">?</span>,
         })
     }
