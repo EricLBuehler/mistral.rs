@@ -82,6 +82,7 @@ impl Sampler {
                     (&logits / temperature)?
                 };
                 let logits = candle_nn::ops::softmax_last_dim(&logits)?;
+                let mut probs: Vec<f32> = logits.to_vec1()?;
 
                 // Apply topk, topp
                 //let logits = self.apply_topk_topp(logits)?;
