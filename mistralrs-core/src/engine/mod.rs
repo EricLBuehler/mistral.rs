@@ -146,40 +146,38 @@ impl Engine {
             // Handle streaming requests
             if deref_refcell!(seq).get_group().is_streaming {
                 let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer().clone();
-                
-                if let Some(delta) = deref_mut_refcell!(seq).get_delta(&tokenizer){
+                let mut seq = deref_mut_refcell!(seq);
+                if let Some(delta) = handle_seq_error!(seq.get_delta(&tokenizer), seq.responder()) {
                     let logprob = ResponseLogprob {
                         token: delta,
                         bytes: next_token.bytes.clone().into_bytes(),
                         logprob: next_token.logprob,
                         top_logprobs: next_token.top_logprobs.clone(),
                     };
-                    deref_refcell!(seq).add_streaming_chunk_choice_to_group(ChunkChoice {
+
+                    seq.add_streaming_chunk_choice_to_group(ChunkChoice {
                         delta: Delta {
                             content: logprob.token.clone(),
                             role: "assistant".to_string(),
                         },
-                        index: deref_refcell!(seq).get_response_index(),
+                        index: seq.get_response_index(),
                         stopreason: is_done.map(|x| x.to_string()),
-                        logprobs: if deref_refcell!(seq).return_logprobs() {
+                        logprobs: if seq.return_logprobs() {
                             Some(logprob)
                         } else {
                             None
                         },
                     });
-    
+
                     if let Some(reason) = is_done {
-                        deref_mut_refcell!(seq).set_state(SequenceState::Done(reason));
+                        seq.set_state(SequenceState::Done(reason));
                     }
-    
-                    deref_refcell!(seq)
-                        .get_mut_group()
-                        .maybe_send_streaming_response(
-                            &*deref_refcell!(seq),
-                            get_mut_arcmutex!(self.pipeline).name(),
-                        );
+
+                    seq.get_mut_group().maybe_send_streaming_response(
+                        &seq,
+                        get_mut_arcmutex!(self.pipeline).name(),
+                    );
                 }
-                
             } else if let Some(reason) = is_done {
                 self.finish_seq(seq, reason);
                 get_mut_arcmutex!(self.pipeline).reset_non_granular_state();
@@ -378,13 +376,12 @@ impl Engine {
     }
 
     fn add_request(&mut self, request: Request) {
-        let prompt = handle_seq_error!(
+        let formatted_prompt = handle_seq_error!(
             get_mut_arcmutex!(self.pipeline).apply_chat_template(request.messages.clone(), true),
             request.response
         );
-        let decoded_prompt = prompt.as_bytes().to_owned(); 
         let mut prompt = handle_seq_error!(
-            get_mut_arcmutex!(self.pipeline).tokenize_prompt(&prompt),
+            get_mut_arcmutex!(self.pipeline).tokenize_prompt(&formatted_prompt),
             request.response
         );
         if prompt.len() > get_mut_arcmutex!(self.pipeline).get_max_seq_len() {
@@ -416,7 +413,6 @@ impl Engine {
         ));
         let num_hidden_layers = get_mut_arcmutex!(self.pipeline).num_hidden_layers();
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
-
 
         let stop_toks = match request.sampling_params.stop_toks {
             None => vec![],
@@ -452,7 +448,7 @@ impl Engine {
         for response_index in 0..request.sampling_params.n_choices {
             let seq = Sequence::new_waiting(
                 prompt.clone(),
-                decoded_prompt.clone(),
+                formatted_prompt.clone(),
                 self.id,
                 now.as_millis(),
                 num_hidden_layers,

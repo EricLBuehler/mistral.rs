@@ -10,7 +10,9 @@ use candle_sampling::logits_processor::{LogitsProcessor, Logprobs};
 use tokenizers::Tokenizer;
 
 use crate::{
-    deref_mut_refcell, deref_refcell, response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT}, ChatCompletionResponse, ChatCompletionUsage
+    deref_mut_refcell, deref_refcell,
+    response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
+    ChatCompletionResponse, ChatCompletionUsage,
 };
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -43,6 +45,7 @@ pub enum SequenceState {
 pub struct Sequence {
     // Metadata, const
     id: usize,
+    original_prompt: String,
     prompt_len: usize,
     max_len: Option<usize>,
     timestamp: u128,
@@ -60,7 +63,7 @@ pub struct Sequence {
 
     // Mutables
     tokens: Vec<u32>,
-    decoded_tokens: Vec<u8>,
+    decoded_tokens: Option<Vec<u8>>,
     logprobs: Vec<Logprobs>,
 
     // GPU things
@@ -75,7 +78,7 @@ impl Sequence {
     #[allow(clippy::too_many_arguments)]
     pub fn new_waiting(
         tokens: Vec<u32>,
-        decoded_tokens: Vec<u8>,
+        original_prompt: String,
         id: usize,
         timestamp: u128,
         layers: usize,
@@ -92,7 +95,8 @@ impl Sequence {
         let prompt_len = tokens.len();
         Self {
             tokens,
-            decoded_tokens,
+            original_prompt,
+            decoded_tokens: None,
             logprobs: Vec::new(),
             prompt_len,
             id,
@@ -217,21 +221,39 @@ impl Sequence {
         self.prompt_len
     }
 
-    pub fn get_delta(&mut self, tokenizer:&Tokenizer) -> Option<String>{
-        //We need to decode incrementally to handle streaming requests, see: https://github.com/huggingface/tokenizers/issues/1141
-        let tokens = self.tokens.clone();
-        let new_decoded_bytes = tokenizer.decode(&tokens, false).unwrap_or("".to_string());
-        let new_decoded_bytes = new_decoded_bytes.as_bytes();
-
-        let new_decoded = unsafe { String::from_utf8_unchecked(new_decoded_bytes.to_vec()) };
-        if new_decoded.ends_with('�') {
-            // no valid text was generated from this token => Skip it for now
-            return None;
+    /// Returns the delta between the last two decoded sequences
+    pub fn get_delta(
+        &mut self,
+        tokenizer: &Tokenizer,
+    ) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+        if self.decoded_tokens.is_none() {
+            //Initial decoding of the prompt
+            let cleaned_prompt = tokenizer.decode(
+                tokenizer
+                    .encode(self.original_prompt.clone(), false)?
+                    .get_ids(),
+                false,
+            )?;
+            let decoded_bytes = cleaned_prompt.as_bytes().to_vec();
+            self.decoded_tokens = Some(decoded_bytes);
         }
 
-        let delta = String::from_utf8_lossy(&new_decoded_bytes[self.decoded_tokens.len()..]).into_owned();
-        self.decoded_tokens = new_decoded_bytes.to_vec();
-        Some(delta)
+        //We need to decode incrementally to handle streaming requests, see: https://github.com/huggingface/tokenizers/issues/1141
+        let new_decoded_bytes = tokenizer.decode(&self.tokens, false)?;
+        let new_decoded_bytes = new_decoded_bytes.as_bytes();
+
+        // check if the sequence decodes to a valid utf8 string, if not skip it as it probably is a multi token sequence
+        let new_decoded = unsafe { String::from_utf8_unchecked(new_decoded_bytes.to_vec()) };
+        if new_decoded.ends_with('�') {
+            return Ok(None);
+        }
+
+        let delta = String::from_utf8_lossy(
+            &new_decoded_bytes[self.decoded_tokens.as_ref().unwrap().len()..],
+        )
+        .into_owned();
+        self.decoded_tokens = Some(new_decoded_bytes.to_vec());
+        Ok(Some(delta))
     }
 
     pub fn timestamp(&self) -> u128 {
