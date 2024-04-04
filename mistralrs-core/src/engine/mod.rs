@@ -476,6 +476,7 @@ impl Engine {
                     .unwrap_or(-1),
             ),
             top_p: Some(request.sampling_params.top_p.unwrap_or(1.0)),
+            temperature: Some(request.sampling_params.temperature.unwrap_or(1.0)),
             ..request.sampling_params.clone()
         };
         let sampler = Sampler::new(SEED, params, get_mut_arcmutex!(self.pipeline).vocab_size());
