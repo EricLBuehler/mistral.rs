@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/engine/mod.rs`."><title>mod.rs - source</title><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/SourceSerif4-Regular-46f98efaafac5295.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/FiraSans-Regular-018c141bf0843ffd.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/FiraSans-Medium-8f9a781e4970d388.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2"><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-5bc39a1768837dd0.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.77.1 (7cf61ebde 2024-03-27)" data-channel="1.77.1" data-search-js="search-dd67cee4cfa65049.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-4c98445ec4002617.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-48f368f3872407c8.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-04d5337699b92874.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-16x16-8b506e7a72182f1c.png"><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/engine/mod.rs`."><title>mod.rs - source</title><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/SourceSerif4-Regular-46f98efaafac5295.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/FiraSans-Regular-018c141bf0843ffd.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/FiraSans-Medium-8f9a781e4970d388.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2"><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-5bc39a1768837dd0.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.77.0 (aedd173a2 2024-03-17)" data-channel="1.77.0" data-search-js="search-dd67cee4cfa65049.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-4c98445ec4002617.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-48f368f3872407c8.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-04d5337699b92874.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-16x16-8b506e7a72182f1c.png"><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title">
             <h2>Files</h2></div></nav><div class="sidebar-resizer"></div>
     <main><nav class="sub"><form class="search-form"><span></span><div id="sidebar-button" tabindex="-1"><a href="../../../mistralrs_core/all.html" title="show sidebar"></a></div><input class="search-input" name="search" aria-label="Run search in the documentation" autocomplete="off" spellcheck="false" placeholder="Click or press ‘S’ to search, ‘?’ for more options…" type="search"><div id="help-button" tabindex="-1"><a href="../../../help.html" title="help">?</a></div><div id="settings-menu" tabindex="-1"><a href="../../../settings.html" title="settings"><img width="22" height="22" alt="Change settings" src="../../../static.files/wheel-7b819b6101059cd0.svg"></a></div></form></nav><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
@@ -637,39 +637,38 @@
             <span class="comment">// Handle streaming requests
             </span><span class="kw">if </span><span class="macro">deref_refcell!</span>(seq).get_group().is_streaming {
                 <span class="kw">let </span>tokenizer = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenizer().clone();
-                <span class="kw">let </span>logprob = ResponseLogprob {
-                    token: <span class="macro">handle_seq_error!</span>(
-                        tokenizer.decode(<span class="kw-2">&amp;</span>[next_token.token], <span class="bool-val">false</span>),
-                        <span class="macro">deref_refcell!</span>(seq).responder()
-                    ),
-                    bytes: next_token.bytes.clone().into_bytes(),
-                    logprob: next_token.logprob,
-                    top_logprobs: next_token.top_logprobs.clone(),
-                };
-                <span class="macro">deref_refcell!</span>(seq).add_streaming_chunk_choice_to_group(ChunkChoice {
-                    delta: Delta {
-                        content: logprob.token.clone(),
-                        role: <span class="string">"assistant"</span>.to_string(),
-                    },
-                    index: <span class="macro">deref_refcell!</span>(seq).get_response_index(),
-                    stopreason: is_done.map(|x| x.to_string()),
-                    logprobs: <span class="kw">if </span><span class="macro">deref_refcell!</span>(seq).return_logprobs() {
-                        <span class="prelude-val">Some</span>(logprob)
-                    } <span class="kw">else </span>{
-                        <span class="prelude-val">None
-                    </span>},
-                });
+                <span class="kw">let </span><span class="kw-2">mut </span>seq = <span class="macro">deref_mut_refcell!</span>(seq);
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(delta) = <span class="macro">handle_seq_error!</span>(seq.get_delta(<span class="kw-2">&amp;</span>tokenizer), seq.responder()) {
+                    <span class="kw">let </span>logprob = ResponseLogprob {
+                        token: delta,
+                        bytes: next_token.bytes.clone().into_bytes(),
+                        logprob: next_token.logprob,
+                        top_logprobs: next_token.top_logprobs.clone(),
+                    };
 
-                <span class="kw">if let </span><span class="prelude-val">Some</span>(reason) = is_done {
-                    <span class="macro">deref_mut_refcell!</span>(seq).set_state(SequenceState::Done(reason));
-                }
+                    seq.add_streaming_chunk_choice_to_group(ChunkChoice {
+                        delta: Delta {
+                            content: logprob.token.clone(),
+                            role: <span class="string">"assistant"</span>.to_string(),
+                        },
+                        index: seq.get_response_index(),
+                        stopreason: is_done.map(|x| x.to_string()),
+                        logprobs: <span class="kw">if </span>seq.return_logprobs() {
+                            <span class="prelude-val">Some</span>(logprob)
+                        } <span class="kw">else </span>{
+                            <span class="prelude-val">None
+                        </span>},
+                    });
 
-                <span class="macro">deref_refcell!</span>(seq)
-                    .get_mut_group()
-                    .maybe_send_streaming_response(
-                        <span class="kw-2">&amp;*</span><span class="macro">deref_refcell!</span>(seq),
+                    <span class="kw">if let </span><span class="prelude-val">Some</span>(reason) = is_done {
+                        seq.set_state(SequenceState::Done(reason));
+                    }
+
+                    seq.get_mut_group().maybe_send_streaming_response(
+                        <span class="kw-2">&amp;</span>seq,
                         <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).name(),
                     );
+                }
             } <span class="kw">else if let </span><span class="prelude-val">Some</span>(reason) = is_done {
                 <span class="self">self</span>.finish_seq(seq, reason);
                 <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).reset_non_granular_state();
@@ -868,12 +867,12 @@
     }
 
     <span class="kw">fn </span>add_request(<span class="kw-2">&amp;mut </span><span class="self">self</span>, request: Request) {
-        <span class="kw">let </span>prompt = <span class="macro">handle_seq_error!</span>(
+        <span class="kw">let </span>formatted_prompt = <span class="macro">handle_seq_error!</span>(
             <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).apply_chat_template(request.messages.clone(), <span class="bool-val">true</span>),
             request.response
         );
         <span class="kw">let </span><span class="kw-2">mut </span>prompt = <span class="macro">handle_seq_error!</span>(
-            <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenize_prompt(<span class="kw-2">&amp;</span>prompt),
+            <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenize_prompt(<span class="kw-2">&amp;</span>formatted_prompt),
             request.response
         );
         <span class="kw">if </span>prompt.len() &gt; <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_max_seq_len() {
@@ -958,6 +957,7 @@
         </span><span class="kw">for </span>response_index <span class="kw">in </span><span class="number">0</span>..request.sampling_params.n_choices {
             <span class="kw">let </span>seq = Sequence::new_waiting(
                 prompt.clone(),
+                formatted_prompt.clone(),
                 <span class="self">self</span>.id,
                 now.as_millis(),
                 num_hidden_layers,
