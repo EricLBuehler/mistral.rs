@@ -230,14 +230,16 @@ impl Loader for LlamaLoader {
                 let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
                 let model = gguf_file::Content::read(&mut file)
                     .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
-                let model = QModelWeights::from_gguf(model, &mut file, device)?;
+                let model =
+                    QModelWeights::from_gguf(model, &mut file, device, self.config.use_flash_attn)?;
                 Model::Quantized(model)
             }
             ModelKind::QuantizedGGML => {
                 let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
                 let model = ggml_file::Content::read(&mut file, device)
                     .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
-                let model = QModelWeights::from_ggml(model, self.config.gqa)?;
+                let model =
+                    QModelWeights::from_ggml(model, self.config.gqa, self.config.use_flash_attn)?;
                 Model::Quantized(model)
             }
             ModelKind::Normal => {

@@ -367,7 +367,10 @@ async fn main() -> Result<()> {
             tokenizer_json,
         } => Box::new(GemmaLoader::new(
             model_id,
-            GemmaSpecificConfig { repeat_last_n },
+            GemmaSpecificConfig {
+                repeat_last_n,
+                use_flash_attn,
+            },
             None,
             None,
             None,
@@ -387,7 +390,10 @@ async fn main() -> Result<()> {
             tgt_non_granular_index,
         } => Box::new(GemmaLoader::new(
             model_id,
-            GemmaSpecificConfig { repeat_last_n },
+            GemmaSpecificConfig {
+                repeat_last_n,
+                use_flash_attn,
+            },
             None,
             None,
             Some(xlora_model_id),

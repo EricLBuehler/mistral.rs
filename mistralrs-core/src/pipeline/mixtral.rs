@@ -264,7 +264,8 @@ impl Loader for MixtralLoader {
                 let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
                 let model = gguf_file::Content::read(&mut file)
                     .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
-                let model = QModelWeights::from_gguf(model, &mut file, device)?;
+                let model =
+                    QModelWeights::from_gguf(model, &mut file, device, self.config.use_flash_attn)?;
                 Model::Quantized(model)
             }
             ModelKind::QuantizedGGML => unreachable!(),

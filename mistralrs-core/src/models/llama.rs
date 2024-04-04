@@ -9,6 +9,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::pipeline::LLAMA_IS_GPTX;
 
+use super::flash_attn;
+
 pub const MAX_SEQ_LEN: usize = 4096;
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -114,22 +116,6 @@ struct CausalSelfAttention {
     head_dim: usize,
     use_flash_attn: bool,
     rotary_emb: Arc<RotaryEmbedding>,
-}
-
-#[cfg(feature = "flash-attn")]
-fn flash_attn(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    softmax_scale: f32,
-    causal: bool,
-) -> Result<Tensor> {
-    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
-}
-
-#[cfg(not(feature = "flash-attn"))]
-fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
-    unimplemented!("compile with '--features flash-attn'")
 }
 
 impl CausalSelfAttention {

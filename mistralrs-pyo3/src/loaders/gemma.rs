@@ -37,7 +37,7 @@ impl GemmaLoader {
         model_id,
         kind,
         no_kv_cache=false,
-        _use_flash_attn=None,
+        use_flash_attn=None,
         repeat_last_n=64,
         _gqa=None,
         order_file=None,
@@ -53,7 +53,7 @@ impl GemmaLoader {
         model_id: String,
         kind: Py<ModelKind>,
         no_kv_cache: bool,
-        _use_flash_attn: Option<bool>,
+        use_flash_attn: Option<bool>,
         repeat_last_n: usize,
         _gqa: Option<usize>,
         order_file: Option<String>,
@@ -64,6 +64,8 @@ impl GemmaLoader {
         tokenizer_json: Option<String>,
         tgt_non_granular_index: Option<usize>,
     ) -> PyResult<Self> {
+        let mut use_flash_attn = use_flash_attn.unwrap_or(false);
+        use_flash_attn &= cfg!(feature = "flash-attn");
         let order = if let Some(ref order_file) = order_file {
             let f = File::open(order_file);
             let f = match f {
@@ -119,7 +121,10 @@ impl GemmaLoader {
         Ok(Self {
             loader: _GemmaLoader::new(
                 model_id,
-                GemmaSpecificConfig { repeat_last_n },
+                GemmaSpecificConfig {
+                    repeat_last_n,
+                    use_flash_attn,
+                },
                 quantized_model_id,
                 quantized_filename,
                 xlora_model_id,

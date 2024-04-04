@@ -8,7 +8,7 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::layer_norm::RmsNormQuantized;
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 
-use super::Cache;
+use super::{flash_attn, Cache};
 
 pub const MAX_SEQ_LEN: u32 = 4096;
 
@@ -138,6 +138,7 @@ struct LayerWeights {
     n_kv_head: usize,
     head_dim: usize,
     rotary: RotaryEmbedding,
+    use_flash_attn: bool,
 }
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
@@ -194,18 +195,30 @@ impl LayerWeights {
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
 
-        let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-        let att = match mask {
-            None => att,
-            Some(mask) => {
-                let mask = mask.broadcast_as(att.shape())?;
-                masked_fill(&att, &mask, f32::NEG_INFINITY)?
-            }
+        let attn_output = if self.use_flash_attn {
+            // flash-attn expects (b_sz, seq_len, nheads, head_dim)
+            let q = q.transpose(1, 2)?;
+            let k = k.transpose(1, 2)?;
+            let v = v.transpose(1, 2)?;
+            let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
+            flash_attn(&q, &k, &v, softmax_scale, seq_len > 1)?.transpose(1, 2)?
+        } else {
+            let scale = 1f64 / f64::sqrt(self.head_dim as f64);
+            let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+
+            let attn_weights = match mask {
+                None => attn_weights,
+                Some(mask) => {
+                    let mask = mask.broadcast_as(attn_weights.shape())?;
+                    masked_fill(&attn_weights, &mask, f32::NEG_INFINITY)?
+                }
+            };
+            let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+            attn_weights.matmul(&v)?
         };
-        let att = candle_nn::ops::softmax_last_dim(&att)?;
-        // Convert to contiguous as matmul doesn't support strided vs for now.
-        let y = att.matmul(&v.contiguous()?)?;
-        let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
+        let y = attn_output
+            .transpose(1, 2)?
+            .reshape(&[b_sz, seq_len, n_embd])?;
         let y = self.attention_wo.forward(&y)?;
         Ok(y)
     }
@@ -237,7 +250,7 @@ pub struct ModelWeights {
 }
 
 impl ModelWeights {
-    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
+    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize, use_flash_attn: bool) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
         let rotary = RotaryEmbedding::new(
             10000.,
@@ -283,6 +296,7 @@ impl ModelWeights {
                 n_kv_head: ct.hparams.n_head as usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
                 rotary: rotary.clone(),
+                use_flash_attn,
             })
         }
         Ok(Self {
@@ -300,6 +314,7 @@ impl ModelWeights {
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
+        use_flash_attn: bool,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle_core::bail!("cannot find {s} in metadata"),
@@ -399,6 +414,7 @@ impl ModelWeights {
                 n_kv_head: head_count_kv,
                 head_dim,
                 rotary: rotary.clone(),
+                use_flash_attn,
             })
         }
         Ok(Self {

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::pipeline::MISTRAL_IS_GPTX;
 
-use super::Cache;
+use super::{flash_attn, Cache};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -75,22 +75,6 @@ impl Module for MLP {
         let rhs = xs.apply(&self.up_proj)?;
         (lhs * rhs)?.apply(&self.down_proj)
     }
-}
-
-#[cfg(feature = "flash-attn")]
-fn flash_attn(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    softmax_scale: f32,
-    causal: bool,
-) -> Result<Tensor> {
-    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
-}
-
-#[cfg(not(feature = "flash-attn"))]
-fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
-    unimplemented!("compile with '--features flash-attn'")
 }
 
 #[derive(Debug, Clone)]

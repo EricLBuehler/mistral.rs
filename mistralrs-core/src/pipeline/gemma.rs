@@ -106,6 +106,7 @@ pub struct GemmaLoader {
 #[derive(Clone, Copy)]
 pub struct GemmaSpecificConfig {
     pub repeat_last_n: usize,
+    pub use_flash_attn: bool,
 }
 
 fn default_max_position_embeddings() -> usize {
@@ -269,7 +270,7 @@ impl Loader for GemmaLoader {
                     false,
                 )?;
 
-                let model = NormalModel::new(&config, vb)?;
+                let model = NormalModel::new(&config, vb, self.config.use_flash_attn)?;
                 Model::Normal(model)
             }
             ModelKind::XLoraNormal => {

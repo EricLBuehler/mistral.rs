@@ -10,7 +10,7 @@ use candle_nn::{
 
 use crate::pipeline::GEMMA_IS_GPTX;
 
-use super::Cache;
+use super::{flash_attn, Cache};
 
 fn default_max_position_embeddings() -> usize {
     4096
@@ -78,10 +78,16 @@ struct Attention {
     num_kv_groups: usize,
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
+    use_flash_attn: bool,
 }
 
 impl Attention {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(
+        rotary_emb: Arc<RotaryEmbedding>,
+        cfg: &Config,
+        vb: VarBuilder,
+        use_flash_attn: bool,
+    ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -102,6 +108,7 @@ impl Attention {
             num_kv_groups,
             head_dim,
             rotary_emb,
+            use_flash_attn,
         })
     }
 
@@ -171,7 +178,14 @@ impl Attention {
         let key_states = self.repeat_kv(key_states)?.contiguous()?;
         let value_states = self.repeat_kv(value_states)?.contiguous()?;
 
-        let attn_output = {
+        let attn_output = if self.use_flash_attn {
+            // flash-attn expects (b_sz, seq_len, nheads, head_dim)
+            let q = query_states.transpose(1, 2)?;
+            let k = key_states.transpose(1, 2)?;
+            let v = value_states.transpose(1, 2)?;
+            let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
+            flash_attn(&q, &k, &v, softmax_scale, q_len > 1)?.transpose(1, 2)?
+        } else {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
             let attn_weights = (query_states.matmul(&key_states.transpose(2, 3)?)? * scale)?;
 
@@ -198,8 +212,13 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
+    fn new(
+        rotary_emb: Arc<RotaryEmbedding>,
+        cfg: &Config,
+        vb: VarBuilder,
+        use_flash_attn: bool,
+    ) -> Result<Self> {
+        let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"), use_flash_attn)?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
         let input_layernorm =
             rms_norm_non_quant(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
@@ -254,7 +273,7 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder, use_flash_attn: bool) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
@@ -269,7 +288,8 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
-            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
+            let layer =
+                DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx), use_flash_attn)?;
             layers.push(layer)
         }
         let norm = rms_norm_non_quant(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
