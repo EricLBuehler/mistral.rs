@@ -163,12 +163,12 @@ impl Sampler {
         };
 
         Ok(Logprobs {
-            token: next_token as u32,
+            token: next_token,
             logprob,
             top_logprobs,
             bytes: self
                 .tokenizer
-                .decode(&[next_token.try_into().unwrap()], true)
+                .decode(&[next_token], true)
                 .map_err(|x| Error::Msg(x.to_string()))?,
         })
     }
