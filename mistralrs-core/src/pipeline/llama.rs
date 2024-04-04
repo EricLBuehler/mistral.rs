@@ -445,7 +445,12 @@ impl Pipeline for LlamaPipeline {
             Model::XLoraQuantized(ref model) => &model.cache,
         }
     }
-    fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs> {
+    fn sample(
+        &mut self,
+        logits: Tensor,
+        seq: Rc<RefCell<Sequence>>,
+        return_logprobs: bool,
+    ) -> Result<Logprobs> {
         let logits = logits
             .squeeze(0)
             .unwrap()
@@ -461,7 +466,7 @@ impl Pipeline for LlamaPipeline {
 
         Ok(deref_mut_refcell!(seq)
             .sampler()
-            .sample(&logits, Some(&ctxt))?)
+            .sample(&logits, Some(&ctxt), return_logprobs)?)
     }
     fn tokenizer(&self) -> Tokenizer {
         self.tokenizer.clone()

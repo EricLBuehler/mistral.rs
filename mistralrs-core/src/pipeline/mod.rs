@@ -187,7 +187,12 @@ pub trait Pipeline: Send + Sync {
     fn device(&self) -> &Device;
     fn num_hidden_layers(&self) -> usize;
     fn cache(&self) -> &Cache;
-    fn sample(&mut self, logits: Tensor, seq: Rc<RefCell<Sequence>>) -> Result<Logprobs>;
+    fn sample(
+        &mut self,
+        logits: Tensor,
+        seq: Rc<RefCell<Sequence>>,
+        return_logprobs: bool,
+    ) -> Result<Logprobs>;
     fn tokenizer(&self) -> Tokenizer;
     fn eos_tok(&self) -> u32;
     fn name(&self) -> String;
