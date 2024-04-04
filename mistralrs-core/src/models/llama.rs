@@ -178,11 +178,13 @@ impl CausalSelfAttention {
 
         let y = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
-            let q = q.transpose(1, 2)?;
-            let k = k.transpose(1, 2)?;
-            let v = v.transpose(1, 2)?;
+            let q = q.transpose(1, 2)?.to_dtype(DType::BF16)?;
+            let k = k.transpose(1, 2)?.to_dtype(DType::BF16)?;
+            let v = v.transpose(1, 2)?.to_dtype(DType::BF16)?;
             let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
-            flash_attn(&q, &k, &v, softmax_scale, seq_len > 1)?.transpose(1, 2)?
+            flash_attn(&q, &k, &v, softmax_scale, seq_len > 1)?
+                .transpose(1, 2)?
+                .to_dtype(DType::F32)?
         } else {
             let in_dtype = q.dtype();
             let q = q.to_dtype(DType::F32)?;
