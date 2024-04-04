@@ -76,8 +76,11 @@ impl Sampler {
                 //let logits = self.apply_penalties(logits)?;
 
                 // Apply temperature scaling
-                dbg!(temperature);
-                let logits = (&logits / temperature)?;
+                let logits = if temperature == 0. {
+                    (&logits / temperature)?
+                } else {
+                    logits
+                };
                 let logits = candle_nn::ops::softmax_last_dim(&logits)?;
 
                 // Apply topk, topp
@@ -118,7 +121,10 @@ impl Sampler {
             - &presence_penalties
                 .unsqueeze(1)?
                 .broadcast_mul(&bin_counts.to_dtype(DType::F32)?)?)?;
-        let logits = (logits - &freq_penalties.unsqueeze(1)?.broadcast_mul(&mask.to_dtype(DType::F32)?)?)?;
+        let logits = (logits
+            - &freq_penalties
+                .unsqueeze(1)?
+                .broadcast_mul(&mask.to_dtype(DType::F32)?)?)?;
         Ok(logits)
     }
 
