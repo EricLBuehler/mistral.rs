@@ -504,6 +504,11 @@
 <a href="#502" id="502">502</a>
 <a href="#503" id="503">503</a>
 <a href="#504" id="504">504</a>
+<a href="#505" id="505">505</a>
+<a href="#506" id="506">506</a>
+<a href="#507" id="507">507</a>
+<a href="#508" id="508">508</a>
+<a href="#509" id="509">509</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, ChatTemplate, Loader, ModelInputs,
     ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
@@ -951,7 +956,12 @@
             Model::XLoraQuantized(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
         }
     }
-    <span class="kw">fn </span>sample(<span class="kw-2">&amp;mut </span><span class="self">self</span>, logits: Tensor, seq: Rc&lt;RefCell&lt;Sequence&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
+    <span class="kw">fn </span>sample(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        logits: Tensor,
+        seq: Rc&lt;RefCell&lt;Sequence&gt;&gt;,
+        return_logprobs: bool,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
         <span class="kw">let </span>logits = logits
             .squeeze(<span class="number">0</span>)
             .unwrap()
@@ -967,7 +977,7 @@
 
         <span class="prelude-val">Ok</span>(<span class="macro">deref_mut_refcell!</span>(seq)
             .sampler()
-            .sample(<span class="kw-2">&amp;</span>logits, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>ctxt))<span class="question-mark">?</span>)
+            .sample(<span class="kw-2">&amp;</span>logits, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>ctxt), return_logprobs)<span class="question-mark">?</span>)
     }
     <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Tokenizer {
         <span class="self">self</span>.tokenizer.clone()

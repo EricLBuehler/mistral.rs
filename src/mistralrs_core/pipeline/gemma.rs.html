@@ -444,6 +444,11 @@
 <a href="#442" id="442">442</a>
 <a href="#443" id="443">443</a>
 <a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -831,7 +836,12 @@
             Model::XLoraNormal(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
         }
     }
-    <span class="kw">fn </span>sample(<span class="kw-2">&amp;mut </span><span class="self">self</span>, logits: Tensor, seq: Rc&lt;RefCell&lt;Sequence&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
+    <span class="kw">fn </span>sample(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        logits: Tensor,
+        seq: Rc&lt;RefCell&lt;Sequence&gt;&gt;,
+        return_logprobs: bool,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
         <span class="kw">let </span>logits = logits
             .squeeze(<span class="number">0</span>)
             .unwrap()
@@ -847,7 +857,7 @@
 
         <span class="prelude-val">Ok</span>(<span class="macro">deref_mut_refcell!</span>(seq)
             .sampler()
-            .sample(<span class="kw-2">&amp;</span>logits, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>ctxt))<span class="question-mark">?</span>)
+            .sample(<span class="kw-2">&amp;</span>logits, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>ctxt), return_logprobs)<span class="question-mark">?</span>)
     }
     <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Tokenizer {
         <span class="self">self</span>.tokenizer.clone()

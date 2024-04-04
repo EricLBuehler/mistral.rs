@@ -488,6 +488,8 @@
 <a href="#486" id="486">486</a>
 <a href="#487" id="487">487</a>
 <a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -625,7 +627,12 @@
         <span class="kw">let </span>eos_tok = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).eos_tok();
         <span class="kw">for </span>(logits_per_seq, seq) <span class="kw">in </span>zip(logits_seq, seqs.iter()) {
             <span class="comment">// Sample and extract next token
-            </span><span class="kw">let </span>sampled = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).sample(logits_per_seq, seq.clone());
+            </span><span class="kw">let </span>return_logprobs = <span class="macro">deref_refcell!</span>(seq).return_logprobs();
+            <span class="kw">let </span>sampled = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).sample(
+                logits_per_seq,
+                seq.clone(),
+                return_logprobs,
+            );
             <span class="kw">let </span>next_token = <span class="macro">handle_seq_error_stateaware!</span>(sampled, seq);
             <span class="kw">let </span>next_token_id = next_token.token;
             <span class="macro">deref_mut_refcell!</span>(seq).add_token(next_token.clone());
@@ -639,22 +646,20 @@
                 <span class="kw">let </span>tokenizer = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenizer().clone();
                 <span class="kw">let </span><span class="kw-2">mut </span>seq = <span class="macro">deref_mut_refcell!</span>(seq);
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(delta) = <span class="macro">handle_seq_error!</span>(seq.get_delta(<span class="kw-2">&amp;</span>tokenizer), seq.responder()) {
-                    <span class="kw">let </span>logprob = ResponseLogprob {
-                        token: delta,
-                        bytes: next_token.bytes.clone().into_bytes(),
-                        logprob: next_token.logprob,
-                        top_logprobs: next_token.top_logprobs.clone(),
-                    };
-
                     seq.add_streaming_chunk_choice_to_group(ChunkChoice {
                         delta: Delta {
-                            content: logprob.token.clone(),
+                            content: delta.clone(),
                             role: <span class="string">"assistant"</span>.to_string(),
                         },
                         index: seq.get_response_index(),
                         stopreason: is_done.map(|x| x.to_string()),
                         logprobs: <span class="kw">if </span>seq.return_logprobs() {
-                            <span class="prelude-val">Some</span>(logprob)
+                            <span class="prelude-val">Some</span>(ResponseLogprob {
+                                token: delta,
+                                bytes: next_token.bytes.clone().into_bytes(),
+                                logprob: next_token.logprob,
+                                top_logprobs: next_token.top_logprobs.unwrap().clone(),
+                            })
                         } <span class="kw">else </span>{
                             <span class="prelude-val">None
                         </span>},
@@ -679,20 +684,25 @@
     <span class="kw">fn </span>finish_seq(<span class="kw-2">&amp;</span><span class="self">self</span>, seq: <span class="kw-2">&amp;</span>Rc&lt;RefCell&lt;Sequence&gt;&gt;, reason: StopReason) {
         <span class="macro">deref_mut_refcell!</span>(seq).set_state(SequenceState::Done(reason));
 
-        <span class="kw">let </span>tokenizer = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenizer().clone();
-        <span class="kw">let </span><span class="kw-2">mut </span>logprobs = Vec::new();
-        <span class="kw">for </span>logprob <span class="kw">in </span><span class="macro">deref_refcell!</span>(seq).logprobs() {
-            <span class="kw">let </span>resp_logprob = ResponseLogprob {
-                token: <span class="macro">handle_seq_error!</span>(
-                    tokenizer.decode(<span class="kw-2">&amp;</span>[logprob.token], <span class="bool-val">false</span>),
-                    <span class="macro">deref_refcell!</span>(seq).responder()
-                ),
-                bytes: logprob.bytes.clone().into_bytes(),
-                logprob: logprob.logprob,
-                top_logprobs: logprob.top_logprobs.clone(),
-            };
-            logprobs.push(resp_logprob);
-        }
+        <span class="kw">let </span>logprobs = <span class="kw">if </span><span class="macro">deref_refcell!</span>(seq).return_logprobs() {
+            <span class="kw">let </span>tokenizer = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenizer().clone();
+            <span class="kw">let </span><span class="kw-2">mut </span>logprobs = Vec::new();
+            <span class="kw">for </span>logprob <span class="kw">in </span><span class="macro">deref_refcell!</span>(seq).logprobs() {
+                <span class="kw">let </span>resp_logprob = ResponseLogprob {
+                    token: <span class="macro">handle_seq_error!</span>(
+                        tokenizer.decode(<span class="kw-2">&amp;</span>[logprob.token], <span class="bool-val">false</span>),
+                        <span class="macro">deref_refcell!</span>(seq).responder()
+                    ),
+                    bytes: logprob.bytes.clone().into_bytes(),
+                    logprob: logprob.logprob,
+                    top_logprobs: logprob.top_logprobs.clone().unwrap(),
+                };
+                logprobs.push(resp_logprob);
+            }
+            <span class="prelude-val">Some</span>(logprobs)
+        } <span class="kw">else </span>{
+            <span class="prelude-val">None
+        </span>};
 
         <span class="kw">let </span>res = <span class="macro">handle_seq_error!</span>(
             <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenizer().decode(
@@ -709,13 +719,7 @@
                 content: res,
                 role: <span class="string">"assistant"</span>.to_string(),
             },
-            logprobs: <span class="kw">if </span><span class="macro">deref_refcell!</span>(seq).return_logprobs() {
-                <span class="prelude-val">Some</span>(Logprobs {
-                    content: <span class="prelude-val">Some</span>(logprobs),
-                })
-            } <span class="kw">else </span>{
-                <span class="prelude-val">None
-            </span>},
+            logprobs: logprobs.map(|l| Logprobs { content: <span class="prelude-val">Some</span>(l) }),
         };
         <span class="macro">deref_mut_refcell!</span>(seq).add_choice_to_group(choice);
 
