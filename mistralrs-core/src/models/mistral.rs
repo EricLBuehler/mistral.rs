@@ -101,10 +101,21 @@ impl MLP {
     fn new(cfg: &Config, vb: VarBuilder, comm: Option<Arc<Comm>>) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let intermediate_sz = cfg.intermediate_size;
-        let gate_proj =
-            TensorParallelColumnLinear::load(vb.pp("gate_proj"), comm.clone().unwrap())?;
-        let up_proj = TensorParallelColumnLinear::load(vb.pp("up_proj"), comm.clone().unwrap())?;
-        let down_proj = TensorParallelRowLinear::load(vb.pp("down_proj"), comm.unwrap())?;
+        let gate_proj = TensorParallelColumnLinear::load(
+            vb.pp("gate_proj"),
+            comm.clone().unwrap(),
+            (hidden_sz, intermediate_sz),
+        )?;
+        let up_proj = TensorParallelColumnLinear::load(
+            vb.pp("up_proj"),
+            comm.clone().unwrap(),
+            (hidden_sz, intermediate_sz),
+        )?;
+        let down_proj = TensorParallelRowLinear::load(
+            vb.pp("down_proj"),
+            comm.unwrap(),
+            (intermediate_sz, hidden_sz),
+        )?;
         Ok(Self {
             gate_proj,
             up_proj,
@@ -124,7 +135,7 @@ impl Module for MLP {
     #[cfg(feature = "nccl")]
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let x = (self.act_fn.forward(&self.gate_proj.forward(xs)?)? * self.up_proj.forward(xs)?)?;
-        self.down_proj.forward(&xs)
+        self.down_proj.forward(&x)
     }
 }
 
@@ -224,8 +235,17 @@ impl Attention {
             vb.clone(),
             &["q_proj", "k_proj", "v_proj"],
             comm.clone().unwrap(),
+            &[
+                (hidden_sz, num_heads * head_dim),
+                (hidden_sz, num_kv_heads * head_dim),
+                (hidden_sz, num_kv_heads * head_dim),
+            ],
         )?;
-        let o_proj = TensorParallelRowLinear::load(vb.pp("o_proj"), comm.unwrap())?;
+        let o_proj = TensorParallelRowLinear::load(
+            vb.pp("o_proj"),
+            comm.unwrap(),
+            (num_heads * head_dim, hidden_sz),
+        )?;
         Ok(Self {
             qkv_proj,
             o_proj,
@@ -355,7 +375,6 @@ impl Attention {
             ..,
             self.num_heads * self.head_dim + self.num_kv_heads * self.head_dim..,
         ))?;
-        // todo!("Q {:?} K {:?} V {:?} - x {:?}", q.shape(), k.shape(), v.shape(), x.shape());
 
         let mut q = q
             .reshape((b_sz, seq_len, self.num_heads, self.head_dim))?
@@ -363,7 +382,7 @@ impl Attention {
         let mut k = k
             .reshape((b_sz, seq_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
-        let mut v = v
+        let v = v
             .reshape((b_sz, seq_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 

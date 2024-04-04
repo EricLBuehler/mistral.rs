@@ -91,19 +91,28 @@ pub fn shard(dim: usize, rank: usize, world_size: usize) -> candle_nn::var_build
 }
 
 impl TensorParallelColumnLinear {
-    pub fn load(vb: VarBuilder, comm: Arc<Comm>) -> Result<Self> {
+    pub fn load(vb: VarBuilder, comm: Arc<Comm>, shape: (usize, usize)) -> Result<Self> {
         let rank = comm.rank();
         let size = comm.world_size();
-        let weight = vb.get_with_hints((), "weight", shard(0, rank, size))?;
+        let weight = vb.get_with_hints((shape.1, shape.0), "weight", shard(0, rank, size))?;
         Ok(Self::new(Linear::new(weight, None)))
     }
 
-    pub fn load_multi(vb: VarBuilder, prefixes: &[&str], comm: Arc<Comm>) -> Result<Self> {
+    pub fn load_multi(
+        vb: VarBuilder,
+        prefixes: &[&str],
+        comm: Arc<Comm>,
+        shapes: &[(usize, usize)],
+    ) -> Result<Self> {
         let rank = comm.rank();
         let size = comm.world_size();
         let weights: Vec<_> = prefixes
             .iter()
-            .map(|p| vb.pp(p).get_with_hints((), "weight", shard(0, rank, size)))
+            .zip(shapes)
+            .map(|(p, s)| {
+                vb.pp(p)
+                    .get_with_hints((s.1, s.0), "weight", shard(0, rank, size))
+            })
             .collect::<Result<Vec<_>>>()?;
         let weight = Tensor::cat(&weights, 0)?;
         Ok(Self::new(Linear::new(weight, None)))
@@ -111,10 +120,10 @@ impl TensorParallelColumnLinear {
 }
 
 impl TensorParallelRowLinear {
-    pub fn load(vb: VarBuilder, comm: Arc<Comm>) -> Result<Self> {
+    pub fn load(vb: VarBuilder, comm: Arc<Comm>, shape: (usize, usize)) -> Result<Self> {
         let rank = comm.rank();
         let size = comm.world_size();
-        let weight = vb.get_with_hints((), "weight", shard(1, rank, size))?;
+        let weight = vb.get_with_hints((shape.1, shape.0), "weight", shard(1, rank, size))?;
         Ok(Self::new(Linear::new(weight, None), comm))
     }
 }
