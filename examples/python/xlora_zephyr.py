@@ -16,7 +16,7 @@ res = runner.send_chat_completion_request(
             {"role": "user", "content": "Tell me a story about the Rust type system."}
         ],
         max_tokens=256,
-        repetition_penalty=1.0,
+        frequency_penalty=1.0,
         top_p=0.1,
         temperature=0.1,
     )
