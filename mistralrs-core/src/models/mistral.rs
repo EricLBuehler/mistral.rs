@@ -246,6 +246,7 @@ impl Attention {
             comm.unwrap(),
             (num_heads * head_dim, hidden_sz),
         )?;
+
         Ok(Self {
             qkv_proj,
             o_proj,
@@ -400,7 +401,7 @@ impl Attention {
                 .contiguous()?;
         }
 
-        let (key_states, value_states) = match &*kv_cache {
+        let (k, v) = match &*kv_cache {
             None => (k.clone(), v.clone()),
             Some((prev_k, prev_v)) => {
                 let key_states = candle_nn::ops::kvconcat(prev_k, &k, 2)?;
@@ -408,7 +409,7 @@ impl Attention {
                 (key_states, value_states)
             }
         };
-        *kv_cache = Some((key_states.clone(), value_states.clone()));
+        *kv_cache = Some((k.clone(), v.clone()));
 
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
