@@ -77,9 +77,9 @@ impl Sampler {
 
                 // Apply temperature scaling
                 let logits = if temperature == 0. {
-                    (&logits / temperature)?
-                } else {
                     logits
+                } else {
+                    (&logits / temperature)?
                 };
                 let logits = candle_nn::ops::softmax_last_dim(&logits)?;
 
