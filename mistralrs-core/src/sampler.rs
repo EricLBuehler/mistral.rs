@@ -76,7 +76,7 @@ impl Sampler {
                 //let logits = self.apply_penalties(logits)?;
 
                 // Apply temperature scaling
-                let logits = (&logits / temperature)?;
+                // let logits = (&logits / temperature)?;
                 let logits = candle_nn::ops::softmax_last_dim(&logits)?;
 
                 // Apply topk, topp
