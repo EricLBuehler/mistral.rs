@@ -57,7 +57,7 @@ pub struct Logprobs {
     pub token: u32,
     pub logprob: f32,
     pub bytes: String,
-    pub top_logprobs: Vec<TopLogprob>,
+    pub top_logprobs: Option<Vec<TopLogprob>>,
 }
 
 impl Sampler {
@@ -108,21 +108,12 @@ impl Sampler {
         Ok(())
     }
 
-    fn sample_argmax(&mut self, logits: Tensor) -> Result<Logprobs> {
-        let mut probs: Vec<f32> = logits.to_vec1()?;
-        let argsort_indices = (0..probs.len()).collect::<Vec<_>>();
-
-        self.apply_logit_bias(&mut probs)?;
-
-        let next_token = probs
-            .iter()
-            .enumerate()
-            .max_by(|(_, u), (_, v)| u.total_cmp(v))
-            .map(|(i, _)| i)
-            .unwrap();
-        let logprob = probs[next_token].log(10.0);
-
-        let mut argsort_indices_sorted = argsort_indices.clone();
+    fn get_top_logprobs(
+        &self,
+        probs: &[f32],
+        argsort_indices: &[usize],
+    ) -> Result<Vec<TopLogprob>> {
+        let mut argsort_indices_sorted = argsort_indices.to_vec();
         // Sort by descending prob
         argsort_indices_sorted.sort_by(|a, b| probs[*b].partial_cmp(&probs[*a]).unwrap());
         // These are where the top n are
@@ -146,13 +137,34 @@ impl Sampler {
                     .map_err(|x| Error::Msg(x.to_string()))?,
             );
         }
-        let top_logprobs = zip(bytes, zip(top_n_toks, top_n_logprobs))
+        Ok(zip(bytes, zip(top_n_toks, top_n_logprobs))
             .map(|(bytes, (token, logprob))| TopLogprob {
                 token: token as u32,
                 logprob,
                 bytes,
             })
-            .collect::<Vec<_>>();
+            .collect::<Vec<_>>())
+    }
+
+    fn sample_argmax(&mut self, logits: Tensor, return_logprobs: bool) -> Result<Logprobs> {
+        let mut probs: Vec<f32> = logits.to_vec1()?;
+        let argsort_indices = (0..probs.len()).collect::<Vec<_>>();
+
+        self.apply_logit_bias(&mut probs)?;
+
+        let next_token = probs
+            .iter()
+            .enumerate()
+            .max_by(|(_, u), (_, v)| u.total_cmp(v))
+            .map(|(i, _)| i)
+            .unwrap();
+        let logprob = probs[next_token].log(10.0);
+
+        let top_logprobs = if return_logprobs {
+            Some(self.get_top_logprobs(&probs, &argsort_indices)?)
+        } else {
+            None
+        };
 
         Ok(Logprobs {
             token: next_token as u32,
@@ -169,6 +181,7 @@ impl Sampler {
         &mut self,
         probs: &mut Vec<f32>,
         argsort_indices: Vec<usize>,
+        return_logprobs: bool,
     ) -> Result<Logprobs> {
         self.apply_logit_bias(probs)?;
 
@@ -176,37 +189,11 @@ impl Sampler {
         let next_token = distr.sample(&mut self.rng); // "Find the first item which has a weight *higher* than the chosen weight."
         let logprob = probs[next_token].log(10.0);
 
-        let mut argsort_indices_sorted = argsort_indices.clone();
-        // Sort by descending prob
-        argsort_indices_sorted.sort_by(|a, b| probs[*b].partial_cmp(&probs[*a]).unwrap());
-        // These are where the top n are
-        let top_n_toks_range = 0..self.top_n_logprobs;
-        // The top n's values
-        let top_n_logprobs = argsort_indices_sorted[top_n_toks_range.clone()]
-            .iter()
-            .map(|x| probs[*x].log(10.0))
-            .collect::<Vec<_>>();
-        // Find where they actually are in the logits
-        let mut top_n_toks = Vec::new();
-        for val in top_n_toks_range {
-            top_n_toks.push(argsort_indices[val]);
-        }
-
-        let mut bytes = Vec::new();
-        for tok in &top_n_toks {
-            bytes.push(
-                self.tokenizer
-                    .decode(&[*tok as u32], true)
-                    .map_err(|x| Error::Msg(x.to_string()))?,
-            );
-        }
-        let top_logprobs = zip(bytes, zip(top_n_toks, top_n_logprobs))
-            .map(|(bytes, (token, logprob))| TopLogprob {
-                token: token as u32,
-                logprob,
-                bytes,
-            })
-            .collect::<Vec<_>>();
+        let top_logprobs = if return_logprobs {
+            Some(self.get_top_logprobs(&probs, &argsort_indices)?)
+        } else {
+            None
+        };
 
         Ok(Logprobs {
             token: next_token as u32,
@@ -219,7 +206,13 @@ impl Sampler {
         })
     }
 
-    fn sample_topkp(&mut self, probs: &mut Vec<f32>, top_k: i64, top_p: f32) -> Result<Logprobs> {
+    fn sample_topkp(
+        &mut self,
+        probs: &mut Vec<f32>,
+        top_k: i64,
+        top_p: f32,
+        return_logprobs: bool,
+    ) -> Result<Logprobs> {
         let mut argsort_indices = (0..probs.len()).collect::<Vec<_>>();
 
         // Sort by descending probability.
@@ -235,7 +228,7 @@ impl Sampler {
         }
 
         if top_p <= 0.0 || top_p >= 1.0 {
-            return self.sample_multinomial(probs, argsort_indices);
+            return self.sample_multinomial(probs, argsort_indices, return_logprobs);
         }
         // TOP P
 
@@ -254,7 +247,7 @@ impl Sampler {
         }
 
         // Sample with clamped probabilities.
-        self.sample_multinomial(probs, argsort_indices)
+        self.sample_multinomial(probs, argsort_indices, return_logprobs)
     }
 
     fn apply_repeat_presence_penalty(
@@ -281,7 +274,12 @@ impl Sampler {
     /// If the temperature is `None`, argmax sampling is used. Otherwise, the selected sampling is used.
     /// With `top-p` sampling, if the `top-p` value is `<= 0.0` or `>= 1.0`, multinomial sampling is used.
     /// If `repeat_penalty.is_some()` or `presence_penalty.is_some()`, then `penalty_ctxt` must be provided.
-    pub fn sample(&mut self, logits: &Tensor, penalty_ctxt: Option<&[u32]>) -> Result<Logprobs> {
+    pub fn sample(
+        &mut self,
+        logits: &Tensor,
+        penalty_ctxt: Option<&[u32]>,
+        return_logprobs: bool,
+    ) -> Result<Logprobs> {
         let logits = logits.to_dtype(DType::F32)?;
 
         let logits = if self.repeat_penalty.is_none() && self.presence_penalty.is_none() {
@@ -299,12 +297,12 @@ impl Sampler {
         };
 
         let next_token = match self.temperature {
-            None => self.sample_argmax(logits)?,
+            None => self.sample_argmax(logits, return_logprobs)?,
             Some(temperature) => {
                 let logits = (&logits / temperature)?;
                 let probs = candle_nn::ops::softmax_last_dim(&logits)?;
                 let mut probs: Vec<f32> = probs.to_vec1()?;
-                self.sample_topkp(&mut probs, self.topk, self.topp as f32)?
+                self.sample_topkp(&mut probs, self.topk, self.topp as f32, return_logprobs)?
             }
         };
         Ok(next_token)
