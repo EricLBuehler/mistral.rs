@@ -64,7 +64,7 @@ fn flash_attn(
     v: &Tensor,
     softmax_scale: f32,
     causal: bool,
-) -> Result<Tensor> {
+) -> candle_core::Result<Tensor> {
     candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
 }
 
