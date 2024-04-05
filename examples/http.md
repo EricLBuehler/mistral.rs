@@ -5,7 +5,7 @@ Mistral.rs provides a lightweight OpenAI API compatible HTTP server based on [ax
 The API consists of the following endpoints.
 
 ## `POST`: `/v1/chat/completions`
-Process an OpenAI compatible request, returning an OpenAI compatible response when finished. Please find the official OpenAI API documentation [here](https://platform.openai.com/docs/api-reference/chat).
+Process an OpenAI compatible request, returning an OpenAI compatible response when finished. Please find the official OpenAI API documentation [here](https://platform.openai.com/docs/api-reference/chat). To control the interval keep-alive messages are sent, set the `KEEP_ALIVE_INTERVAL` environment variable to the desired time in ms.
 
 To send a request with the Python `openai` library:
 
@@ -56,6 +56,22 @@ Returns the running models.
 Example with `curl`:
 ```bash
 curl http://localhost:1234/v1/models
+```
+
+## `GET`: `/` or `/health`
+Returns the server health.
+
+Example with `curl`:
+```bash
+curl http://localhost:1234/health
+```
+
+## `GET`: `/docs`
+Returns OpenAPI API docs.
+
+Example with `curl`:
+```bash
+curl http://localhost:1234/health
 ```
 
 ## Request
