@@ -255,6 +255,8 @@ impl Loader for MistralLoader {
             DType::F32
         };
 
+        info!("Model config: {config:?}");
+
         let model = match self.kind {
             ModelKind::QuantizedGGUF => {
                 let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
@@ -361,6 +363,10 @@ impl Loader for MistralLoader {
     fn get_id(&self) -> &str {
         &self.model_id
     }
+
+    fn get_kind(&self) -> ModelKind {
+        self.kind
+    }
 }
 
 impl Pipeline for MistralPipeline {
@@ -451,6 +457,7 @@ impl Pipeline for MistralPipeline {
             .get_toks()
             .len()
             .saturating_sub(self.config.repeat_last_n);
+
         let ctxt = deref_refcell!(seq).get_toks()[start_at..].to_vec();
 
         Ok(deref_mut_refcell!(seq)

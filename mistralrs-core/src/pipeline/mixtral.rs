@@ -259,6 +259,8 @@ impl Loader for MixtralLoader {
             DType::F32
         };
 
+        info!("Model config: {config:?}");
+
         let model = match self.kind {
             ModelKind::QuantizedGGUF => {
                 let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
@@ -364,6 +366,10 @@ impl Loader for MixtralLoader {
 
     fn get_id(&self) -> &str {
         &self.model_id
+    }
+
+    fn get_kind(&self) -> ModelKind {
+        self.kind
     }
 }
 

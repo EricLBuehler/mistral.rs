@@ -35,9 +35,11 @@ use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use crate::openai::ModelObject;
 mod model_selected;
 mod openai;
-use tracing::info;
+
+use tracing::{info, warn};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
+
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
@@ -725,6 +727,21 @@ async fn main() -> Result<()> {
     );
     info!("Sampling method: penalties -> temperature -> topk -> topp -> multinomial");
     info!("Loading model `{}` on {device:?}...", loader.get_id());
+    if use_flash_attn {
+        info!("Using flash attention.");
+    }
+    if use_flash_attn
+        && matches!(
+            loader.get_kind(),
+            ModelKind::QuantizedGGML
+                | ModelKind::QuantizedGGUF
+                | ModelKind::XLoraGGML
+                | ModelKind::XLoraGGUF
+        )
+    {
+        warn!("Using flash attention with a quantized model has no effect!")
+    }
+    info!("Model kind is: {}", loader.get_kind().as_ref());
     let pipeline = loader.load_model(None, args.token_source, None, &device)?;
     info!("Model loaded.");
     let mistralrs = MistralRs::new(

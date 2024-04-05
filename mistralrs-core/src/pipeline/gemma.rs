@@ -257,6 +257,8 @@ impl Loader for GemmaLoader {
             DType::F32
         };
 
+        info!("Model config: {config:?}");
+
         let model = match self.kind {
             ModelKind::QuantizedGGUF => unreachable!(),
             ModelKind::QuantizedGGML => unreachable!(),
@@ -328,6 +330,10 @@ impl Loader for GemmaLoader {
 
     fn get_id(&self) -> &str {
         &self.model_id
+    }
+
+    fn get_kind(&self) -> ModelKind {
+        self.kind
     }
 }
 

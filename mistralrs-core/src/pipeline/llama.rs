@@ -225,6 +225,8 @@ impl Loader for LlamaLoader {
             DType::F32
         };
 
+        info!("Model config: {basic_config:?}");
+
         let model = match self.kind {
             ModelKind::QuantizedGGUF => {
                 let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
@@ -371,6 +373,10 @@ impl Loader for LlamaLoader {
 
     fn get_id(&self) -> &str {
         &self.model_id
+    }
+
+    fn get_kind(&self) -> ModelKind {
+        self.kind
     }
 }
 

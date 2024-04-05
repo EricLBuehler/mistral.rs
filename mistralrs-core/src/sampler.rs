@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, iter::zip};
 
-use candle_core::{bail, DType, Error, Result, Tensor};
+use candle_core::{bail, DType, Error, Result, Tensor, D};
 use rand::{
     distributions::{Distribution, WeightedIndex},
     SeedableRng,
@@ -152,13 +152,9 @@ impl Sampler {
 
         self.apply_logit_bias(&mut probs)?;
 
-        let next_token = probs
-            .iter()
-            .enumerate()
-            .max_by(|(_, u), (_, v)| u.total_cmp(v))
-            .map(|(i, _)| i)
-            .unwrap();
-        let logprob = probs[next_token].log(10.0);
+        let next_token = logits.argmax(D::Minus1)?.to_scalar::<u32>()?;
+
+        let logprob = probs[next_token as usize].log(10.0);
 
         let top_logprobs = if return_logprobs {
             Some(self.get_top_logprobs(&probs, &argsort_indices)?)
@@ -167,12 +163,12 @@ impl Sampler {
         };
 
         Ok(Logprobs {
-            token: next_token as u32,
+            token: next_token,
             logprob,
             top_logprobs,
             bytes: self
                 .tokenizer
-                .decode(&[next_token.try_into().unwrap()], true)
+                .decode(&[next_token], true)
                 .map_err(|x| Error::Msg(x.to_string()))?,
         })
     }
