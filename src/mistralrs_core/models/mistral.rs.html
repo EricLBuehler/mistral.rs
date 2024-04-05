@@ -372,51 +372,17 @@
 <a href="#370" id="370">370</a>
 <a href="#371" id="371">371</a>
 <a href="#372" id="372">372</a>
-<a href="#373" id="373">373</a>
-<a href="#374" id="374">374</a>
-<a href="#375" id="375">375</a>
-<a href="#376" id="376">376</a>
-<a href="#377" id="377">377</a>
-<a href="#378" id="378">378</a>
-<a href="#379" id="379">379</a>
-<a href="#380" id="380">380</a>
-<a href="#381" id="381">381</a>
-<a href="#382" id="382">382</a>
-<a href="#383" id="383">383</a>
-<a href="#384" id="384">384</a>
-<a href="#385" id="385">385</a>
-<a href="#386" id="386">386</a>
-<a href="#387" id="387">387</a>
-<a href="#388" id="388">388</a>
-<a href="#389" id="389">389</a>
-<a href="#390" id="390">390</a>
-<a href="#391" id="391">391</a>
-<a href="#392" id="392">392</a>
-<a href="#393" id="393">393</a>
-<a href="#394" id="394">394</a>
-<a href="#395" id="395">395</a>
-<a href="#396" id="396">396</a>
-<a href="#397" id="397">397</a>
-<a href="#398" id="398">398</a>
-<a href="#399" id="399">399</a>
-<a href="#400" id="400">400</a>
-<a href="#401" id="401">401</a>
-<a href="#402" id="402">402</a>
-<a href="#403" id="403">403</a>
-<a href="#404" id="404">404</a>
-<a href="#405" id="405">405</a>
-<a href="#406" id="406">406</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
 </span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
-<span class="kw">use </span>candle_nn::{layer_norm::RmsNormNonQuantized, Activation, RotaryEmbedding, VarBuilder};
+<span class="kw">use </span>candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>candle_transformers::models::with_tracing::{linear_no_bias, Linear};
 <span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::MISTRAL_IS_GPTX;
 
-<span class="kw">use </span><span class="kw">super</span>::Cache;
+<span class="kw">use super</span>::{flash_attn, Cache, RmsNorm};
 
 <span class="attr">#[derive(Debug, Clone, PartialEq)]
 </span><span class="kw">pub struct </span>Config {
@@ -432,24 +398,6 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) rope_theta: f64,
     <span class="kw">pub</span>(<span class="kw">crate</span>) sliding_window: usize,
     <span class="kw">pub</span>(<span class="kw">crate</span>) use_flash_attn: bool,
-}
-
-<span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">struct </span>RmsNorm {
-    inner: candle_nn::RmsNorm&lt;RmsNormNonQuantized&gt;,
-}
-
-<span class="kw">impl </span>RmsNorm {
-    <span class="kw">fn </span>new(size: usize, eps: f64, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>inner = candle_nn::rms_norm_non_quant(size, eps, vb)<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ inner })
-    }
-}
-
-<span class="kw">impl </span>Module <span class="kw">for </span>RmsNorm {
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="self">self</span>.inner.forward(x)
-    }
 }
 
 <span class="attr">#[derive(Debug, Clone)]
@@ -483,22 +431,6 @@
         <span class="kw">let </span>rhs = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.up_proj)<span class="question-mark">?</span>;
         (lhs * rhs)<span class="question-mark">?</span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.down_proj)
     }
-}
-
-<span class="attr">#[cfg(feature = <span class="string">"flash-attn"</span>)]
-</span><span class="kw">fn </span>flash_attn(
-    q: <span class="kw-2">&amp;</span>Tensor,
-    k: <span class="kw-2">&amp;</span>Tensor,
-    v: <span class="kw-2">&amp;</span>Tensor,
-    softmax_scale: f32,
-    causal: bool,
-) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
-}
-
-<span class="attr">#[cfg(not(feature = <span class="string">"flash-attn"</span>))]
-</span><span class="kw">fn </span>flash_attn(<span class="kw">_</span>: <span class="kw-2">&amp;</span>Tensor, <span class="kw">_</span>: <span class="kw-2">&amp;</span>Tensor, <span class="kw">_</span>: <span class="kw-2">&amp;</span>Tensor, <span class="kw">_</span>: f32, <span class="kw">_</span>: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-    <span class="macro">unimplemented!</span>(<span class="string">"compile with '--features flash-attn'"</span>)
 }
 
 <span class="attr">#[derive(Debug, Clone)]

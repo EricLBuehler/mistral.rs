@@ -370,48 +370,16 @@
 <a href="#368" id="368">368</a>
 <a href="#369" id="369">369</a>
 <a href="#370" id="370">370</a>
-<a href="#371" id="371">371</a>
-<a href="#372" id="372">372</a>
-<a href="#373" id="373">373</a>
-<a href="#374" id="374">374</a>
-<a href="#375" id="375">375</a>
-<a href="#376" id="376">376</a>
-<a href="#377" id="377">377</a>
-<a href="#378" id="378">378</a>
-<a href="#379" id="379">379</a>
-<a href="#380" id="380">380</a>
-<a href="#381" id="381">381</a>
-<a href="#382" id="382">382</a>
-<a href="#383" id="383">383</a>
-<a href="#384" id="384">384</a>
-<a href="#385" id="385">385</a>
-<a href="#386" id="386">386</a>
-<a href="#387" id="387">387</a>
-<a href="#388" id="388">388</a>
-<a href="#389" id="389">389</a>
-<a href="#390" id="390">390</a>
-<a href="#391" id="391">391</a>
-<a href="#392" id="392">392</a>
-<a href="#393" id="393">393</a>
-<a href="#394" id="394">394</a>
-<a href="#395" id="395">395</a>
-<a href="#396" id="396">396</a>
-<a href="#397" id="397">397</a>
-<a href="#398" id="398">398</a>
-<a href="#399" id="399">399</a>
-<a href="#400" id="400">400</a>
-<a href="#401" id="401">401</a>
-<a href="#402" id="402">402</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
-<span class="kw">use </span>candle_nn::{
-    embedding, layer_norm::RmsNormNonQuantized, Embedding, Module, RotaryEmbedding, VarBuilder,
-};
+<span class="kw">use </span>candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>candle_transformers::models::with_tracing::{linear_no_bias <span class="kw">as </span>linear, Linear};
 <span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::LLAMA_IS_GPTX;
+
+<span class="kw">use super</span>::{flash_attn, RmsNorm};
 
 <span class="kw">pub const </span>MAX_SEQ_LEN: usize = <span class="number">4096</span>;
 
@@ -492,22 +460,6 @@
 }
 
 <span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">struct </span>RmsNorm {
-    inner: candle_nn::RmsNorm&lt;RmsNormNonQuantized&gt;,
-}
-
-<span class="kw">impl </span>RmsNorm {
-    <span class="kw">fn </span>load(size: usize, eps: f64, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>inner = candle_nn::rms_norm_non_quant(size, eps, vb)<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ inner })
-    }
-
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="self">self</span>.inner.forward(x)
-    }
-}
-
-<span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">struct </span>CausalSelfAttention {
     q_proj: Linear,
     k_proj: Linear,
@@ -518,22 +470,6 @@
     head_dim: usize,
     use_flash_attn: bool,
     rotary_emb: Arc&lt;RotaryEmbedding&gt;,
-}
-
-<span class="attr">#[cfg(feature = <span class="string">"flash-attn"</span>)]
-</span><span class="kw">fn </span>flash_attn(
-    q: <span class="kw-2">&amp;</span>Tensor,
-    k: <span class="kw-2">&amp;</span>Tensor,
-    v: <span class="kw-2">&amp;</span>Tensor,
-    softmax_scale: f32,
-    causal: bool,
-) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
-}
-
-<span class="attr">#[cfg(not(feature = <span class="string">"flash-attn"</span>))]
-</span><span class="kw">fn </span>flash_attn(<span class="kw">_</span>: <span class="kw-2">&amp;</span>Tensor, <span class="kw">_</span>: <span class="kw-2">&amp;</span>Tensor, <span class="kw">_</span>: <span class="kw-2">&amp;</span>Tensor, <span class="kw">_</span>: f32, <span class="kw">_</span>: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-    <span class="macro">unimplemented!</span>(<span class="string">"compile with '--features flash-attn'"</span>)
 }
 
 <span class="kw">impl </span>CausalSelfAttention {
@@ -733,8 +669,8 @@
     <span class="kw">fn </span>load(vb: VarBuilder, cfg: <span class="kw-2">&amp;</span>Config) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>attn = CausalSelfAttention::load(vb.pp(<span class="string">"self_attn"</span>), cfg)<span class="question-mark">?</span>;
         <span class="kw">let </span>mlp = Mlp::load(vb.pp(<span class="string">"mlp"</span>), cfg)<span class="question-mark">?</span>;
-        <span class="kw">let </span>rms_1 = RmsNorm::load(cfg.hidden_size, cfg.rms_norm_eps, vb.pp(<span class="string">"input_layernorm"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>rms_2 = RmsNorm::load(
+        <span class="kw">let </span>rms_1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp(<span class="string">"input_layernorm"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>rms_2 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             vb.pp(<span class="string">"post_attention_layernorm"</span>),
@@ -788,7 +724,7 @@
     <span class="kw">pub fn </span>load(vb: VarBuilder, cfg: <span class="kw-2">&amp;</span>Config, device: <span class="kw-2">&amp;</span>Device, no_kv_cache: bool) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp(<span class="string">"model.embed_tokens"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp(<span class="string">"lm_head"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>ln_f = RmsNorm::load(cfg.hidden_size, cfg.rms_norm_eps, vb.pp(<span class="string">"model.norm"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp(<span class="string">"model.norm"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>blocks: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..cfg.num_hidden_layers)
             .map(|i| Block::load(vb.pp(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"model.layers.{i}"</span>)), cfg).unwrap())
             .collect();

@@ -799,58 +799,22 @@
 <a href="#797" id="797">797</a>
 <a href="#798" id="798">798</a>
 <a href="#799" id="799">799</a>
-<a href="#800" id="800">800</a>
-<a href="#801" id="801">801</a>
-<a href="#802" id="802">802</a>
-<a href="#803" id="803">803</a>
-<a href="#804" id="804">804</a>
-<a href="#805" id="805">805</a>
-<a href="#806" id="806">806</a>
-<a href="#807" id="807">807</a>
-<a href="#808" id="808">808</a>
-<a href="#809" id="809">809</a>
-<a href="#810" id="810">810</a>
-<a href="#811" id="811">811</a>
-<a href="#812" id="812">812</a>
-<a href="#813" id="813">813</a>
-<a href="#814" id="814">814</a>
-<a href="#815" id="815">815</a>
-<a href="#816" id="816">816</a>
-<a href="#817" id="817">817</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
 
+<span class="kw">use </span>candle_core::quantized::QMatMul;
 <span class="kw">use </span>candle_core::quantized::{ggml_file, gguf_file};
-<span class="kw">use </span>candle_core::quantized::{QMatMul, QTensor};
 <span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::layer_norm::RmsNormQuantized;
 <span class="kw">use </span>candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Ordering, QLoraLinear};
 
-<span class="kw">use </span><span class="kw">crate</span>::models::Cache;
+<span class="kw">use </span><span class="kw">crate</span>::models::{Cache, QRmsNorm};
 
 <span class="kw">use </span><span class="kw">super</span>::classifier::XLoraClassifier;
 <span class="kw">use super</span>::{NonGranularState, ScalingsMaker, XLoraConfig};
 
 <span class="kw">pub const </span>MAX_SEQ_LEN: u32 = <span class="number">4096</span>;
-
-<span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">struct </span>RmsNorm {
-    inner: candle_nn::RmsNorm&lt;RmsNormQuantized&gt;,
-}
-
-<span class="kw">impl </span>RmsNorm {
-    <span class="kw">fn </span>new(scale: QTensor, eps: f32) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>scale = scale.dequantize(<span class="kw-2">&amp;</span>scale.device())<span class="question-mark">?</span>;
-        <span class="kw">let </span>inner = candle_nn::RmsNorm::&lt;RmsNormQuantized&gt;::new(scale, eps <span class="kw">as </span>f64);
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ inner })
-    }
-
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="self">self</span>.inner.forward(x)
-    }
-}
 
 <span class="attr">#[derive(Debug)]
 </span><span class="kw">struct </span>Mlp {
@@ -987,9 +951,9 @@
     attention_wk: QLoraLinear,
     attention_wv: QLoraLinear,
     attention_wo: QLoraLinear,
-    attention_norm: RmsNorm,
+    attention_norm: QRmsNorm,
     mlp_or_moe: MlpOrMoe,
-    ffn_norm: RmsNorm,
+    ffn_norm: QRmsNorm,
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
@@ -1108,7 +1072,7 @@
 <span class="kw">pub struct </span>ModelWeights {
     tok_embeddings: Embedding,
     layers: Vec&lt;LayerWeights&gt;,
-    norm: RmsNorm,
+    norm: QRmsNorm,
     output: QMatMul,
     masks: HashMap&lt;usize, Tensor&gt;,
     <span class="kw">pub </span>device: Device,
@@ -1136,7 +1100,7 @@
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = ct.remove(<span class="string">"tok_embeddings.weight"</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(<span class="kw-2">&amp;</span>ct.device)<span class="question-mark">?</span>;
-        <span class="kw">let </span>norm = RmsNorm::new(ct.remove(<span class="string">"norm.weight"</span>)<span class="question-mark">?</span>, <span class="number">1e-5</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>norm = QRmsNorm::new(ct.remove(<span class="string">"norm.weight"</span>)<span class="question-mark">?</span>, <span class="number">1e-5</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>output = ct.remove(<span class="string">"output.weight"</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(ct.hparams.n_layer <span class="kw">as </span>usize);
         <span class="kw">let </span><span class="kw-2">mut </span>count = <span class="number">0</span>;
@@ -1226,9 +1190,9 @@
                     <span class="macro">format!</span>(<span class="string">"model.layers.{layer_idx}.self_attn.o_proj"</span>),
                     <span class="kw-2">&amp;mut </span>count,
                 )<span class="question-mark">?</span>,
-                attention_norm: RmsNorm::new(attention_norm, <span class="number">1e-5</span>)<span class="question-mark">?</span>,
+                attention_norm: QRmsNorm::new(attention_norm, <span class="number">1e-5</span>)<span class="question-mark">?</span>,
                 mlp_or_moe,
-                ffn_norm: RmsNorm::new(ffn_norm, <span class="number">1e-5</span>)<span class="question-mark">?</span>,
+                ffn_norm: QRmsNorm::new(ffn_norm, <span class="number">1e-5</span>)<span class="question-mark">?</span>,
                 n_head: ct.hparams.n_head <span class="kw">as </span>usize,
                 n_kv_head: ct.hparams.n_head <span class="kw">as </span>usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) <span class="kw">as </span>usize,
@@ -1297,7 +1261,7 @@
 
         <span class="kw">let </span>tok_embeddings = ct.tensor(reader, <span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(device)<span class="question-mark">?</span>;
-        <span class="kw">let </span>norm = RmsNorm::new(
+        <span class="kw">let </span>norm = QRmsNorm::new(
             ct.tensor(reader, <span class="string">"output_norm.weight"</span>, device)<span class="question-mark">?</span>,
             rms_norm_eps,
         )<span class="question-mark">?</span>;
@@ -1444,9 +1408,9 @@
                     <span class="macro">format!</span>(<span class="string">"model.layers.{layer_idx}.self_attn.o_proj"</span>),
                     <span class="kw-2">&amp;mut </span>count,
                 )<span class="question-mark">?</span>,
-                attention_norm: RmsNorm::new(attention_norm, rms_norm_eps)<span class="question-mark">?</span>,
+                attention_norm: QRmsNorm::new(attention_norm, rms_norm_eps)<span class="question-mark">?</span>,
                 mlp_or_moe,
-                ffn_norm: RmsNorm::new(ffn_norm, rms_norm_eps)<span class="question-mark">?</span>,
+                ffn_norm: QRmsNorm::new(ffn_norm, rms_norm_eps)<span class="question-mark">?</span>,
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,

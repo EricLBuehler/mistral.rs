@@ -358,22 +358,16 @@
 <a href="#356" id="356">356</a>
 <a href="#357" id="357">357</a>
 <a href="#358" id="358">358</a>
-<a href="#359" id="359">359</a>
-<a href="#360" id="360">360</a>
-<a href="#361" id="361">361</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
-<span class="kw">use </span>candle_nn::{
-    layer_norm::RmsNormNonQuantized, linear_b <span class="kw">as </span>linear, rms_norm_non_quant, Linear, RmsNorm,
-    RotaryEmbedding, VarBuilder,
-};
+<span class="kw">use </span>candle_nn::{linear_b <span class="kw">as </span>linear, Linear, RotaryEmbedding, VarBuilder};
 
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::GEMMA_IS_GPTX;
 
-<span class="kw">use </span><span class="kw">super</span>::Cache;
+<span class="kw">use super</span>::{Cache, RmsNorm};
 
 <span class="kw">fn </span>default_max_position_embeddings() -&gt; usize {
     <span class="number">4096
@@ -556,8 +550,8 @@
 </span><span class="kw">struct </span>DecoderLayer {
     self_attn: Attention,
     mlp: MLP,
-    input_layernorm: RmsNorm&lt;RmsNormNonQuantized&gt;,
-    post_attention_layernorm: RmsNorm&lt;RmsNormNonQuantized&gt;,
+    input_layernorm: RmsNorm,
+    post_attention_layernorm: RmsNorm,
 }
 
 <span class="kw">impl </span>DecoderLayer {
@@ -565,8 +559,8 @@
         <span class="kw">let </span>self_attn = Attention::new(rotary_emb, cfg, vb.pp(<span class="string">"self_attn"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>mlp = MLP::new(cfg, vb.pp(<span class="string">"mlp"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>input_layernorm =
-            rms_norm_non_quant(cfg.hidden_size, cfg.rms_norm_eps, vb.pp(<span class="string">"input_layernorm"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>post_attention_layernorm = rms_norm_non_quant(
+            RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp(<span class="string">"input_layernorm"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>post_attention_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             vb.pp(<span class="string">"post_attention_layernorm"</span>),
@@ -607,7 +601,7 @@
 </span><span class="kw">pub struct </span>Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec&lt;DecoderLayer&gt;,
-    norm: RmsNorm&lt;RmsNormNonQuantized&gt;,
+    norm: RmsNorm,
     lm_head: Linear,
     dtype: DType,
     hidden_size: usize,
@@ -635,7 +629,7 @@
             <span class="kw">let </span>layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))<span class="question-mark">?</span>;
             layers.push(layer)
         }
-        <span class="kw">let </span>norm = rms_norm_non_quant(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp(<span class="string">"norm"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp(<span class="string">"norm"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>lm_head = Linear::new(embed_tokens.embeddings().clone(), <span class="prelude-val">None</span>);
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             embed_tokens,
