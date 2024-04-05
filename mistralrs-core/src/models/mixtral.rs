@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::pipeline::MIXTRAL_IS_GPTX;
 
-use super::{Cache, RmsNorm};
+use super::{flash_attn, Cache, RmsNorm};
 
 /// https://github.com/huggingface/transformers/blob/1a585c1222a56bcaecc070966d558d4a9d862e83/src/transformers/models/mixtral/configuration_mixtral.py#L113
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -30,22 +30,6 @@ pub struct Config {
     pub(crate) num_experts_per_tok: usize,
     pub(crate) num_local_experts: usize,
     pub(crate) use_flash_attn: bool,
-}
-
-#[cfg(feature = "flash-attn")]
-fn flash_attn(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    softmax_scale: f32,
-    causal: bool,
-) -> Result<Tensor> {
-    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
-}
-
-#[cfg(not(feature = "flash-attn"))]
-fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
-    unimplemented!("compile with '--features flash-attn'")
 }
 
 #[derive(Debug, Clone)]
