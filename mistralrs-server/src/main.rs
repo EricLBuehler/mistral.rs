@@ -40,7 +40,6 @@ use tracing::{info, warn};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
 }
