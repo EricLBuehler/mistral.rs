@@ -235,10 +235,10 @@ async fn chatcompletions(
 }
 
 #[utoipa::path(
-get,
-tag = "Mistral.rs",
-path = "/v1/models",
-responses((status = 200, description = "Served model info", body = ModelObjects))
+    get,
+    tag = "Mistral.rs",
+    path = "/v1/models",
+    responses((status = 200, description = "Served model info", body = ModelObjects))
 )]
 async fn models(State(state): State<Arc<MistralRs>>) -> Json<ModelObjects> {
     Json(ModelObjects {
@@ -257,7 +257,7 @@ async fn models(State(state): State<Arc<MistralRs>>) -> Json<ModelObjects> {
     tag = "Mistral.rs",
     path = "/health",
     responses((status = 200, description = "Server is healthy"))
-    )]
+)]
 async fn health() -> &'static str {
     "OK"
 }
