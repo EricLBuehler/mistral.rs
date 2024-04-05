@@ -2,32 +2,14 @@
 
 use std::collections::HashMap;
 
+use candle_core::quantized::QMatMul;
 use candle_core::quantized::{ggml_file, gguf_file};
-use candle_core::quantized::{QMatMul, QTensor};
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
-use candle_nn::layer_norm::RmsNormQuantized;
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 
-use super::Cache;
+use super::{Cache, QRmsNorm};
 
 pub const MAX_SEQ_LEN: u32 = 4096;
-
-#[derive(Debug, Clone)]
-struct RmsNorm {
-    inner: candle_nn::RmsNorm<RmsNormQuantized>,
-}
-
-impl RmsNorm {
-    fn new(scale: QTensor, eps: f32) -> Result<Self> {
-        let scale = scale.dequantize(&scale.device())?;
-        let inner = candle_nn::RmsNorm::<RmsNormQuantized>::new(scale, eps as f64);
-        Ok(Self { inner })
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.inner.forward(x)
-    }
-}
 
 #[derive(Debug, Clone)]
 struct Mlp {
@@ -131,9 +113,9 @@ struct LayerWeights {
     attention_wk: QMatMul,
     attention_wv: QMatMul,
     attention_wo: QMatMul,
-    attention_norm: RmsNorm,
+    attention_norm: QRmsNorm,
     mlp_or_moe: MlpOrMoe,
-    ffn_norm: RmsNorm,
+    ffn_norm: QRmsNorm,
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
@@ -229,7 +211,7 @@ impl LayerWeights {
 pub struct ModelWeights {
     tok_embeddings: Embedding,
     layers: Vec<LayerWeights>,
-    norm: RmsNorm,
+    norm: QRmsNorm,
     output: QMatMul,
     masks: HashMap<usize, Tensor>,
     pub device: Device,
@@ -250,7 +232,7 @@ impl ModelWeights {
 
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(&ct.device)?;
-        let norm = RmsNorm::new(ct.remove("norm.weight")?, 1e-5)?;
+        let norm = QRmsNorm::new(ct.remove("norm.weight")?, 1e-5)?;
         let output = ct.remove("output.weight")?;
         let mut layers = Vec::with_capacity(ct.hparams.n_layer as usize);
         for layer_idx in 0..ct.hparams.n_layer {
@@ -276,9 +258,9 @@ impl ModelWeights {
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,
                 attention_wv: QMatMul::from_qtensor(attention_wv)?,
                 attention_wo: QMatMul::from_qtensor(attention_wo)?,
-                attention_norm: RmsNorm::new(attention_norm, 1e-5)?,
+                attention_norm: QRmsNorm::new(attention_norm, 1e-5)?,
                 mlp_or_moe,
-                ffn_norm: RmsNorm::new(ffn_norm, 1e-5)?,
+                ffn_norm: QRmsNorm::new(ffn_norm, 1e-5)?,
                 n_head: ct.hparams.n_head as usize,
                 n_kv_head: ct.hparams.n_head as usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
@@ -336,7 +318,7 @@ impl ModelWeights {
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
-        let norm = RmsNorm::new(
+        let norm = QRmsNorm::new(
             ct.tensor(reader, "output_norm.weight", device)?,
             rms_norm_eps,
         )?;
@@ -392,9 +374,9 @@ impl ModelWeights {
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,
                 attention_wv: QMatMul::from_qtensor(attention_wv)?,
                 attention_wo: QMatMul::from_qtensor(attention_wo)?,
-                attention_norm: RmsNorm::new(attention_norm, rms_norm_eps)?,
+                attention_norm: QRmsNorm::new(attention_norm, rms_norm_eps)?,
                 mlp_or_moe,
-                ffn_norm: RmsNorm::new(ffn_norm, rms_norm_eps)?,
+                ffn_norm: QRmsNorm::new(ffn_norm, rms_norm_eps)?,
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim,

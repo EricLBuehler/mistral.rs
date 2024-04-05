@@ -1,9 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{
-    embedding, layer_norm::RmsNormNonQuantized, Embedding, Module, RotaryEmbedding, VarBuilder,
-};
+use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering};
 use std::{collections::HashMap, sync::Arc};
 
@@ -11,7 +9,7 @@ use crate::{
     models::{
         self,
         llama::{Config, MAX_SEQ_LEN},
-        LayerCaches,
+        LayerCaches, RmsNorm,
     },
     pipeline::LLAMA_IS_GPTX,
 };
@@ -45,22 +43,6 @@ impl Cache {
             self.masks.insert(t, mask.clone());
             Ok(mask)
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct RmsNorm {
-    inner: candle_nn::RmsNorm<RmsNormNonQuantized>,
-}
-
-impl RmsNorm {
-    fn load(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
-        Ok(Self { inner })
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.inner.forward(x)
     }
 }
 
@@ -361,8 +343,8 @@ impl Block {
     ) -> Result<Self> {
         let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg, lora_config, count, ord)?;
         let mlp = Mlp::load(vb.pp("mlp"), cfg, lora_config, count, ord)?;
-        let rms_1 = RmsNorm::load(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
-        let rms_2 = RmsNorm::load(
+        let rms_1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let rms_2 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             vb.pp("post_attention_layernorm"),
@@ -498,7 +480,7 @@ impl XLoraLlama {
     ) -> Result<Self> {
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let lm_head = candle_nn::linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
-        let ln_f = RmsNorm::load(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
+        let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
         let mut count = 0;
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)
             .map(|i| {

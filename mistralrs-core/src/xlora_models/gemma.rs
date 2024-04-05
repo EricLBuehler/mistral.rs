@@ -3,13 +3,11 @@
 use std::sync::Arc;
 
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{
-    layer_norm::RmsNormNonQuantized, rms_norm_non_quant, RmsNorm, RotaryEmbedding, VarBuilder,
-};
+use candle_nn::{RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_b as linear, LinearLayerLike, LoraConfig, Ordering};
 
 use crate::{
-    models::{gemma::Config, Cache},
+    models::{gemma::Config, Cache, RmsNorm},
     pipeline::GEMMA_IS_GPTX,
 };
 
@@ -285,8 +283,8 @@ impl Attention {
 struct DecoderLayer {
     self_attn: Attention,
     mlp: MLP,
-    input_layernorm: RmsNorm<RmsNormNonQuantized>,
-    post_attention_layernorm: RmsNorm<RmsNormNonQuantized>,
+    input_layernorm: RmsNorm,
+    post_attention_layernorm: RmsNorm,
 }
 
 impl DecoderLayer {
@@ -302,8 +300,8 @@ impl DecoderLayer {
             Attention::new(rotary_emb, cfg, vb.pp("self_attn"), lora_config, count, ord)?;
         let mlp = MLP::new(cfg, vb.pp("mlp"), lora_config, count, ord)?;
         let input_layernorm =
-            rms_norm_non_quant(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
-        let post_attention_layernorm = rms_norm_non_quant(
+            RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let post_attention_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             vb.pp("post_attention_layernorm"),
@@ -355,7 +353,7 @@ impl DecoderLayer {
 pub struct XLoraModel {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
-    norm: RmsNorm<RmsNormNonQuantized>,
+    norm: RmsNorm,
     lm_head: candle_nn::Linear,
     dtype: DType,
     hidden_size: usize,
@@ -398,7 +396,7 @@ impl XLoraModel {
             )?;
             layers.push(layer)
         }
-        let norm = rms_norm_non_quant(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
+        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
         let lm_head = candle_nn::Linear::new(embed_tokens.embeddings().clone(), None);
         Ok(Self {
             embed_tokens,
