@@ -86,7 +86,9 @@ A quantized model should be handled by the `quantized_llama.rs` implementation. 
 
 
 ## 7) Adding an X-LoRA counterpart
-To add an X-LoRA counterpart, start by copying your model to the `xlora_models` directory. Then, implement `ScalingsMaker` for model. This requires that you change the original `forward` method to `inner_forward`. A new forward method should be written, which because it is the same accross most models can be copied:
+To add an X-LoRA counterpart, start by copying your model to the `xlora_models` directory. 
+
+Then, implement `ScalingsMaker` for model. This requires that you change the original `forward` method to `inner_forward`. A new forward method should be written, which because it is the same accross most models can be copied:
 
 ```rust
 pub fn forward(
@@ -141,6 +143,18 @@ pub fn forward(
         .narrow(1, seq_len - 1, 1)
     }
 }
+```
+
+Next, the `Linear` layers should be replaced by `Arc<dyn LinearLayerLike>` and the appropriate method must be passed between initialization functions to correctly handle the layer count and configs:
+```diff
+fn new(
+    rotary_emb: Arc<RotaryEmbedding>,
+    cfg: &Config,
+    vb: VarBuilder,
++   lora_config: &Vec<(String, LoraConfig)>,
++   count: &mut usize,
++   ord: &Ordering,
+) -> Result<Self> {
 ```
 
 Additionally, the pipeline should store a non granular state: 
