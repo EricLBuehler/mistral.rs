@@ -81,3 +81,78 @@ if query_states.rank() == 3 {
 The `Loader` is in charge of downloading and loading the model. The `download_model` method is pretty general and can be copied from an existing implementation
 
 The `_setup_model` method instantiates the `Pipeline`. It handles loading the different model kinds. The `Pipeline` is responsible for running and sampling the model. For example, please see the [`mistral pipeline`](mistralrs-core/src/pipeline/mistral.rs).
+
+A quantized model should be handled by the `quantized_llama.rs` implementation. For example the [`llama pipeline`](mistralrs-core/src/pipeline/llama.rs) loads GGUF and GGML model with `quantized_llama`.rs
+
+
+## 7) Adding an X-LoRA counterpart
+To add an X-LoRA counterpart, start by copying your model to the `xlora_models` directory. Then, implement `ScalingsMaker` for model. This requires that you change the original `forward` method to `inner_forward`. A new forward method should be written, which because it is the same accross most models can be copied:
+
+```rust
+pub fn forward(
+    &mut self,
+    input_ids: &Tensor,
+    input_ids_full: &Tensor,
+    seqlen_offsets: &[usize],
+    seqlen_offsets_full: &[usize],
+    start_offsets_kernel: Tensor,
+    start_offsets_kernel_full: Tensor,
+    no_kv_cache: bool,
+    non_granular_state: &Option<NonGranularState>,
+) -> Result<Tensor> {
+    let (_b_size, seq_len_full) = input_ids_full.dims2()?;
+    let (_, seq_len) = input_ids.dims2()?;
+
+    let scalings = self.get_scalings(
+        input_ids,
+        input_ids_full,
+        seqlen_offsets,
+        seqlen_offsets_full,
+        &start_offsets_kernel,
+        &start_offsets_kernel_full,
+        no_kv_cache,
+        non_granular_state,
+    )?;
+
+    if no_kv_cache {
+        self.inner_forward(
+            input_ids_full,
+            seqlen_offsets_full,
+            start_offsets_kernel_full,
+            scalings,
+            true,
+            no_kv_cache,
+            None,
+        )?
+        .apply(&self.lm_head)?
+        .narrow(1, seq_len_full - 1, 1)
+    } else {
+        // is_full_pass=true is ok because no_kv_cache=false
+        self.inner_forward(
+            input_ids,
+            seqlen_offsets,
+            start_offsets_kernel,
+            scalings,
+            true,
+            no_kv_cache,
+            None,
+        )?
+        .apply(&self.lm_head)?
+        .narrow(1, seq_len - 1, 1)
+    }
+}
+```
+
+Additionally, the pipeline should store a non granular state: 
+
+```diff
+pub struct MistralPipeline {
+    model: Model,
+    tokenizer: Tokenizer,
+    config: MistralSpecificConfig,
+    no_kv_cache: bool,
+    chat_template: ChatTemplate,
++   non_granular_state: Option<NonGranularState>,
+    model_id: String,
+}
+```
