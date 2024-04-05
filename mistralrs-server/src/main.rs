@@ -30,12 +30,14 @@ use mistralrs_core::{
     Response, SamplingParams, SchedulerMethod, StopTokens as InternalStopTokens, TokenSource,
 };
 use model_selected::ModelSelected;
-use openai::{ChatCompletionRequest, ModelObjects, StopTokens};
+use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 
 use crate::openai::ModelObject;
 mod model_selected;
 mod openai;
 use tracing::info;
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
@@ -179,6 +181,13 @@ fn parse_request(
     }
 }
 
+#[utoipa::path(
+    post,
+    tag = "Mistral.rs",
+    path = "/v1/chat/completions",
+    request_body = ChatCompletionRequest,
+    responses((status = 200, description = "Chat completions"))
+)]
 async fn chatcompletions(
     State(state): State<Arc<MistralRs>>,
     Json(oairequest): Json<ChatCompletionRequest>,
@@ -224,8 +233,14 @@ async fn chatcompletions(
     }
 }
 
-async fn models(State(state): State<Arc<MistralRs>>) -> String {
-    serde_json::to_string(&ModelObjects {
+#[utoipa::path(
+get,
+tag = "Mistral.rs",
+path = "/v1/models",
+responses((status = 200, description = "Served model info", body = ModelObjects))
+)]
+async fn models(State(state): State<Arc<MistralRs>>) -> Json<ModelObjects> {
+    Json(ModelObjects {
         object: "list",
         data: vec![ModelObject {
             id: state.get_id(),
@@ -234,18 +249,43 @@ async fn models(State(state): State<Arc<MistralRs>>) -> String {
             owned_by: "local",
         }],
     })
-    .unwrap()
 }
 
+#[utoipa::path(
+    get,
+    tag = "Mistral.rs",
+    path = "/health",
+    responses((status = 200, description = "Server is healthy"))
+    )]
 async fn health() -> &'static str {
     "OK"
 }
 
 fn get_router(state: Arc<MistralRs>) -> Router {
+    #[derive(OpenApi)]
+    #[openapi(
+        paths(models, health, chatcompletions),
+        components(
+            schemas(ModelObjects, ModelObject, ChatCompletionRequest, StopTokens, Message)),
+        tags(
+            (name = "Mistral.rs", description = "Mistral.rs API")
+        ),
+        info(
+            title = "Mistral.rs",
+            license(
+            name = "MIT",
+        )
+        )
+    )]
+    struct ApiDoc;
+
+    let doc = { ApiDoc::openapi() };
     Router::new()
+        .merge(SwaggerUi::new("/docs").url("/api-doc/openapi.json", doc))
         .route("/v1/chat/completions", post(chatcompletions))
         .route("/v1/models", get(models))
         .route("/health", get(health))
+        .route("/", get(health))
         .with_state(state)
 }
 
