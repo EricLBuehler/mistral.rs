@@ -2,13 +2,13 @@
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{layer_norm::RmsNormNonQuantized, Activation, RotaryEmbedding, VarBuilder};
+use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 use candle_transformers::models::with_tracing::{linear_no_bias, Linear};
 use std::sync::Arc;
 
 use crate::pipeline::MISTRAL_IS_GPTX;
 
-use super::Cache;
+use super::{flash_attn, Cache, RmsNorm};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -24,24 +24,6 @@ pub struct Config {
     pub(crate) rope_theta: f64,
     pub(crate) sliding_window: usize,
     pub(crate) use_flash_attn: bool,
-}
-
-#[derive(Debug, Clone)]
-struct RmsNorm {
-    inner: candle_nn::RmsNorm<RmsNormNonQuantized>,
-}
-
-impl RmsNorm {
-    fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
-        Ok(Self { inner })
-    }
-}
-
-impl Module for RmsNorm {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.inner.forward(x)
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -75,22 +57,6 @@ impl Module for MLP {
         let rhs = xs.apply(&self.up_proj)?;
         (lhs * rhs)?.apply(&self.down_proj)
     }
-}
-
-#[cfg(feature = "flash-attn")]
-fn flash_attn(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    softmax_scale: f32,
-    causal: bool,
-) -> Result<Tensor> {
-    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
-}
-
-#[cfg(not(feature = "flash-attn"))]
-fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
-    unimplemented!("compile with '--features flash-attn'")
 }
 
 #[derive(Debug, Clone)]

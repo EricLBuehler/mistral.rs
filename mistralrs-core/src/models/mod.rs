@@ -1,6 +1,10 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use candle_core::Tensor;
+use candle_core::{quantized::QTensor, Result, Tensor};
+use candle_nn::{
+    layer_norm::{RmsNormNonQuantized, RmsNormQuantized},
+    Module, VarBuilder,
+};
 
 use crate::get_mut_arcmutex;
 
@@ -55,4 +59,55 @@ impl Cache {
     pub(crate) fn is_xlora(&self) -> bool {
         self.xlora_cache.is_some()
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct RmsNorm {
+    inner: candle_nn::RmsNorm<RmsNormNonQuantized>,
+}
+
+impl RmsNorm {
+    pub fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
+        Ok(Self { inner })
+    }
+}
+
+impl Module for RmsNorm {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        self.inner.forward(x)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct QRmsNorm {
+    inner: candle_nn::RmsNorm<RmsNormQuantized>,
+}
+
+impl QRmsNorm {
+    pub fn new(scale: QTensor, eps: f32) -> Result<Self> {
+        let scale = scale.dequantize(&scale.device())?;
+        let inner = candle_nn::RmsNorm::<RmsNormQuantized>::new(scale, eps as f64);
+        Ok(Self { inner })
+    }
+
+    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        self.inner.forward(x)
+    }
+}
+
+#[cfg(feature = "flash-attn")]
+pub fn flash_attn(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    softmax_scale: f32,
+    causal: bool,
+) -> Result<Tensor> {
+    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
+}
+
+#[cfg(not(feature = "flash-attn"))]
+pub fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
+    unimplemented!("Compile with '--features flash-attn'")
 }

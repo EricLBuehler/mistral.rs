@@ -232,3 +232,6 @@ Putting it all together, to run, for example, an [Orca](https://huggingface.co/m
 1) Generate the `tokenizer.json` by running the script at `scripts/get_tokenizers_json.py`. This will output some files including `tokenizer.json` in the working directory.
 2) Find and copy the correct chat template from `chat-templates` to the working directory (eg., `cp chat_templates/chatml.json .`)
 3) Run `mistralrs-server`, specifying the tokenizer and chat template: `cargo run --release --features cuda -- --port 1234 --log output.txt --chat-template chatml.json llama -m microsoft/Orca-2-13b -t tokenizer.json`
+
+## Contributing
+If you have any problems or want to contribute something, please raise an issue or pull request! If you want to add a new model, please see [our guide](ADDING_MODELS.md).

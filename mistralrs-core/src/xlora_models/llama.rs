@@ -1,17 +1,15 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{
-    embedding, layer_norm::RmsNormNonQuantized, Embedding, Module, RotaryEmbedding, VarBuilder,
-};
+use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering};
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     models::{
-        self,
+        self, flash_attn,
         llama::{Config, MAX_SEQ_LEN},
-        LayerCaches,
+        LayerCaches, RmsNorm,
     },
     pipeline::LLAMA_IS_GPTX,
 };
@@ -49,22 +47,6 @@ impl Cache {
 }
 
 #[derive(Debug, Clone)]
-struct RmsNorm {
-    inner: candle_nn::RmsNorm<RmsNormNonQuantized>,
-}
-
-impl RmsNorm {
-    fn load(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
-        Ok(Self { inner })
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.inner.forward(x)
-    }
-}
-
-#[derive(Debug, Clone)]
 struct CausalSelfAttention {
     q_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     k_proj: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -75,22 +57,6 @@ struct CausalSelfAttention {
     head_dim: usize,
     use_flash_attn: bool,
     rotary_emb: Arc<RotaryEmbedding>,
-}
-
-#[cfg(feature = "flash-attn")]
-fn flash_attn(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    softmax_scale: f32,
-    causal: bool,
-) -> Result<Tensor> {
-    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
-}
-
-#[cfg(not(feature = "flash-attn"))]
-fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
-    unimplemented!("compile with '--features flash-attn'")
 }
 
 impl CausalSelfAttention {
@@ -361,8 +327,8 @@ impl Block {
     ) -> Result<Self> {
         let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg, lora_config, count, ord)?;
         let mlp = Mlp::load(vb.pp("mlp"), cfg, lora_config, count, ord)?;
-        let rms_1 = RmsNorm::load(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
-        let rms_2 = RmsNorm::load(
+        let rms_1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let rms_2 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             vb.pp("post_attention_layernorm"),
@@ -498,7 +464,7 @@ impl XLoraLlama {
     ) -> Result<Self> {
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let lm_head = candle_nn::linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
-        let ln_f = RmsNorm::load(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
+        let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
         let mut count = 0;
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)
             .map(|i| {
