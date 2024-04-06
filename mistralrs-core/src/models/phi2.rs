@@ -215,6 +215,7 @@ impl Attention {
             }
         };
         *kv_cache = Some((key_states.clone(), value_states.clone()));
+        dbg!(&key_states);
 
         // Repeat kv.
         let key_states = self.repeat_kv(key_states)?.contiguous()?;
