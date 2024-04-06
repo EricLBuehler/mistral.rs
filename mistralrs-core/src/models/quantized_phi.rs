@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use candle_core::quantized::gguf_file;
 use candle_core::quantized::{QMatMul, QTensor};
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
-use candle_nn::{Embedding, LayerNorm, Module, RotaryEmbedding};
+use candle_nn::{Activation, Embedding, LayerNorm, Module, RotaryEmbedding};
 
 use super::Cache;
 
@@ -152,6 +152,7 @@ pub struct ModelWeights {
     masks: HashMap<usize, Tensor>,
     pub device: Device,
     pub cache: Cache,
+    act: Activation,
 }
 
 impl ModelWeights {
@@ -253,6 +254,7 @@ impl ModelWeights {
             masks: HashMap::new(),
             device: device.clone(),
             cache: Cache::new(block_count, false),
+            act: Activation::NewGelu,
         })
     }
 
@@ -296,6 +298,7 @@ impl ModelWeights {
 
             // MLP
             let feed_forward_hidden_states = layer.ffn_up.forward(&x)?;
+            let feed_forward_hidden_states = self.act.forward(&feed_forward_hidden_states)?;
             let feed_forward_hidden_states = layer.ffn_down.forward(&feed_forward_hidden_states)?;
             layer_in = (attn_outputs + feed_forward_hidden_states + residual)?;
         }
