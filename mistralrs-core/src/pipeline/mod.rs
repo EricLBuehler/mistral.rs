@@ -17,7 +17,7 @@ use minijinja::{context, Environment, ErrorKind};
 pub use mistral::{MistralLoader, MistralSpecificConfig, MISTRAL_IS_GPTX};
 use mistralrs_lora::{LoraConfig, Ordering};
 pub use mixtral::{MixtralLoader, MixtralSpecificConfig, MIXTRAL_IS_GPTX};
-pub use phi2::{Phi2Loader, Phi2SpecificConfig};
+pub use phi2::{Phi2Loader, Phi2SpecificConfig, PHI2_IS_GPTX};
 use serde::Deserialize;
 use std::{
     cell::RefCell, collections::HashMap, fs, iter::repeat, path::PathBuf, rc::Rc, str::FromStr,

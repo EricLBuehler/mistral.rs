@@ -11,6 +11,7 @@ use crate::{
     models::phi2::{Config, Model as NormalModel},
     sequence::Sequence,
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
+    xlora_models::XLoraPhi2,
 };
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -33,7 +34,9 @@ use tracing::info;
 
 enum Model {
     Normal(NormalModel),
+    XLoraNormal(XLoraPhi2),
 }
+pub const PHI2_IS_GPTX: bool = true;
 
 pub struct Phi2ModelPaths<P> {
     tokenizer_filename: P,
@@ -270,7 +273,35 @@ impl Loader for Phi2Loader {
                 let model = NormalModel::new(&config, vb)?;
                 Model::Normal(model)
             }
-            ModelKind::XLoraNormal => unreachable!(),
+            ModelKind::XLoraNormal => {
+                let mut safetensors_paths = paths.get_weight_filenames().iter().collect::<Vec<_>>();
+                safetensors_paths.push(paths.get_classifier_path().as_ref().unwrap());
+                let vb = from_mmaped_safetensors(
+                    safetensors_paths
+                        .iter()
+                        .map(|x| (*x).to_owned())
+                        .collect::<Vec<_>>(),
+                    paths
+                        .get_adapter_filenames()
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .map(|(_, x)| (*x).to_owned())
+                        .collect::<Vec<_>>(),
+                    dtype.unwrap_or(default_dtype),
+                    device,
+                    false,
+                )?;
+
+                let model = XLoraPhi2::new(
+                    &config,
+                    vb,
+                    paths.get_adapter_configs().as_ref().unwrap(),
+                    paths.get_classifier_config().as_ref().unwrap().clone(),
+                    paths.get_ordering().as_ref().unwrap().clone(),
+                )?;
+                Model::XLoraNormal(model)
+            }
             ModelKind::XLoraGGUF => unreachable!(),
             ModelKind::XLoraGGML => unreachable!(),
         };
@@ -309,11 +340,11 @@ impl Pipeline for Phi2Pipeline {
     fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor {
         let ModelInputs {
             input_ids,
-            input_ids_full: _,
+            input_ids_full,
             seqlen_offsets,
-            seqlen_offsets_full: _,
+            seqlen_offsets_full,
             seqlen_offsets_kernel,
-            seqlen_offsets_kernel_full: _,
+            seqlen_offsets_kernel_full,
         } = calculate_inputs(
             input_toks,
             is_prompt,
@@ -326,6 +357,16 @@ impl Pipeline for Phi2Pipeline {
             Model::Normal(ref mut model) => {
                 model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)
             }
+            Model::XLoraNormal(ref mut model) => model.forward(
+                &input_ids,
+                input_ids_full.as_ref().unwrap(),
+                &seqlen_offsets,
+                seqlen_offsets_full.as_ref().unwrap(),
+                seqlen_offsets_kernel,
+                seqlen_offsets_kernel_full.unwrap(),
+                self.no_kv_cache,
+                &self.non_granular_state,
+            ),
         };
         match result {
             Ok(v) => v,
@@ -337,6 +378,7 @@ impl Pipeline for Phi2Pipeline {
     fn device(&self) -> &Device {
         match self.model {
             Model::Normal(ref model) => &model.device,
+            Model::XLoraNormal(ref model) => &model.device,
         }
     }
     fn num_hidden_layers(&self) -> usize {
@@ -345,6 +387,7 @@ impl Pipeline for Phi2Pipeline {
     fn cache(&self) -> &Cache {
         match self.model {
             Model::Normal(ref model) => &model.cache,
+            Model::XLoraNormal(ref model) => &model.cache,
         }
     }
     fn sample(
@@ -390,12 +433,14 @@ impl Pipeline for Phi2Pipeline {
     }
     fn get_max_seq_len(&self) -> usize {
         match &self.model {
-            Model::Normal(model) => model.max_seq_len,
+            Model::Normal(ref model) => model.max_seq_len,
+            Model::XLoraNormal(ref model) => model.max_seq_len,
         }
     }
     fn is_xlora(&self) -> bool {
         match &self.model {
             Model::Normal(_) => false,
+            Model::XLoraNormal(_) => true,
         }
     }
     fn has_no_kv_cache(&self) -> bool {
