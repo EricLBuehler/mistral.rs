@@ -13,7 +13,10 @@ use std::{
 
 use aici::iface::AsyncCmdChannel;
 use aici_abi::toktree::TokTrie;
-use aicirt::api::{AuthInfo, GetTagsResp, MkModuleReq, MkModuleResp, SetTagsReq};
+use aicirt::{
+    api::{AuthInfo, GetTagsResp, MkModuleReq, MkModuleResp, SetTagsReq},
+    bintokens::find_tokenizer,
+};
 use anyhow::Result;
 use axum::{
     body::Bytes,
@@ -892,13 +895,26 @@ async fn main() -> Result<()> {
         },
     };
 
-    let shm_prefix = format!("/aici-{}-", args.port);
+    let shm_prefix = match &args.shm_prefix {
+        Some(v) => {
+            if v.starts_with("/") {
+                v.clone()
+            } else {
+                format!("/{}", v)
+            }
+        }
+        None => format!("/aici-{}-", args.port),
+    };
 
-    let tok_trie = TokTrie::from_host(); // FIXME: This is a stub
+    // TODO: do not hardcode mistral
+    let tokenizer = find_tokenizer("mistralai/Mixtral-8x7B-Instruct-v0.1").unwrap();
+    let tokens = tokenizer.token_bytes();
+
+    let tok_trie = TokTrie::from(&tokenizer.tokrx_info(), &tokens);
 
     let rt_args = iface::Args {
         aicirt,
-        tokenizer: "TODO FIXME".into(),
+        tokenizer: "mistral".to_string(), // TODO: do not hardcode mistral
         json_size: args.json_size,
         bin_size: args.bin_size,
         shm_prefix,
