@@ -34,6 +34,7 @@ use model_selected::ModelSelected;
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 
 use crate::openai::ModelObject;
+mod aici;
 mod model_selected;
 mod openai;
 
