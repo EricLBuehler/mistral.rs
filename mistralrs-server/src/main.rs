@@ -25,9 +25,10 @@ use candle_core::Device;
 use clap::Parser;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader, MistralLoader,
-    MistralRs, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind, Request,
-    Response, SamplingParams, SchedulerMethod, StopTokens as InternalStopTokens, TokenSource,
+    ChatCompletionResponse, GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig,
+    Loader, MistralLoader, MistralRs, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig,
+    ModelKind, Request, Response, SamplingParams, SchedulerMethod,
+    StopTokens as InternalStopTokens, TokenSource,
 };
 use model_selected::ModelSelected;
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
@@ -124,7 +125,7 @@ impl futures::Stream for Streamer {
 
 enum ChatCompletionResponder {
     Sse(Sse<Streamer>),
-    String(String),
+    Json(ChatCompletionResponse),
     Error(Box<dyn Error>),
 }
 
@@ -132,7 +133,7 @@ impl IntoResponse for ChatCompletionResponder {
     fn into_response(self) -> axum::response::Response {
         match self {
             ChatCompletionResponder::Sse(s) => s.into_response(),
-            ChatCompletionResponder::String(s) => s.into_response(),
+            ChatCompletionResponder::Json(s) => Json(s).into_response(),
             ChatCompletionResponder::Error(e) => e.to_string().into_response(),
         }
     }
@@ -227,7 +228,7 @@ async fn chatcompletions(
             }
             Response::Done(response) => {
                 MistralRs::maybe_log_response(state, &response);
-                ChatCompletionResponder::String(serde_json::to_string(&response).unwrap())
+                ChatCompletionResponder::Json(response)
             }
             Response::Chunk(_) => unreachable!(),
         }
