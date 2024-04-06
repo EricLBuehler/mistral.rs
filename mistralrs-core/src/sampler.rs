@@ -44,7 +44,7 @@ pub struct Sampler {
     topp: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 // Top-n logprobs element
 pub struct TopLogprob {
     pub token: u32,
@@ -302,5 +302,37 @@ impl Sampler {
             }
         };
         Ok(next_token)
+    }
+}
+
+mod tests {
+    use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+    use tokenizers::Tokenizer;
+
+    #[allow(dead_code)]
+    fn get_tokenizer() -> Tokenizer {
+        let api = ApiBuilder::new().with_progress(true).build().unwrap();
+        let api = api.repo(Repo::with_revision(
+            "mistralai/Mistral-7B-Instruct-v0.1".to_string(),
+            RepoType::Model,
+            "main".to_string(),
+        ));
+
+        let tokenizer_filename = api.get("tokenizer.json").unwrap();
+        Tokenizer::from_file(tokenizer_filename).unwrap()
+    }
+
+    #[test]
+    fn test_argmax() {
+        use super::Sampler;
+        use candle_core::{Device, Tensor};
+
+        let mut sampler = Sampler::new(0, None, 10, get_tokenizer(), None, None, None, 32, 0.1);
+
+        let logits = Tensor::arange(0f64, 1024f64, &Device::Cpu).unwrap();
+        let res = sampler.sample(&logits, None, false).unwrap();
+        assert_eq!(res.token, 1023);
+        assert_eq!(res.top_logprobs, None);
+        assert_eq!(res.logprob, 1023f64.log(10.) as f32)
     }
 }
