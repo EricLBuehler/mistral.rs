@@ -309,7 +309,8 @@ async fn main() -> Result<()> {
         | ModelSelected::MistralGGUF { .. }
         | ModelSelected::Mixtral { .. }
         | ModelSelected::MixtralGGUF { .. }
-        | ModelSelected::Phi2 { .. } => None,
+        | ModelSelected::Phi2 { .. }
+        | ModelSelected::Phi2GGUF { .. } => None,
         ModelSelected::XLoraGemma {
             tgt_non_granular_index,
             ..
@@ -725,6 +726,28 @@ async fn main() -> Result<()> {
             None,
             None,
             ModelKind::Normal,
+            None,
+            args.no_kv_cache,
+            args.chat_template,
+            tokenizer_json,
+            None,
+        )),
+        ModelSelected::Phi2GGUF {
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+            tokenizer_json,
+        } => Box::new(MistralLoader::new(
+            tok_model_id,
+            MistralSpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+            },
+            quantized_model_id,
+            quantized_filename,
+            None,
+            ModelKind::QuantizedGGUF,
             None,
             args.no_kv_cache,
             args.chat_template,
