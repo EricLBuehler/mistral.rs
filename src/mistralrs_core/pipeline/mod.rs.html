@@ -735,10 +735,13 @@
 <a href="#733" id="733">733</a>
 <a href="#734" id="734">734</a>
 <a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
 <span class="kw">mod </span>mixtral;
+<span class="kw">mod </span>phi2;
 <span class="kw">use </span><span class="kw">crate</span>::sampler::Logprobs;
 <span class="kw">use </span>core::fmt;
 <span class="kw">use </span>either::Either;
@@ -753,6 +756,7 @@
 <span class="kw">pub use </span>mistral::{MistralLoader, MistralSpecificConfig, MISTRAL_IS_GPTX};
 <span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
 <span class="kw">pub use </span>mixtral::{MixtralLoader, MixtralSpecificConfig, MIXTRAL_IS_GPTX};
+<span class="kw">pub use </span>phi2::{Phi2Loader, Phi2SpecificConfig, PHI2_IS_GPTX};
 <span class="kw">use </span>serde::Deserialize;
 <span class="kw">use </span>std::{
     cell::RefCell, collections::HashMap, fs, iter::repeat, path::PathBuf, rc::Rc, str::FromStr,
@@ -812,7 +816,7 @@
     legacy: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     model_max_length: f64,
     pad_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    sp_model_kwargs: HashMap&lt;String, String&gt;,
+    sp_model_kwargs: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, String&gt;&gt;,
     spaces_between_special_tokens: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     tokenizer_class: String,
     truncation_size: <span class="prelude-ty">Option</span>&lt;String&gt;,

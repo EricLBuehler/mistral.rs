@@ -119,12 +119,15 @@
 <a href="#117" id="117">117</a>
 <a href="#118" id="118">118</a>
 <a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>classifier;
 <span class="kw">mod </span>config;
 <span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
 <span class="kw">mod </span>mixtral;
+<span class="kw">mod </span>phi2;
 <span class="kw">mod </span>quantized_llama;
 
 <span class="kw">use </span>std::sync::{Arc, Mutex};
@@ -135,6 +138,7 @@
 <span class="kw">pub use </span>llama::XLoraLlama;
 <span class="kw">pub use </span>mistral::XLoraModel <span class="kw">as </span>XLoraMistral;
 <span class="kw">pub use </span>mixtral::XLoraModel <span class="kw">as </span>XLoraMixtral;
+<span class="kw">pub use </span>phi2::Model <span class="kw">as </span>XLoraPhi2;
 <span class="kw">pub use </span>quantized_llama::ModelWeights <span class="kw">as </span>XLoraModelWeights;
 
 <span class="kw">use crate</span>::{get_mut_arcmutex, models::Cache};

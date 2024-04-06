@@ -113,6 +113,7 @@
 <a href="#111" id="111">111</a>
 <a href="#112" id="112">112</a>
 <a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
 
 <span class="kw">use </span>candle_core::{quantized::QTensor, <span class="prelude-ty">Result</span>, Tensor};
@@ -127,6 +128,7 @@
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>llama;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>mistral;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>mixtral;
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>phi2;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>quantized_llama;
 
 <span class="kw">pub type </span>LayerCaches = Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt;;

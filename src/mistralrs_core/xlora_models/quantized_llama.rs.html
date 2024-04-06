@@ -799,6 +799,9 @@
 <a href="#797" id="797">797</a>
 <a href="#798" id="798">798</a>
 <a href="#799" id="799">799</a>
+<a href="#800" id="800">800</a>
+<a href="#801" id="801">801</a>
+<a href="#802" id="802">802</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -1033,7 +1036,7 @@
         </span><span class="kw">let </span>k = <span class="self">self</span>.repeat_kv(k)<span class="question-mark">?</span>;
         <span class="kw">let </span>v = <span class="self">self</span>.repeat_kv(v)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>att = (q.matmul(<span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>)<span class="question-mark">? </span>/ (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
+        <span class="kw">let </span>att = (q.contiguous()<span class="question-mark">?</span>.matmul(<span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>)<span class="question-mark">? </span>/ (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
         <span class="kw">let </span>att = <span class="kw">match </span>mask {
             <span class="prelude-val">None </span>=&gt; att,
             <span class="prelude-val">Some</span>(mask) =&gt; {
@@ -1090,9 +1093,10 @@
         xlora_config: XLoraConfig,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>head_dim = (ct.hparams.n_embd / ct.hparams.n_head) <span class="kw">as </span>usize;
-        <span class="kw">let </span>rotary = RotaryEmbedding::new(
+        <span class="kw">let </span>rotary = RotaryEmbedding::new_partial(
             <span class="number">10000.</span>,
             head_dim,
+            ct.hparams.n_rot <span class="kw">as </span>usize,
             MAX_SEQ_LEN <span class="kw">as </span>usize,
             <span class="kw-2">&amp;</span>ct.device,
             <span class="bool-val">false</span>,
@@ -1250,8 +1254,10 @@
         <span class="kw">let </span>rope_freq_base = md_get(<span class="string">"llama.rope.freq_base"</span>)
             .and_then(|m| m.to_f32())
             .unwrap_or(<span class="number">10000f32</span>);
-        <span class="kw">let </span>rotary = RotaryEmbedding::new(
+        <span class="kw">let </span>head_dim = embedding_length / head_count;
+        <span class="kw">let </span>rotary = RotaryEmbedding::new_partial(
             rope_freq_base,
+            head_dim,
             rope_dim,
             MAX_SEQ_LEN <span class="kw">as </span>usize,
             device,
