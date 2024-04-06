@@ -60,6 +60,7 @@ impl LayerWeights {
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (b_size, seq_len, _n_embd) = x.dims3()?;
+        dbg!(x);
         let qkv = self.attn_qkv.forward(x)?;
         dbg!(&qkv);
         todo!()
