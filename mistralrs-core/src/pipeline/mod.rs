@@ -725,7 +725,7 @@ mod tests {
                 eos,
                 unk,
             )
-            .expect(&format!("Template number {i}"));
+            .unwrap_or_else(|_| panic!("Template number {i}"));
             assert_eq!(output, expected, "Template number {i}");
         }
     }
