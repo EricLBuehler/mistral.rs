@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 /// Phi model.
 /// https://huggingface.co/microsoft/phi-2
 /// There is an alternative implementation of the phi model in mixformers.rs.
