@@ -14,7 +14,7 @@ use serde::Deserialize;
 
 use crate::pipeline::PHI2_IS_GPTX;
 
-use super::Cache;
+use super::{flash_attn, Cache};
 
 // https://huggingface.co/microsoft/phi-2/blob/main/configuration_phi.py
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -32,6 +32,7 @@ pub struct Config {
     pub(crate) rope_theta: f32,
     pub(crate) partial_rotary_factor: f64,
     pub(crate) qk_layernorm: bool,
+    pub(crate) use_flash_attn: bool,
 }
 
 impl Config {
@@ -85,7 +86,7 @@ struct Attention {
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
-    span: tracing::Span,
+    use_flash_attn: bool,
 }
 
 fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
@@ -140,7 +141,7 @@ impl Attention {
             num_heads,
             num_kv_heads,
             head_dim,
-            span: tracing::span!(tracing::Level::TRACE, "attention"),
+            use_flash_attn: cfg.use_flash_attn,
         })
     }
 
@@ -164,7 +165,6 @@ impl Attention {
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
-        let _enter = self.span.enter();
         let (b_size, seq_len, _n_embd) = xs.dims3()?;
         let query_states = self.q_proj.forward(xs)?;
         let key_states = self.k_proj.forward(xs)?;
@@ -220,22 +220,31 @@ impl Attention {
         let key_states = self.repeat_kv(key_states)?.contiguous()?;
         let value_states = self.repeat_kv(value_states)?.contiguous()?;
 
-        let attn_weights = (query_states
-            .to_dtype(DType::F32)?
-            .contiguous()?
-            .matmul(&key_states.to_dtype(DType::F32)?.t()?)?
-            * self.softmax_scale)?;
-        let attn_weights = match mask {
-            None => attn_weights,
-            Some(mask) => masked_fill(
-                &attn_weights,
-                &mask.broadcast_left((b_size, self.num_heads))?,
-                f32::NEG_INFINITY,
-            )?,
+        let attn_output = if self.use_flash_attn {
+            // flash-attn expects (b_sz, seq_len, nheads, head_dim)
+            let q = query_states.transpose(1, 2)?;
+            let k = key_states.transpose(1, 2)?;
+            let v = value_states.transpose(1, 2)?;
+            flash_attn(&q, &k, &v, self.softmax_scale as f32, seq_len > 1)?.transpose(1, 2)?
+        } else {
+            let attn_weights = (query_states
+                .to_dtype(DType::F32)?
+                .contiguous()?
+                .matmul(&key_states.to_dtype(DType::F32)?.t()?)?
+                * self.softmax_scale)?;
+            let attn_weights = match mask {
+                None => attn_weights,
+                Some(mask) => masked_fill(
+                    &attn_weights,
+                    &mask.broadcast_left((b_size, self.num_heads))?,
+                    f32::NEG_INFINITY,
+                )?,
+            };
+            let attn_weights =
+                candle_nn::ops::softmax_last_dim(&attn_weights)?.to_dtype(value_states.dtype())?;
+            attn_weights.matmul(&value_states)?
         };
-        let attn_weights =
-            candle_nn::ops::softmax_last_dim(&attn_weights)?.to_dtype(value_states.dtype())?;
-        let attn_output = attn_weights.matmul(&value_states)?;
+
         let attn_output = attn_output
             .transpose(1, 2)?
             .reshape((b_size, seq_len, ()))?;
@@ -248,7 +257,6 @@ struct DecoderLayer {
     self_attn: Attention,
     mlp: MLP,
     input_layernorm: LayerNorm,
-    span: tracing::Span,
 }
 
 impl DecoderLayer {
@@ -264,7 +272,6 @@ impl DecoderLayer {
             self_attn,
             mlp,
             input_layernorm,
-            span: tracing::span!(tracing::Level::TRACE, "block"),
         })
     }
 
@@ -276,7 +283,6 @@ impl DecoderLayer {
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
-        let _enter = self.span.enter();
         let residual = xs;
         let xs = xs.apply(&self.input_layernorm)?;
         let attn_outputs =
@@ -293,7 +299,6 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     final_layernorm: LayerNorm,
     lm_head: Linear,
-    span: tracing::Span,
     pub cache: Cache,
     pub device: Device,
     pub max_seq_len: usize,
@@ -320,7 +325,6 @@ impl Model {
             layers,
             final_layernorm,
             lm_head,
-            span: tracing::span!(tracing::Level::TRACE, "model"),
             cache: Cache::new(cfg.num_hidden_layers, false),
             device: vb.device().clone(),
             max_seq_len: cfg.max_position_embeddings,
@@ -333,7 +337,6 @@ impl Model {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
     ) -> Result<Tensor> {
-        let _enter = self.span.enter();
         let (_b_size, seq_len) = xs.dims2()?;
         let mut xs = xs.apply(&self.embed_tokens)?;
         let mask = if seq_len <= 1 {

@@ -246,6 +246,7 @@ impl Loader for Phi2Loader {
             tie_word_embeddings: basic_config.tie_word_embeddings,
             partial_rotary_factor: basic_config.partial_rotary_factor,
             qk_layernorm: basic_config.qk_layernorm,
+            use_flash_attn: self.config.use_flash_attn,
         };
         let default_dtype = if device.is_cuda() {
             DType::BF16
