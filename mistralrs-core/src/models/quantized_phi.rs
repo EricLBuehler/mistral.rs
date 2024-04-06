@@ -288,7 +288,7 @@ impl ModelWeights {
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            let residual = layer_in;
+            let residual = layer_in.clone();
             let x = layer.attn_norm.forward(&residual)?;
             let attn_outputs = layer.forward_attn(
                 &x,
