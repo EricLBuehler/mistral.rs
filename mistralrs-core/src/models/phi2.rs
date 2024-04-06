@@ -5,9 +5,9 @@
 /// There is an alternative implementation of the phi model in mixformers.rs.
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
-use candle_core::{DType, Device, Module, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{
-    embedding, layer_norm, linear, Activation, Embedding, LayerNorm, Linear, RotaryEmbedding,
+    embedding, layer_norm, linear, Activation, Embedding, LayerNorm, Linear,
     VarBuilder,
 };
 use serde::Deserialize;
@@ -73,6 +73,49 @@ impl Module for MLP {
     }
 }
 
+#[derive(Debug, Clone)]
+struct RotaryEmbedding {
+    dim: usize,
+    sin: Tensor,
+    cos: Tensor,
+}
+
+impl RotaryEmbedding {
+    fn new(cfg: &Config, dev: &Device) -> Result<Self> {
+        let dim = (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize;
+        let inv_freq: Vec<_> = (0..dim)
+            .step_by(2)
+            .map(|i| 1f32 / cfg.rope_theta.powf(i as f32 / dim as f32))
+            .collect();
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?;
+        let t = Tensor::arange(0u32, cfg.max_position_embeddings as u32, dev)?
+            .to_dtype(DType::F32)?
+            .reshape((cfg.max_position_embeddings, 1))?;
+        let freqs = t.matmul(&inv_freq)?;
+        let emb = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
+        Ok(Self {
+            dim,
+            sin: emb.sin()?,
+            cos: emb.cos()?,
+        })
+    }
+
+    fn apply_rotary_emb(&self, xs: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+        let (_b_size, _num_heads, seq_len, _headdim) = xs.dims4()?;
+        let xs_rot = xs.i((.., .., .., ..self.dim))?;
+        let xs_pass = xs.i((.., .., .., self.dim..))?;
+        let xs12 = xs_rot.chunk(2, D::Minus1)?;
+        let (xs1, xs2) = (&xs12[0], &xs12[1]);
+        let c = self.cos.narrow(0, seqlen_offset, seq_len)?;
+        let s = self.sin.narrow(0, seqlen_offset, seq_len)?;
+        let rotate_half = Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)?;
+        let xs_rot = (xs_rot.broadcast_mul(&c)? + rotate_half.broadcast_mul(&s)?)?;
+        Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)
+    }
+}
+
+
 #[derive(Clone)]
 struct Attention {
     q_proj: Linear,
@@ -113,14 +156,14 @@ impl Attention {
         let v_proj = linear(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?;
         let dense = linear(num_heads * head_dim, cfg.hidden_size, vb.pp("dense"))?;
         // Alternative rope scalings are not supported.
-        let rotary_emb = RotaryEmbedding::new(
+        let rotary_emb = /*RotaryEmbedding::new(
             cfg.rope_theta,
             (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
             cfg.max_position_embeddings,
             vb.device(),
             PHI2_IS_GPTX,
             vb.dtype(),
-        )?;
+        )?;*/ RotaryEmbedding::new(cfg, vb.device())?;
         let (q_layernorm, k_layernorm) = if cfg.qk_layernorm {
             let q_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp("q_layernorm"))?;
             let k_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp("k_layernorm"))?;
@@ -179,7 +222,7 @@ impl Attention {
             Some(ln) => key_states.apply(ln)?,
         };
 
-        let mut query_states =
+        /*let mut query_states =
             query_states.reshape((b_size * seq_len, self.num_heads, self.head_dim))?;
         let mut key_states =
             key_states.reshape((b_size * seq_len, self.num_kv_heads, self.head_dim))?;
@@ -204,7 +247,24 @@ impl Attention {
                 .reshape((b_size, seq_len, self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?
                 .contiguous()?;
-        }
+        }*/
+        let query_states = query_states
+            .reshape((b_size, seq_len, self.num_heads, self.head_dim))?
+            .transpose(1, 2)?;
+        let key_states = key_states
+            .reshape((b_size, seq_len, self.num_kv_heads, self.head_dim))?
+            .transpose(1, 2)?;
+        let value_states = value_states
+            .reshape((b_size, seq_len, self.num_kv_heads, self.head_dim))?
+            .transpose(1, 2)?;
+
+        // Rotary embeddings.
+        let query_states = self
+            .rotary_emb
+            .apply_rotary_emb(&query_states, seqlen_offsets[0])?;
+        let key_states = self
+            .rotary_emb
+            .apply_rotary_emb(&key_states, seqlen_offsets[0])?;
 
         let (key_states, value_states) = match &*kv_cache {
             None => (key_states, value_states),
