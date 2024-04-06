@@ -472,7 +472,6 @@ impl Engine {
                 request
                     .sampling_params
                     .top_k
-                    .map(|x| x as i64)
                     .unwrap_or(-1),
             ),
             top_p: Some(request.sampling_params.top_p.unwrap_or(1.0)),

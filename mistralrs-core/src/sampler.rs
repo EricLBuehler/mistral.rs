@@ -94,7 +94,7 @@ impl Sampler {
                     (&logits / temperature)?
                 };
                 let logits = candle_nn::ops::softmax_last_dim(&logits)?;
-                let mut probs: Vec<f32> = logits.to_vec1()?;
+                let probs: Vec<f32> = logits.to_vec1()?;
                 let mut argsort_indices = (0..probs.len()).collect::<Vec<_>>();
                 // Sort by descending probability.
                 argsort_indices.sort_by(|&i, &j| probs[j].partial_cmp(&probs[i]).unwrap());
@@ -121,7 +121,7 @@ impl Sampler {
     ) -> Result<BinCountsAndMask> {
         // TODO(EricLBuehler): The bug is here: need to not take logits, take output token IDs.
         let bin_counts = Tensor::zeros(vocab_size, DType::I64, logits.device())?
-            .scatter_add(&logits, &logits.ones_like()?, 0)?
+            .scatter_add(logits, &logits.ones_like()?, 0)?
             .i((.., ..vocab_size))?;
         let mask = bin_counts.ge(0i64)?;
         Ok(BinCountsAndMask { bin_counts, mask })
