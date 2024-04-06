@@ -176,7 +176,7 @@ impl LayerWeights {
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
 
-        let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
+        let att = (q.contiguous()?.matmul(&k.t()?.contiguous()?)? / (self.head_dim as f64).sqrt())?;
         let att = match mask {
             None => att,
             Some(mask) => {
@@ -221,9 +221,10 @@ pub struct ModelWeights {
 impl ModelWeights {
     pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
-        let rotary = RotaryEmbedding::new(
+        let rotary = RotaryEmbedding::new_partial(
             10000.,
             head_dim,
+            ct.hparams.n_rot as usize,
             MAX_SEQ_LEN as usize,
             &ct.device,
             false,
@@ -307,8 +308,9 @@ impl ModelWeights {
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
         let head_dim = embedding_length / head_count;
-        let rotary = RotaryEmbedding::new(
+        let rotary = RotaryEmbedding::new_partial(
             rope_freq_base,
+            head_dim,
             rope_dim,
             MAX_SEQ_LEN as usize,
             device,

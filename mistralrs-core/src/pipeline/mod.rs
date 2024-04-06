@@ -2,6 +2,7 @@ mod gemma;
 mod llama;
 mod mistral;
 mod mixtral;
+mod phi2;
 use crate::sampler::Logprobs;
 use core::fmt;
 use either::Either;
@@ -16,6 +17,7 @@ use minijinja::{context, Environment, ErrorKind};
 pub use mistral::{MistralLoader, MistralSpecificConfig, MISTRAL_IS_GPTX};
 use mistralrs_lora::{LoraConfig, Ordering};
 pub use mixtral::{MixtralLoader, MixtralSpecificConfig, MIXTRAL_IS_GPTX};
+pub use phi2::{Phi2Loader, Phi2SpecificConfig, PHI2_IS_GPTX};
 use serde::Deserialize;
 use std::{
     cell::RefCell, collections::HashMap, fs, iter::repeat, path::PathBuf, rc::Rc, str::FromStr,
@@ -75,7 +77,7 @@ pub struct ChatTemplate {
     legacy: Option<bool>,
     model_max_length: f64,
     pad_token: Option<String>,
-    sp_model_kwargs: HashMap<String, String>,
+    sp_model_kwargs: Option<HashMap<String, String>>,
     spaces_between_special_tokens: Option<bool>,
     tokenizer_class: String,
     truncation_size: Option<String>,

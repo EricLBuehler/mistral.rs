@@ -30,7 +30,8 @@ mod xlora_models;
 
 pub use pipeline::{
     GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader, MistralLoader,
-    MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind, TokenSource,
+    MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind, Phi2Loader,
+    Phi2SpecificConfig, TokenSource,
 };
 pub use request::Request;
 pub use response::Response;

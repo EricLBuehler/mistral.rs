@@ -4,6 +4,7 @@ mod gemma;
 mod llama;
 mod mistral;
 mod mixtral;
+mod phi2;
 mod quantized_llama;
 
 use std::sync::{Arc, Mutex};
@@ -14,6 +15,7 @@ pub use gemma::XLoraModel as XLoraGemma;
 pub use llama::XLoraLlama;
 pub use mistral::XLoraModel as XLoraMistral;
 pub use mixtral::XLoraModel as XLoraMixtral;
+pub use phi2::Model as XLoraPhi2;
 pub use quantized_llama::ModelWeights as XLoraModelWeights;
 
 use crate::{get_mut_arcmutex, models::Cache};
