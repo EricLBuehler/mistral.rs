@@ -357,6 +357,7 @@ impl Model {
                 start_offsets_kernel.clone(),
                 cache.get_mut(i).unwrap(),
             )?;
+            dbg!(xs.mean_all());
         }
         todo!();
         xs.apply(&self.final_layernorm)?

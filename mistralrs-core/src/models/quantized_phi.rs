@@ -301,11 +301,12 @@ impl ModelWeights {
 
             // MLP
             let feed_forward_hidden_states = layer.ffn_up.forward(&x)?;
-            //let feed_forward_hidden_states = self.act.forward(&feed_forward_hidden_states)?;
+            let feed_forward_hidden_states = self.act.forward(&feed_forward_hidden_states)?;
             let feed_forward_hidden_states = layer.ffn_down.forward(&feed_forward_hidden_states)?;
             dbg!(feed_forward_hidden_states.mean_all());
             dbg!(residual.mean_all());
             layer_in = (attn_outputs + feed_forward_hidden_states + residual)?;
+            dbg!(layer_in.mean_all());
         }
         todo!();
         let x = self.norm.forward(&layer_in)?;
