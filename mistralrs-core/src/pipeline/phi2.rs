@@ -235,6 +235,7 @@ impl Loader for Phi2Loader {
         dtype: Option<DType>,
         device: &Device,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
+        dbg!(std::fs::read(paths.get_config_filename())?);
         let basic_config: BasicConfig =
             serde_json::from_slice(&std::fs::read(paths.get_config_filename())?)?;
         let config = Config {
