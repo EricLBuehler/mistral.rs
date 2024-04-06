@@ -289,9 +289,10 @@ impl ModelWeights {
         xlora_config: XLoraConfig,
     ) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
-        let rotary = RotaryEmbedding::new(
+        let rotary = RotaryEmbedding::new_partial(
             10000.,
             head_dim,
+            ct.hparams.n_rot as usize,
             MAX_SEQ_LEN as usize,
             &ct.device,
             false,
@@ -449,8 +450,10 @@ impl ModelWeights {
         let rope_freq_base = md_get("llama.rope.freq_base")
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
-        let rotary = RotaryEmbedding::new(
+        let head_dim = embedding_length / head_count;
+        let rotary = RotaryEmbedding::new_partial(
             rope_freq_base,
+            head_dim,
             rope_dim,
             MAX_SEQ_LEN as usize,
             device,
