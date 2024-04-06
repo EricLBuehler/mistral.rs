@@ -81,7 +81,7 @@ struct RotaryEmbedding {
 }
 
 impl RotaryEmbedding {
-    fn new(cfg: &Config, dev: &Device) -> Result<Self> {
+    fn new(cfg: &Config, dev: &Device, dtype: DType) -> Result<Self> {
         let dim = (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize;
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
@@ -96,8 +96,8 @@ impl RotaryEmbedding {
         let emb = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
         Ok(Self {
             dim,
-            sin: emb.sin()?,
-            cos: emb.cos()?,
+            sin: emb.sin()?.to_dtype(dtype)?,
+            cos: emb.cos()?.to_dtype(dtype)?,
         })
     }
 
@@ -163,7 +163,7 @@ impl Attention {
             vb.device(),
             PHI2_IS_GPTX,
             vb.dtype(),
-        )?;*/ RotaryEmbedding::new(cfg, vb.device())?;
+        )?;*/ RotaryEmbedding::new(cfg, vb.device(), vb.dtype())?;
         let (q_layernorm, k_layernorm) = if cfg.qk_layernorm {
             let q_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp("q_layernorm"))?;
             let k_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp("k_layernorm"))?;
