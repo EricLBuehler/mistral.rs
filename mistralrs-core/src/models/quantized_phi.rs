@@ -7,6 +7,8 @@ use candle_core::quantized::{QMatMul, QTensor};
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Activation, Embedding, LayerNorm, Module, RotaryEmbedding};
 
+use crate::pipeline::PHI2_IS_GPTX;
+
 use super::Cache;
 
 pub const MAX_SEQ_LEN: u32 = 2048;
@@ -183,7 +185,7 @@ impl ModelWeights {
             rope_dim,
             MAX_SEQ_LEN as usize,
             device,
-            true,
+            PHI2_IS_GPTX,
             DType::F32,
         )?;
 
@@ -298,7 +300,7 @@ impl ModelWeights {
 
             // MLP
             let feed_forward_hidden_states = layer.ffn_up.forward(&x)?;
-            let feed_forward_hidden_states = self.act.forward(&feed_forward_hidden_states)?;
+            //let feed_forward_hidden_states = self.act.forward(&feed_forward_hidden_states)?;
             let feed_forward_hidden_states = layer.ffn_down.forward(&feed_forward_hidden_states)?;
             layer_in = (attn_outputs + feed_forward_hidden_states + residual)?;
         }
