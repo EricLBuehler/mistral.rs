@@ -34,7 +34,6 @@ use tracing::info;
 enum Model {
     Normal(NormalModel),
 }
-pub const PHI2_IS_GPTX: bool = true;
 
 pub struct Phi2ModelPaths<P> {
     tokenizer_filename: P,

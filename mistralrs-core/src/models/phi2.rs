@@ -7,12 +7,9 @@
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{
-    embedding, layer_norm, linear, Activation, Embedding, LayerNorm, Linear,
-    VarBuilder,
+    embedding, layer_norm, linear, Activation, Embedding, LayerNorm, Linear, VarBuilder,
 };
 use serde::Deserialize;
-
-use crate::pipeline::PHI2_IS_GPTX;
 
 use super::{flash_attn, Cache};
 
@@ -101,20 +98,24 @@ impl RotaryEmbedding {
         })
     }
 
-    fn apply_rotary_emb(&self, xs: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+    fn apply_rotary_emb(&self, xs: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
         let (_b_size, _num_heads, seq_len, _headdim) = xs.dims4()?;
-        let xs_rot = xs.i((.., .., .., ..self.dim))?;
-        let xs_pass = xs.i((.., .., .., self.dim..))?;
-        let xs12 = xs_rot.chunk(2, D::Minus1)?;
-        let (xs1, xs2) = (&xs12[0], &xs12[1]);
-        let c = self.cos.narrow(0, seqlen_offset, seq_len)?;
-        let s = self.sin.narrow(0, seqlen_offset, seq_len)?;
-        let rotate_half = Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)?;
-        let xs_rot = (xs_rot.broadcast_mul(&c)? + rotate_half.broadcast_mul(&s)?)?;
-        Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)
+        let mut results = Vec::new();
+        for (b, offset) in seqlen_offsets.iter().enumerate() {
+            let xs_b = xs.i(b)?.unsqueeze(0)?;
+            let xs_rot = xs_b.i((.., .., .., ..self.dim))?;
+            let xs_pass = xs_b.i((.., .., .., self.dim..))?;
+            let xs12 = xs_rot.chunk(2, D::Minus1)?;
+            let (xs1, xs2) = (&xs12[0], &xs12[1]);
+            let c = self.cos.narrow(0, *offset, seq_len)?;
+            let s = self.sin.narrow(0, *offset, seq_len)?;
+            let rotate_half = Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)?;
+            let xs_rot = (xs_rot.broadcast_mul(&c)? + rotate_half.broadcast_mul(&s)?)?;
+            results.push(Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?);
+        }
+        Tensor::cat(&results, 0)
     }
 }
-
 
 #[derive(Clone)]
 struct Attention {
@@ -156,14 +157,7 @@ impl Attention {
         let v_proj = linear(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?;
         let dense = linear(num_heads * head_dim, cfg.hidden_size, vb.pp("dense"))?;
         // Alternative rope scalings are not supported.
-        let rotary_emb = /*RotaryEmbedding::new(
-            cfg.rope_theta,
-            (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
-            cfg.max_position_embeddings,
-            vb.device(),
-            PHI2_IS_GPTX,
-            vb.dtype(),
-        )?;*/ RotaryEmbedding::new(cfg, vb.device(), vb.dtype())?;
+        let rotary_emb = RotaryEmbedding::new(cfg, vb.device(), vb.dtype())?;
         let (q_layernorm, k_layernorm) = if cfg.qk_layernorm {
             let q_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp("q_layernorm"))?;
             let k_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp("k_layernorm"))?;
@@ -205,7 +199,7 @@ impl Attention {
         xs: &Tensor,
         mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
+        _start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (b_size, seq_len, _n_embd) = xs.dims3()?;
@@ -222,32 +216,6 @@ impl Attention {
             Some(ln) => key_states.apply(ln)?,
         };
 
-        /*let mut query_states =
-            query_states.reshape((b_size * seq_len, self.num_heads, self.head_dim))?;
-        let mut key_states =
-            key_states.reshape((b_size * seq_len, self.num_kv_heads, self.head_dim))?;
-        let value_states = value_states
-            .reshape((b_size, seq_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
-
-        self.rotary_emb.forward(
-            seqlen_offsets,
-            &start_offsets_kernel,
-            &mut query_states,
-            &mut key_states,
-            b_size,
-        )?;
-
-        if query_states.rank() == 3 {
-            query_states = query_states
-                .reshape((b_size, seq_len, self.num_heads, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-            key_states = key_states
-                .reshape((b_size, seq_len, self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-        }*/
         let query_states = query_states
             .reshape((b_size, seq_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
@@ -261,10 +229,10 @@ impl Attention {
         // Rotary embeddings.
         let query_states = self
             .rotary_emb
-            .apply_rotary_emb(&query_states, seqlen_offsets[0])?;
+            .apply_rotary_emb(&query_states, seqlen_offsets)?;
         let key_states = self
             .rotary_emb
-            .apply_rotary_emb(&key_states, seqlen_offsets[0])?;
+            .apply_rotary_emb(&key_states, seqlen_offsets)?;
 
         let (key_states, value_states) = match &*kv_cache {
             None => (key_states, value_states),
