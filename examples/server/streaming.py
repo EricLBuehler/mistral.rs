@@ -9,6 +9,8 @@ prompt = input("Enter system prompt >>> ")
 if len(prompt) > 0:
     messages.append({"role": "system", "content": prompt})
 
+eos_toks = ["</s>", "<eos>", "<|endoftext|>"]
+
 while True:
     prompt = input(">>> ")
     messages.append({"role": "user", "content": prompt})
@@ -21,11 +23,13 @@ while True:
     )
     for chunk in response:
         delta = chunk.choices[0].delta.content
-        if (delta != "</s>") and (delta != "<eos>"):
+        if delta not in eos_toks:
             print(delta, end="")
         resp += delta
-    if (not resp.endswith("</s>")) and (not resp.endswith("<eos>")):
-        print("...")
+    for eos in eos_toks:
+        if resp.endswith(eos):
+            print()
+            break
     else:
-        print()
+        print("...")
     messages.append({"role": "assistant", "content": resp})
