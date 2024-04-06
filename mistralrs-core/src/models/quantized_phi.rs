@@ -133,11 +133,9 @@ impl ModelWeights {
         let mut layers = Vec::with_capacity(block_count);
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
-            let w = ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?
-            .dequantize(&device)?;
-            dbg!(&w);
             let attn_norm = LayerNorm::new(
-                w,
+                ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?
+                    .dequantize(&device)?,
                 ct.tensor(reader, &format!("{prefix}.attn_norm.bias"), device)?
                     .dequantize(&device)?,
                 attn_layer_norm_eps as f64,
@@ -223,10 +221,8 @@ impl ModelWeights {
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            let residual = x;
-            dbg!(&x);
-            let x = layer.attn_norm.forward(&x)?;
-            dbg!(&x);
+            let residual = layer_in;
+            let x = layer.attn_norm.forward(&residual)?;
             let attn_outputs = layer.forward_attn(
                 &x,
                 &mask,
