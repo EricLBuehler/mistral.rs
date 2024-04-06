@@ -41,6 +41,7 @@ struct LayerWeights {
     n_head: usize,
     n_kv_head: usize,
     rotary: RotaryEmbedding,
+    hidden_size: usize,
 }
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
@@ -62,7 +63,12 @@ impl LayerWeights {
         let (b_size, seq_len, _n_embd) = x.dims3()?;
         dbg!(x);
         let qkv = self.attn_qkv.forward(x)?;
-        dbg!(&qkv);
+        let q = qkv.i((.., .., 0..self.hidden_size))?;
+        let k = qkv.i((.., .., self.hidden_size..self.hidden_size*2))?;
+        let v = qkv.i((.., .., self.hidden_size*3..))?;
+        dbg!(&q);
+        dbg!(&k);
+        dbg!(&v);
         todo!()
     }
 
@@ -165,6 +171,7 @@ impl ModelWeights {
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 rotary: rotary.clone(),
+                hidden_size: embedding_length,
             })
         }
         let output_norm = {
