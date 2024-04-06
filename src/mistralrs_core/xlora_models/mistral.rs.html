@@ -609,6 +609,7 @@
 <a href="#607" id="607">607</a>
 <a href="#608" id="608">608</a>
 <a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -967,7 +968,7 @@
     layers: Vec&lt;DecoderLayer&gt;,
     norm: RmsNorm,
     lm_head: candle_nn::Linear,
-    sliding_window: usize,
+    sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     dtype: DType,
     <span class="kw">pub </span>device: Device,
     <span class="kw">pub </span>cache: Cache,
@@ -1037,11 +1038,12 @@
         tgt_len: usize,
         seqlen_offset: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="comment">// Sliding window mask?
-        </span><span class="kw">let </span>mask: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..tgt_len)
+        <span class="comment">// Sliding window mask
+        </span><span class="kw">let </span>sliding_window = <span class="self">self</span>.sliding_window.unwrap_or(tgt_len + <span class="number">1</span>);
+        <span class="kw">let </span>mask: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..tgt_len)
             .flat_map(|i| {
                 (<span class="number">0</span>..tgt_len).map(<span class="kw">move </span>|j| {
-                    <span class="kw">if </span>i &lt; j || j + <span class="self">self</span>.sliding_window &lt; i {
+                    <span class="kw">if </span>i &lt; j || j + sliding_window &lt; i {
                         f32::NEG_INFINITY
                     } <span class="kw">else </span>{
                         <span class="number">0.

@@ -372,6 +372,7 @@
 <a href="#370" id="370">370</a>
 <a href="#371" id="371">371</a>
 <a href="#372" id="372">372</a>
+<a href="#373" id="373">373</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -396,7 +397,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) max_position_embeddings: usize,
     <span class="kw">pub</span>(<span class="kw">crate</span>) rms_norm_eps: f64,
     <span class="kw">pub</span>(<span class="kw">crate</span>) rope_theta: f64,
-    <span class="kw">pub</span>(<span class="kw">crate</span>) sliding_window: usize,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) use_flash_attn: bool,
 }
 
@@ -622,7 +623,7 @@
     layers: Vec&lt;DecoderLayer&gt;,
     norm: RmsNorm,
     lm_head: Linear,
-    sliding_window: usize,
+    sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     dtype: DType,
     <span class="kw">pub </span>device: Device,
     <span class="kw">pub </span>cache: Cache,
@@ -670,11 +671,12 @@
         tgt_len: usize,
         seqlen_offset: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="comment">// Sliding window mask?
-        </span><span class="kw">let </span>mask: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..tgt_len)
+        <span class="comment">// Sliding window mask
+        </span><span class="kw">let </span>sliding_window = <span class="self">self</span>.sliding_window.unwrap_or(tgt_len + <span class="number">1</span>);
+        <span class="kw">let </span>mask: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..tgt_len)
             .flat_map(|i| {
                 (<span class="number">0</span>..tgt_len).map(<span class="kw">move </span>|j| {
-                    <span class="kw">if </span>i &lt; j || j + <span class="self">self</span>.sliding_window &lt; i {
+                    <span class="kw">if </span>i &lt; j || j + sliding_window &lt; i {
                         f32::NEG_INFINITY
                     } <span class="kw">else </span>{
                         <span class="number">0.

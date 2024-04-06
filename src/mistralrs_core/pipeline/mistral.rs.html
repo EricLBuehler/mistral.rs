@@ -634,7 +634,7 @@
     max_position_embeddings: usize,
     rms_norm_eps: f64,
     rope_theta: f64,
-    sliding_window: usize,
+    sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
 <span class="attr">#[derive(Error, Debug)]
