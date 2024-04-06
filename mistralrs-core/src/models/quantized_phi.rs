@@ -179,6 +179,10 @@ impl ModelWeights {
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
         let head_dim = embedding_length / head_count;
+        dbg!(rope_freq_base);
+        dbg!(head_dim);
+        dbg!(rope_dim);
+        dbg!(MAX_SEQ_LEN);
         let rotary = RotaryEmbedding::new_partial(
             rope_freq_base,
             head_dim,

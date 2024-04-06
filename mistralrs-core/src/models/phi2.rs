@@ -112,6 +112,10 @@ impl Attention {
         let k_proj = linear(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?;
         let v_proj = linear(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?;
         let dense = linear(num_heads * head_dim, cfg.hidden_size, vb.pp("dense"))?;
+        dbg!(cfg.rope_theta);
+        dbg!(cfg.head_dim());
+        dbg!((cfg.partial_rotary_factor * cfg.head_dim() as f64));
+        dbg!(cfg.max_position_embeddings);
         // Alternative rope scalings are not supported.
         let rotary_emb = RotaryEmbedding::new_partial(
             cfg.rope_theta,
