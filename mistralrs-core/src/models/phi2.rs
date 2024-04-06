@@ -170,13 +170,6 @@ impl Attention {
         let query_states = self.q_proj.forward(xs)?;
         let key_states = self.k_proj.forward(xs)?;
         let value_states = self.v_proj.forward(xs)?;
-        dbg!(&query_states);
-        dbg!(&key_states);
-        dbg!(&value_states);
-        dbg!(&query_states.mean_all());
-        dbg!(&key_states.mean_all());
-        dbg!(&value_states.mean_all());
-        todo!();
 
         let query_states = match &self.q_layernorm {
             None => query_states,

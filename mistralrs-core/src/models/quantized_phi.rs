@@ -42,6 +42,8 @@ struct LayerWeights {
     n_kv_head: usize,
     rotary: RotaryEmbedding,
     hidden_size: usize,
+    head_dim: usize,
+    softmax_scale: f64,
 }
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
@@ -64,15 +66,72 @@ impl LayerWeights {
         dbg!(x);
         let qkv = self.attn_qkv.forward(x)?;
         let q = qkv.i((.., .., 0..self.hidden_size))?;
-        let k = qkv.i((.., .., self.hidden_size..self.hidden_size*2))?;
-        let v = qkv.i((.., .., self.hidden_size*2..))?;
+        let k = qkv.i((.., .., self.hidden_size..self.hidden_size * 2))?;
+        let v = qkv.i((.., .., self.hidden_size * 2..))?;
         dbg!(&q);
         dbg!(&k);
         dbg!(&v);
         dbg!(&q.mean_all());
         dbg!(&k.mean_all());
         dbg!(&v.mean_all());
-        todo!()
+
+        let q = self.attn_norm.forward(&q)?;
+        let k = self.attn_norm.forward(&k)?;
+
+        let mut q = q.reshape((b_size * seq_len, self.n_head, self.head_dim))?;
+        let mut k = k.reshape((b_size * seq_len, self.n_kv_head, self.head_dim))?;
+        let v = v
+            .reshape((b_size, seq_len, self.n_kv_head, self.head_dim))?
+            .transpose(1, 2)?;
+
+        self.rotary
+            .forward(start_offsets, &start_offsets_kernel, &mut q, &mut k, b_size)?;
+
+        if q.rank() == 3 {
+            q = q
+                .reshape((b_size, seq_len, self.n_head, self.head_dim))?
+                .transpose(1, 2)?
+                .contiguous()?;
+            k = k
+                .reshape((b_size, seq_len, self.n_kv_head, self.head_dim))?
+                .transpose(1, 2)?
+                .contiguous()?;
+        }
+
+        let (k, v) = match &*kv_cache {
+            None => (k, v),
+            Some((prev_k, prev_v)) => {
+                let k = candle_nn::ops::kvconcat(prev_k, &k, 2)?;
+                let v = candle_nn::ops::kvconcat(prev_v, &v, 2)?;
+                (k, v)
+            }
+        };
+        *kv_cache = Some((k.clone(), v.clone()));
+
+        // Repeat kv.
+        let k = self.repeat_kv(k)?.contiguous()?;
+        let v = self.repeat_kv(v)?.contiguous()?;
+
+        let attn_weights = (q
+            .to_dtype(DType::F32)?
+            .contiguous()?
+            .matmul(&k.to_dtype(DType::F32)?.t()?)?
+            * self.softmax_scale)?;
+        let attn_weights = match mask {
+            None => attn_weights,
+            Some(mask) => masked_fill(
+                &attn_weights,
+                &mask.broadcast_left((b_size, self.n_head))?,
+                f32::NEG_INFINITY,
+            )?,
+        };
+        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?.to_dtype(v.dtype())?;
+        let attn_output = attn_weights.matmul(&v)?;
+
+        let attn_output = attn_output
+            .transpose(1, 2)?
+            .reshape((b_size, seq_len, ()))?;
+        self.output.forward(&attn_output)
     }
 
     fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
@@ -175,6 +234,8 @@ impl ModelWeights {
                 n_kv_head: head_count_kv,
                 rotary: rotary.clone(),
                 hidden_size: embedding_length,
+                head_dim,
+                softmax_scale: 1f64 / (head_dim as f64).sqrt(),
             })
         }
         let output_norm = {
