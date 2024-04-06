@@ -732,6 +732,9 @@
 <a href="#730" id="730">730</a>
 <a href="#731" id="731">731</a>
 <a href="#732" id="732">732</a>
+<a href="#733" id="733">733</a>
+<a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -824,6 +827,7 @@
     EnvVar(String),
     Path(String),
     CacheToken,
+    <span class="prelude-val">None</span>,
 }
 
 <span class="kw">impl </span>FromStr <span class="kw">for </span>TokenSource {
@@ -847,6 +851,7 @@
                 .map(|<span class="kw-2">&amp;</span>value| TokenSource::Path(value.to_string()))
                 .ok_or_else(|| <span class="string">"Expected a value for 'path'"</span>.to_string()),
             <span class="string">"cache" </span>=&gt; <span class="prelude-val">Ok</span>(TokenSource::CacheToken),
+            <span class="string">"none" </span>=&gt; <span class="prelude-val">Ok</span>(TokenSource::None),
             <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(<span class="string">"Invalid token source format"</span>.to_string()),
         }
     }
@@ -859,6 +864,7 @@
             TokenSource::EnvVar(value) =&gt; <span class="macro">write!</span>(f, <span class="string">"env:{}"</span>, value),
             TokenSource::Path(value) =&gt; <span class="macro">write!</span>(f, <span class="string">"path:{}"</span>, value),
             TokenSource::CacheToken =&gt; <span class="macro">write!</span>(f, <span class="string">"cache"</span>),
+            TokenSource::None =&gt; <span class="macro">write!</span>(f, <span class="string">"none"</span>),
         }
     }
 }

@@ -34,6 +34,7 @@
 <a href="#32" id="32">32</a>
 <a href="#33" id="33">33</a>
 <a href="#34" id="34">34</a>
+<a href="#35" id="35">35</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{env, fs};
 <span class="kw">use </span>thiserror::Error;
 
@@ -64,6 +65,7 @@
             fs::read_to_string(home.clone())
                 .map_err(|<span class="kw">_</span>| anyhow::Error::msg(<span class="macro">format!</span>(<span class="string">"Could not load token at `{home}`"</span>)))<span class="question-mark">?
         </span>}
+        TokenSource::None =&gt; <span class="string">""</span>.to_string(),
     }
     .trim()
     .to_string())
