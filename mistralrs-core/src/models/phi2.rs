@@ -215,7 +215,6 @@ impl Attention {
             }
         };
         *kv_cache = Some((key_states.clone(), value_states.clone()));
-        dbg!(&key_states);
 
         // Repeat kv.
         let key_states = self.repeat_kv(key_states)?.contiguous()?;
@@ -231,7 +230,7 @@ impl Attention {
             let attn_weights = (query_states
                 .to_dtype(DType::F32)?
                 .contiguous()?
-                .matmul(&key_states.to_dtype(DType::F32)?.t()?).unwrap()
+                .matmul(&key_states.to_dtype(DType::F32)?.t()?)?
                 * self.softmax_scale)?;
             let attn_weights = match mask {
                 None => attn_weights,
@@ -243,7 +242,7 @@ impl Attention {
             };
             let attn_weights =
                 candle_nn::ops::softmax_last_dim(&attn_weights)?.to_dtype(value_states.dtype())?;
-            attn_weights.matmul(&value_states).unwrap()
+            attn_weights.matmul(&value_states)?
         };
 
         let attn_output = attn_output
