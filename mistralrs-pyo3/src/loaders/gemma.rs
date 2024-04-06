@@ -216,6 +216,7 @@ impl GemmaLoader {
             logfile,
             truncate_sequence,
             self.no_kv_cache,
+            None, // todo: aicirt
         );
 
         Ok(Runner { runner: mistralrs })

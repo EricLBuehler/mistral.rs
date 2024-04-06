@@ -31,8 +31,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 aicirt = { git = "https://github.com/microsoft/aici", rev = "64f0b551dee49e320e9b3b92289f3d6f2e888276" }
 aici_abi = { git = "https://github.com/microsoft/aici", rev = "64f0b551dee49e320e9b3b92289f3d6f2e888276" }
-libc = "0.2.150"
-uuid = { version = "1.6.1", features = ["v4"] }
 base64 = "0.21.5"
 
 [features]

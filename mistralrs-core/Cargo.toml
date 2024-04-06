@@ -35,6 +35,13 @@ accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
 tracing.workspace = true
 rand = "0.8.5"
+aicirt = { git = "https://github.com/microsoft/aici", rev = "64f0b551dee49e320e9b3b92289f3d6f2e888276" }
+aici_abi = { git = "https://github.com/microsoft/aici", rev = "64f0b551dee49e320e9b3b92289f3d6f2e888276" }
+libc = "0.2.150"
+uuid = { version = "1.6.1", features = ["v4"] }
+base64 = "0.21.5"
+futures = "0.3"
+tokio = { version = "1.36.0", features = ["rt-multi-thread","signal"] }
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]

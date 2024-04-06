@@ -3,7 +3,7 @@ use std::{
     collections::VecDeque,
     iter::zip,
     rc::Rc,
-    sync::{mpsc::Receiver, Mutex},
+    sync::{mpsc::Receiver, Arc, Mutex},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -11,6 +11,7 @@ use candle_core::{Device, Tensor};
 use tracing::warn;
 
 use crate::{
+    aici::iface::AiciRtIface,
     deref_mut_refcell, deref_refcell, get_mut_arcmutex, handle_seq_error,
     handle_seq_error_stateaware,
     pipeline::Pipeline,
@@ -34,6 +35,7 @@ pub struct Engine {
     id: usize,
     truncate_sequence: bool,
     no_kv_cache: bool,
+    aicirt: Option<Arc<Mutex<AiciRtIface>>>,
 }
 
 impl Engine {
@@ -43,6 +45,7 @@ impl Engine {
         method: SchedulerMethod,
         truncate_sequence: bool,
         no_kv_cache: bool,
+        aicirt: Option<Arc<Mutex<AiciRtIface>>>,
     ) -> Self {
         Self {
             rx,
@@ -51,6 +54,7 @@ impl Engine {
             id: 0,
             truncate_sequence,
             no_kv_cache,
+            aicirt,
         }
     }
 
@@ -464,6 +468,7 @@ impl Engine {
             request.sampling_params.logits_bias.clone(),
             topk,
             topp,
+            self.aicirt.clone(),
         );
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {

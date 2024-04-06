@@ -13,10 +13,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use aici::iface::AiciRtIface;
 use engine::Engine;
 pub use mistralrs_lora::Ordering;
 pub use pipeline::Pipeline;
 
+pub mod aici;
 mod engine;
 mod models;
 mod pipeline;
@@ -54,6 +56,7 @@ impl MistralRs {
         log: Option<String>,
         truncate_sequence: bool,
         no_kv_cache: bool,
+        aicirt: Option<Arc<Mutex<AiciRtIface>>>,
     ) -> Arc<Self> {
         let (tx, rx) = channel();
 
@@ -69,7 +72,8 @@ impl MistralRs {
         });
 
         thread::spawn(move || {
-            let mut engine = Engine::new(rx, pipeline, method, truncate_sequence, no_kv_cache);
+            let mut engine =
+                Engine::new(rx, pipeline, method, truncate_sequence, no_kv_cache, aicirt);
             engine.run();
         });
 

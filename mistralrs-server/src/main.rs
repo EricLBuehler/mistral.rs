@@ -5,13 +5,13 @@ use std::{
     pin::Pin,
     sync::{
         mpsc::{channel, Receiver, Sender},
-        Arc,
+        Arc, Mutex,
     },
     task::{Context, Poll},
     time::Duration,
 };
 
-use aici::iface::AsyncCmdChannel;
+use crate::openai::ModelObject;
 use aici_abi::toktree::TokTrie;
 use aicirt::{
     api::{AuthInfo, GetTagsResp, MkModuleReq, MkModuleResp, SetTagsReq},
@@ -34,6 +34,7 @@ use candle_core::Device;
 use clap::Parser;
 use indexmap::IndexMap;
 use mistralrs_core::{
+    aici::iface::{self, AiciRtIface},
     ChatCompletionResponse, GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig,
     Loader, MistralLoader, MistralRs, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig,
     ModelKind, Request, Response, SamplingParams, SchedulerMethod,
@@ -41,18 +42,14 @@ use mistralrs_core::{
 };
 use model_selected::ModelSelected;
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
-
-use crate::{
-    aici::iface::{self, AiciRtIface},
-    openai::ModelObject,
-};
-mod aici;
 mod model_selected;
 mod openai;
 
 use tracing::{info, warn};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
+
+use mistralrs_core::aici::iface::AsyncCmdChannel;
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
@@ -876,13 +873,6 @@ async fn main() -> Result<()> {
     info!("Model kind is: {}", loader.get_kind().as_ref());
     let pipeline = loader.load_model(None, args.token_source, None, &device)?;
     info!("Model loaded.");
-    let mistralrs = MistralRs::new(
-        pipeline,
-        SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
-        args.log,
-        args.truncate_sequence,
-        args.no_kv_cache,
-    );
 
     let aicirt = match &args.aicirt {
         Some(v) => v.clone(),
@@ -925,6 +915,15 @@ async fn main() -> Result<()> {
     let iface = AiciRtIface::start_aicirt(&rt_args, &tok_trie).expect("failed to start aicirt");
 
     let side_cmd_ch = iface.side_cmd.clone();
+
+    let mistralrs = MistralRs::new(
+        pipeline,
+        SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
+        args.log,
+        args.truncate_sequence,
+        args.no_kv_cache,
+        Some(Arc::new(Mutex::new(iface))),
+    );
 
     let app = get_router(ServerState::new(mistralrs, side_cmd_ch).into());
 

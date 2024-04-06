@@ -1,6 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{collections::HashMap, iter::zip};
+use std::{
+    collections::HashMap,
+    iter::zip,
+    sync::{Arc, Mutex},
+};
 
 use candle_core::{bail, DType, Error, Result, Tensor, D};
 use rand::{
@@ -9,6 +13,8 @@ use rand::{
 };
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
+
+use crate::aici::iface::AiciRtIface;
 
 #[derive(Clone, Debug)]
 pub enum StopTokens {
@@ -42,6 +48,7 @@ pub struct Sampler {
     logits_bias: Option<HashMap<u32, f32>>,
     topk: i64,
     topp: f64,
+    aicirt: Option<Arc<Mutex<AiciRtIface>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -72,6 +79,7 @@ impl Sampler {
         logits_bias: Option<HashMap<u32, f32>>,
         topk: i64,
         topp: f64,
+        aicirt: Option<Arc<Mutex<AiciRtIface>>>,
     ) -> Self {
         let temperature = if temperature.map_or(true, |v| v < 1e-7) {
             None
@@ -88,10 +96,37 @@ impl Sampler {
             logits_bias,
             topk,
             topp,
+            aicirt,
         }
     }
 
+    fn aici_bias(&self) -> Option<Vec<f32>> {
+        if self.aicirt.is_none() {
+            return None;
+        }
+
+        let mut rt = self.aicirt.as_ref().unwrap().lock().unwrap();
+        let mid_res = rt.finish_mid_process().unwrap(); // TODO: handle error
+        let shm = &rt.bin_shm;
+        let slice = shm.slice_at_byte_offset::<f32>(0, mid_res.num_seqs * 32_000);
+        Some(slice.to_vec())
+    }
+
     fn apply_logit_bias(&self, probs: &mut [f32]) -> Result<()> {
+        if let Some(bias) = self.aici_bias() {
+            for (id, bias_v) in bias.iter().enumerate() {
+                let idx = probs.get_mut(id);
+                if let Some(idx) = idx {
+                    *idx += bias_v;
+                } else {
+                    candle_core::bail!(
+                        "Token ID `{id}` out of range for probs of length `{}`.",
+                        probs.len()
+                    );
+                }
+            }
+        }
+
         if let Some(ref bias) = self.logits_bias {
             for (id, bias_v) in bias {
                 let idx = probs.get_mut(*id as usize);
@@ -327,7 +362,18 @@ mod tests {
         use super::Sampler;
         use candle_core::{Device, Tensor};
 
-        let mut sampler = Sampler::new(0, None, 10, get_tokenizer(), None, None, None, 32, 0.1);
+        let mut sampler = Sampler::new(
+            0,
+            None,
+            10,
+            get_tokenizer(),
+            None,
+            None,
+            None,
+            32,
+            0.1,
+            None,
+        );
 
         let logits = Tensor::arange(0f64, 1024f64, &Device::Cpu).unwrap();
         let res = sampler.sample(&logits, None, false).unwrap();
