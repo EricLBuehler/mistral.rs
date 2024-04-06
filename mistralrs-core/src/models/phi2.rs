@@ -293,7 +293,6 @@ impl DecoderLayer {
         let feed_forward_hidden_states = self.mlp.forward(&xs)?;
         dbg!(feed_forward_hidden_states.mean_all());
         dbg!(residual.mean_all());
-        todo!();
         attn_outputs + feed_forward_hidden_states + residual
     }
 }
@@ -359,6 +358,7 @@ impl Model {
                 cache.get_mut(i).unwrap(),
             )?;
         }
+        todo!();
         xs.apply(&self.final_layernorm)?
             .narrow(1, seq_len - 1, 1)?
             .apply(&self.lm_head)?
