@@ -2,12 +2,12 @@
 
 use std::collections::HashMap;
 
-use candle_core::quantized::{ggml_file, gguf_file};
+use candle_core::quantized::gguf_file;
 use candle_core::quantized::{QMatMul, QTensor};
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Embedding, LayerNorm, Module, RotaryEmbedding};
 
-use super::{Cache, QRmsNorm};
+use super::Cache;
 
 pub const MAX_SEQ_LEN: u32 = 4096;
 
@@ -165,9 +165,7 @@ impl ModelWeights {
             Some(v) => Ok(v),
         };
 
-        let context_length = md_get("phi2.context_length")?.to_u32()? as usize;
         let embedding_length = md_get("phi2.embedding_length")?.to_u32()? as usize;
-        let feed_forward_length = md_get("phi2.feed_forward_length")?.to_u32()? as usize;
         let block_count = md_get("phi2.block_count")?.to_u32()? as usize;
         let head_count = md_get("phi2.attention.head_count")?.to_u32()? as usize;
         let head_count_kv = md_get("phi2.attention.head_count_kv")?.to_u32()? as usize;
@@ -197,9 +195,9 @@ impl ModelWeights {
             let prefix = format!("blk.{layer_idx}");
             let attn_norm = LayerNorm::new(
                 ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?
-                    .dequantize(&device)?,
+                    .dequantize(device)?,
                 ct.tensor(reader, &format!("{prefix}.attn_norm.bias"), device)?
-                    .dequantize(&device)?,
+                    .dequantize(device)?,
                 attn_layer_norm_eps as f64,
             );
             let output = QLinear::new(
