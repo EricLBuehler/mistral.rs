@@ -125,7 +125,7 @@ pub struct BasicConfig {
     max_position_embeddings: usize,
     rms_norm_eps: f64,
     rope_theta: f64,
-    sliding_window: usize,
+    sliding_window: Option<usize>,
 }
 
 #[derive(Error, Debug)]
