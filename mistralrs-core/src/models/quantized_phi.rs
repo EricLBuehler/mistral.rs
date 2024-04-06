@@ -183,7 +183,7 @@ impl ModelWeights {
             rope_dim,
             MAX_SEQ_LEN as usize,
             device,
-            false,
+            true,
             DType::F32,
         )?;
 
