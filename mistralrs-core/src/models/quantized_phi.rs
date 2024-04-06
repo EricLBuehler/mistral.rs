@@ -63,17 +63,11 @@ impl LayerWeights {
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (b_size, seq_len, _n_embd) = x.dims3()?;
-        dbg!(x);
+
         let qkv = self.attn_qkv.forward(x)?;
         let q = qkv.i((.., .., 0..self.hidden_size))?;
         let k = qkv.i((.., .., self.hidden_size..self.hidden_size * 2))?;
         let v = qkv.i((.., .., self.hidden_size * 2..))?;
-        dbg!(&q);
-        dbg!(&k);
-        dbg!(&v);
-        dbg!(&q.mean_all());
-        dbg!(&k.mean_all());
-        dbg!(&v.mean_all());
 
         let q = self.attn_norm.forward(&q)?;
         let k = self.attn_norm.forward(&k)?;
