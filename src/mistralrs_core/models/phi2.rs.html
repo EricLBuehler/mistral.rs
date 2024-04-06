@@ -362,7 +362,6 @@
 <a href="#360" id="360">360</a>
 <a href="#361" id="361">361</a>
 <a href="#362" id="362">362</a>
-<a href="#363" id="363">363</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Phi model.
@@ -722,8 +721,7 @@
         }
         xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.final_layernorm)<span class="question-mark">?
             </span>.narrow(<span class="number">1</span>, seq_len - <span class="number">1</span>, <span class="number">1</span>)<span class="question-mark">?
-            </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?
-            </span>.squeeze(<span class="number">1</span>)
+            </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)
     }
 }
 </code></pre></div></section></main></body></html>
