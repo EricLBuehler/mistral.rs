@@ -69,6 +69,9 @@ impl LayerWeights {
         dbg!(&q);
         dbg!(&k);
         dbg!(&v);
+        dbg!(&q.mean_all());
+        dbg!(&k.mean_all());
+        dbg!(&v.mean_all());
         todo!()
     }
 
