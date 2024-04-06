@@ -230,7 +230,7 @@ impl Attention {
             let attn_weights = (query_states
                 .to_dtype(DType::F32)?
                 .contiguous()?
-                .matmul(&key_states.to_dtype(DType::F32)?.t()?)?
+                .matmul(&key_states.to_dtype(DType::F32)?.t()?).unwrap()
                 * self.softmax_scale)?;
             let attn_weights = match mask {
                 None => attn_weights,
@@ -242,7 +242,7 @@ impl Attention {
             };
             let attn_weights =
                 candle_nn::ops::softmax_last_dim(&attn_weights)?.to_dtype(value_states.dtype())?;
-            attn_weights.matmul(&value_states)?
+            attn_weights.matmul(&value_states).unwrap()
         };
 
         let attn_output = attn_output
