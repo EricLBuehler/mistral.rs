@@ -1,15 +1,7 @@
-name: Build and push CPU docker image to registry
+name: deploy_cpu_docker
 
-on:
-    workflow_dispatch:
-    push:
-      branches:
-        - 'master'
-      tags:
-        - 'v*'
-    pull_request:
-      branches:
-        - 'master'
+# gh workflow run deploy_cpu_docker
+on: workflow_dispatch
 
 jobs:
     build-and-push-image:

@@ -1,15 +1,7 @@
-name: Build and push Cuda docker images to registry
+name: deploy_cuda_docker
 
-on:
-    workflow_dispatch:
-    push:
-      branches:
-        - 'master'
-      tags:
-        - 'v*'
-    pull_request:
-      branches:
-        - 'master'
+# gh workflow run deploy_cuda_docker
+on: workflow_dispatch
 
 jobs:
     build-and-push-image:
