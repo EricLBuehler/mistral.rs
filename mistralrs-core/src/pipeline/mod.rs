@@ -77,7 +77,7 @@ pub struct ChatTemplate {
     legacy: Option<bool>,
     model_max_length: f64,
     pad_token: Option<String>,
-    sp_model_kwargs: HashMap<String, String>,
+    sp_model_kwargs: Option<HashMap<String, String>>,
     spaces_between_special_tokens: Option<bool>,
     tokenizer_class: String,
     truncation_size: Option<String>,
