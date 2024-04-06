@@ -11,9 +11,14 @@ use std::{
     time::Duration,
 };
 
+use aici::iface::AsyncCmdChannel;
+use aici_abi::toktree::TokTrie;
+use aicirt::api::{AuthInfo, GetTagsResp, MkModuleReq, MkModuleResp, SetTagsReq};
 use anyhow::Result;
 use axum::{
+    body::Bytes,
     extract::{Json, State},
+    http::HeaderMap,
     response::{
         sse::{Event, KeepAlive},
         IntoResponse, Sse,
@@ -21,6 +26,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use base64::Engine;
 use candle_core::Device;
 use clap::Parser;
 use indexmap::IndexMap;
@@ -33,7 +39,10 @@ use mistralrs_core::{
 use model_selected::ModelSelected;
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 
-use crate::openai::ModelObject;
+use crate::{
+    aici::iface::{self, AiciRtIface},
+    openai::ModelObject,
+};
 mod aici;
 mod model_selected;
 mod openai;
@@ -44,6 +53,20 @@ use utoipa_swagger_ui::SwaggerUi;
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
+}
+
+struct ServerState {
+    mistralrs: Arc<MistralRs>,
+    side_cmd_ch: AsyncCmdChannel,
+}
+
+impl ServerState {
+    fn new(mistralrs: Arc<MistralRs>, side_cmd_ch: AsyncCmdChannel) -> Self {
+        Self {
+            mistralrs,
+            side_cmd_ch,
+        }
+    }
 }
 
 #[derive(Parser)]
@@ -89,12 +112,37 @@ struct Args {
     /// Defaults to using a cached token.
     #[arg(long, default_value_t = TokenSource::CacheToken, value_parser = parse_token_source)]
     token_source: TokenSource,
+
+    // TODO: below are only used for aici
+    /// Path to the aicirt binary.
+    #[arg(long, help_heading = "AICI settings")]
+    pub aicirt: Option<String>,
+
+    /// Size of JSON comm buffer in megabytes
+    #[arg(long, default_value = "128", help_heading = "AICI settings")]
+    json_size: usize,
+
+    /// Size of binary comm buffer in megabytes
+    #[arg(long, default_value = "32", help_heading = "AICI settings")]
+    bin_size: usize,
+
+    /// How many milliseconds to spin-wait for a message over IPC and SHM.
+    #[arg(long, default_value = "200", help_heading = "AICI settings")]
+    busy_wait_time: u64,
+
+    /// Shm/semaphore name prefix; default /aici-PORT-
+    #[arg(long, help_heading = "AICI settings")]
+    shm_prefix: Option<String>,
+
+    /// Pass additional option to aicirt
+    #[arg(long, short = 'A', help_heading = "AICI settings")]
+    aicirt_arg: Vec<String>,
 }
 
 struct Streamer {
     rx: Receiver<Response>,
     is_done: bool,
-    state: Arc<MistralRs>,
+    state: Arc<ServerState>,
 }
 
 impl futures::Stream for Streamer {
@@ -107,14 +155,14 @@ impl futures::Stream for Streamer {
         match self.rx.try_recv() {
             Ok(resp) => match resp {
                 Response::Error(e) => {
-                    MistralRs::maybe_log_error(self.state.clone(), &*e);
+                    MistralRs::maybe_log_error(self.state.mistralrs.clone(), &*e);
                     Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
                 }
                 Response::Chunk(response) => {
                     if response.choices.iter().all(|x| x.stopreason.is_some()) {
                         self.is_done = true;
                     }
-                    MistralRs::maybe_log_response(self.state.clone(), &response);
+                    MistralRs::maybe_log_response(self.state.mistralrs.clone(), &response);
                     Poll::Ready(Some(Event::default().json_data(response)))
                 }
                 _ => unreachable!(),
@@ -142,11 +190,11 @@ impl IntoResponse for ChatCompletionResponder {
 
 fn parse_request(
     oairequest: ChatCompletionRequest,
-    state: Arc<MistralRs>,
+    state: Arc<ServerState>,
     tx: Sender<Response>,
 ) -> Request {
     let repr = serde_json::to_string(&oairequest).unwrap();
-    MistralRs::maybe_log_request(state.clone(), repr);
+    MistralRs::maybe_log_request(state.mistralrs.clone(), repr);
 
     let stop_toks = match oairequest.stop_seqs {
         Some(StopTokens::Multi(m)) => Some(InternalStopTokens::Seqs(m)),
@@ -164,7 +212,7 @@ fn parse_request(
     }
 
     Request {
-        id: state.next_request_id(),
+        id: state.mistralrs.next_request_id(),
         messages,
         sampling_params: SamplingParams {
             temperature: oairequest.temperature,
@@ -192,13 +240,13 @@ fn parse_request(
     responses((status = 200, description = "Chat completions"))
 )]
 async fn chatcompletions(
-    State(state): State<Arc<MistralRs>>,
+    State(state): State<Arc<ServerState>>,
     Json(oairequest): Json<ChatCompletionRequest>,
 ) -> ChatCompletionResponder {
     let (tx, rx) = channel();
     let request = parse_request(oairequest, state.clone(), tx);
     let is_streaming = request.is_streaming;
-    let sender = state.get_sender();
+    let sender = state.mistralrs.get_sender();
     sender.send(request).unwrap();
 
     if is_streaming {
@@ -224,11 +272,11 @@ async fn chatcompletions(
 
         match response {
             Response::Error(e) => {
-                MistralRs::maybe_log_error(state, &*e);
+                MistralRs::maybe_log_error(state.mistralrs.clone(), &*e);
                 ChatCompletionResponder::Error(e)
             }
             Response::Done(response) => {
-                MistralRs::maybe_log_response(state, &response);
+                MistralRs::maybe_log_response(state.mistralrs.clone(), &response);
                 ChatCompletionResponder::Json(response)
             }
             Response::Chunk(_) => unreachable!(),
@@ -242,13 +290,13 @@ async fn chatcompletions(
     path = "/v1/models",
     responses((status = 200, description = "Served model info", body = ModelObjects))
 )]
-async fn models(State(state): State<Arc<MistralRs>>) -> Json<ModelObjects> {
+async fn models(State(state): State<Arc<ServerState>>) -> Json<ModelObjects> {
     Json(ModelObjects {
         object: "list",
         data: vec![ModelObject {
-            id: state.get_id(),
+            id: state.mistralrs.get_id(),
             object: "model",
-            created: state.get_creation_time(),
+            created: state.mistralrs.get_creation_time(),
             owned_by: "local",
         }],
     })
@@ -264,7 +312,70 @@ async fn health() -> &'static str {
     "OK"
 }
 
-fn get_router(state: Arc<MistralRs>) -> Router {
+fn auth_info(headers: HeaderMap) -> AuthInfo {
+    // we default to localhost/admin when no headers given
+    let user = headers
+        .get("x-user-id")
+        .map_or("localhost", |v| v.to_str().unwrap_or("(invalid header)"));
+    let role = headers
+        .get("x-user-role")
+        .map_or("admin", |v| v.to_str().unwrap_or("(invalid header)"));
+    let is_admin = role == "admin";
+    AuthInfo {
+        user: user.to_string(),
+        is_admin,
+    }
+}
+
+#[utoipa::path(
+    get,
+    tag = "Mistral.rs",
+    path = "/controllers/tags",
+    responses((status = 200, description = "Get controller tags", body=GetTagsResp))
+)]
+async fn get_controllers_tags(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+) -> Json<GetTagsResp> {
+    let r = state.side_cmd_ch.get_tags(auth_info(headers)).await;
+    Json(r.unwrap()) // TODO: handle error
+}
+
+#[utoipa::path(
+    post,
+    tag = "Mistral.rs",
+    path = "/controllers/tags",
+    responses((status = 200, description = "Create controller tags", body=GetTagsResp))
+)]
+async fn tag_controller(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+    Json(body): Json<SetTagsReq>,
+) -> Json<GetTagsResp> {
+    let r = state.side_cmd_ch.set_tags(body, auth_info(headers)).await;
+    Json(r.unwrap()) // TODO: handle error
+}
+
+#[utoipa::path(
+    post,
+    tag = "Mistral.rs",
+    path = "/controllers",
+    responses((status = 200, description = "Upload controller", body=MkModuleResp))
+)]
+async fn upload_controller(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Json<MkModuleResp> {
+    let binary = base64::engine::general_purpose::STANDARD.encode(body);
+    let r = state
+        .side_cmd_ch
+        .mk_module(MkModuleReq { binary }, auth_info(headers))
+        .await;
+    Json(r.unwrap()) // TODO: handle error
+}
+
+fn get_router(state: Arc<ServerState>) -> Router {
     #[derive(OpenApi)]
     #[openapi(
         paths(models, health, chatcompletions),
@@ -287,9 +398,26 @@ fn get_router(state: Arc<MistralRs>) -> Router {
         .merge(SwaggerUi::new("/docs").url("/api-doc/openapi.json", doc))
         .route("/v1/chat/completions", post(chatcompletions))
         .route("/v1/models", get(models))
+        .route("/controllers/tags", get(get_controllers_tags))
+        .route("/controllers/tags", post(tag_controller))
+        .route("/controllers", post(upload_controller))
         .route("/health", get(health))
         .route("/", get(health))
         .with_state(state)
+}
+
+fn guess_aicirt() -> Result<String> {
+    let mut path = std::env::current_exe()?;
+    path.pop();
+    path.push("aicirt");
+    if path.to_str().is_some() && path.exists() {
+        Ok(path.to_str().unwrap().to_string())
+    } else {
+        Err(anyhow::anyhow!(
+            "can't find aicirt binary (tried {:?})",
+            path
+        ))
+    }
 }
 
 #[tokio::main]
@@ -753,7 +881,36 @@ async fn main() -> Result<()> {
         args.no_kv_cache,
     );
 
-    let app = get_router(mistralrs);
+    let aicirt = match &args.aicirt {
+        Some(v) => v.clone(),
+        None => match guess_aicirt() {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("can't find aicirt; specify with --aicirt=PATH\n{e}");
+                std::process::exit(10);
+            }
+        },
+    };
+
+    let shm_prefix = format!("/aici-{}-", args.port);
+
+    let tok_trie = TokTrie::from_host(); // FIXME: This is a stub
+
+    let rt_args = iface::Args {
+        aicirt,
+        tokenizer: "TODO FIXME".into(),
+        json_size: args.json_size,
+        bin_size: args.bin_size,
+        shm_prefix,
+        busy_wait_time: args.busy_wait_time,
+        add_args: args.aicirt_arg.clone(),
+    };
+
+    let iface = AiciRtIface::start_aicirt(&rt_args, &tok_trie).expect("failed to start aicirt");
+
+    let side_cmd_ch = iface.side_cmd.clone();
+
+    let app = get_router(ServerState::new(mistralrs, side_cmd_ch).into());
 
     let ip = if let Some(ref ip) = args.serve_ip {
         ip.to_string()
