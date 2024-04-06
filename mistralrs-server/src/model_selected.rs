@@ -433,4 +433,19 @@ pub enum ModelSelected {
         #[arg(long)]
         tgt_non_granular_index: Option<usize>,
     },
+
+    /// Select the phi2 model.
+    Phi2 {
+        /// Model ID to load from
+        #[arg(short, long, default_value = "microsoft/phi-2")]
+        model_id: String,
+
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(short, long)]
+        tokenizer_json: Option<String>,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
+    },
 }

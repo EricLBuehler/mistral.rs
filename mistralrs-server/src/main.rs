@@ -27,7 +27,7 @@ use indexmap::IndexMap;
 use mistralrs_core::{
     ChatCompletionResponse, GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig,
     Loader, MistralLoader, MistralRs, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig,
-    ModelKind, Request, Response, SamplingParams, SchedulerMethod,
+    ModelKind, Phi2Loader, Phi2SpecificConfig, Request, Response, SamplingParams, SchedulerMethod,
     StopTokens as InternalStopTokens, TokenSource,
 };
 use model_selected::ModelSelected;
@@ -308,7 +308,8 @@ async fn main() -> Result<()> {
         | ModelSelected::Mistral { .. }
         | ModelSelected::MistralGGUF { .. }
         | ModelSelected::Mixtral { .. }
-        | ModelSelected::MixtralGGUF { .. } => None,
+        | ModelSelected::MixtralGGUF { .. }
+        | ModelSelected::Phi2 { .. } => None,
         ModelSelected::XLoraGemma {
             tgt_non_granular_index,
             ..
@@ -709,6 +710,26 @@ async fn main() -> Result<()> {
             args.chat_template,
             tokenizer_json,
             tgt_non_granular_index,
+        )),
+        ModelSelected::Phi2 {
+            model_id,
+            repeat_last_n,
+            tokenizer_json,
+        } => Box::new(Phi2Loader::new(
+            model_id,
+            Phi2SpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+            },
+            None,
+            None,
+            None,
+            ModelKind::Normal,
+            None,
+            args.no_kv_cache,
+            args.chat_template,
+            tokenizer_json,
+            None,
         )),
     };
 
