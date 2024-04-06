@@ -283,11 +283,11 @@ impl ModelWeights {
         reader: &mut R,
         device: &Device,
     ) -> Result<Self> {
-        dbg!(ct.metadata.clone().keys());
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle_core::bail!("cannot find {s} in metadata"),
             Some(v) => Ok(v),
         };
+        dbg!(md_get("llama.rope.dimension_count"));
 
         // Parameter extraction from metadata.
         let n_expert = md_get("llama.expert_count")
