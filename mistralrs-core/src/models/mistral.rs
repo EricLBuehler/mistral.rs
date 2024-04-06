@@ -2,13 +2,13 @@
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{layer_norm::RmsNormNonQuantized, Activation, RotaryEmbedding, VarBuilder};
+use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 use candle_transformers::models::with_tracing::{linear_no_bias, Linear};
 use std::sync::Arc;
 
 use crate::pipeline::MISTRAL_IS_GPTX;
 
-use super::{flash_attn, Cache};
+use super::{flash_attn, Cache, RmsNorm};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -24,24 +24,6 @@ pub struct Config {
     pub(crate) rope_theta: f64,
     pub(crate) sliding_window: usize,
     pub(crate) use_flash_attn: bool,
-}
-
-#[derive(Debug, Clone)]
-struct RmsNorm {
-    inner: candle_nn::RmsNorm<RmsNormNonQuantized>,
-}
-
-impl RmsNorm {
-    fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
-        Ok(Self { inner })
-    }
-}
-
-impl Module for RmsNorm {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.inner.forward(x)
-    }
 }
 
 #[derive(Debug, Clone)]

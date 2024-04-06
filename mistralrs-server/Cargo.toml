@@ -17,6 +17,8 @@ candle-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 axum = { version = "0.7.4", features = ["tokio"] }
+utoipa = { version = "4.2", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "6.0", features = ["axum"]}
 clap = { version = "4.5.1", features = ["derive"] }
 mistralrs-core = { version = "0.1.0", path = "../mistralrs-core" }
 tokio = { version = "1.36.0", features = ["rt-multi-thread"] }

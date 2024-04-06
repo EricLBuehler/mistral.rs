@@ -1,0 +1,63 @@
+name: Analysis Bot
+on:
+  pull_request_target
+
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get the lines of code
+        id: scc
+        uses: iryanbell/scc-docker-action@v1.0.2 
+        with:
+          args: ${{ env.workspace }} -irs 
+
+      - name: Write output to a file
+        run: |
+          echo "${{ steps.scc.outputs.scc }}" > scc_output.txt
+
+      - name: Comment or Update PR
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const sccOutput = fs.readFileSync('scc_output.txt', 'utf8');
+            const uniqueIdentifier = 'Code Metrics Report'; 
+            const codeReport = `
+              <details>
+              <summary>${uniqueIdentifier}</summary>
+              <pre>
+              ${sccOutput}
+              </pre>
+              </details>
+            `;
+
+            const issue_number = context.issue.number;
+            const { owner, repo } = context.repo;
+
+            const comments = await github.rest.issues.listComments({
+              issue_number,
+              owner,
+              repo
+            });
+
+            const existingComment = comments.data.find(comment => comment.body.includes(uniqueIdentifier));
+
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existingComment.id,
+                body: codeReport
+              });
+            } else {
+              await github.rest.issues.createComment({
+                issue_number,
+                owner,
+                repo,
+                body: codeReport
+              });
+            }

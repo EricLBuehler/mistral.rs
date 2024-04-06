@@ -190,6 +190,32 @@ fn raise_exception(msg: String) -> Result<String, minijinja::Error> {
     Err(minijinja::Error::new(ErrorKind::InvalidOperation, msg))
 }
 
+fn apply_chat_template_to(
+    messages: Vec<IndexMap<String, String>>,
+    add_generation_prompt: bool,
+    template: &str,
+    bos_tok: &str,
+    eos_tok: &str,
+    unk_tok: &str,
+) -> Result<String> {
+    let mut env = Environment::new();
+    // https://github.com/huggingface/transformers/blob/76a33a10923ccc1074917f6b6a1e719e626b7dc9/src/transformers/tokenization_utils_base.py#L1842
+    env.set_lstrip_blocks(true);
+    env.set_trim_blocks(true);
+
+    let template = template.replace(".strip()", "|trim");
+    env.add_template("chat_template", template.as_str())?;
+    env.add_function("raise_exception", raise_exception);
+    let tmpl = env.get_template("chat_template").unwrap();
+    Ok(tmpl.render(context! {
+        messages => messages,
+        add_generation_prompt => add_generation_prompt,
+        bos_token => bos_tok,
+        eos_token => eos_tok,
+        unk_token => unk_tok,
+    })?)
+}
+
 pub trait Pipeline: Send + Sync {
     fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor;
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
@@ -219,20 +245,7 @@ pub trait Pipeline: Send + Sync {
         messages: Vec<IndexMap<String, String>>,
         add_generation_prompt: bool,
     ) -> Result<String> {
-        let mut env = Environment::new();
-        // https://github.com/huggingface/transformers/blob/76a33a10923ccc1074917f6b6a1e719e626b7dc9/src/transformers/tokenization_utils_base.py#L1842
-        env.set_lstrip_blocks(true);
-        env.set_trim_blocks(true);
-
-        let template = self
-            .get_chat_template()
-            .chat_template
-            .as_ref()
-            .unwrap()
-            .replace(".strip()", "|trim");
-        env.add_template("chat_template", template.as_str())?;
-        env.add_function("raise_exception", raise_exception);
-        let tmpl = env.get_template("chat_template").unwrap();
+        let template = self.get_chat_template().chat_template.as_ref().unwrap();
         let bos_tok = match self.get_chat_template().bos_token {
             Either::Left(ref lit) => lit,
             Either::Right(ref added) => &added.content,
@@ -245,13 +258,14 @@ pub trait Pipeline: Send + Sync {
             Either::Left(ref lit) => lit,
             Either::Right(ref added) => &added.content,
         };
-        Ok(tmpl.render(context! {
-            messages => messages,
-            add_generation_prompt => add_generation_prompt,
-            bos_token => bos_tok,
-            eos_token => eos_tok,
-            unk_token => unk_tok,
-        })?)
+        apply_chat_template_to(
+            messages,
+            add_generation_prompt,
+            template,
+            bos_tok,
+            eos_tok,
+            unk_tok,
+        )
     }
     fn get_chat_template(&self) -> &ChatTemplate;
     fn get_non_granular_state(&self) -> &Option<NonGranularState>;
@@ -641,4 +655,78 @@ macro_rules! deserialize_chat_template {
             }
         }
     }};
+}
+
+mod tests {
+    #[test]
+    /// Generating these cases:
+    /// ```py
+    /// >>> t=transformers.AutoTokenizer.from_pretrained(...)
+    /// # If non-system prompt model
+    /// >>> t.apply_chat_template([{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi there"},{"role":"user","content":"Who are you"},{"role":"assistant","content":"   I am an assistant   "},{"role":"user","content":"Another question"}], add_generation_prompt=True, tokenize=False)
+    /// # If system prompt model
+    /// >>> t.apply_chat_template([{"role":"system","content":"You are a helpful assistant"},{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi there"},{"role":"user","content":"Who are you"},{"role":"assistant","content":"   I am an assistant   "},{"role":"user","content":"Another question"}], add_generation_prompt=True, tokenize=False)
+    /// ```
+    fn test_chat_templates() {
+        use indexmap::IndexMap;
+
+        use crate::pipeline::apply_chat_template_to;
+        let templates = [
+            // ChatML: https://huggingface.co/teknium/OpenHermes-2.5-Mistral-7B
+            (true, "<s>", "</s>", "<unk>", "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"),
+            // mistralai/Mistral-7B-Instruct-v0.1
+            (false, "<s>", "</s>", "<unk>", "{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token + ' ' }}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}"),
+            // meta-llama/Llama-2-13b-chat-hf
+            (true, "<s>", "</s>", "<unk>", "{% if messages[0]['role'] == 'system' %}{% set loop_messages = messages[1:] %}{% set system_message = messages[0]['content'] %}{% else %}{% set loop_messages = messages %}{% set system_message = false %}{% endif %}{% for message in loop_messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if loop.index0 == 0 and system_message != false %}{% set content = '<<SYS>>\\n' + system_message + '\\n<</SYS>>\\n\\n' + message['content'] %}{% else %}{% set content = message['content'] %}{% endif %}{% if message['role'] == 'user' %}{{ bos_token + '[INST] ' + content.strip() + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ ' '  + content.strip() + ' ' + eos_token }}{% endif %}{% endfor %}"),
+            // mistralai/Mixtral-8x7B-Instruct-v0.1
+            (false, "<s>", "</s>", "<unk>", "{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token}}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}"),
+            // google/gemma-7b-it
+            (false, "<bos>", "<eos>", "<unk>", "{{ bos_token }}{% if messages[0]['role'] == 'system' %}{{ raise_exception('System role not supported') }}{% endif %}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if (message['role'] == 'assistant') %}{% set role = 'model' %}{% else %}{% set role = message['role'] %}{% endif %}{{ '<start_of_turn>' + role + '\n' + message['content'] | trim + '<end_of_turn>\n' }}{% endfor %}{% if add_generation_prompt %}{{'<start_of_turn>model\n'}}{% endif %}"),
+        ];
+        let expected_outputs = [
+            // ChatML: https://huggingface.co/teknium/OpenHermes-2.5-Mistral-7B
+            "<|im_start|>system\nYou are a helpful assistant<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\nHi there<|im_end|>\n<|im_start|>user\nWho are you<|im_end|>\n<|im_start|>assistant\n   I am an assistant   <|im_end|>\n<|im_start|>user\nAnother question<|im_end|>\n<|im_start|>assistant\n",
+            // mistralai/Mistral-7B-Instruct-v0.1
+            "<s>[INST] Hello [/INST]Hi there</s> [INST] Who are you [/INST]   I am an assistant   </s> [INST] Another question [/INST]",
+            // meta-llama/Llama-2-13b-chat-hf
+            "<s>[INST] <<SYS>>\nYou are a helpful assistant\n<</SYS>>\n\nHello [/INST] Hi there </s><s>[INST] Who are you [/INST] I am an assistant </s><s>[INST] Another question [/INST]",
+            // mistralai/Mixtral-8x7B-Instruct-v0.1
+            "<s>[INST] Hello [/INST]Hi there</s>[INST] Who are you [/INST]   I am an assistant   </s>[INST] Another question [/INST]",
+            // google/gemma-7b-it
+            "<bos><start_of_turn>user\nHello<end_of_turn>\n<start_of_turn>model\nHi there<end_of_turn>\n<start_of_turn>user\nWho are you<end_of_turn>\n<start_of_turn>model\nI am an assistant<end_of_turn>\n<start_of_turn>user\nAnother question<end_of_turn>\n<start_of_turn>model\n",
+        ];
+        let messages = [
+            ["system", "You are a helpful assistant"],
+            ["user", "Hello"],
+            ["assistant", "Hi there"],
+            ["user", "Who are you"],
+            ["assistant", "   I am an assistant   "],
+            ["user", "Another question"],
+        ];
+        let mut inputs = Vec::new();
+        for [role, content] in messages {
+            let mut message = IndexMap::new();
+            message.insert("role".to_string(), role.to_string());
+            message.insert("content".to_string(), content.to_string());
+            inputs.push(message);
+        }
+        for ((i, (has_system, bos, eos, unk, template)), expected) in
+            templates.into_iter().enumerate().zip(expected_outputs)
+        {
+            let output = apply_chat_template_to(
+                if !has_system {
+                    inputs[1..].to_vec()
+                } else {
+                    inputs.clone()
+                },
+                true,
+                template,
+                bos,
+                eos,
+                unk,
+            )
+            .unwrap_or_else(|_| panic!("Template number {i}"));
+            assert_eq!(output, expected, "Template number {i}");
+        }
+    }
 }

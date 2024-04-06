@@ -258,6 +258,8 @@ impl Loader for GemmaLoader {
             DType::F32
         };
 
+        info!("Model config: {config:?}");
+
         let model = match self.kind {
             ModelKind::QuantizedGGUF => unreachable!(),
             ModelKind::QuantizedGGML => unreachable!(),

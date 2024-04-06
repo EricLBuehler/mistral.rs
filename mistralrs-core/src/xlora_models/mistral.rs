@@ -2,34 +2,16 @@
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{layer_norm::RmsNormNonQuantized, Activation, RotaryEmbedding, VarBuilder};
+use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 use std::sync::Arc;
 
 use crate::{
-    models::{mistral::Config, Cache},
+    models::{flash_attn, mistral::Config, Cache, RmsNorm},
     pipeline::MISTRAL_IS_GPTX,
 };
 
 use super::{classifier::XLoraClassifier, config::XLoraConfig, NonGranularState, ScalingsMaker};
-
-#[derive(Debug, Clone)]
-struct RmsNorm {
-    inner: candle_nn::RmsNorm<RmsNormNonQuantized>,
-}
-
-impl RmsNorm {
-    fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
-        Ok(Self { inner })
-    }
-}
-
-impl Module for RmsNorm {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.inner.forward(x)
-    }
-}
 
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
@@ -106,22 +88,6 @@ impl MLP {
             is_scaling_pass,
         )
     }
-}
-
-#[cfg(feature = "flash-attn")]
-fn flash_attn(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    softmax_scale: f32,
-    causal: bool,
-) -> Result<Tensor> {
-    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
-}
-
-#[cfg(not(feature = "flash-attn"))]
-fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
-    unimplemented!("compile with '--features flash-attn'")
 }
 
 #[derive(Debug, Clone)]
