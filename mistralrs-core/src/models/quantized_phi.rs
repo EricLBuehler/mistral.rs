@@ -108,7 +108,7 @@ impl ModelWeights {
         let block_count = md_get("phi2.block_count")?.to_u32()? as usize;
         let head_count = md_get("phi2.attention.head_count")?.to_u32()? as usize;
         let head_count_kv = md_get("phi2.attention.head_count_kv")?.to_u32()? as usize;
-        let attn_layer_norm_eps = md_get("phi2.attention.layer_norm_epsilon")?.to_f64()?;
+        let attn_layer_norm_eps = md_get("phi2.attention.layer_norm_epsilon")?.to_f32()?;
         let rope_dim = md_get("phi2.rope.dimension_count")?.to_u32()? as usize;
 
         let rope_freq_base = md_get("llama.rope.freq_base")
