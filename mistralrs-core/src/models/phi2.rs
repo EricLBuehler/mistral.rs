@@ -350,7 +350,7 @@ impl Model {
         };
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            xs = layer.forward(
+            /*xs = */layer.forward(
                 &xs,
                 mask.as_ref(),
                 seqlen_offsets,
