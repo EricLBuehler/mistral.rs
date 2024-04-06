@@ -27,7 +27,7 @@ impl QLinear {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        self.weight.forward(xs)?.broadcast_add(xs)
+        self.weight.forward(xs)?.broadcast_add(&self.bias)
     }
 }
 
