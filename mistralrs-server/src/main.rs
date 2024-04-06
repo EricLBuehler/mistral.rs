@@ -84,7 +84,7 @@ struct Args {
     chat_template: Option<String>,
 
     /// Source of the token for authentication.
-    /// Can be in the formats: "literal:<value>", "env:<value>", "path:<value>", or "cache" to use a cached token.
+    /// Can be in the formats: "literal:<value>", "env:<value>", "path:<value>", "cache" to use a cached token or "none" to use no token.
     /// Defaults to using a cached token.
     #[arg(long, default_value_t = TokenSource::CacheToken, value_parser = parse_token_source)]
     token_source: TokenSource,

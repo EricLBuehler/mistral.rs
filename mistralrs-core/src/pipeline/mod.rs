@@ -90,6 +90,7 @@ pub enum TokenSource {
     EnvVar(String),
     Path(String),
     CacheToken,
+    None,
 }
 
 impl FromStr for TokenSource {
@@ -113,6 +114,7 @@ impl FromStr for TokenSource {
                 .map(|&value| TokenSource::Path(value.to_string()))
                 .ok_or_else(|| "Expected a value for 'path'".to_string()),
             "cache" => Ok(TokenSource::CacheToken),
+            "none" => Ok(TokenSource::None),
             _ => Err("Invalid token source format".to_string()),
         }
     }
@@ -125,6 +127,7 @@ impl fmt::Display for TokenSource {
             TokenSource::EnvVar(value) => write!(f, "env:{}", value),
             TokenSource::Path(value) => write!(f, "path:{}", value),
             TokenSource::CacheToken => write!(f, "cache"),
+            TokenSource::None => write!(f, "none"),
         }
     }
 }
