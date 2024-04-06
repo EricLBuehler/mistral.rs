@@ -133,9 +133,11 @@ impl ModelWeights {
         let mut layers = Vec::with_capacity(block_count);
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
+            let w = ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?
+            .dequantize(&device)?;
+            dbg!(&w);
             let attn_norm = LayerNorm::new(
-                ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?
-                    .dequantize(&device)?,
+                w,
                 ct.tensor(reader, &format!("{prefix}.attn_norm.bias"), device)?
                     .dequantize(&device)?,
                 attn_layer_norm_eps as f64,
