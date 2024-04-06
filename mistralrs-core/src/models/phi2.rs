@@ -289,7 +289,7 @@ impl DecoderLayer {
         let attn_outputs =
             self.self_attn
                 .forward(&xs, mask, seqlen_offsets, start_offsets_kernel, kv_cache)?;
-        //dbg!(attn_outputs.mean_all());
+        dbg!(attn_outputs.mean_all());
         let feed_forward_hidden_states = self.mlp.forward(&xs)?;
         //dbg!(feed_forward_hidden_states.mean_all());
         //dbg!(residual.mean_all());
@@ -357,7 +357,7 @@ impl Model {
                 start_offsets_kernel.clone(),
                 cache.get_mut(i).unwrap(),
             )?;
-            dbg!(xs.mean_all());
+            //dbg!(xs.mean_all());
         }
         todo!();
         xs.apply(&self.final_layernorm)?
