@@ -644,6 +644,94 @@
 <a href="#642" id="642">642</a>
 <a href="#643" id="643">643</a>
 <a href="#644" id="644">644</a>
+<a href="#645" id="645">645</a>
+<a href="#646" id="646">646</a>
+<a href="#647" id="647">647</a>
+<a href="#648" id="648">648</a>
+<a href="#649" id="649">649</a>
+<a href="#650" id="650">650</a>
+<a href="#651" id="651">651</a>
+<a href="#652" id="652">652</a>
+<a href="#653" id="653">653</a>
+<a href="#654" id="654">654</a>
+<a href="#655" id="655">655</a>
+<a href="#656" id="656">656</a>
+<a href="#657" id="657">657</a>
+<a href="#658" id="658">658</a>
+<a href="#659" id="659">659</a>
+<a href="#660" id="660">660</a>
+<a href="#661" id="661">661</a>
+<a href="#662" id="662">662</a>
+<a href="#663" id="663">663</a>
+<a href="#664" id="664">664</a>
+<a href="#665" id="665">665</a>
+<a href="#666" id="666">666</a>
+<a href="#667" id="667">667</a>
+<a href="#668" id="668">668</a>
+<a href="#669" id="669">669</a>
+<a href="#670" id="670">670</a>
+<a href="#671" id="671">671</a>
+<a href="#672" id="672">672</a>
+<a href="#673" id="673">673</a>
+<a href="#674" id="674">674</a>
+<a href="#675" id="675">675</a>
+<a href="#676" id="676">676</a>
+<a href="#677" id="677">677</a>
+<a href="#678" id="678">678</a>
+<a href="#679" id="679">679</a>
+<a href="#680" id="680">680</a>
+<a href="#681" id="681">681</a>
+<a href="#682" id="682">682</a>
+<a href="#683" id="683">683</a>
+<a href="#684" id="684">684</a>
+<a href="#685" id="685">685</a>
+<a href="#686" id="686">686</a>
+<a href="#687" id="687">687</a>
+<a href="#688" id="688">688</a>
+<a href="#689" id="689">689</a>
+<a href="#690" id="690">690</a>
+<a href="#691" id="691">691</a>
+<a href="#692" id="692">692</a>
+<a href="#693" id="693">693</a>
+<a href="#694" id="694">694</a>
+<a href="#695" id="695">695</a>
+<a href="#696" id="696">696</a>
+<a href="#697" id="697">697</a>
+<a href="#698" id="698">698</a>
+<a href="#699" id="699">699</a>
+<a href="#700" id="700">700</a>
+<a href="#701" id="701">701</a>
+<a href="#702" id="702">702</a>
+<a href="#703" id="703">703</a>
+<a href="#704" id="704">704</a>
+<a href="#705" id="705">705</a>
+<a href="#706" id="706">706</a>
+<a href="#707" id="707">707</a>
+<a href="#708" id="708">708</a>
+<a href="#709" id="709">709</a>
+<a href="#710" id="710">710</a>
+<a href="#711" id="711">711</a>
+<a href="#712" id="712">712</a>
+<a href="#713" id="713">713</a>
+<a href="#714" id="714">714</a>
+<a href="#715" id="715">715</a>
+<a href="#716" id="716">716</a>
+<a href="#717" id="717">717</a>
+<a href="#718" id="718">718</a>
+<a href="#719" id="719">719</a>
+<a href="#720" id="720">720</a>
+<a href="#721" id="721">721</a>
+<a href="#722" id="722">722</a>
+<a href="#723" id="723">723</a>
+<a href="#724" id="724">724</a>
+<a href="#725" id="725">725</a>
+<a href="#726" id="726">726</a>
+<a href="#727" id="727">727</a>
+<a href="#728" id="728">728</a>
+<a href="#729" id="729">729</a>
+<a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -836,6 +924,32 @@
     <span class="prelude-val">Err</span>(minijinja::Error::new(ErrorKind::InvalidOperation, msg))
 }
 
+<span class="kw">fn </span>apply_chat_template_to(
+    messages: Vec&lt;IndexMap&lt;String, String&gt;&gt;,
+    add_generation_prompt: bool,
+    template: <span class="kw-2">&amp;</span>str,
+    bos_tok: <span class="kw-2">&amp;</span>str,
+    eos_tok: <span class="kw-2">&amp;</span>str,
+    unk_tok: <span class="kw-2">&amp;</span>str,
+) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
+    <span class="kw">let </span><span class="kw-2">mut </span>env = Environment::new();
+    <span class="comment">// https://github.com/huggingface/transformers/blob/76a33a10923ccc1074917f6b6a1e719e626b7dc9/src/transformers/tokenization_utils_base.py#L1842
+    </span>env.set_lstrip_blocks(<span class="bool-val">true</span>);
+    env.set_trim_blocks(<span class="bool-val">true</span>);
+
+    <span class="kw">let </span>template = template.replace(<span class="string">".strip()"</span>, <span class="string">"|trim"</span>);
+    env.add_template(<span class="string">"chat_template"</span>, template.as_str())<span class="question-mark">?</span>;
+    env.add_function(<span class="string">"raise_exception"</span>, raise_exception);
+    <span class="kw">let </span>tmpl = env.get_template(<span class="string">"chat_template"</span>).unwrap();
+    <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context! </span>{
+        messages =&gt; messages,
+        add_generation_prompt =&gt; add_generation_prompt,
+        bos_token =&gt; bos_tok,
+        eos_token =&gt; eos_tok,
+        unk_token =&gt; unk_tok,
+    })<span class="question-mark">?</span>)
+}
+
 <span class="kw">pub trait </span>Pipeline: Send + Sync {
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;mut </span><span class="self">self</span>, input_toks: Box&lt;[Rc&lt;RefCell&lt;Sequence&gt;&gt;]&gt;, is_prompt: bool) -&gt; Tensor;
     <span class="kw">fn </span>tokenize_prompt(<span class="kw-2">&amp;</span><span class="self">self</span>, prompt: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u32&gt;&gt; {
@@ -865,20 +979,7 @@
         messages: Vec&lt;IndexMap&lt;String, String&gt;&gt;,
         add_generation_prompt: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>env = Environment::new();
-        <span class="comment">// https://github.com/huggingface/transformers/blob/76a33a10923ccc1074917f6b6a1e719e626b7dc9/src/transformers/tokenization_utils_base.py#L1842
-        </span>env.set_lstrip_blocks(<span class="bool-val">true</span>);
-        env.set_trim_blocks(<span class="bool-val">true</span>);
-
-        <span class="kw">let </span>template = <span class="self">self
-            </span>.get_chat_template()
-            .chat_template
-            .as_ref()
-            .unwrap()
-            .replace(<span class="string">".strip()"</span>, <span class="string">"|trim"</span>);
-        env.add_template(<span class="string">"chat_template"</span>, template.as_str())<span class="question-mark">?</span>;
-        env.add_function(<span class="string">"raise_exception"</span>, raise_exception);
-        <span class="kw">let </span>tmpl = env.get_template(<span class="string">"chat_template"</span>).unwrap();
+        <span class="kw">let </span>template = <span class="self">self</span>.get_chat_template().chat_template.as_ref().unwrap();
         <span class="kw">let </span>bos_tok = <span class="kw">match </span><span class="self">self</span>.get_chat_template().bos_token {
             Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit,
             Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="kw-2">&amp;</span>added.content,
@@ -891,13 +992,14 @@
             Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit,
             Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="kw-2">&amp;</span>added.content,
         };
-        <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context! </span>{
-            messages =&gt; messages,
-            add_generation_prompt =&gt; add_generation_prompt,
-            bos_token =&gt; bos_tok,
-            eos_token =&gt; eos_tok,
-            unk_token =&gt; unk_tok,
-        })<span class="question-mark">?</span>)
+        apply_chat_template_to(
+            messages,
+            add_generation_prompt,
+            template,
+            bos_tok,
+            eos_tok,
+            unk_tok,
+        )
     }
     <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ChatTemplate;
     <span class="kw">fn </span>get_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;NonGranularState&gt;;
@@ -1287,5 +1389,79 @@
             }
         }
     }};
+}
+
+<span class="kw">mod </span>tests {
+    <span class="attr">#[test]
+    </span><span class="doccomment">/// Generating these cases:
+    /// ```py
+    /// &gt;&gt;&gt; t=transformers.AutoTokenizer.from_pretrained(...)
+    /// # If non-system prompt model
+    /// &gt;&gt;&gt; t.apply_chat_template([{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi there"},{"role":"user","content":"Who are you"},{"role":"assistant","content":"   I am an assistant   "},{"role":"user","content":"Another question"}], add_generation_prompt=True, tokenize=False)
+    /// # If system prompt model
+    /// &gt;&gt;&gt; t.apply_chat_template([{"role":"system","content":"You are a helpful assistant"},{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi there"},{"role":"user","content":"Who are you"},{"role":"assistant","content":"   I am an assistant   "},{"role":"user","content":"Another question"}], add_generation_prompt=True, tokenize=False)
+    /// ```
+    </span><span class="kw">fn </span>test_chat_templates() {
+        <span class="kw">use </span>indexmap::IndexMap;
+
+        <span class="kw">use </span><span class="kw">crate</span>::pipeline::apply_chat_template_to;
+        <span class="kw">let </span>templates = [
+            <span class="comment">// ChatML: https://huggingface.co/teknium/OpenHermes-2.5-Mistral-7B
+            </span>(<span class="bool-val">true</span>, <span class="string">"&lt;s&gt;"</span>, <span class="string">"&lt;/s&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{% for message in messages %}{{'&lt;|im_start|&gt;' + message['role'] + '\n' + message['content'] + '&lt;|im_end|&gt;' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '&lt;|im_start|&gt;assistant\n' }}{% endif %}"</span>),
+            <span class="comment">// mistralai/Mistral-7B-Instruct-v0.1
+            </span>(<span class="bool-val">false</span>, <span class="string">"&lt;s&gt;"</span>, <span class="string">"&lt;/s&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token + ' ' }}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}"</span>),
+            <span class="comment">// meta-llama/Llama-2-13b-chat-hf
+            </span>(<span class="bool-val">true</span>, <span class="string">"&lt;s&gt;"</span>, <span class="string">"&lt;/s&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{% if messages[0]['role'] == 'system' %}{% set loop_messages = messages[1:] %}{% set system_message = messages[0]['content'] %}{% else %}{% set loop_messages = messages %}{% set system_message = false %}{% endif %}{% for message in loop_messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if loop.index0 == 0 and system_message != false %}{% set content = '&lt;&lt;SYS&gt;&gt;\\n' + system_message + '\\n&lt;&lt;/SYS&gt;&gt;\\n\\n' + message['content'] %}{% else %}{% set content = message['content'] %}{% endif %}{% if message['role'] == 'user' %}{{ bos_token + '[INST] ' + content.strip() + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ ' '  + content.strip() + ' ' + eos_token }}{% endif %}{% endfor %}"</span>),
+            <span class="comment">// mistralai/Mixtral-8x7B-Instruct-v0.1
+            </span>(<span class="bool-val">false</span>, <span class="string">"&lt;s&gt;"</span>, <span class="string">"&lt;/s&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token}}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}"</span>),
+            <span class="comment">// google/gemma-7b-it
+            </span>(<span class="bool-val">false</span>, <span class="string">"&lt;bos&gt;"</span>, <span class="string">"&lt;eos&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{{ bos_token }}{% if messages[0]['role'] == 'system' %}{{ raise_exception('System role not supported') }}{% endif %}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if (message['role'] == 'assistant') %}{% set role = 'model' %}{% else %}{% set role = message['role'] %}{% endif %}{{ '&lt;start_of_turn&gt;' + role + '\n' + message['content'] | trim + '&lt;end_of_turn&gt;\n' }}{% endfor %}{% if add_generation_prompt %}{{'&lt;start_of_turn&gt;model\n'}}{% endif %}"</span>),
+        ];
+        <span class="kw">let </span>expected_outputs = [
+            <span class="comment">// ChatML: https://huggingface.co/teknium/OpenHermes-2.5-Mistral-7B
+            </span><span class="string">"&lt;|im_start|&gt;system\nYou are a helpful assistant&lt;|im_end|&gt;\n&lt;|im_start|&gt;user\nHello&lt;|im_end|&gt;\n&lt;|im_start|&gt;assistant\nHi there&lt;|im_end|&gt;\n&lt;|im_start|&gt;user\nWho are you&lt;|im_end|&gt;\n&lt;|im_start|&gt;assistant\n   I am an assistant   &lt;|im_end|&gt;\n&lt;|im_start|&gt;user\nAnother question&lt;|im_end|&gt;\n&lt;|im_start|&gt;assistant\n"</span>,
+            <span class="comment">// mistralai/Mistral-7B-Instruct-v0.1
+            </span><span class="string">"&lt;s&gt;[INST] Hello [/INST]Hi there&lt;/s&gt; [INST] Who are you [/INST]   I am an assistant   &lt;/s&gt; [INST] Another question [/INST]"</span>,
+            <span class="comment">// meta-llama/Llama-2-13b-chat-hf
+            </span><span class="string">"&lt;s&gt;[INST] &lt;&lt;SYS&gt;&gt;\nYou are a helpful assistant\n&lt;&lt;/SYS&gt;&gt;\n\nHello [/INST] Hi there &lt;/s&gt;&lt;s&gt;[INST] Who are you [/INST] I am an assistant &lt;/s&gt;&lt;s&gt;[INST] Another question [/INST]"</span>,
+            <span class="comment">// mistralai/Mixtral-8x7B-Instruct-v0.1
+            </span><span class="string">"&lt;s&gt;[INST] Hello [/INST]Hi there&lt;/s&gt;[INST] Who are you [/INST]   I am an assistant   &lt;/s&gt;[INST] Another question [/INST]"</span>,
+            <span class="comment">// google/gemma-7b-it
+            </span><span class="string">"&lt;bos&gt;&lt;start_of_turn&gt;user\nHello&lt;end_of_turn&gt;\n&lt;start_of_turn&gt;model\nHi there&lt;end_of_turn&gt;\n&lt;start_of_turn&gt;user\nWho are you&lt;end_of_turn&gt;\n&lt;start_of_turn&gt;model\nI am an assistant&lt;end_of_turn&gt;\n&lt;start_of_turn&gt;user\nAnother question&lt;end_of_turn&gt;\n&lt;start_of_turn&gt;model\n"</span>,
+        ];
+        <span class="kw">let </span>messages = [
+            [<span class="string">"system"</span>, <span class="string">"You are a helpful assistant"</span>],
+            [<span class="string">"user"</span>, <span class="string">"Hello"</span>],
+            [<span class="string">"assistant"</span>, <span class="string">"Hi there"</span>],
+            [<span class="string">"user"</span>, <span class="string">"Who are you"</span>],
+            [<span class="string">"assistant"</span>, <span class="string">"   I am an assistant   "</span>],
+            [<span class="string">"user"</span>, <span class="string">"Another question"</span>],
+        ];
+        <span class="kw">let </span><span class="kw-2">mut </span>inputs = Vec::new();
+        <span class="kw">for </span>[role, content] <span class="kw">in </span>messages {
+            <span class="kw">let </span><span class="kw-2">mut </span>message = IndexMap::new();
+            message.insert(<span class="string">"role"</span>.to_string(), role.to_string());
+            message.insert(<span class="string">"content"</span>.to_string(), content.to_string());
+            inputs.push(message);
+        }
+        <span class="kw">for </span>((i, (has_system, bos, eos, unk, template)), expected) <span class="kw">in
+            </span>templates.into_iter().enumerate().zip(expected_outputs)
+        {
+            <span class="kw">let </span>output = apply_chat_template_to(
+                <span class="kw">if </span>!has_system {
+                    inputs[<span class="number">1</span>..].to_vec()
+                } <span class="kw">else </span>{
+                    inputs.clone()
+                },
+                <span class="bool-val">true</span>,
+                template,
+                bos,
+                eos,
+                unk,
+            )
+            .unwrap_or_else(|<span class="kw">_</span>| <span class="macro">panic!</span>(<span class="string">"Template number {i}"</span>));
+            <span class="macro">assert_eq!</span>(output, expected, <span class="string">"Template number {i}"</span>);
+        }
+    }
 }
 </code></pre></div></section></main></body></html>
