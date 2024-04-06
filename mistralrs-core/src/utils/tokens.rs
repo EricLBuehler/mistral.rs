@@ -28,6 +28,7 @@ pub(crate) fn get_token(source: &TokenSource) -> Result<String> {
             fs::read_to_string(home.clone())
                 .map_err(|_| anyhow::Error::msg(format!("Could not load token at `{home}`")))?
         }
+        TokenSource::None => "".to_string(),
     }
     .trim()
     .to_string())
