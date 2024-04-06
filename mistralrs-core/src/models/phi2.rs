@@ -184,7 +184,7 @@ impl Attention {
         let mut key_states =
             key_states.reshape((b_size * seq_len, self.num_kv_heads, self.head_dim))?;
         let value_states = value_states
-            .reshape((b_size * seq_len, self.num_kv_heads, self.head_dim))?
+            .reshape((b_size, seq_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
         self.rotary_emb.forward(
