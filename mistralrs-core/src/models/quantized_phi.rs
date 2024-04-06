@@ -65,7 +65,7 @@ impl LayerWeights {
         let qkv = self.attn_qkv.forward(x)?;
         let q = qkv.i((.., .., 0..self.hidden_size))?;
         let k = qkv.i((.., .., self.hidden_size..self.hidden_size*2))?;
-        let v = qkv.i((.., .., self.hidden_size*3..))?;
+        let v = qkv.i((.., .., self.hidden_size*2..))?;
         dbg!(&q);
         dbg!(&k);
         dbg!(&v);
