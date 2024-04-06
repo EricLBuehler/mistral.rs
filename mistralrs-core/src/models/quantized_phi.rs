@@ -9,7 +9,7 @@ use candle_nn::{Embedding, LayerNorm, Module, RotaryEmbedding};
 
 use super::Cache;
 
-pub const MAX_SEQ_LEN: u32 = 4096;
+pub const MAX_SEQ_LEN: u32 = 2048;
 
 #[derive(Clone, Debug)]
 struct QLinear {
@@ -69,8 +69,8 @@ impl LayerWeights {
         let k = qkv.i((.., .., self.hidden_size..self.hidden_size * 2))?;
         let v = qkv.i((.., .., self.hidden_size * 2..))?;
 
-        let q = self.attn_norm.forward(&q)?;
-        let k = self.attn_norm.forward(&k)?;
+        //let q = self.attn_norm.forward(&q)?;
+        //let k = self.attn_norm.forward(&k)?;
 
         let mut q = q.reshape((b_size * seq_len, self.n_head, self.head_dim))?;
         let mut k = k.reshape((b_size * seq_len, self.n_kv_head, self.head_dim))?;
