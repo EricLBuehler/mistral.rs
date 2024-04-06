@@ -222,9 +222,9 @@ impl ModelWeights {
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
             let residual = x;
-            dbg!(x);
+            dbg!(&x);
             let x = layer.attn_norm.forward(&x)?;
-            dbg!(x);
+            dbg!(&x);
             let attn_outputs = layer.forward_attn(
                 &x,
                 &mask,
