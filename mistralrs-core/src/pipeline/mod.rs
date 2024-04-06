@@ -261,10 +261,10 @@ pub trait Pipeline: Send + Sync {
         apply_chat_template_to(
             messages,
             add_generation_prompt,
-            &template,
-            &bos_tok,
-            &eos_tok,
-            &unk_tok,
+            template,
+            bos_tok,
+            eos_tok,
+            unk_tok,
         )
     }
     fn get_chat_template(&self) -> &ChatTemplate;
