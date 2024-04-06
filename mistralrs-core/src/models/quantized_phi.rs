@@ -137,7 +137,7 @@ impl ModelWeights {
                     .dequantize(&device)?,
                 ct.tensor(reader, &format!("{prefix}.attn_norm.bias"), device)?
                     .dequantize(&device)?,
-                attn_layer_norm_eps,
+                attn_layer_norm_eps as f64,
             );
             let output = QLinear::new(
                 ct.tensor(reader, &format!("{prefix}.attn_output.weight"), device)?,
@@ -172,7 +172,7 @@ impl ModelWeights {
                 w.dequantize(&w.device())?,
                 ct.tensor(reader, "output_norm.bias", device)?
                     .dequantize(&w.device())?,
-                attn_layer_norm_eps,
+                attn_layer_norm_eps as f64,
             )
         };
 
