@@ -176,7 +176,7 @@ impl Attention {
         dbg!(&query_states.mean_all());
         dbg!(&key_states.mean_all());
         dbg!(&value_states.mean_all());
-        todo!()
+        todo!();
 
         let query_states = match &self.q_layernorm {
             None => query_states,
