@@ -738,9 +738,9 @@ async fn main() -> Result<()> {
             quantized_filename,
             repeat_last_n,
             tokenizer_json,
-        } => Box::new(MistralLoader::new(
+        } => Box::new(Phi2Loader::new(
             tok_model_id,
-            MistralSpecificConfig {
+            Phi2SpecificConfig {
                 use_flash_attn,
                 repeat_last_n,
             },
