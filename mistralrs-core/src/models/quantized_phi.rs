@@ -297,6 +297,9 @@ impl ModelWeights {
                 start_offsets_kernel.clone(),
                 cache.get_mut(i).unwrap(),
             )?;
+            dbg!(attn_outputs.mean_all());
+            layer_in = attn_outputs;
+            continue;
 
             // MLP
             let feed_forward_hidden_states = layer.ffn_up.forward(&x)?;
