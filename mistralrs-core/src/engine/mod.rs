@@ -383,7 +383,7 @@ impl Engine {
             get_mut_arcmutex!(self.pipeline).apply_chat_template(request.messages.clone(), true),
             request.response
         );*/
-        let formatted_prompt = "Instruct: Rust is a great programming language\nOutput:";
+        let formatted_prompt = "Instruct: Rust is a great programming language\nOutput:".to_string();
         let mut prompt = handle_seq_error!(
             get_mut_arcmutex!(self.pipeline).tokenize_prompt(&formatted_prompt),
             request.response
