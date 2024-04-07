@@ -5,7 +5,7 @@
 /// There is an alternative implementation of the phi model in mixformers.rs.
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
-use candle_core::{DType, Device, Module, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Module, Result, Tensor};
 use candle_nn::{
     embedding, layer_norm, linear, Activation, Embedding, LayerNorm, Linear, RotaryEmbedding,
     VarBuilder,
@@ -174,6 +174,8 @@ impl Attention {
         let query_states = self.q_proj.forward(xs)?;
         let key_states = self.k_proj.forward(xs)?;
         let value_states = self.v_proj.forward(xs)?;
+        dbg!(query_states.i((0,0,0..100)));
+        todo!();
 
         let query_states = match &self.q_layernorm {
             None => query_states,
