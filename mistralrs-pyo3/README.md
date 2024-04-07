@@ -22,7 +22,7 @@
     maturin develop -r --features ...
     ```
 
-Please find [API docs here](API.md).
+Please find [API docs here](API.md). We also provide type stubs [here](mistralrs.pyi), which can serve as another form of documentation.
 
 ## Example
 ```python

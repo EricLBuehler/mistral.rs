@@ -366,7 +366,6 @@ impl Model {
         todo!();
         xs.apply(&self.final_layernorm)?
             .narrow(1, seq_len - 1, 1)?
-            .apply(&self.lm_head)?
-            .squeeze(1)
+            .apply(&self.lm_head)
     }
 }

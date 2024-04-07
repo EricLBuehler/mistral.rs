@@ -3,7 +3,7 @@ use super::{
     ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
 };
 use crate::models::llama::MAX_SEQ_LEN;
-use crate::models::{quantized_llama, Cache};
+use crate::models::Cache;
 use crate::sampler::Logprobs;
 use crate::xlora_models::{NonGranularState, XLoraConfig, XLoraLlama, XLoraModelWeights};
 use crate::{deref_mut_refcell, deref_refcell, deserialize_chat_template};
@@ -494,7 +494,8 @@ impl Pipeline for LlamaPipeline {
     fn get_max_seq_len(&self) -> usize {
         match &self.model {
             Model::Normal(_) | Model::XLoraNormal(_) => MAX_SEQ_LEN,
-            Model::Quantized(_) | Model::XLoraQuantized(_) => quantized_llama::MAX_SEQ_LEN as usize,
+            Model::Quantized(ref m) => m.max_seq_len,
+            Model::XLoraQuantized(ref m) => m.max_seq_len,
         }
     }
     fn is_xlora(&self) -> bool {
