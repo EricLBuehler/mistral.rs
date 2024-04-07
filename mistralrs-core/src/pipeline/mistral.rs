@@ -2,7 +2,7 @@ use super::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
 };
-use crate::models::{quantized_llama, Cache};
+use crate::models::Cache;
 use crate::pipeline::ChatTemplate;
 use crate::sampler::Logprobs;
 use crate::xlora_models::{NonGranularState, XLoraConfig, XLoraMistral, XLoraModelWeights};
@@ -484,9 +484,9 @@ impl Pipeline for MistralPipeline {
     fn get_max_seq_len(&self) -> usize {
         match &self.model {
             Model::Normal(model) => model.max_seq_len,
-            Model::Quantized(_) => quantized_llama::MAX_SEQ_LEN as usize,
+            Model::Quantized(model) => model.max_seq_len,
             Model::XLoraNormal(model) => model.max_seq_len,
-            Model::XLoraQuantized(_) => quantized_llama::MAX_SEQ_LEN as usize,
+            Model::XLoraQuantized(model) => model.max_seq_len,
         }
     }
     fn is_xlora(&self) -> bool {

@@ -13,7 +13,7 @@ use crate::models::{Cache, QRmsNorm};
 use super::classifier::XLoraClassifier;
 use super::{NonGranularState, ScalingsMaker, XLoraConfig};
 
-pub const MAX_SEQ_LEN: u32 = 4096;
+const MAX_SEQ_LEN: u32 = 4096;
 
 #[derive(Debug)]
 struct Mlp {
@@ -277,6 +277,7 @@ pub struct ModelWeights {
     pub device: Device,
     pub cache: Cache,
     xlora_classifier: XLoraClassifier,
+    pub max_seq_len: usize,
 }
 
 impl ModelWeights {
@@ -414,6 +415,7 @@ impl ModelWeights {
                 vb.clone(),
                 true,
             )?,
+            max_seq_len: MAX_SEQ_LEN as usize, // Cannot determine from ggml.
         })
     }
 
@@ -634,6 +636,7 @@ impl ModelWeights {
                 vb.clone(),
                 true,
             )?,
+            max_seq_len: md_get("llama.context_length").and_then(|m| m.to_u64()).unwrap_or(MAX_SEQ_LEN as u64) as usize,
         })
     }
 
