@@ -123,7 +123,7 @@ impl LayerWeights {
         };
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?.to_dtype(v.dtype())?;
         let attn_output = attn_weights.matmul(&v)?;
-        dbg!(attn_output.i((0,0..10,0))?.to_vec1::<f32>());
+        dbg!(attn_output.i((0,0..10))?.to_vec1::<f32>());
         todo!();
 
         let attn_output = attn_output
