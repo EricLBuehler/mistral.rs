@@ -249,7 +249,7 @@ impl Attention {
                 candle_nn::ops::softmax_last_dim(&attn_weights)?.to_dtype(value_states.dtype())?;
             attn_weights.matmul(&value_states)?
         };
-        dbg!(attn_output.i((0,0..10))?.to_dtype(DType::F32)?.to_vec1::<f32>());
+        dbg!(attn_output.i((0,0..10,0))?.to_dtype(DType::F32)?.to_vec1::<f32>());
         todo!();
 
         let attn_output = attn_output
