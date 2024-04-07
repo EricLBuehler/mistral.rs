@@ -355,7 +355,9 @@ impl Model {
                 cache.get_mut(i).unwrap(),
             )?;
         }
-        dbg!(&xs);
+        dbg!(&xs.mean_all());
+        let y = xs.apply(&self.final_layernorm)?;
+        dbg!(&y.mean_all());
         xs.apply(&self.final_layernorm)?
             .narrow(1, seq_len - 1, 1)?
             .apply(&self.lm_head)

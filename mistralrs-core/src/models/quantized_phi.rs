@@ -304,8 +304,9 @@ impl ModelWeights {
             let feed_forward_hidden_states = layer.ffn_down.forward(&feed_forward_hidden_states)?;
             layer_in = (attn_outputs + feed_forward_hidden_states + residual)?;
         }
-        dbg!(&layer_in);
+        dbg!(&layer_in.mean_all());
         let x = self.norm.forward(&layer_in)?;
+        dbg!(&x.mean_all());
         let x = x.narrow(1, seq_len - 1, 1)?;
         self.output.forward(&x.contiguous()?)
     }
