@@ -70,8 +70,6 @@ impl LayerWeights {
         let q = qkv.i((.., .., 0..self.hidden_size))?;
         let k = qkv.i((.., .., self.hidden_size..self.hidden_size * 2))?;
         let v = qkv.i((.., .., self.hidden_size * 2..))?;
-        dbg!(v.i((0,0,0..100))?.to_vec1::<f32>());
-        todo!();
 
         //let q = self.attn_norm.forward(&q)?;
         //let k = self.attn_norm.forward(&k)?;
@@ -95,6 +93,8 @@ impl LayerWeights {
                 .transpose(1, 2)?
                 .contiguous()?;
         }
+        dbg!(q.i((0,0,0..100))?.to_vec1::<f32>());
+        todo!();
 
         let (k, v) = match &*kv_cache {
             None => (k, v),
