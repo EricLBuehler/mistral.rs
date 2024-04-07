@@ -300,7 +300,7 @@ impl ModelWeights {
 
             // MLP
             let feed_forward_hidden_states = layer.ffn_up.forward(&x)?;
-            let feed_forward_hidden_states = self.act.forward(&feed_forward_hidden_states)?;
+            //let feed_forward_hidden_states = self.act.forward(&feed_forward_hidden_states)?;
             let feed_forward_hidden_states = layer.ffn_down.forward(&feed_forward_hidden_states)?;
             layer_in = (attn_outputs + feed_forward_hidden_states + residual)?;
         }
