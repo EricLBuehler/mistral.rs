@@ -160,6 +160,7 @@ class QuantizedLoader(LoaderMixin):
         self,
         loader_class,
         model_id: str,
+        is_gguf: bool,
         no_kv_cache: bool = False,
         use_flash_attn: bool = False,
         repeat_last_n: int = 64,
@@ -172,6 +173,7 @@ class QuantizedLoader(LoaderMixin):
         """
         - `loader_class`: Loader class.
         - `model_id`: Base model ID, or tokenizer ID if quantized model type.
+        - `is_gguf`: Is the quantized model GGUF.
         - `no_kv_cache=False`: Disable kv cache.
         - `use_flash_attn=None`: Use flash attn, only used if feature is enabled.
         - `repeat_last_n=64`: Repeat last n context window.
@@ -190,6 +192,7 @@ class XLoraQuantizedLoader(LoaderMixin):
         self,
         loader_class,
         model_id: str,
+        is_gguf: bool,
         no_kv_cache: bool = False,
         use_flash_attn: bool = False,
         repeat_last_n: int = 64,
@@ -204,6 +207,7 @@ class XLoraQuantizedLoader(LoaderMixin):
         """
         - `loader_class`: Loader class.
         - `model_id`: Base model ID, or tokenizer ID if quantized model type.
+        - `is_gguf`: Is the quantized model GGUF.
         - `no_kv_cache=False`: Disable kv cache.
         - `use_flash_attn=None`: Use flash attn, only used if feature is enabled.
         - `repeat_last_n=64`: Repeat last n context window.
