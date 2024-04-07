@@ -210,7 +210,7 @@ impl Attention {
                 .transpose(1, 2)?
                 .contiguous()?;
         }
-        dbg!(query_states.i((0,0..10,0,0))?.to_vec1::<f32>());
+        dbg!(query_states.i((0,0..10,0,0))?.to_dtype(DType::F32)?.to_vec1::<f32>());
         todo!();
 
         let (key_states, value_states) = match &*kv_cache {
