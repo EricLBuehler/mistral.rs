@@ -123,8 +123,6 @@ impl LayerWeights {
         };
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?.to_dtype(v.dtype())?;
         let attn_output = attn_weights.matmul(&v)?;
-        dbg!(attn_output.i((0,0..10,0,0))?.to_vec1::<f32>());
-        todo!();
 
         let attn_output = attn_output
             .transpose(1, 2)?
@@ -181,14 +179,10 @@ impl ModelWeights {
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
         let head_dim = embedding_length / head_count;
-        dbg!(rope_freq_base);
-        dbg!(head_dim);
-        dbg!(rope_dim);
-        dbg!(MAX_SEQ_LEN);
         let rotary = RotaryEmbedding::new_partial(
             rope_freq_base,
             head_dim,
-            rope_dim,
+            head_dim,//rope_dim,
             MAX_SEQ_LEN as usize,
             device,
             PHI2_IS_GPTX,
@@ -303,18 +297,13 @@ impl ModelWeights {
                 start_offsets_kernel.clone(),
                 cache.get_mut(i).unwrap(),
             )?;
-            dbg!(attn_outputs.mean_all());
 
             // MLP
             let feed_forward_hidden_states = layer.ffn_up.forward(&x)?;
             let feed_forward_hidden_states = self.act.forward(&feed_forward_hidden_states)?;
             let feed_forward_hidden_states = layer.ffn_down.forward(&feed_forward_hidden_states)?;
-            //dbg!(feed_forward_hidden_states.mean_all());
-            //dbg!(residual.mean_all());
-            //layer_in = (attn_outputs + feed_forward_hidden_states + residual)?;
-            //dbg!(layer_in.mean_all());
+            layer_in = (attn_outputs + feed_forward_hidden_states + residual)?;
         }
-        todo!();
         let x = self.norm.forward(&layer_in)?;
         let x = x.i((.., seq_len - 1, ..))?;
         self.output.forward(&x.contiguous()?)

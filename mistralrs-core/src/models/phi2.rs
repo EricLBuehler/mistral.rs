@@ -5,7 +5,7 @@
 /// There is an alternative implementation of the phi model in mixformers.rs.
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor};
+use candle_core::{DType, Device, Module, Result, Tensor};
 use candle_nn::{
     embedding, layer_norm, linear, Activation, Embedding, LayerNorm, Linear, RotaryEmbedding,
     VarBuilder,
@@ -112,10 +112,6 @@ impl Attention {
         let k_proj = linear(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?;
         let v_proj = linear(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?;
         let dense = linear(num_heads * head_dim, cfg.hidden_size, vb.pp("dense"))?;
-        dbg!(cfg.rope_theta);
-        dbg!(cfg.head_dim());
-        dbg!((cfg.partial_rotary_factor * cfg.head_dim() as f64));
-        dbg!(cfg.max_position_embeddings);
         // Alternative rope scalings are not supported.
         let rotary_emb = RotaryEmbedding::new_partial(
             cfg.rope_theta,
@@ -249,8 +245,6 @@ impl Attention {
                 candle_nn::ops::softmax_last_dim(&attn_weights)?.to_dtype(value_states.dtype())?;
             attn_weights.matmul(&value_states)?
         };
-        dbg!(attn_output.i((0,0..10,0,0))?.to_dtype(DType::F32)?.to_vec1::<f32>());
-        todo!();
 
         let attn_output = attn_output
             .transpose(1, 2)?
@@ -295,10 +289,7 @@ impl DecoderLayer {
         let attn_outputs =
             self.self_attn
                 .forward(&xs, mask, seqlen_offsets, start_offsets_kernel, kv_cache)?;
-        dbg!(attn_outputs.mean_all());
         let feed_forward_hidden_states = self.mlp.forward(&xs)?;
-        //dbg!(feed_forward_hidden_states.mean_all());
-        //dbg!(residual.mean_all());
         attn_outputs + feed_forward_hidden_states + residual
     }
 }
@@ -356,16 +347,14 @@ impl Model {
         };
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            /*xs = */layer.forward(
+            xs = layer.forward(
                 &xs,
                 mask.as_ref(),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 cache.get_mut(i).unwrap(),
             )?;
-            //dbg!(xs.mean_all());
         }
-        todo!();
         xs.apply(&self.final_layernorm)?
             .narrow(1, seq_len - 1, 1)?
             .apply(&self.lm_head)
