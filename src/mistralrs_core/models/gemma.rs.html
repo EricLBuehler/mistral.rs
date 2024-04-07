@@ -351,13 +351,6 @@
 <a href="#349" id="349">349</a>
 <a href="#350" id="350">350</a>
 <a href="#351" id="351">351</a>
-<a href="#352" id="352">352</a>
-<a href="#353" id="353">353</a>
-<a href="#354" id="354">354</a>
-<a href="#355" id="355">355</a>
-<a href="#356" id="356">356</a>
-<a href="#357" id="357">357</a>
-<a href="#358" id="358">358</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
@@ -484,60 +477,53 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, q_len, <span class="kw">_</span>) = xs.dims3()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>query_states = <span class="self">self</span>.q_proj.forward(xs)<span class="question-mark">?</span>;
-        <span class="kw">let </span>key_states = <span class="self">self</span>.k_proj.forward(xs)<span class="question-mark">?</span>;
-        <span class="kw">let </span>value_states = <span class="self">self</span>.v_proj.forward(xs)<span class="question-mark">?</span>;
+        <span class="kw">let </span>q = <span class="self">self</span>.q_proj.forward(xs)<span class="question-mark">?</span>;
+        <span class="kw">let </span>k = <span class="self">self</span>.k_proj.forward(xs)<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = <span class="self">self</span>.v_proj.forward(xs)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span><span class="kw-2">mut </span>query_states =
-            query_states.reshape((b_sz * q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>key_states =
-            key_states.reshape((b_sz * q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span>value_states = value_states
+        <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz * q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz * q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = v
             .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 
-        <span class="self">self</span>.rotary_emb.forward(
-            seqlen_offsets,
-            <span class="kw-2">&amp;</span>start_offsets_kernel,
-            <span class="kw-2">&amp;mut </span>query_states,
-            <span class="kw-2">&amp;mut </span>key_states,
-            b_sz,
-        )<span class="question-mark">?</span>;
+        <span class="self">self</span>.rotary_emb
+            .forward(seqlen_offsets, <span class="kw-2">&amp;</span>start_offsets_kernel, <span class="kw-2">&amp;mut </span>q, <span class="kw-2">&amp;mut </span>k, b_sz)<span class="question-mark">?</span>;
 
-        <span class="kw">if </span>query_states.rank() == <span class="number">3 </span>{
-            query_states = query_states
+        <span class="kw">if </span>q.rank() == <span class="number">3 </span>{
+            q = q
                 .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
                 </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
                 </span>.contiguous()<span class="question-mark">?</span>;
-            key_states = key_states
+            k = k
                 .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
                 </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
                 </span>.contiguous()<span class="question-mark">?</span>;
         }
 
-        <span class="kw">let </span>(key_states, value_states) = <span class="kw">match </span><span class="kw-2">&amp;*</span>kv_cache {
-            <span class="prelude-val">None </span>=&gt; (key_states, value_states),
+        <span class="kw">let </span>(k, v) = <span class="kw">match </span><span class="kw-2">&amp;*</span>kv_cache {
+            <span class="prelude-val">None </span>=&gt; (k, v),
             <span class="prelude-val">Some</span>((prev_k, prev_v)) =&gt; {
-                <span class="kw">let </span>key_states = candle_nn::ops::kvconcat(prev_k, <span class="kw-2">&amp;</span>key_states, <span class="number">2</span>)<span class="question-mark">?</span>;
-                <span class="kw">let </span>value_states = candle_nn::ops::kvconcat(prev_v, <span class="kw-2">&amp;</span>value_states, <span class="number">2</span>)<span class="question-mark">?</span>;
-                (key_states, value_states)
+                <span class="kw">let </span>k = candle_nn::ops::kvconcat(prev_k, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>;
+                <span class="kw">let </span>v = candle_nn::ops::kvconcat(prev_v, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>;
+                (k, v)
             }
         };
-        <span class="kw-2">*</span>kv_cache = <span class="prelude-val">Some</span>((key_states.clone(), value_states.clone()));
+        <span class="kw-2">*</span>kv_cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
 
-        <span class="kw">let </span>key_states = <span class="self">self</span>.repeat_kv(key_states)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-        <span class="kw">let </span>value_states = <span class="self">self</span>.repeat_kv(value_states)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>k = <span class="self">self</span>.repeat_kv(k)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = <span class="self">self</span>.repeat_kv(v)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
 
         <span class="kw">let </span>attn_output = {
             <span class="kw">let </span>scale = <span class="number">1f64 </span>/ f64::sqrt(<span class="self">self</span>.head_dim <span class="kw">as </span>f64);
-            <span class="kw">let </span>attn_weights = (query_states.matmul(<span class="kw-2">&amp;</span>key_states.transpose(<span class="number">2</span>, <span class="number">3</span>)<span class="question-mark">?</span>)<span class="question-mark">? </span>* scale)<span class="question-mark">?</span>;
+            <span class="kw">let </span>attn_weights = (q.matmul(<span class="kw-2">&amp;</span>k.transpose(<span class="number">2</span>, <span class="number">3</span>)<span class="question-mark">?</span>)<span class="question-mark">? </span>* scale)<span class="question-mark">?</span>;
 
             <span class="kw">let </span>attn_weights = <span class="kw">match </span>attention_mask {
                 <span class="prelude-val">None </span>=&gt; attn_weights,
                 <span class="prelude-val">Some</span>(mask) =&gt; attn_weights.broadcast_add(mask)<span class="question-mark">?</span>,
             };
             <span class="kw">let </span>attn_weights = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>;
-            attn_weights.matmul(<span class="kw-2">&amp;</span>value_states)<span class="question-mark">?
+            attn_weights.matmul(<span class="kw-2">&amp;</span>v)<span class="question-mark">?
         </span>};
         attn_output
             .transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?

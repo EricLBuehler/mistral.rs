@@ -360,8 +360,6 @@
 <a href="#358" id="358">358</a>
 <a href="#359" id="359">359</a>
 <a href="#360" id="360">360</a>
-<a href="#361" id="361">361</a>
-<a href="#362" id="362">362</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Phi model.
@@ -531,71 +529,69 @@
         kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_size, seq_len, _n_embd) = xs.dims3()<span class="question-mark">?</span>;
-        <span class="kw">let </span>query_states = <span class="self">self</span>.q_proj.forward(xs)<span class="question-mark">?</span>;
-        <span class="kw">let </span>key_states = <span class="self">self</span>.k_proj.forward(xs)<span class="question-mark">?</span>;
-        <span class="kw">let </span>value_states = <span class="self">self</span>.v_proj.forward(xs)<span class="question-mark">?</span>;
+        <span class="kw">let </span>q = <span class="self">self</span>.q_proj.forward(xs)<span class="question-mark">?</span>;
+        <span class="kw">let </span>k = <span class="self">self</span>.k_proj.forward(xs)<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = <span class="self">self</span>.v_proj.forward(xs)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>query_states = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.q_layernorm {
-            <span class="prelude-val">None </span>=&gt; query_states,
-            <span class="prelude-val">Some</span>(ln) =&gt; query_states.apply(ln)<span class="question-mark">?</span>,
+        <span class="kw">let </span>q = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.q_layernorm {
+            <span class="prelude-val">None </span>=&gt; q,
+            <span class="prelude-val">Some</span>(ln) =&gt; q.apply(ln)<span class="question-mark">?</span>,
         };
-        <span class="kw">let </span>key_states = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.k_layernorm {
-            <span class="prelude-val">None </span>=&gt; key_states,
-            <span class="prelude-val">Some</span>(ln) =&gt; key_states.apply(ln)<span class="question-mark">?</span>,
+        <span class="kw">let </span>k = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.k_layernorm {
+            <span class="prelude-val">None </span>=&gt; k,
+            <span class="prelude-val">Some</span>(ln) =&gt; k.apply(ln)<span class="question-mark">?</span>,
         };
 
-        <span class="kw">let </span><span class="kw-2">mut </span>query_states =
-            query_states.reshape((b_size * seq_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>key_states =
-            key_states.reshape((b_size * seq_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span>value_states = value_states
+        <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_size * seq_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_size * seq_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = v
             .reshape((b_size, seq_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 
         <span class="self">self</span>.rotary_emb.forward(
             seqlen_offsets,
             <span class="kw-2">&amp;</span>start_offsets_kernel,
-            <span class="kw-2">&amp;mut </span>query_states,
-            <span class="kw-2">&amp;mut </span>key_states,
+            <span class="kw-2">&amp;mut </span>q,
+            <span class="kw-2">&amp;mut </span>k,
             b_size,
         )<span class="question-mark">?</span>;
 
-        <span class="kw">if </span>query_states.rank() == <span class="number">3 </span>{
-            query_states = query_states
+        <span class="kw">if </span>q.rank() == <span class="number">3 </span>{
+            q = q
                 .reshape((b_size, seq_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
                 </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
                 </span>.contiguous()<span class="question-mark">?</span>;
-            key_states = key_states
+            k = k
                 .reshape((b_size, seq_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
                 </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
                 </span>.contiguous()<span class="question-mark">?</span>;
         }
 
-        <span class="kw">let </span>(key_states, value_states) = <span class="kw">match </span><span class="kw-2">&amp;*</span>kv_cache {
-            <span class="prelude-val">None </span>=&gt; (key_states, value_states),
+        <span class="kw">let </span>(k, v) = <span class="kw">match </span><span class="kw-2">&amp;*</span>kv_cache {
+            <span class="prelude-val">None </span>=&gt; (k, v),
             <span class="prelude-val">Some</span>((prev_k, prev_v)) =&gt; {
-                <span class="kw">let </span>key_states = candle_nn::ops::kvconcat(prev_k, <span class="kw-2">&amp;</span>key_states, <span class="number">2</span>)<span class="question-mark">?</span>;
-                <span class="kw">let </span>value_states = candle_nn::ops::kvconcat(prev_v, <span class="kw-2">&amp;</span>value_states, <span class="number">2</span>)<span class="question-mark">?</span>;
-                (key_states, value_states)
+                <span class="kw">let </span>k = candle_nn::ops::kvconcat(prev_k, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>;
+                <span class="kw">let </span>v = candle_nn::ops::kvconcat(prev_v, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>;
+                (k, v)
             }
         };
-        <span class="kw-2">*</span>kv_cache = <span class="prelude-val">Some</span>((key_states.clone(), value_states.clone()));
+        <span class="kw-2">*</span>kv_cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
 
         <span class="comment">// Repeat kv.
-        </span><span class="kw">let </span>key_states = <span class="self">self</span>.repeat_kv(key_states)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-        <span class="kw">let </span>value_states = <span class="self">self</span>.repeat_kv(value_states)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+        </span><span class="kw">let </span>k = <span class="self">self</span>.repeat_kv(k)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = <span class="self">self</span>.repeat_kv(v)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
 
         <span class="kw">let </span>attn_output = <span class="kw">if </span><span class="self">self</span>.use_flash_attn {
             <span class="comment">// flash-attn expects (b_sz, seq_len, nheads, head_dim)
-            </span><span class="kw">let </span>q = query_states.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>k = key_states.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>v = value_states.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            </span><span class="kw">let </span>q = q.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>k = k.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>v = v.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
             flash_attn(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, <span class="self">self</span>.softmax_scale <span class="kw">as </span>f32, seq_len &gt; <span class="number">1</span>)<span class="question-mark">?</span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
         </span>} <span class="kw">else </span>{
-            <span class="kw">let </span>attn_weights = (query_states
+            <span class="kw">let </span>attn_weights = (q
                 .to_dtype(DType::F32)<span class="question-mark">?
                 </span>.contiguous()<span class="question-mark">?
-                </span>.matmul(<span class="kw-2">&amp;</span>key_states.to_dtype(DType::F32)<span class="question-mark">?</span>.t()<span class="question-mark">?</span>)<span class="question-mark">?
+                </span>.matmul(<span class="kw-2">&amp;</span>k.to_dtype(DType::F32)<span class="question-mark">?</span>.t()<span class="question-mark">?</span>)<span class="question-mark">?
                 </span>* <span class="self">self</span>.softmax_scale)<span class="question-mark">?</span>;
             <span class="kw">let </span>attn_weights = <span class="kw">match </span>mask {
                 <span class="prelude-val">None </span>=&gt; attn_weights,
@@ -606,8 +602,8 @@
                 )<span class="question-mark">?</span>,
             };
             <span class="kw">let </span>attn_weights =
-                candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>.to_dtype(value_states.dtype())<span class="question-mark">?</span>;
-            attn_weights.matmul(<span class="kw-2">&amp;</span>value_states)<span class="question-mark">?
+                candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>.to_dtype(v.dtype())<span class="question-mark">?</span>;
+            attn_weights.matmul(<span class="kw-2">&amp;</span>v)<span class="question-mark">?
         </span>};
 
         <span class="kw">let </span>attn_output = attn_output
