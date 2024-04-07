@@ -636,7 +636,9 @@ impl ModelWeights {
                 vb.clone(),
                 true,
             )?,
-            max_seq_len: md_get("llama.context_length").and_then(|m| m.to_u64()).unwrap_or(MAX_SEQ_LEN as u64) as usize,
+            max_seq_len: md_get("llama.context_length")
+                .and_then(|m| m.to_u64())
+                .unwrap_or(MAX_SEQ_LEN as u64) as usize,
         })
     }
 
