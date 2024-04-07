@@ -42,15 +42,15 @@ be sure to set the `is_xlora` state to false as this is a non X-LoRA model: `Cac
 In the model struct's forward method, the normal model cache should be accessed with the `.lock()` method: `self.cache.lock()`. Then, caches for each layer should be passed by accessing the locked cache with `cache.get_mut(layer).unwrap()`. In the attention block, the KV cache is updated. See the following code for reference:
 
 ```rust
-let (key_states, value_states) = match &*kv_cache {
-    None => (key_states, value_states),
+let (k, v) = match &*kv_cache {
+    None => (k, v),
     Some((prev_k, prev_v)) => {
-        let key_states = candle_nn::ops::kvconcat(prev_k, &key_states, 2)?;
-        let value_states = candle_nn::ops::kvconcat(prev_v, &value_states, 2)?;
-        (key_states, value_states)
+        let k = candle_nn::ops::kvconcat(prev_k, &k, 2)?;
+        let v = candle_nn::ops::kvconcat(prev_v, &v, 2)?;
+        (k, v)
     }
 };
-*kv_cache = Some((key_states.clone(), value_states.clone()));
+*kv_cache = Some((k.clone(), v.clone()));
 ```
 
 ## 5) Update the RoPE application
@@ -60,17 +60,17 @@ Next, replace code that applies RoPE to Q or K vectors with the following:
 self.rotary_emb.forward(
     seqlen_offsets,
     &start_offsets_kernel,
-    &mut query_states,
-    &mut key_states,
+    &mut q,
+    &mut k,
     b_sz,
 )?;
 
-if query_states.rank() == 3 {
-    query_states = query_states
+if q.rank() == 3 {
+    q = q
         .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
         .transpose(1, 2)?
         .contiguous()?;
-    key_states = key_states
+    k = k
         .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
         .transpose(1, 2)?
         .contiguous()?;

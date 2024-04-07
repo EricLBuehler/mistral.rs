@@ -117,82 +117,75 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let query_states = self.q_proj.lora_forward(
+        let q = self.q_proj.lora_forward(
             xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let key_states = self.k_proj.lora_forward(
+        let k = self.k_proj.lora_forward(
             xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let value_states = self.v_proj.lora_forward(
+        let v = self.v_proj.lora_forward(
             xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
 
-        let mut query_states =
-            query_states.reshape((b_sz * q_len, self.num_heads, self.head_dim))?;
-        let mut key_states =
-            key_states.reshape((b_sz * q_len, self.num_kv_heads, self.head_dim))?;
-        let value_states = value_states
+        let mut q = q.reshape((b_sz * q_len, self.num_heads, self.head_dim))?;
+        let mut k = k.reshape((b_sz * q_len, self.num_kv_heads, self.head_dim))?;
+        let v = v
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        self.rotary_emb.forward(
-            seqlen_offsets,
-            &start_offsets_kernel,
-            &mut query_states,
-            &mut key_states,
-            b_sz,
-        )?;
+        self.rotary_emb
+            .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
 
-        if query_states.rank() == 3 {
-            query_states = query_states
+        if q.rank() == 3 {
+            q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
                 .transpose(1, 2)?
                 .contiguous()?;
-            key_states = key_states
+            k = k
                 .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?
                 .contiguous()?;
         }
 
-        let (key_states, value_states) = match &*kv_cache {
-            None => (key_states, value_states),
+        let (k, v) = match &*kv_cache {
+            None => (k, v),
             Some((prev_k, prev_v)) => {
-                let key_states = candle_nn::ops::kvconcat(prev_k, &key_states, 2)?;
-                let value_states = candle_nn::ops::kvconcat(prev_v, &value_states, 2)?;
-                (key_states, value_states)
+                let k = candle_nn::ops::kvconcat(prev_k, &k, 2)?;
+                let v = candle_nn::ops::kvconcat(prev_v, &v, 2)?;
+                (k, v)
             }
         };
-        *kv_cache = Some((key_states.clone(), value_states.clone()));
+        *kv_cache = Some((k.clone(), v.clone()));
 
-        let key_states = self.repeat_kv(key_states)?;
-        let value_states = self.repeat_kv(value_states)?;
+        let k = self.repeat_kv(k)?;
+        let v = self.repeat_kv(v)?;
 
         let attn_output = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
-            let q = query_states.transpose(1, 2)?;
-            let k = key_states.transpose(1, 2)?;
-            let v = value_states.transpose(1, 2)?;
+            let q = q.transpose(1, 2)?;
+            let k = k.transpose(1, 2)?;
+            let v = v.transpose(1, 2)?;
             let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
             flash_attn(&q, &k, &v, softmax_scale, q_len > 1)?.transpose(1, 2)?
         } else {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
-            let attn_weights = (query_states.matmul(&key_states.transpose(2, 3)?)? * scale)?;
+            let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
 
             let attn_weights = match attention_mask {
                 None => attn_weights,
                 Some(mask) => attn_weights.broadcast_add(mask)?,
             };
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-            attn_weights.matmul(&value_states)?
+            attn_weights.matmul(&v)?
         };
         self.o_proj.lora_forward(
             &attn_output
