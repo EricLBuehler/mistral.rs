@@ -182,7 +182,7 @@ impl ModelWeights {
         let rotary = RotaryEmbedding::new_partial(
             rope_freq_base,
             head_dim,
-            head_dim,//rope_dim,
+            rope_dim,
             MAX_SEQ_LEN as usize,
             device,
             PHI2_IS_GPTX,
