@@ -294,7 +294,7 @@ impl DecoderLayer {
         dbg!(feed_forward_hidden_states.mean_all());
         dbg!(residual.mean_all());
         println!();
-        return Ok(attn_outputs);
+        //return Ok(attn_outputs);
         attn_outputs + feed_forward_hidden_states + residual
     }
 }
