@@ -210,8 +210,6 @@ impl Attention {
                 .transpose(1, 2)?
                 .contiguous()?;
         }
-        dbg!(query_states.i((0,0..10,0,0))?.to_dtype(DType::F32)?.to_vec1::<f32>());
-        todo!();
 
         let (key_states, value_states) = match &*kv_cache {
             None => (key_states, value_states),
@@ -251,6 +249,8 @@ impl Attention {
                 candle_nn::ops::softmax_last_dim(&attn_weights)?.to_dtype(value_states.dtype())?;
             attn_weights.matmul(&value_states)?
         };
+        dbg!(attn_output.i((0,0..10,0))?.to_dtype(DType::F32)?.to_vec1::<f32>());
+        todo!();
 
         let attn_output = attn_output
             .transpose(1, 2)?
