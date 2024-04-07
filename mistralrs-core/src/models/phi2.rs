@@ -174,7 +174,7 @@ impl Attention {
         let query_states = self.q_proj.forward(xs)?;
         let key_states = self.k_proj.forward(xs)?;
         let value_states = self.v_proj.forward(xs)?;
-        dbg!(query_states.i((0,0,0..100))?.to_dtype(DType::F32)?.to_vec1::<f32>());
+        dbg!(key_states.i((0,0,0..100))?.to_dtype(DType::F32)?.to_vec1::<f32>());
         todo!();
 
         let query_states = match &self.q_layernorm {
