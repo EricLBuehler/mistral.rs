@@ -1,64 +1,6 @@
 # `mistralrs` API
 ## Loaders
-The following classes provide a more bare-bones method to load a model.
-- `MistralLoader`
-    - `model_id`: Base model ID, or tokenizer ID if quantized model type.
-    - `kind`: Model kind
-    - `no_kv_cache=False`: Disable kv cache.
-    - `use_flash_attn=<feature>`: Use flash attn, only used if feature is enabled.
-    - `repeat_last_n=64`: Repeat last n context window.
-    - `gqa=None`: GQA, irrelevant.
-    - `order_file=None`: Ordering JSON file.
-    - `quantized_model_id=None`: Quantized model ID.
-    - `quantized_filename=None`: Quantized filename (gguf/ggml),
-    - `xlora_model_id=None`: X-LoRA model
-    - `chat_template=None`: Chat template literal or file.
-    - `tokenizer_json=None`: Tokenizer json file.
-    - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached. If this is set then the max running sequences will be set to 1.
-- `MixtralLoader`
-    - `model_id`: Base model ID, or tokenizer ID if quantized model type.
-    - `kind`: Model kind
-    - `no_kv_cache=False`: Disable kv cache.
-    - `use_flash_attn=<feature>`: Use flash attn, only used if feature is enabled.
-    - `repeat_last_n=64`: Repeat last n context window.
-    - `gqa=1`: GQA, irrelevant.
-    - `order_file=None`: Ordering JSON file.
-    - `quantized_model_id=None`: Quantized model ID.
-    - `quantized_filename=None`: Quantized filename (gguf/ggml),
-    - `xlora_model_id=None`: X-LoRA model
-    - `chat_template=None`: Chat template literal or file.
-    - `tokenizer_json=None`: Tokenizer json file.
-    - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached. If this is set then the max running sequences will be set to 1.
-- `GemmaLoader`
-    - `model_id`: Base model ID, or tokenizer ID if quantized model type.
-    - `kind`: Model kind
-    - `no_kv_cache=False`: Disable kv cache.
-    - `use_flash_attn=None`: Use flash attn, irrelevant.
-    - `repeat_last_n=64`: Repeat last n context window.
-    - `gqa=None`: GQA, irrelevant.
-    - `order_file=None`: Ordering JSON file.
-    - `quantized_model_id=None`: Quantized model ID.
-    - `quantized_filename=None`: Quantized filename (gguf/ggml),
-    - `xlora_model_id=None`: X-LoRA model
-    - `chat_template=None`: Chat template literal or file.
-    - `tokenizer_json=None`: Tokenizer json file.
-    - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached. If this is set then the max running sequences will be set to 1.
-- `LlamaLoader`
-    - `model_id`: Base model ID, or tokenizer ID if quantized model type.
-    - `kind`: Model kind
-    - `no_kv_cache=False`: Disable kv cache.
-    - `use_flash_attn=<feature>`: Use flash attn, only used if feature is enabled.
-    - `repeat_last_n=64`: Repeat last n context window.
-    - `gqa=1`: GQA, irrelevant if non quantized model type.
-    - `order_file=None`: Ordering JSON file.
-    - `quantized_model_id=None`: Quantized model ID.
-    - `quantized_filename=None`: Quantized filename (gguf/ggml),
-    - `xlora_model_id=None`: X-LoRA model
-    - `chat_template=None`: Chat template literal or file.
-    - `tokenizer_json=None`: Tokenizer json file.
-    - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached. If this is set then the max running sequences will be set to 1.
-
-Additionally, the following ergonomic classes provide a more streamlined method which take one of the above loader classes (without instantiation):
+There are several ways to load different architectures of model:
 - `NormalLoader`
     - `class`: Loader class.
     - `model_id`: Base model ID, or tokenizer ID if quantized model type.
@@ -118,6 +60,7 @@ Specify token source and token source value as the following pairing:
 "literal" -> str
 "envvar" -> str
 "path" -> str
+"none" -> None
 
 - `max_seqs`: Maximum running sequences at any time.
 
@@ -144,7 +87,7 @@ Send an OpenAI compatible request, returning JSON.
 ## `ChatCompletionRequest`
 Request is a class with a constructor which accepts the following arguments. It is used to create a chat completion request.
 
-- `messages: list[dict[String, String]]`
+- `messages: list[dict[str, str]]`
 - `model: str`
 - `logit_bias: dict[int, float]`
 - `logprobs: bool`

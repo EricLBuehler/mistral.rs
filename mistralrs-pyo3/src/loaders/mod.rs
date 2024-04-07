@@ -78,10 +78,11 @@ impl NormalLoader {
     ///
     /// - `token_source="cache"`
     /// Specify token source and token source value as the following pairing:
-    /// "cache" -> None
-    /// "literal" -> str
-    /// "envvar" -> str
-    /// "path" -> str
+    ///     - "cache" -> None
+    ///     - "literal" -> str
+    ///     - "envvar" -> str
+    ///     - "path" -> str
+    ///     - "none" -> None
     ///
     /// - `max_seqs=16`: Maximum running sequences at any time.
     ///
@@ -203,10 +204,11 @@ impl XLoraLoader {
     ///
     /// - `token_source="cache"`
     /// Specify token source and token source value as the following pairing:
-    /// "cache" -> None
-    /// "literal" -> str
-    /// "envvar" -> str
-    /// "path" -> str
+    ///     - "cache" -> None
+    ///     - "literal" -> str
+    ///     - "envvar" -> str
+    ///     - "path" -> str
+    ///     - "none" -> None
     ///
     /// - `max_seqs=16`: Maximum running sequences at any time.
     ///
@@ -331,10 +333,11 @@ impl QuantizedLoader {
     ///
     /// - `token_source="cache"`
     /// Specify token source and token source value as the following pairing:
-    /// "cache" -> None
-    /// "literal" -> str
-    /// "envvar" -> str
-    /// "path" -> str
+    ///     - "cache" -> None
+    ///     - "literal" -> str
+    ///     - "envvar" -> str
+    ///     - "path" -> str
+    ///     - "none" -> None
     ///
     /// - `max_seqs=16`: Maximum running sequences at any time.
     ///
@@ -468,10 +471,11 @@ impl XLoraQuantizedLoader {
     ///
     /// - `token_source="cache"`
     /// Specify token source and token source value as the following pairing:
-    /// "cache" -> None
-    /// "literal" -> str
-    /// "envvar" -> str
-    /// "path" -> str
+    ///     - "cache" -> None
+    ///     - "literal" -> str
+    ///     - "envvar" -> str
+    ///     - "path" -> str
+    ///     - "none" -> None
     ///
     /// - `max_seqs=16`: Maximum running sequences at any time.
     ///
