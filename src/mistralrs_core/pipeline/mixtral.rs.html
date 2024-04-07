@@ -509,11 +509,12 @@
 <a href="#507" id="507">507</a>
 <a href="#508" id="508">508</a>
 <a href="#509" id="509">509</a>
+<a href="#510" id="510">510</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
 };
-<span class="kw">use </span><span class="kw">crate</span>::models::{quantized_llama, Cache};
+<span class="kw">use </span><span class="kw">crate</span>::models::Cache;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
 <span class="kw">use </span><span class="kw">crate</span>::sampler::Logprobs;
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::{NonGranularState, XLoraConfig, XLoraMixtral, XLoraModelWeights};
@@ -998,7 +999,8 @@
     <span class="kw">fn </span>get_max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.model {
             Model::Normal(model) =&gt; model.max_seq_len,
-            Model::Quantized(<span class="kw">_</span>) | Model::XLoraQuantized(<span class="kw">_</span>) =&gt; quantized_llama::MAX_SEQ_LEN <span class="kw">as </span>usize,
+            Model::Quantized(model) =&gt; model.max_seq_len,
+            Model::XLoraQuantized(model) =&gt; model.max_seq_len,
             Model::XLoraNormal(model) =&gt; model.max_seq_len,
         }
     }

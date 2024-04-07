@@ -511,7 +511,7 @@
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
 };
-<span class="kw">use </span><span class="kw">crate</span>::models::{quantized_llama, Cache};
+<span class="kw">use </span><span class="kw">crate</span>::models::Cache;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
 <span class="kw">use </span><span class="kw">crate</span>::sampler::Logprobs;
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::{NonGranularState, XLoraConfig, XLoraMistral, XLoraModelWeights};
@@ -993,9 +993,9 @@
     <span class="kw">fn </span>get_max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.model {
             Model::Normal(model) =&gt; model.max_seq_len,
-            Model::Quantized(<span class="kw">_</span>) =&gt; quantized_llama::MAX_SEQ_LEN <span class="kw">as </span>usize,
+            Model::Quantized(model) =&gt; model.max_seq_len,
             Model::XLoraNormal(model) =&gt; model.max_seq_len,
-            Model::XLoraQuantized(<span class="kw">_</span>) =&gt; quantized_llama::MAX_SEQ_LEN <span class="kw">as </span>usize,
+            Model::XLoraQuantized(model) =&gt; model.max_seq_len,
         }
     }
     <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {

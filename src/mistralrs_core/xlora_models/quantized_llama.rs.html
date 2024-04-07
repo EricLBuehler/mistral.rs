@@ -802,6 +802,11 @@
 <a href="#800" id="800">800</a>
 <a href="#801" id="801">801</a>
 <a href="#802" id="802">802</a>
+<a href="#803" id="803">803</a>
+<a href="#804" id="804">804</a>
+<a href="#805" id="805">805</a>
+<a href="#806" id="806">806</a>
+<a href="#807" id="807">807</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -817,7 +822,7 @@
 <span class="kw">use </span><span class="kw">super</span>::classifier::XLoraClassifier;
 <span class="kw">use super</span>::{NonGranularState, ScalingsMaker, XLoraConfig};
 
-<span class="kw">pub const </span>MAX_SEQ_LEN: u32 = <span class="number">4096</span>;
+<span class="kw">const </span>MAX_SEQ_LEN: u32 = <span class="number">4096</span>;
 
 <span class="attr">#[derive(Debug)]
 </span><span class="kw">struct </span>Mlp {
@@ -1081,6 +1086,7 @@
     <span class="kw">pub </span>device: Device,
     <span class="kw">pub </span>cache: Cache,
     xlora_classifier: XLoraClassifier,
+    <span class="kw">pub </span>max_seq_len: usize,
 }
 
 <span class="kw">impl </span>ModelWeights {
@@ -1218,7 +1224,8 @@
                 vb.clone(),
                 <span class="bool-val">true</span>,
             )<span class="question-mark">?</span>,
-        })
+            max_seq_len: MAX_SEQ_LEN <span class="kw">as </span>usize, <span class="comment">// Cannot determine from ggml.
+        </span>})
     }
 
     <span class="attr">#[allow(clippy::too_many_arguments)]
@@ -1438,6 +1445,9 @@
                 vb.clone(),
                 <span class="bool-val">true</span>,
             )<span class="question-mark">?</span>,
+            max_seq_len: md_get(<span class="string">"llama.context_length"</span>)
+                .and_then(|m| m.to_u64())
+                .unwrap_or(MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize,
         })
     }
 
