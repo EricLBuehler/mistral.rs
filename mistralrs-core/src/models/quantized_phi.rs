@@ -93,7 +93,7 @@ impl LayerWeights {
                 .transpose(1, 2)?
                 .contiguous()?;
         }
-        dbg!(q.i((0,0,0..100))?.to_vec1::<f32>());
+        dbg!(q.i((0,0..10,0,0))?.to_vec1::<f32>());
         todo!();
 
         let (k, v) = match &*kv_cache {
