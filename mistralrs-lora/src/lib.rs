@@ -82,6 +82,13 @@ pub trait LinearLayerLike: Debug {
     ) -> Result<Tensor>;
 }
 
+pub trait Merge {
+    /// Get the delta weight of the LoRA layer. This is meant to be an internal method.
+    fn get_delta_weight(&self, adapter: usize) -> Result<Tensor>;
+    /// Merge the LoRA weights.
+    fn merge_weights(&mut self) -> Result<()>;
+}
+
 impl LinearLayerLike for Linear {
     fn weight(&self) -> &Tensor {
         self.weight()

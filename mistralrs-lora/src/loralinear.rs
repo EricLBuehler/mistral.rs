@@ -6,7 +6,7 @@ use either::Either;
 
 use crate::{
     apply_scalings_to_x, frozenlinear::FrozenLinear, get_maybe_topk_scalings, LinearLayerLike,
-    LoraConfig, LoraLinearConfig,
+    LoraConfig, LoraLinearConfig, Merge,
 };
 
 #[derive(Debug)]
@@ -17,6 +17,7 @@ pub struct LoraLinear {
     scale_adapters: Vec<f64>,
     dropout_adapters: Vec<Option<Dropout>>,
     layer_n: usize,
+    merged: bool,
 }
 
 impl LoraLinear {
@@ -106,6 +107,7 @@ impl LoraLinear {
                 scale_adapters,
                 dropout_adapters,
                 layer_n,
+                merged: false,
             })
         } else {
             Ok(LoraLinear {
@@ -115,8 +117,32 @@ impl LoraLinear {
                 scale_adapters,
                 dropout_adapters,
                 layer_n,
+                merged: false,
             })
         }
+    }
+}
+
+impl Merge for LoraLinear {
+    fn get_delta_weight(&self, adapter: usize) -> Result<Tensor> {
+        match (&self.a_adapters, &self.b_adapters) {
+            (Either::Left(a), Either::Left(b)) | (Either::Right((_, a)), Either::Right((_, b))) => {
+                let w_a = a[adapter].weight();
+                let w_b = b[adapter].weight();
+
+                w_b.matmul(w_a)? * self.scale_adapters[adapter]
+            }
+            _ => unreachable!("Both adapters must be Either::Left or Either::Right."),
+        }
+    }
+
+    fn merge_weights(&mut self) -> Result<()> {
+        let mut w_base_layer = self.old.weight().clone();
+        for adapter in 0..self.scale_adapters.len() {
+            w_base_layer = (w_base_layer + self.get_delta_weight(adapter))?;
+        }
+        self.old = FrozenLinear::new(w_base_layer, self.old.bias().cloned())?;
+        Ok(())
     }
 }
 
@@ -138,6 +164,10 @@ impl LinearLayerLike for LoraLinear {
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         let mut result = self.old.forward(input)?;
+
+        if self.merged {
+            return Ok(result);
+        }
 
         if is_scaling_pass.is_some_and(|x| x == 0.) {
             return Ok(result);
