@@ -85,6 +85,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             (0, 0) => {
                 println!("0,0");
                 self.running = running;
+                panic!();
                 return SchedulerOutput {
                     prompt: vec![].into(),
                     completion: vec![].into(),

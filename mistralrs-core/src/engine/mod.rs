@@ -60,7 +60,6 @@ impl Engine {
                 println!("got a request");
             }
             let mut scheduled = self.scheduler.schedule();
-            panic!();
 
             if scheduled.completion.len() > 0 {
                 // Run the completion seqs
