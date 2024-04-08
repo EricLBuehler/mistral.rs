@@ -203,22 +203,12 @@ impl ChatCompletionRequest {
                     }
                     messages_vec.push(messages_map);
                 }
-                Ok::<
-                    Either<
-                        Vec<IndexMap<std::string::String, std::string::String>>,
-                        std::string::String,
-                    >,
-                    PyErr,
-                >(Either::Left(messages_vec))
+                Ok::<Either<Vec<IndexMap<String, String>>, String>, PyErr>(Either::Left(
+                    messages_vec,
+                ))
             } else if let Ok(messages) = messages.bind(py).downcast_exact::<PyString>() {
                 let prompt = messages.extract::<String>()?;
-                Ok::<
-                    Either<
-                        Vec<IndexMap<std::string::String, std::string::String>>,
-                        std::string::String,
-                    >,
-                    PyErr,
-                >(Either::Right(prompt))
+                Ok::<Either<Vec<IndexMap<String, String>>, String>, PyErr>(Either::Right(prompt))
             } else {
                 return Err(PyTypeError::new_err("Expected a string or list of dicts."));
             }
