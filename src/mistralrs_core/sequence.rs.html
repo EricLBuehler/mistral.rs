@@ -722,10 +722,10 @@
                 * <span class="number">1000.</span>,
             avg_sample_tok_per_sec: (<span class="self">self</span>.total_toks <span class="kw">as </span>f32 / <span class="self">self</span>.total_sampling_time <span class="kw">as </span>f32)
                 * <span class="number">1000.</span>,
-            total_time_sec: <span class="self">self</span>.total_time <span class="kw">as </span>f32 * <span class="number">1000.</span>,
-            total_completion_time_sec: <span class="self">self</span>.total_completion_time <span class="kw">as </span>f32 * <span class="number">1000.</span>,
-            total_prompt_time_sec: <span class="self">self</span>.total_prompt_time <span class="kw">as </span>f32 * <span class="number">1000.</span>,
-            total_sampling_time_sec: <span class="self">self</span>.total_sampling_time <span class="kw">as </span>f32 * <span class="number">1000.</span>,
+            total_time_sec: <span class="self">self</span>.total_time <span class="kw">as </span>f32 / <span class="number">1000.</span>,
+            total_completion_time_sec: <span class="self">self</span>.total_completion_time <span class="kw">as </span>f32 / <span class="number">1000.</span>,
+            total_prompt_time_sec: <span class="self">self</span>.total_prompt_time <span class="kw">as </span>f32 / <span class="number">1000.</span>,
+            total_sampling_time_sec: <span class="self">self</span>.total_sampling_time <span class="kw">as </span>f32 / <span class="number">1000.</span>,
         }
     }
 
