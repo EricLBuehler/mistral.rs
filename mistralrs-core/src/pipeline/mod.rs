@@ -392,12 +392,12 @@ fn calculate_inputs(
             input: input_ids_full,
             positions: seqlen_offsets_full,
             positions_kernel: seqlen_offsets_kernel_full,
-        } = get_prompt_input(&input_toks, device)?;
+        } = get_prompt_input(input_toks, device)?;
         let InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_completion_input(&input_toks, device, no_kv_cache)?;
+        } = get_completion_input(input_toks, device, no_kv_cache)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: Some(input_ids_full),
@@ -411,7 +411,7 @@ fn calculate_inputs(
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_prompt_input(&input_toks, device)?;
+        } = get_prompt_input(input_toks, device)?;
         Ok(ModelInputs {
             input_ids: input_ids.clone(),
             input_ids_full: Some(input_ids),
@@ -425,7 +425,7 @@ fn calculate_inputs(
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_prompt_input(&input_toks, device)?;
+        } = get_prompt_input(input_toks, device)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: None,
@@ -439,7 +439,7 @@ fn calculate_inputs(
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_completion_input(&input_toks, device, no_kv_cache)?;
+        } = get_completion_input(input_toks, device, no_kv_cache)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: None,

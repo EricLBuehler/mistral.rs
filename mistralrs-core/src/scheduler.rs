@@ -6,7 +6,7 @@ use std::collections::{
 use crate::sequence::{Sequence, SequenceState};
 use range_checked::UsizeBounded;
 
-pub trait FcfsBacker {
+pub trait FcfsBacker: Default {
     fn new() -> Self;
     fn next(&mut self) -> Option<Sequence>;
     fn add(&mut self, item: Sequence);
@@ -72,8 +72,8 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
     /// Schedule all sequences based on their state and the available space.
     pub fn schedule(&mut self) -> SchedulerOutput {
         // Filter out all done sequences
-        let running = std::mem::replace(&mut self.running, Vec::new());
-        let mut waiting = std::mem::replace(&mut self.waiting, Backer::new());
+        let running = std::mem::take(&mut self.running);
+        let mut waiting = std::mem::take(&mut self.waiting);
         let mut running = running
             .into_iter()
             .filter(|seq| seq.is_running())

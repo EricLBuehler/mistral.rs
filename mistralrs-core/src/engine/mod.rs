@@ -182,7 +182,7 @@ impl Engine {
                     }
 
                     seq.get_mut_group()
-                        .maybe_send_streaming_response(&seq, pipeline.name());
+                        .maybe_send_streaming_response(seq, pipeline.name());
                 }
             } else if let Some(reason) = is_done {
                 Self::finish_seq(pipeline, seq, reason);
@@ -253,7 +253,6 @@ impl Engine {
             let mut k_vec = Vec::new();
             let mut v_vec = Vec::new();
             for seq in &mut *seqs {
-                let seq = seq;
                 let seq_cache = &*seq.cache();
                 let cache = seq_cache.get(layer).unwrap();
                 // Note(EricLBuehler): Unwrap reasoning: We are handling completions seqs so unwrap is OK.
