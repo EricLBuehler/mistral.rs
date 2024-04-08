@@ -350,6 +350,8 @@ impl SequenceGroup {
         response: ChatCompletionResponse,
         sender: Sender<Response>,
     ) {
+        dbg!(self.choices.len());
+        dbg!(self.n_choices);
         if self.choices.len() == self.n_choices {
             // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
             dbg!(&response);
