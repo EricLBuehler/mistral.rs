@@ -232,15 +232,16 @@ impl Engine {
         };
         seq.add_choice_to_group(choice);
 
-        seq.get_mut_group().maybe_send_done_response(
+        let group = seq.get_mut_group();
+        group.maybe_send_done_response(
             ChatCompletionResponse {
                 id: seq.id().to_string(),
-                choices: seq.get_mut_group().get_choices().to_vec(),
+                choices: group.get_choices().to_vec(),
                 created: seq.creation_time(),
                 model: pipeline.name(),
                 system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                 object: "chat.completion".to_string(),
-                usage: seq.get_mut_group().get_usage(),
+                usage: group.get_usage(),
             },
             seq.responder(),
         );
