@@ -23,6 +23,8 @@ from llama_index.core.base.llms.generic_utils import (
     stream_completion_response_to_chat_response,
 )
 from llama_index.core.types import BaseOutputParser, PydanticProgramMode
+from llama_index.core.utils import get_cache_dir
+from tqdm import tqdm
 
 from mistralrs import (
     MistralLoader,
@@ -164,10 +166,10 @@ class MistralRS(CustomLLM):
                 "max_tokens": max_new_tokens,
                 "top_k": top_k,
                 "top_p": top_p,
-                "top_logprobs": DEFAULT_TOP_LOGPROBS,
+                "top_logprobs": top_logprobs,
             }
         )
-        splits = map(lambda x: x.lower(), arch.split("-"))
+        splits = list(map(lambda x: x.lower(), arch.split("-")))
         if splits[0:2] == ["x", "lora"]:
             is_xlora = True
         else:
