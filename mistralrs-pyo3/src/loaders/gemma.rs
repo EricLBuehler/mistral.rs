@@ -65,11 +65,8 @@ impl GemmaLoader {
         tgt_non_granular_index: Option<usize>,
     ) -> PyResult<Self> {
         let order = if let Some(ref order_file) = order_file {
-            let f = File::open(order_file);
-            let f = match f {
-                Ok(x) => x,
-                Err(y) => return Err(PyValueError::new_err(y)),
-            };
+            let f = File::open(order_file.clone())
+                .expect(&format!("Could not load ordering file at {order_file}"));
             match serde_json::from_reader(f) {
                 Ok(x) => Some(x),
                 Err(y) => return Err(PyValueError::new_err(y.to_string())),
