@@ -33,6 +33,7 @@ from mistralrs import (
     LlamaLoader,
     ChatCompletionRequest,
     NormalLoader,
+    Runner,
     XLoraLoader,
     QuantizedLoader,
     XLoraQuantizedLoader,
@@ -49,7 +50,8 @@ DEFAULT_MISTRAL_RS_GGUF_MODEL = (
 DEFAULT_TOPK = 32
 DEFAULT_TOPP = 0.1
 DEFAULT_TOP_LOGPROBS = 10
-
+DEFAULT_REPEAT_LAST_N = 64
+DEFAULT_MAX_SEQS = 10
 
 class MistralRS(CustomLLM):
     r"""MistralRS LLM.
@@ -133,8 +135,7 @@ class MistralRS(CustomLLM):
     model_kwargs: Dict[str, Any] = Field(
         default_factory=dict, description="Kwargs used for model initialization."
     )
-
-    _model: Any = PrivateAttr()
+    _runner: Runner = PrivateAttr("Mistral.rs model runner.")
 
     def __init__(
         self,
@@ -152,7 +153,7 @@ class MistralRS(CustomLLM):
         top_logprobs: Optional[int] = DEFAULT_TOP_LOGPROBS,
         callback_manager: Optional[CallbackManager] = None,
         generate_kwargs: Optional[Dict[str, Any]] = None,
-        model_kwargs: Optional[Dict[str, Any]] = None,
+        model_kwargs: Optional[Dict[str, Any]] = {},
         system_prompt: Optional[str] = None,
         messages_to_prompt: Optional[Callable[[Sequence[ChatMessage]], str]] = None,
         completion_to_prompt: Optional[Callable[[str], str]] = None,
@@ -184,7 +185,14 @@ class MistralRS(CustomLLM):
             is_gguf = False
             is_ggml = False
 
-        model = "-".join(splits[2:-1])
+        if len(splits) == 1:
+            model = splits[0]
+        elif len(splits) == 2 and is_xlora:
+            model = splits[1] 
+        elif len(splits) == 2 and not is_xlora and (is_ggml or is_gguf):
+            model = splits[0]
+        elif len(splits) == 2 and is_xlora and (is_ggml or is_gguf):
+            model = splits[1]
 
         match model:
             case "mistral":
@@ -207,7 +215,7 @@ class MistralRS(CustomLLM):
                     model_id,
                     no_kv_cache=model_kwargs.get("no_kv_cache", False),
                     use_flash_attn=True,  # will be disabled by &
-                    repeat_last_n=model_kwargs.get("repeat_last_n", None),
+                    repeat_last_n=model_kwargs.get("repeat_last_n", DEFAULT_REPEAT_LAST_N),
                     gqa=model_kwargs.get("gqa", None),
                     chat_template=model_kwargs.get("chat_template", None),
                     tokenizer_json=model_kwargs.get("tokenizer_json", None),
@@ -219,7 +227,7 @@ class MistralRS(CustomLLM):
                     is_gguf=True,
                     no_kv_cache=model_kwargs.get("no_kv_cache", False),
                     use_flash_attn=True,  # will be disabled by &
-                    repeat_last_n=model_kwargs.get("repeat_last_n", None),
+                    repeat_last_n=model_kwargs.get("repeat_last_n", DEFAULT_REPEAT_LAST_N),
                     gqa=model_kwargs.get("gqa", None),
                     quantized_model_id=quantized_model_id,
                     quantized_filename=quantized_filename,
@@ -233,7 +241,7 @@ class MistralRS(CustomLLM):
                     is_gguf=False,
                     no_kv_cache=model_kwargs.get("no_kv_cache", False),
                     use_flash_attn=True,  # will be disabled by &
-                    repeat_last_n=model_kwargs.get("repeat_last_n", None),
+                    repeat_last_n=model_kwargs.get("repeat_last_n", DEFAULT_REPEAT_LAST_N),
                     gqa=model_kwargs.get("gqa", None),
                     quantized_model_id=quantized_model_id,
                     quantized_filename=quantized_filename,
@@ -246,7 +254,7 @@ class MistralRS(CustomLLM):
                     model_id,
                     no_kv_cache=model_kwargs.get("no_kv_cache", False),
                     use_flash_attn=True,  # will be disabled by &
-                    repeat_last_n=model_kwargs.get("repeat_last_n", None),
+                    repeat_last_n=model_kwargs.get("repeat_last_n", DEFAULT_REPEAT_LAST_N),
                     gqa=model_kwargs.get("gqa", None),
                     order_file=xlora_order_file,
                     xlora_model_id=xlora_model_id,
@@ -290,9 +298,9 @@ class MistralRS(CustomLLM):
                     f"Invalid model architecture {arch}. Expected <x-lora>-arch-<gguf | ggml>."
                 )
 
-        self.runner = loader.load(
-            token_source=model_kwargs.get("token_source", {"source": None})["source"],
-            max_seqs=model_kwargs.get("max_seqs", None),
+        self._runner = loader.load(
+            token_source=model_kwargs.get("token_source", {"source": "cache"})["source"], # default source is "cache"
+            max_seqs=model_kwargs.get("max_seqs", DEFAULT_MAX_SEQS),
             logfile=None,
             revision=model_kwargs.get("revision", None),
             token_source_value=model_kwargs.get("token_source", {"value": None})[
@@ -300,7 +308,6 @@ class MistralRS(CustomLLM):
             ],
             dtype=None,
         )
-        self.context_window = context_window
 
         super().__init__(
             model_path=model_id,
@@ -350,7 +357,7 @@ class MistralRS(CustomLLM):
             repetition_penalty=self.generate_kwargs["repetition_penalty"],
             temperature=self.generate_kwargs["temperature"],
         )
-        completion_response = self.runner.send_chat_completion_request(request)
+        completion_response = self._runner.send_chat_completion_request(request)
         json_resp = json.loads(completion_response)
         return completion_response_to_chat_response(
             CompletionResponse(
