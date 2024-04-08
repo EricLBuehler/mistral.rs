@@ -1,45 +1,49 @@
-use std::{
-    cell::RefCell,
-    collections::{vec_deque::Iter, HashMap, VecDeque},
-    rc::Rc,
+use std::collections::{
+    vec_deque::{Iter, IterMut},
+    HashMap, VecDeque,
 };
 
-use crate::{
-    deref_mut_refcell, deref_refcell,
-    sequence::{Sequence, SequenceState},
-};
+use crate::sequence::{Sequence, SequenceState};
 use range_checked::UsizeBounded;
 
 pub trait FcfsBacker {
     fn new() -> Self;
-    fn next(&mut self) -> Option<Rc<RefCell<Sequence>>>;
-    fn add(&mut self, item: Rc<RefCell<Sequence>>);
-    fn iter(&self) -> impl Iterator<Item = &Rc<RefCell<Sequence>>>;
+    fn next(&mut self) -> Option<Sequence>;
+    fn add(&mut self, item: Sequence);
+    fn into_iter(self) -> impl Iterator<Item = Sequence>;
+    fn iter(&self) -> impl Iterator<Item = &Sequence>;
+    fn mut_iter(&mut self) -> impl Iterator<Item = &mut Sequence>;
     fn sort_ascending_ids(&mut self);
 }
 
-impl FcfsBacker for VecDeque<Rc<RefCell<Sequence>>> {
+impl FcfsBacker for VecDeque<Sequence> {
     fn new() -> Self {
         Self::new()
     }
-    fn add(&mut self, item: Rc<RefCell<Sequence>>) {
+    fn add(&mut self, item: Sequence) {
         self.push_back(item)
     }
-    fn next(&mut self) -> Option<Rc<RefCell<Sequence>>> {
+    fn next(&mut self) -> Option<Sequence> {
         self.pop_front()
     }
-    fn iter(&self) -> Iter<'_, Rc<RefCell<Sequence>>> {
+    fn iter(&self) -> Iter<'_, Sequence> {
         self.iter()
+    }
+    fn mut_iter(&mut self) -> IterMut<'_, Sequence> {
+        self.iter_mut()
+    }
+    fn into_iter(self) -> impl Iterator<Item = Sequence> {
+        <Self as IntoIterator>::into_iter(self)
     }
     fn sort_ascending_ids(&mut self) {
         let slice = self.make_contiguous();
-        slice.sort_by_key(|seq| *deref_refcell!(seq).id());
+        slice.sort_by_key(|seq| *seq.id());
     }
 }
 
-pub struct SchedulerOutput {
-    pub completion: Box<[Rc<RefCell<Sequence>>]>,
-    pub prompt: Box<[Rc<RefCell<Sequence>>]>,
+pub struct SchedulerOutput<'a> {
+    pub completion: Box<[&'a mut Sequence]>,
+    pub prompt: Box<[&'a mut Sequence]>,
 }
 
 pub enum SchedulerMethod {
@@ -48,7 +52,7 @@ pub enum SchedulerMethod {
 
 pub struct Scheduler<Backer: FcfsBacker> {
     waiting: Backer,
-    running: Vec<Rc<RefCell<Sequence>>>,
+    running: Vec<Sequence>,
     method: SchedulerMethod,
 }
 
@@ -62,17 +66,17 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
     }
 
     pub fn add_seq(&mut self, seq: Sequence) {
-        self.waiting.add(Rc::new(RefCell::new(seq)))
+        self.waiting.add(seq);
     }
 
     /// Schedule all sequences based on their state and the available space.
     pub fn schedule(&mut self) -> SchedulerOutput {
         // Filter out all done sequences
-        let running = self.running.clone();
+        let running = std::mem::replace(&mut self.running, Vec::new());
+        let mut waiting = std::mem::replace(&mut self.waiting, Backer::new());
         let mut running = running
-            .iter()
-            .filter(|seq| deref_refcell!(seq).is_running())
-            .cloned()
+            .into_iter()
+            .filter(|seq| seq.is_running())
             .collect::<Vec<_>>();
 
         match (self.waiting.iter().count(), running.len()) {
@@ -84,13 +88,13 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
                 };
             }
             (_, 0) => {
-                for seq in self.waiting.iter() {
-                    deref_mut_refcell!(seq).set_state(SequenceState::RunningPrompt);
-                    self.running.push(seq.clone());
+                for seq in waiting.into_iter() {
+                    seq.set_state(SequenceState::RunningPrompt);
+                    self.running.push(seq);
                 }
                 self.waiting = Backer::new();
                 return SchedulerOutput {
-                    prompt: self.running.clone().into(),
+                    prompt: self.running.iter_mut().collect::<Vec<_>>().into(),
                     completion: vec![].into(),
                 };
             }
@@ -98,78 +102,77 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
                 self.running = running;
                 return SchedulerOutput {
                     prompt: vec![].into(),
-                    completion: self.running.clone().into(),
+                    completion: self.running.iter_mut().collect::<Vec<_>>().into(),
                 };
             }
             _ => {}
         }
 
         // Sort the waiting seqs
-        self.waiting.sort_ascending_ids();
+        waiting.sort_ascending_ids();
 
-        // If the waiting sequence will fit, add it. Keep track of its id.
-        let mut waiting_to_remove = Vec::new();
-        for seq in self.waiting.iter() {
-            if self.sequence_fits(&running, &*deref_refcell!(seq)) {
-                waiting_to_remove.push(*deref_refcell!(seq).id());
-                if deref_refcell!(seq).is_waiting() {
-                    deref_mut_refcell!(seq).set_state(SequenceState::RunningPrompt);
+        // If the waiting sequence will fit, add it. Otherwise remove it
+        let mut new_waiting = Backer::new();
+        for seq in waiting.into_iter() {
+            if self.sequence_fits(&running, &seq) {
+                if seq.is_waiting() {
+                    seq.set_state(SequenceState::RunningPrompt);
                 }
-                running.push(seq.clone());
-            }
-        }
-
-        // Remove sequences moved from waiting -> running.
-        let mut waiting = Backer::new();
-        for seq in self.waiting.iter() {
-            if !waiting_to_remove.contains(deref_refcell!(seq).id()) {
-                waiting.add(seq.clone());
+                running.push(seq);
+            } else {
+                new_waiting.add(seq);
             }
         }
 
         // Now, get the sequences with the smallest sequence lengths, and allow them to catch up.
-        let mut seq_buckets: HashMap<usize, Vec<Rc<RefCell<Sequence>>>> = HashMap::new();
+        let mut seq_buckets: HashMap<usize, Vec<Sequence>> = HashMap::new();
         let mut min_len = usize::MAX;
-        for seq in &running {
-            let len = deref_refcell!(seq).len();
+        for seq in running {
+            let len = seq.len();
             if len < min_len {
                 min_len = len;
             }
             match seq_buckets.get_mut(&len) {
-                Some(bucket) => bucket.push(seq.clone()),
+                Some(bucket) => bucket.push(seq),
                 None => {
-                    seq_buckets.insert(len, vec![seq.clone()]);
+                    seq_buckets.insert(len, vec![seq]);
                 }
             }
         }
-        let (running, waiting) = if seq_buckets.len() <= 1 {
+        let (running, new_waiting) = if seq_buckets.len() <= 1 {
             // Full steam ahead or have everything
-            (running, waiting)
+            (
+                seq_buckets
+                    .into_iter()
+                    .flat_map(|(_, x)| x)
+                    .collect::<Vec<_>>(),
+                new_waiting,
+            )
         } else {
             // Set the min seqs to be the running ones, and the rest to be waiting (but their states are not changed!)
             // Allow the min seqs to catch up.
             let min_seqs = seq_buckets.remove(&min_len).unwrap();
             for (_, seqs) in seq_buckets {
                 for seq in seqs {
-                    waiting.add(seq);
+                    new_waiting.add(seq);
                 }
             }
             // Know min_seqs.len < running.len() <= max
-            (min_seqs, waiting)
+            (min_seqs, new_waiting)
         };
+
+        self.waiting = new_waiting;
+        self.running = running;
 
         let mut completion = Vec::new();
         let mut prompt = Vec::new();
-        for seq in &running {
-            if deref_refcell!(seq).is_completion() {
-                completion.push(seq.clone());
+        for seq in &mut self.running {
+            if seq.is_completion() {
+                completion.push(seq);
             } else {
-                prompt.push(seq.clone());
+                prompt.push(seq);
             }
         }
-
-        self.waiting = waiting;
-        self.running = running;
 
         SchedulerOutput {
             completion: completion.into(),
@@ -177,7 +180,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
         }
     }
 
-    fn sequence_fits(&self, running: &[Rc<RefCell<Sequence>>], _seq: &Sequence) -> bool {
+    fn sequence_fits(&self, running: &[Sequence], _seq: &Sequence) -> bool {
         match &self.method {
             SchedulerMethod::Fixed(n) => (running.len() + 1) <= **n,
         }
