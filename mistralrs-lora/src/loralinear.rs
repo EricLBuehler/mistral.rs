@@ -142,6 +142,7 @@ impl Merge for LoraLinear {
             w_base_layer = (w_base_layer + self.get_delta_weight(adapter))?;
         }
         self.old = FrozenLinear::new(w_base_layer, self.old.bias().cloned())?;
+        self.merged = true;
         Ok(())
     }
 }
