@@ -202,6 +202,10 @@ impl LinearLayerLike for QLoraLinear {
     ) -> Result<Tensor> {
         //No fan_in_fan_out so no weight.transpose(0,1)
         let mut result = self.old.forward(input)?;
+        if self.merged {
+            return Ok(result);
+        }
+        
         if self
             .a_adapters
             .as_ref()
