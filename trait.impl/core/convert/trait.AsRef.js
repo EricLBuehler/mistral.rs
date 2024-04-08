@@ -1,3 +1,3 @@
 (function() {var implementors = {
-"mistralrs_core":[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.77.1/core/convert/trait.AsRef.html\" title=\"trait core::convert::AsRef\">AsRef</a>&lt;<a class=\"primitive\" href=\"https://doc.rust-lang.org/1.77.1/std/primitive.str.html\">str</a>&gt; for <a class=\"enum\" href=\"mistralrs_core/enum.ModelKind.html\" title=\"enum mistralrs_core::ModelKind\">ModelKind</a>"]]
+"mistralrs_core":[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.77.0/core/convert/trait.AsRef.html\" title=\"trait core::convert::AsRef\">AsRef</a>&lt;<a class=\"primitive\" href=\"https://doc.rust-lang.org/1.77.0/std/primitive.str.html\">str</a>&gt; for <a class=\"enum\" href=\"mistralrs_core/enum.ModelKind.html\" title=\"enum mistralrs_core::ModelKind\">ModelKind</a>"]]
 };if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()
