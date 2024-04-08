@@ -1,5 +1,5 @@
 use std::{
-    cell::{Cell, Ref, RefCell, RefMut},
+    cell::{Cell, RefCell, RefMut},
     rc::Rc,
     sync::mpsc::Sender,
     time::{SystemTime, UNIX_EPOCH},
@@ -9,7 +9,7 @@ use candle_core::Tensor;
 use tokenizers::Tokenizer;
 
 use crate::{
-    deref_mut_refcell, deref_refcell,
+    get_mut_group,
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
     ChatCompletionResponse, ChatCompletionUsage,
@@ -187,7 +187,7 @@ impl Sequence {
 
     pub fn set_state(&self, state: SequenceState) {
         if matches!(state, SequenceState::Error) {
-            deref_mut_refcell!(self.group).n_choices -= 1;
+            get_mut_group!(self).n_choices -= 1;
         }
         self.state.set(state);
     }
@@ -265,39 +265,33 @@ impl Sequence {
     }
 
     pub fn add_choice_to_group(&self, choice: Choice) {
-        deref_mut_refcell!(self.group).choices.push(choice);
+        get_mut_group!(self).choices.push(choice);
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time travel has occurred!")
             .as_millis();
 
-        deref_mut_refcell!(self.group).total_completion_time +=
-            now - self.prompt_timestamp.unwrap();
-        deref_mut_refcell!(self.group).total_prompt_time +=
-            self.prompt_timestamp.unwrap() - self.timestamp;
-        deref_mut_refcell!(self.group).total_time += now - self.timestamp;
+        get_mut_group!(self).total_completion_time += now - self.prompt_timestamp.unwrap();
+        get_mut_group!(self).total_prompt_time += self.prompt_timestamp.unwrap() - self.timestamp;
+        get_mut_group!(self).total_time += now - self.timestamp;
 
-        deref_mut_refcell!(self.group).total_prompt_toks += self.prompt_len;
-        deref_mut_refcell!(self.group).total_toks += self.len();
+        get_mut_group!(self).total_prompt_toks += self.prompt_len;
+        get_mut_group!(self).total_toks += self.len();
 
-        deref_mut_refcell!(self.group).total_sampling_time += self.total_sampling_time;
+        get_mut_group!(self).total_sampling_time += self.total_sampling_time;
     }
 
     pub fn get_response_index(&self) -> usize {
         self.response_index
     }
 
-    pub fn get_group(&self) -> Ref<'_, SequenceGroup> {
-        deref_refcell!(self.group)
-    }
-
     pub fn get_mut_group(&self) -> RefMut<'_, SequenceGroup> {
-        deref_mut_refcell!(self.group)
+        get_mut_group!(self)
     }
 
     pub fn add_streaming_chunk_choice_to_group(&self, chunk: ChunkChoice) {
-        deref_mut_refcell!(self.group).streaming_chunks.push(chunk);
+        get_mut_group!(self).streaming_chunks.push(chunk);
     }
 }
 

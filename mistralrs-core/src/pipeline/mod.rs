@@ -19,17 +19,14 @@ use mistralrs_lora::{LoraConfig, Ordering};
 pub use mixtral::{MixtralLoader, MixtralSpecificConfig, MIXTRAL_IS_GPTX};
 pub use phi2::{Phi2Loader, Phi2SpecificConfig, PHI2_IS_GPTX};
 use serde::Deserialize;
-use std::{
-    cell::RefCell, collections::HashMap, fs, iter::repeat, path::PathBuf, rc::Rc, str::FromStr,
-    sync::Mutex,
-};
+use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
 use tokenizers::Tokenizer;
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 
 use crate::{
-    deref_refcell, get_mut_arcmutex,
+    get_mut_arcmutex,
     models::Cache,
     sequence::Sequence,
     utils::tokens::get_token,
@@ -222,7 +219,7 @@ fn apply_chat_template_to(
 }
 
 pub trait Pipeline: Send + Sync {
-    fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor;
+    fn forward(&mut self, input_toks: &[&mut Sequence], is_prompt: bool) -> Tensor;
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
         let encoding = self
             .tokenizer()
@@ -233,12 +230,6 @@ pub trait Pipeline: Send + Sync {
     fn device(&self) -> &Device;
     fn num_hidden_layers(&self) -> usize;
     fn cache(&self) -> &Cache;
-    fn sample(
-        &mut self,
-        logits: Tensor,
-        seq: Rc<RefCell<Sequence>>,
-        return_logprobs: bool,
-    ) -> Result<Logprobs>;
     fn tokenizer(&self) -> Tokenizer;
     fn eos_tok(&self) -> u32;
     fn name(&self) -> String;
@@ -280,6 +271,30 @@ pub trait Pipeline: Send + Sync {
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
     }
+    fn get_repeat_last_n(&self) -> usize;
+    fn sample(
+        &mut self,
+        logits: Tensor,
+        seq: &mut Sequence,
+        return_logprobs: bool,
+    ) -> Result<Logprobs> {
+        let logits = logits
+            .squeeze(0)
+            .unwrap()
+            .squeeze(0)
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap();
+        let start_at = seq
+            .get_toks()
+            .len()
+            .saturating_sub(self.get_repeat_last_n());
+        let ctxt = seq.get_toks()[start_at..].to_vec();
+
+        Ok(seq
+            .sampler()
+            .sample(&logits, Some(&ctxt), return_logprobs)?)
+    }
 }
 
 struct InputMetadata {
@@ -288,22 +303,15 @@ struct InputMetadata {
     positions_kernel: Tensor, // [bs, seq len]
 }
 
-fn get_prompt_input(
-    input_toks: &[Rc<RefCell<Sequence>>],
-    device: &Device,
-) -> Result<InputMetadata> {
+fn get_prompt_input(input_toks: &[&mut Sequence], device: &Device) -> Result<InputMetadata> {
     // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
-    let max_len = input_toks
-        .iter()
-        .map(|seq| deref_refcell!(seq).len())
-        .max()
-        .unwrap();
+    let max_len = input_toks.iter().map(|seq| seq.len()).max().unwrap();
     let padding_tok = 0;
     // Pad each sequence by the padding token to the max len.
     let mut seqs_tensors = Vec::new();
     let mut seqlen_offsets = Vec::new();
     for seq in input_toks.iter() {
-        let mut ctxt = deref_refcell!(seq).get_toks().to_vec();
+        let mut ctxt = seq.get_toks().to_vec();
         seqlen_offsets.push(0);
 
         ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
@@ -329,7 +337,7 @@ fn get_prompt_input(
 }
 
 fn get_completion_input(
-    input_toks: &[Rc<RefCell<Sequence>>],
+    input_toks: &[&mut Sequence],
     device: &Device,
     no_kv_cache: bool,
 ) -> Result<InputMetadata> {
@@ -340,8 +348,8 @@ fn get_completion_input(
     let mut seqs_tensors = Vec::new();
     let mut seqlen_offsets = Vec::new();
     for seq in input_toks.iter() {
-        let start_pos = deref_refcell!(seq).get_toks().len().saturating_sub(1);
-        let ctxt = deref_refcell!(seq).get_toks()[start_pos..].to_vec();
+        let start_pos = seq.get_toks().len().saturating_sub(1);
+        let ctxt = seq.get_toks()[start_pos..].to_vec();
         seqlen_offsets.push(start_pos);
 
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
@@ -373,7 +381,7 @@ struct ModelInputs {
 }
 
 fn calculate_inputs(
-    input_toks: Box<[Rc<RefCell<Sequence>>]>,
+    input_toks: &[&mut Sequence],
     is_prompt: bool,
     is_xlora: bool,
     device: &Device,
@@ -384,12 +392,12 @@ fn calculate_inputs(
             input: input_ids_full,
             positions: seqlen_offsets_full,
             positions_kernel: seqlen_offsets_kernel_full,
-        } = get_prompt_input(&input_toks, device)?;
+        } = get_prompt_input(input_toks, device)?;
         let InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_completion_input(&input_toks, device, no_kv_cache)?;
+        } = get_completion_input(input_toks, device, no_kv_cache)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: Some(input_ids_full),
@@ -403,7 +411,7 @@ fn calculate_inputs(
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_prompt_input(&input_toks, device)?;
+        } = get_prompt_input(input_toks, device)?;
         Ok(ModelInputs {
             input_ids: input_ids.clone(),
             input_ids_full: Some(input_ids),
@@ -417,7 +425,7 @@ fn calculate_inputs(
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_prompt_input(&input_toks, device)?;
+        } = get_prompt_input(input_toks, device)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: None,
@@ -431,7 +439,7 @@ fn calculate_inputs(
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-        } = get_completion_input(&input_toks, device, no_kv_cache)?;
+        } = get_completion_input(input_toks, device, no_kv_cache)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: None,

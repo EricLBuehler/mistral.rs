@@ -2,11 +2,10 @@ use super::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
 };
+use crate::deserialize_chat_template;
 use crate::models::Cache;
 use crate::pipeline::ChatTemplate;
-use crate::sampler::Logprobs;
 use crate::xlora_models::{NonGranularState, XLoraConfig, XLoraGemma};
-use crate::{deref_mut_refcell, deref_refcell, deserialize_chat_template};
 use crate::{
     models::gemma::{Config, Model as NormalModel},
     sequence::Sequence,
@@ -19,13 +18,12 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
 use serde::Deserialize;
 use serde_json::Value;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::{rc::Rc, sync::Mutex};
+use std::sync::Mutex;
 use thiserror::Error;
 use tokenizers::Tokenizer;
 use tracing::info;
@@ -338,7 +336,7 @@ impl Loader for GemmaLoader {
 }
 
 impl Pipeline for GemmaPipeline {
-    fn forward(&mut self, input_toks: Box<[Rc<RefCell<Sequence>>]>, is_prompt: bool) -> Tensor {
+    fn forward(&mut self, input_toks: &[&mut Sequence], is_prompt: bool) -> Tensor {
         let ModelInputs {
             input_ids,
             input_ids_full,
@@ -391,28 +389,8 @@ impl Pipeline for GemmaPipeline {
             Model::XLoraNormal(ref model) => &model.cache,
         }
     }
-    fn sample(
-        &mut self,
-        logits: Tensor,
-        seq: Rc<RefCell<Sequence>>,
-        return_logprobs: bool,
-    ) -> Result<Logprobs> {
-        let logits = logits
-            .squeeze(0)
-            .unwrap()
-            .squeeze(0)
-            .unwrap()
-            .to_dtype(DType::F32)
-            .unwrap();
-        let start_at = deref_refcell!(seq)
-            .get_toks()
-            .len()
-            .saturating_sub(self.config.repeat_last_n);
-        let ctxt = deref_refcell!(seq).get_toks()[start_at..].to_vec();
-
-        Ok(deref_mut_refcell!(seq)
-            .sampler()
-            .sample(&logits, Some(&ctxt), return_logprobs)?)
+    fn get_repeat_last_n(&self) -> usize {
+        self.config.repeat_last_n
     }
     fn tokenizer(&self) -> Tokenizer {
         self.tokenizer.clone()

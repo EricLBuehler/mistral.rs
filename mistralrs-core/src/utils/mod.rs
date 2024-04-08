@@ -36,8 +36,8 @@ macro_rules! handle_seq_error_stateaware {
                 use $crate::response::Response;
                 use $crate::sequence::SequenceState;
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                deref_mut_refcell!($seq).responder().send(Response::Error(e.into())).unwrap();
-                deref_mut_refcell!($seq).set_state(SequenceState::Error);
+                $seq.responder().send(Response::Error(e.into())).unwrap();
+                $seq.set_state(SequenceState::Error);
                 return;
             }
         }
@@ -45,21 +45,10 @@ macro_rules! handle_seq_error_stateaware {
 }
 
 #[macro_export]
-macro_rules! deref_refcell {
-    ($thing:expr) => {
+macro_rules! get_mut_group {
+    ($this:expr) => {
         loop {
-            if let Ok(inner) = $thing.try_borrow() {
-                break inner;
-            }
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! deref_mut_refcell {
-    ($thing:expr) => {
-        loop {
-            if let Ok(inner) = $thing.try_borrow_mut() {
+            if let Ok(inner) = $this.group.try_borrow_mut() {
                 break inner;
             }
         }
