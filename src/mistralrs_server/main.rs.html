@@ -788,6 +788,22 @@
 <a href="#786" id="786">786</a>
 <a href="#787" id="787">787</a>
 <a href="#788" id="788">788</a>
+<a href="#789" id="789">789</a>
+<a href="#790" id="790">790</a>
+<a href="#791" id="791">791</a>
+<a href="#792" id="792">792</a>
+<a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a>
+<a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
+<a href="#797" id="797">797</a>
+<a href="#798" id="798">798</a>
+<a href="#799" id="799">799</a>
+<a href="#800" id="800">800</a>
+<a href="#801" id="801">801</a>
+<a href="#802" id="802">802</a>
+<a href="#803" id="803">803</a>
+<a href="#804" id="804">804</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     env,
     error::Error,
@@ -1198,7 +1214,9 @@
             <span class="prelude-val">None</span>,
             <span class="prelude-val">Some</span>(xlora_model_id),
             ModelKind::XLoraNormal,
-            <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order)<span class="question-mark">?</span>)<span class="question-mark">?</span>),
+            <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order.clone()).expect(
+                <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"Could not load ordering file at {order}"</span>),
+            ))<span class="question-mark">?</span>),
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
@@ -1235,7 +1253,9 @@
             <span class="prelude-val">None</span>,
             <span class="prelude-val">Some</span>(xlora_model_id),
             ModelKind::Normal,
-            <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order)<span class="question-mark">?</span>)<span class="question-mark">?</span>),
+            <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order.clone()).expect(
+                <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"Could not load ordering file at {order}"</span>),
+            ))<span class="question-mark">?</span>),
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
@@ -1327,7 +1347,9 @@
             <span class="prelude-val">None</span>,
             <span class="prelude-val">Some</span>(xlora_model_id),
             ModelKind::QuantizedGGML,
-            <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order)<span class="question-mark">?</span>)<span class="question-mark">?</span>),
+            <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order.clone()).expect(
+                <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"Could not load ordering file at {order}"</span>),
+            ))<span class="question-mark">?</span>),
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
@@ -1392,7 +1414,9 @@
             <span class="prelude-val">None</span>,
             <span class="prelude-val">Some</span>(xlora_model_id),
             ModelKind::XLoraNormal,
-            <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order)<span class="question-mark">?</span>)<span class="question-mark">?</span>),
+            <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order.clone()).expect(
+                <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"Could not load ordering file at {order}"</span>),
+            ))<span class="question-mark">?</span>),
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
@@ -1417,7 +1441,9 @@
             quantized_filename,
             <span class="prelude-val">Some</span>(xlora_model_id),
             ModelKind::XLoraGGUF,
-            <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order)<span class="question-mark">?</span>)<span class="question-mark">?</span>),
+            <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order.clone()).expect(
+                <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"Could not load ordering file at {order}"</span>),
+            ))<span class="question-mark">?</span>),
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
@@ -1442,7 +1468,9 @@
             quantized_filename,
             <span class="prelude-val">Some</span>(xlora_model_id),
             ModelKind::XLoraGGUF,
-            <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order)<span class="question-mark">?</span>)<span class="question-mark">?</span>),
+            <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order.clone()).expect(
+                <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"Could not load ordering file at {order}"</span>),
+            ))<span class="question-mark">?</span>),
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
@@ -1468,7 +1496,9 @@
             quantized_filename,
             <span class="prelude-val">Some</span>(xlora_model_id),
             ModelKind::XLoraGGUF,
-            <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order)<span class="question-mark">?</span>)<span class="question-mark">?</span>),
+            <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order.clone()).expect(
+                <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"Could not load ordering file at {order}"</span>),
+            ))<span class="question-mark">?</span>),
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
@@ -1495,7 +1525,9 @@
             quantized_filename,
             <span class="prelude-val">Some</span>(xlora_model_id),
             ModelKind::XLoraGGML,
-            <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order)<span class="question-mark">?</span>)<span class="question-mark">?</span>),
+            <span class="prelude-val">Some</span>(serde_json::from_reader(File::open(order.clone()).expect(
+                <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"Could not load ordering file at {order}"</span>),
+            ))<span class="question-mark">?</span>),
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,

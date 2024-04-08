@@ -451,6 +451,14 @@
 <a href="#449" id="449">449</a>
 <a href="#450" id="450">450</a>
 <a href="#451" id="451">451</a>
+<a href="#452" id="452">452</a>
+<a href="#453" id="453">453</a>
+<a href="#454" id="454">454</a>
+<a href="#455" id="455">455</a>
+<a href="#456" id="456">456</a>
+<a href="#457" id="457">457</a>
+<a href="#458" id="458">458</a>
+<a href="#459" id="459">459</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>clap::Subcommand;
 
 <span class="attr">#[derive(Debug, Subcommand)]
@@ -525,6 +533,7 @@
         </span>order: String,
 
         <span class="doccomment">/// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        /// This makes the maximum running sequences 1.
         </span><span class="attr">#[arg(long)]
         </span>tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     },
@@ -567,6 +576,7 @@
         </span>order: String,
 
         <span class="doccomment">/// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        /// This makes the maximum running sequences 1.
         </span><span class="attr">#[arg(long)]
         </span>tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     },
@@ -665,6 +675,7 @@
         </span>order: String,
 
         <span class="doccomment">/// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        /// This makes the maximum running sequences 1.
         </span><span class="attr">#[arg(long)]
         </span>tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     },
@@ -731,6 +742,7 @@
         </span>order: String,
 
         <span class="doccomment">/// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        /// This makes the maximum running sequences 1.
         </span><span class="attr">#[arg(long)]
         </span>tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     },
@@ -767,6 +779,7 @@
         </span>order: String,
 
         <span class="doccomment">/// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        /// This makes the maximum running sequences 1.
         </span><span class="attr">#[arg(long)]
         </span>tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     },
@@ -803,6 +816,7 @@
         </span>order: String,
 
         <span class="doccomment">/// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        /// This makes the maximum running sequences 1.
         </span><span class="attr">#[arg(long)]
         </span>tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     },
@@ -847,6 +861,7 @@
         </span>gqa: usize,
 
         <span class="doccomment">/// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        /// This makes the maximum running sequences 1.
         </span><span class="attr">#[arg(long)]
         </span>tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     },
@@ -883,6 +898,7 @@
         </span>order: String,
 
         <span class="doccomment">/// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        /// This makes the maximum running sequences 1.
         </span><span class="attr">#[arg(long)]
         </span>tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     },
