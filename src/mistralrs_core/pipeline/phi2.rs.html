@@ -434,38 +434,14 @@
 <a href="#432" id="432">432</a>
 <a href="#433" id="433">433</a>
 <a href="#434" id="434">434</a>
-<a href="#435" id="435">435</a>
-<a href="#436" id="436">436</a>
-<a href="#437" id="437">437</a>
-<a href="#438" id="438">438</a>
-<a href="#439" id="439">439</a>
-<a href="#440" id="440">440</a>
-<a href="#441" id="441">441</a>
-<a href="#442" id="442">442</a>
-<a href="#443" id="443">443</a>
-<a href="#444" id="444">444</a>
-<a href="#445" id="445">445</a>
-<a href="#446" id="446">446</a>
-<a href="#447" id="447">447</a>
-<a href="#448" id="448">448</a>
-<a href="#449" id="449">449</a>
-<a href="#450" id="450">450</a>
-<a href="#451" id="451">451</a>
-<a href="#452" id="452">452</a>
-<a href="#453" id="453">453</a>
-<a href="#454" id="454">454</a>
-<a href="#455" id="455">455</a>
-<a href="#456" id="456">456</a>
-<a href="#457" id="457">457</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
 };
+<span class="kw">use </span><span class="kw">crate</span>::deserialize_chat_template;
 <span class="kw">use </span><span class="kw">crate</span>::models::Cache;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
-<span class="kw">use </span><span class="kw">crate</span>::sampler::Logprobs;
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::{NonGranularState, XLoraConfig};
-<span class="kw">use crate</span>::{deref_mut_refcell, deref_refcell, deserialize_chat_template};
 <span class="kw">use crate</span>::{
     models::phi2::{Config, Model <span class="kw">as </span>NormalModel},
     sequence::Sequence,
@@ -480,13 +456,12 @@
 <span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
 <span class="kw">use </span>serde::Deserialize;
 <span class="kw">use </span>serde_json::Value;
-<span class="kw">use </span>std::cell::RefCell;
 <span class="kw">use </span>std::collections::HashMap;
 <span class="kw">use </span>std::fs;
 <span class="kw">use </span>std::path::PathBuf;
 <span class="kw">use </span>std::str::FromStr;
 <span class="kw">use </span>std::sync::Arc;
-<span class="kw">use </span>std::{rc::Rc, sync::Mutex};
+<span class="kw">use </span>std::sync::Mutex;
 <span class="kw">use </span>thiserror::Error;
 <span class="kw">use </span>tokenizers::Tokenizer;
 <span class="kw">use </span>tracing::{info, warn};
@@ -798,7 +773,7 @@
 }
 
 <span class="kw">impl </span>Pipeline <span class="kw">for </span>Phi2Pipeline {
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;mut </span><span class="self">self</span>, input_toks: Box&lt;[Rc&lt;RefCell&lt;Sequence&gt;&gt;]&gt;, is_prompt: bool) -&gt; Tensor {
+    <span class="kw">fn </span>forward(<span class="kw-2">&amp;mut </span><span class="self">self</span>, input_toks: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence], is_prompt: bool) -&gt; Tensor {
         <span class="kw">let </span>ModelInputs {
             input_ids,
             input_ids_full,
@@ -851,29 +826,8 @@
             Model::XLoraNormal(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
         }
     }
-    <span class="kw">fn </span>sample(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-        logits: Tensor,
-        seq: Rc&lt;RefCell&lt;Sequence&gt;&gt;,
-        return_logprobs: bool,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
-        <span class="kw">let </span>logits = logits
-            .squeeze(<span class="number">0</span>)
-            .unwrap()
-            .squeeze(<span class="number">0</span>)
-            .unwrap()
-            .to_dtype(DType::F32)
-            .unwrap();
-        <span class="kw">let </span>start_at = <span class="macro">deref_refcell!</span>(seq)
-            .get_toks()
-            .len()
-            .saturating_sub(<span class="self">self</span>.config.repeat_last_n);
-
-        <span class="kw">let </span>ctxt = <span class="macro">deref_refcell!</span>(seq).get_toks()[start_at..].to_vec();
-
-        <span class="prelude-val">Ok</span>(<span class="macro">deref_mut_refcell!</span>(seq)
-            .sampler()
-            .sample(<span class="kw-2">&amp;</span>logits, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>ctxt), return_logprobs)<span class="question-mark">?</span>)
+    <span class="kw">fn </span>get_repeat_last_n(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="self">self</span>.config.repeat_last_n
     }
     <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Tokenizer {
         <span class="self">self</span>.tokenizer.clone()

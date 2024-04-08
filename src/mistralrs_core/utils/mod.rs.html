@@ -56,17 +56,6 @@
 <a href="#54" id="54">54</a>
 <a href="#55" id="55">55</a>
 <a href="#56" id="56">56</a>
-<a href="#57" id="57">57</a>
-<a href="#58" id="58">58</a>
-<a href="#59" id="59">59</a>
-<a href="#60" id="60">60</a>
-<a href="#61" id="61">61</a>
-<a href="#62" id="62">62</a>
-<a href="#63" id="63">63</a>
-<a href="#64" id="64">64</a>
-<a href="#65" id="65">65</a>
-<a href="#66" id="66">66</a>
-<a href="#67" id="67">67</a>
 </pre></div><pre class="rust"><code><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>tokens;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>varbuilder_utils;
 
@@ -105,8 +94,8 @@
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::response::Response</span>;
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::sequence::SequenceState</span>;
                 <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                </span><span class="macro">deref_mut_refcell!</span>(<span class="macro-nonterminal">$seq</span>).responder().send(Response::Error(e.into())).unwrap();
-                <span class="macro">deref_mut_refcell!</span>(<span class="macro-nonterminal">$seq</span>).set_state(SequenceState::Error);
+                </span><span class="macro-nonterminal">$seq</span>.responder().send(Response::Error(e.into())).unwrap();
+                <span class="macro-nonterminal">$seq</span>.set_state(SequenceState::Error);
                 <span class="kw">return</span>;
             }
         }
@@ -114,21 +103,10 @@
 }
 
 <span class="attr">#[macro_export]
-</span><span class="macro">macro_rules! </span>deref_refcell {
-    (<span class="macro-nonterminal">$thing</span>:expr) =&gt; {
+</span><span class="macro">macro_rules! </span>get_mut_group {
+    (<span class="macro-nonterminal">$this</span>:expr) =&gt; {
         <span class="kw">loop </span>{
-            <span class="kw">if let </span><span class="prelude-val">Ok</span>(inner) = <span class="macro-nonterminal">$thing</span>.try_borrow() {
-                <span class="kw">break </span>inner;
-            }
-        }
-    };
-}
-
-<span class="attr">#[macro_export]
-</span><span class="macro">macro_rules! </span>deref_mut_refcell {
-    (<span class="macro-nonterminal">$thing</span>:expr) =&gt; {
-        <span class="kw">loop </span>{
-            <span class="kw">if let </span><span class="prelude-val">Ok</span>(inner) = <span class="macro-nonterminal">$thing</span>.try_borrow_mut() {
+            <span class="kw">if let </span><span class="prelude-val">Ok</span>(inner) = <span class="macro-nonterminal">$this</span>.group.try_borrow_mut() {
                 <span class="kw">break </span>inner;
             }
         }

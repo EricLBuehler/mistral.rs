@@ -374,14 +374,8 @@
 <a href="#372" id="372">372</a>
 <a href="#373" id="373">373</a>
 <a href="#374" id="374">374</a>
-<a href="#375" id="375">375</a>
-<a href="#376" id="376">376</a>
-<a href="#377" id="377">377</a>
-<a href="#378" id="378">378</a>
-<a href="#379" id="379">379</a>
-<a href="#380" id="380">380</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
-    cell::{Cell, Ref, RefCell, RefMut},
+    cell::{Cell, RefCell, RefMut},
     rc::Rc,
     sync::mpsc::Sender,
     time::{SystemTime, UNIX_EPOCH},
@@ -391,7 +385,7 @@
 <span class="kw">use </span>tokenizers::Tokenizer;
 
 <span class="kw">use crate</span>::{
-    deref_mut_refcell, deref_refcell,
+    get_mut_group,
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
     ChatCompletionResponse, ChatCompletionUsage,
@@ -569,7 +563,7 @@
 
     <span class="kw">pub fn </span>set_state(<span class="kw-2">&amp;</span><span class="self">self</span>, state: SequenceState) {
         <span class="kw">if </span><span class="macro">matches!</span>(state, SequenceState::Error) {
-            <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).n_choices -= <span class="number">1</span>;
+            <span class="macro">get_mut_group!</span>(<span class="self">self</span>).n_choices -= <span class="number">1</span>;
         }
         <span class="self">self</span>.state.set(state);
     }
@@ -647,39 +641,33 @@
     }
 
     <span class="kw">pub fn </span>add_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, choice: Choice) {
-        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).choices.push(choice);
+        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).choices.push(choice);
 
         <span class="kw">let </span>now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect(<span class="string">"Time travel has occurred!"</span>)
             .as_millis();
 
-        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).total_completion_time +=
-            now - <span class="self">self</span>.prompt_timestamp.unwrap();
-        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).total_prompt_time +=
-            <span class="self">self</span>.prompt_timestamp.unwrap() - <span class="self">self</span>.timestamp;
-        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).total_time += now - <span class="self">self</span>.timestamp;
+        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_completion_time += now - <span class="self">self</span>.prompt_timestamp.unwrap();
+        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_prompt_time += <span class="self">self</span>.prompt_timestamp.unwrap() - <span class="self">self</span>.timestamp;
+        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_time += now - <span class="self">self</span>.timestamp;
 
-        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).total_prompt_toks += <span class="self">self</span>.prompt_len;
-        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).total_toks += <span class="self">self</span>.len();
+        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_prompt_toks += <span class="self">self</span>.prompt_len;
+        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_toks += <span class="self">self</span>.len();
 
-        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).total_sampling_time += <span class="self">self</span>.total_sampling_time;
+        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_sampling_time += <span class="self">self</span>.total_sampling_time;
     }
 
     <span class="kw">pub fn </span>get_response_index(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="self">self</span>.response_index
     }
 
-    <span class="kw">pub fn </span>get_group(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Ref&lt;<span class="lifetime">'_</span>, SequenceGroup&gt; {
-        <span class="macro">deref_refcell!</span>(<span class="self">self</span>.group)
-    }
-
     <span class="kw">pub fn </span>get_mut_group(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; RefMut&lt;<span class="lifetime">'_</span>, SequenceGroup&gt; {
-        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group)
+        <span class="macro">get_mut_group!</span>(<span class="self">self</span>)
     }
 
     <span class="kw">pub fn </span>add_streaming_chunk_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, chunk: ChunkChoice) {
-        <span class="macro">deref_mut_refcell!</span>(<span class="self">self</span>.group).streaming_chunks.push(chunk);
+        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).streaming_chunks.push(chunk);
     }
 }
 

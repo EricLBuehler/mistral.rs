@@ -482,14 +482,6 @@
 <a href="#480" id="480">480</a>
 <a href="#481" id="481">481</a>
 <a href="#482" id="482">482</a>
-<a href="#483" id="483">483</a>
-<a href="#484" id="484">484</a>
-<a href="#485" id="485">485</a>
-<a href="#486" id="486">486</a>
-<a href="#487" id="487">487</a>
-<a href="#488" id="488">488</a>
-<a href="#489" id="489">489</a>
-<a href="#490" id="490">490</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -503,8 +495,7 @@
 <span class="kw">use </span>tracing::warn;
 
 <span class="kw">use crate</span>::{
-    deref_mut_refcell, deref_refcell, get_mut_arcmutex, handle_seq_error,
-    handle_seq_error_stateaware,
+    get_mut_arcmutex, handle_seq_error, handle_seq_error_stateaware,
     pipeline::Pipeline,
     request::Request,
     response::{
@@ -522,7 +513,7 @@
 <span class="kw">pub struct </span>Engine {
     rx: Receiver&lt;Request&gt;,
     pipeline: Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
-    scheduler: Scheduler&lt;VecDeque&lt;Rc&lt;RefCell&lt;Sequence&gt;&gt;&gt;&gt;,
+    scheduler: Scheduler&lt;VecDeque&lt;Sequence&gt;&gt;,
     id: usize,
     truncate_sequence: bool,
     no_kv_cache: bool,
@@ -551,100 +542,105 @@
             <span class="kw">if let </span><span class="prelude-val">Ok</span>(request) = <span class="self">self</span>.rx.try_recv() {
                 <span class="self">self</span>.add_request(request);
             }
-            <span class="kw">let </span>scheduled = <span class="self">self</span>.scheduler.schedule();
+            <span class="kw">let </span><span class="kw-2">mut </span>scheduled = <span class="self">self</span>.scheduler.schedule();
 
             <span class="kw">if </span>scheduled.completion.len() &gt; <span class="number">0 </span>{
                 <span class="comment">// Run the completion seqs
                 </span><span class="kw">if </span>!<span class="self">self</span>.no_kv_cache {
-                    <span class="self">self</span>.clone_in_cache(<span class="kw-2">&amp;</span>scheduled.completion);
+                    <span class="self">Self</span>::clone_in_cache(
+                        <span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline),
+                        <span class="kw-2">&amp;mut </span>scheduled.completion,
+                    );
                 }
-                <span class="kw">let </span>logits =
-                    <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).forward(scheduled.completion.clone(), <span class="bool-val">false</span>);
-                <span class="self">self</span>.synchronize(<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).device());
+                <span class="kw">let </span>logits = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).forward(<span class="kw-2">&amp;</span>scheduled.completion, <span class="bool-val">false</span>);
+                <span class="self">Self</span>::synchronize(<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).device());
 
                 <span class="kw">let </span>before_sample = Instant::now();
-                <span class="self">self</span>.sample_seqs(<span class="kw-2">&amp;</span>scheduled.completion, logits);
+                <span class="self">Self</span>::sample_seqs(
+                    <span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline),
+                    <span class="kw-2">&amp;mut </span>scheduled.completion,
+                    logits,
+                );
                 <span class="kw">let </span>sampling_time = before_sample.elapsed().as_millis();
-                <span class="kw">for </span>seq <span class="kw">in </span>scheduled.completion.iter() {
-                    <span class="macro">deref_mut_refcell!</span>(seq).total_sampling_time += sampling_time;
+                <span class="kw">for </span>seq <span class="kw">in </span>scheduled.completion.iter_mut() {
+                    seq.total_sampling_time += sampling_time;
                 }
 
                 <span class="kw">if </span>!<span class="self">self</span>.no_kv_cache {
-                    <span class="self">self</span>.clone_out_cache(<span class="kw-2">&amp;</span>scheduled.completion);
+                    <span class="self">Self</span>::clone_out_cache(
+                        <span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline),
+                        <span class="kw-2">&amp;mut </span>scheduled.completion,
+                    );
                 } <span class="kw">else </span>{
-                    <span class="self">self</span>.set_none_cache();
+                    <span class="self">Self</span>::set_none_cache(<span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline));
                 }
             }
 
             <span class="kw">if </span>scheduled.prompt.len() &gt; <span class="number">0 </span>{
                 <span class="comment">// Run the prompt seqs
-                </span><span class="self">self</span>.set_none_cache();
-                <span class="kw">let </span>logits =
-                    <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).forward(scheduled.prompt.clone(), <span class="bool-val">true</span>);
-                <span class="self">self</span>.synchronize(<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).device());
-                <span class="kw">for </span>seq <span class="kw">in </span>scheduled.prompt.iter() {
-                    <span class="macro">deref_mut_refcell!</span>(seq).set_state(SequenceState::RunningCompletion);
+                </span><span class="self">Self</span>::set_none_cache(<span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline));
+                <span class="kw">let </span>logits = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).forward(<span class="kw-2">&amp;</span>scheduled.prompt, <span class="bool-val">true</span>);
+                <span class="self">Self</span>::synchronize(<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).device());
+                <span class="kw">for </span>seq <span class="kw">in </span>scheduled.prompt.iter_mut() {
+                    seq.set_state(SequenceState::RunningCompletion);
                     <span class="kw">let </span>now = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .expect(<span class="string">"Time travel has occurred!"</span>)
                         .as_millis();
                     <span class="attr">#[allow(clippy::cast_precision_loss)]
-                    </span><span class="kw">let </span>prompt_tok_per_sec = <span class="macro">deref_refcell!</span>(seq).len() <span class="kw">as </span>f32
-                        / (now - <span class="macro">deref_refcell!</span>(seq).timestamp()) <span class="kw">as </span>f32;
-                    <span class="macro">deref_mut_refcell!</span>(seq).prompt_tok_per_sec = prompt_tok_per_sec * <span class="number">1000.</span>;
-                    <span class="macro">deref_mut_refcell!</span>(seq).prompt_timestamp = <span class="prelude-val">Some</span>(now);
+                    </span><span class="kw">let </span>prompt_tok_per_sec = seq.len() <span class="kw">as </span>f32 / (now - seq.timestamp()) <span class="kw">as </span>f32;
+                    seq.prompt_tok_per_sec = prompt_tok_per_sec * <span class="number">1000.</span>;
+                    seq.prompt_timestamp = <span class="prelude-val">Some</span>(now);
                 }
 
                 <span class="kw">let </span>before_sample = Instant::now();
-                <span class="self">self</span>.sample_seqs(<span class="kw-2">&amp;</span>scheduled.prompt, logits);
+                <span class="self">Self</span>::sample_seqs(
+                    <span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline),
+                    <span class="kw-2">&amp;mut </span>scheduled.prompt,
+                    logits,
+                );
                 <span class="kw">let </span>sampling_time = before_sample.elapsed().as_millis();
-                <span class="kw">for </span>seq <span class="kw">in </span>scheduled.prompt.iter() {
-                    <span class="macro">deref_mut_refcell!</span>(seq).total_sampling_time += sampling_time;
+                <span class="kw">for </span>seq <span class="kw">in </span>scheduled.prompt.iter_mut() {
+                    seq.total_sampling_time += sampling_time;
                 }
 
                 <span class="kw">if </span>!<span class="self">self</span>.no_kv_cache {
-                    <span class="self">self</span>.clone_out_cache(<span class="kw-2">&amp;</span>scheduled.prompt);
+                    <span class="self">Self</span>::clone_out_cache(
+                        <span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline),
+                        <span class="kw-2">&amp;mut </span>scheduled.prompt,
+                    );
                 } <span class="kw">else </span>{
-                    <span class="self">self</span>.set_none_cache();
+                    <span class="self">Self</span>::set_none_cache(<span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline));
                 }
             }
         }
     }
 
     <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
-    </span><span class="kw">fn </span>synchronize(<span class="kw-2">&amp;</span><span class="self">self</span>, dev: <span class="kw-2">&amp;</span>Device) {
+    </span><span class="kw">fn </span>synchronize(dev: <span class="kw-2">&amp;</span>Device) {
         <span class="kw">if let </span>candle_core::Device::Cuda(dev) = dev {
             dev.synchronize().unwrap();
         }
     }
     <span class="attr">#[cfg(not(feature = <span class="string">"cuda"</span>))]
-    </span><span class="kw">fn </span>synchronize(<span class="kw-2">&amp;</span><span class="self">self</span>, _dev: <span class="kw-2">&amp;</span>Device) {}
+    </span><span class="kw">fn </span>synchronize(_dev: <span class="kw-2">&amp;</span>Device) {}
 
-    <span class="kw">fn </span>sample_seqs(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;</span>[Rc&lt;RefCell&lt;Sequence&gt;&gt;], logits: Tensor) {
+    <span class="kw">fn </span>sample_seqs(pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], logits: Tensor) {
         <span class="kw">let </span>seqs_len = seqs.len();
         <span class="kw">let </span>logits_seq = logits.chunk(seqs_len, <span class="number">0</span>).unwrap();
         <span class="macro">debug_assert_eq!</span>(logits_seq.len(), seqs_len);
-        <span class="kw">let </span>eos_tok = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).eos_tok();
-        <span class="kw">for </span>(logits_per_seq, seq) <span class="kw">in </span>zip(logits_seq, seqs.iter()) {
+        <span class="kw">let </span>eos_tok = pipeline.eos_tok();
+        <span class="kw">for </span>(logits_per_seq, seq) <span class="kw">in </span>zip(logits_seq, seqs.iter_mut()) {
             <span class="comment">// Sample and extract next token
-            </span><span class="kw">let </span>return_logprobs = <span class="macro">deref_refcell!</span>(seq).return_logprobs();
-            <span class="kw">let </span>sampled = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).sample(
-                logits_per_seq,
-                seq.clone(),
-                return_logprobs,
-            );
+            </span><span class="kw">let </span>return_logprobs = seq.return_logprobs();
+            <span class="kw">let </span>sampled = pipeline.sample(logits_per_seq, seq, return_logprobs);
             <span class="kw">let </span>next_token = <span class="macro">handle_seq_error_stateaware!</span>(sampled, seq);
             <span class="kw">let </span>next_token_id = next_token.token;
-            <span class="macro">deref_mut_refcell!</span>(seq).add_token(next_token.clone());
-            <span class="kw">let </span>is_done = <span class="macro">deref_refcell!</span>(seq).is_done(
-                next_token_id,
-                eos_tok,
-                <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_max_seq_len(),
-            );
+            seq.add_token(next_token.clone());
+            <span class="kw">let </span>is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
             <span class="comment">// Handle streaming requests
-            </span><span class="kw">if </span><span class="macro">deref_refcell!</span>(seq).get_group().is_streaming {
-                <span class="kw">let </span>tokenizer = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenizer().clone();
-                <span class="kw">let </span><span class="kw-2">mut </span>seq = <span class="macro">deref_mut_refcell!</span>(seq);
+            </span><span class="kw">if </span>seq.get_mut_group().is_streaming {
+                <span class="kw">let </span>tokenizer = pipeline.tokenizer().clone();
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(delta) = <span class="macro">handle_seq_error!</span>(seq.get_delta(<span class="kw-2">&amp;</span>tokenizer), seq.responder()) {
                     seq.add_streaming_chunk_choice_to_group(ChunkChoice {
                         delta: Delta {
@@ -669,29 +665,27 @@
                         seq.set_state(SequenceState::Done(reason));
                     }
 
-                    seq.get_mut_group().maybe_send_streaming_response(
-                        <span class="kw-2">&amp;</span>seq,
-                        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).name(),
-                    );
+                    seq.get_mut_group()
+                        .maybe_send_streaming_response(seq, pipeline.name());
                 }
             } <span class="kw">else if let </span><span class="prelude-val">Some</span>(reason) = is_done {
-                <span class="self">self</span>.finish_seq(seq, reason);
-                <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).reset_non_granular_state();
+                <span class="self">Self</span>::finish_seq(pipeline, seq, reason);
+                pipeline.reset_non_granular_state();
             }
         }
     }
 
-    <span class="kw">fn </span>finish_seq(<span class="kw-2">&amp;</span><span class="self">self</span>, seq: <span class="kw-2">&amp;</span>Rc&lt;RefCell&lt;Sequence&gt;&gt;, reason: StopReason) {
-        <span class="macro">deref_mut_refcell!</span>(seq).set_state(SequenceState::Done(reason));
+    <span class="kw">fn </span>finish_seq(pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline, seq: <span class="kw-2">&amp;</span>Sequence, reason: StopReason) {
+        seq.set_state(SequenceState::Done(reason));
 
-        <span class="kw">let </span>logprobs = <span class="kw">if </span><span class="macro">deref_refcell!</span>(seq).return_logprobs() {
-            <span class="kw">let </span>tokenizer = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenizer().clone();
+        <span class="kw">let </span>logprobs = <span class="kw">if </span>seq.return_logprobs() {
+            <span class="kw">let </span>tokenizer = pipeline.tokenizer().clone();
             <span class="kw">let </span><span class="kw-2">mut </span>logprobs = Vec::new();
-            <span class="kw">for </span>logprob <span class="kw">in </span><span class="macro">deref_refcell!</span>(seq).logprobs() {
+            <span class="kw">for </span>logprob <span class="kw">in </span>seq.logprobs() {
                 <span class="kw">let </span>resp_logprob = ResponseLogprob {
                     token: <span class="macro">handle_seq_error!</span>(
                         tokenizer.decode(<span class="kw-2">&amp;</span>[logprob.token], <span class="bool-val">false</span>),
-                        <span class="macro">deref_refcell!</span>(seq).responder()
+                        seq.responder()
                     ),
                     bytes: logprob.bytes.clone().into_bytes(),
                     logprob: logprob.logprob,
@@ -705,46 +699,45 @@
         </span>};
 
         <span class="kw">let </span>res = <span class="macro">handle_seq_error!</span>(
-            <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenizer().decode(
-                <span class="kw-2">&amp;</span><span class="macro">deref_refcell!</span>(seq).get_toks()[<span class="macro">deref_refcell!</span>(seq).prompt_tokens()..],
-                <span class="bool-val">false
-            </span>),
-            <span class="macro">deref_refcell!</span>(seq).responder()
+            pipeline
+                .tokenizer()
+                .decode(<span class="kw-2">&amp;</span>seq.get_toks()[seq.prompt_tokens()..], <span class="bool-val">false</span>),
+            seq.responder()
         );
 
         <span class="kw">let </span>choice = Choice {
             stopreason: reason.to_string(),
-            index: <span class="macro">deref_refcell!</span>(seq).get_response_index(),
+            index: seq.get_response_index(),
             message: ResponseMessage {
                 content: res,
                 role: <span class="string">"assistant"</span>.to_string(),
             },
             logprobs: logprobs.map(|l| Logprobs { content: <span class="prelude-val">Some</span>(l) }),
         };
-        <span class="macro">deref_mut_refcell!</span>(seq).add_choice_to_group(choice);
+        seq.add_choice_to_group(choice);
 
-        <span class="macro">deref_refcell!</span>(seq).get_group().maybe_send_done_response(
+        <span class="kw">let </span>group = seq.get_mut_group();
+        group.maybe_send_done_response(
             ChatCompletionResponse {
-                id: <span class="macro">deref_refcell!</span>(seq).id().to_string(),
-                choices: <span class="macro">deref_refcell!</span>(seq).get_group().get_choices().to_vec(),
-                created: <span class="macro">deref_refcell!</span>(seq).creation_time(),
-                model: <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).name(),
+                id: seq.id().to_string(),
+                choices: group.get_choices().to_vec(),
+                created: seq.creation_time(),
+                model: pipeline.name(),
                 system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                 object: <span class="string">"chat.completion"</span>.to_string(),
-                usage: <span class="macro">deref_refcell!</span>(seq).get_group().get_usage(),
+                usage: group.get_usage(),
             },
-            <span class="macro">deref_refcell!</span>(seq).responder(),
+            seq.responder(),
         );
     }
 
     <span class="doccomment">/// Clone the cache FROM the sequences' cache TO the model cache. Only used for completion seqs.
-    </span><span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;</span>[Rc&lt;RefCell&lt;Sequence&gt;&gt;]) {
+    </span><span class="kw">fn </span>clone_in_cache(pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
         <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
-        <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).num_hidden_layers() {
+        <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..pipeline.num_hidden_layers() {
             <span class="kw">let </span><span class="kw-2">mut </span>k_vec = Vec::new();
             <span class="kw">let </span><span class="kw-2">mut </span>v_vec = Vec::new();
-            <span class="kw">for </span>seq <span class="kw">in </span>seqs.iter() {
-                <span class="kw">let </span><span class="kw-2">mut </span>seq = <span class="macro">deref_mut_refcell!</span>(seq);
+            <span class="kw">for </span>seq <span class="kw">in </span><span class="kw-2">&amp;mut *</span>seqs {
                 <span class="kw">let </span>seq_cache = <span class="kw-2">&amp;*</span>seq.cache();
                 <span class="kw">let </span>cache = seq_cache.get(layer).unwrap();
                 <span class="comment">// Note(EricLBuehler): Unwrap reasoning: We are handling completions seqs so unwrap is OK.
@@ -766,15 +759,12 @@
                 },
             )));
         }
-        <span class="kw">if </span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).is_xlora()
-            &amp;&amp; !<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).has_no_kv_cache()
-        {
+        <span class="kw">if </span>pipeline.is_xlora() &amp;&amp; !pipeline.has_no_kv_cache() {
             <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
-            <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).num_hidden_layers() {
+            <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..pipeline.num_hidden_layers() {
                 <span class="kw">let </span><span class="kw-2">mut </span>k_vec = Vec::new();
                 <span class="kw">let </span><span class="kw-2">mut </span>v_vec = Vec::new();
-                <span class="kw">for </span>seq <span class="kw">in </span>seqs.iter() {
-                    <span class="kw">let </span><span class="kw-2">mut </span>seq = <span class="macro">deref_mut_refcell!</span>(seq);
+                <span class="kw">for </span>seq <span class="kw">in </span><span class="kw-2">&amp;mut *</span>seqs {
                     <span class="kw">let </span>seq_cache = <span class="kw-2">&amp;*</span>seq.xlora_cache();
                     <span class="kw">let </span>cache = seq_cache.get(layer).unwrap();
                     <span class="comment">// Note(EricLBuehler): Unwrap reasoning: We are handling completions seqs so unwrap is OK.
@@ -796,33 +786,30 @@
                     },
                 )));
             }
-            <span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).cache().xlora_lock() = new_cache;
+            <span class="kw-2">*</span>pipeline.cache().xlora_lock() = new_cache;
         }
-        <span class="kw">if </span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).is_xlora() {
-            <span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
-                .cache()
-                .get_scalings_cache() = <span class="macro">deref_mut_refcell!</span>(seqs[<span class="number">0</span>]).scaling_cache().clone();
+        <span class="kw">if </span>pipeline.is_xlora() {
+            <span class="kw-2">*</span>pipeline.cache().get_scalings_cache() = seqs[<span class="number">0</span>].scaling_cache().clone();
         }
-        <span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).cache().lock() = new_cache;
+        <span class="kw-2">*</span>pipeline.cache().lock() = new_cache;
     }
 
     <span class="doccomment">/// Set the model cache to all None. Only used for prompt seqs.
-    </span><span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) {
+    </span><span class="kw">fn </span>set_none_cache(pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline) {
         <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
-        <span class="kw">for _ in </span><span class="number">0</span>..<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).num_hidden_layers() {
+        <span class="kw">for _ in </span><span class="number">0</span>..pipeline.num_hidden_layers() {
             new_cache.push(<span class="prelude-val">None</span>);
         }
-        <span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).cache().lock() = new_cache.clone();
-        <span class="kw">if </span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).cache().is_xlora() {
-            <span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).cache().xlora_lock() = new_cache;
+        <span class="kw-2">*</span>pipeline.cache().lock() = new_cache.clone();
+        <span class="kw">if </span>pipeline.cache().is_xlora() {
+            <span class="kw-2">*</span>pipeline.cache().xlora_lock() = new_cache;
         }
     }
 
     <span class="doccomment">/// Clone the cache FROM the model cache TO the sequences. Used for prompt, completion seqs.
-    </span><span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;</span>[Rc&lt;RefCell&lt;Sequence&gt;&gt;]) {
-        <span class="kw">let </span>num_hidden_layers = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).num_hidden_layers();
+    </span><span class="kw">fn </span>clone_out_cache(pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
+        <span class="kw">let </span>num_hidden_layers = pipeline.num_hidden_layers();
         <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..num_hidden_layers {
-            <span class="kw">let </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
             <span class="kw">let </span>cache = pipeline.cache().lock();
             <span class="kw">let </span>cache = cache.get(layer).unwrap();
             <span class="kw">let </span>k_cache = cache.as_ref().unwrap().<span class="number">0</span>.clone();
@@ -833,8 +820,7 @@
             <span class="kw">let </span>v_caches = v_cache.chunk(seqs.len(), <span class="number">0</span>).unwrap();
             <span class="macro">debug_assert_eq!</span>(v_caches.len(), seqs.len());
 
-            <span class="kw">for </span>(seq_i, seq) <span class="kw">in </span>seqs.iter().enumerate() {
-                <span class="kw">let </span><span class="kw-2">mut </span>seq = <span class="macro">deref_mut_refcell!</span>(seq);
+            <span class="kw">for </span>(seq_i, seq) <span class="kw">in </span>seqs.iter_mut().enumerate() {
                 <span class="kw">let </span>seq_cache = seq.cache();
                 <span class="kw">let </span>seq_cache = seq_cache.get_mut(layer).unwrap();
                 <span class="kw-2">*</span>seq_cache = <span class="prelude-val">Some</span>((
@@ -853,8 +839,7 @@
                 <span class="kw">let </span>v_caches = v_cache.chunk(seqs.len(), <span class="number">0</span>).unwrap();
                 <span class="macro">debug_assert_eq!</span>(v_caches.len(), seqs.len());
 
-                <span class="kw">for </span>(seq_i, seq) <span class="kw">in </span>seqs.iter().enumerate() {
-                    <span class="kw">let </span><span class="kw-2">mut </span>seq = <span class="macro">deref_mut_refcell!</span>(seq);
+                <span class="kw">for </span>(seq_i, seq) <span class="kw">in </span>seqs.iter_mut().enumerate() {
                     <span class="kw">let </span>seq_cache = seq.xlora_cache();
                     <span class="kw">let </span>seq_cache = seq_cache.get_mut(layer).unwrap();
                     <span class="kw-2">*</span>seq_cache = <span class="prelude-val">Some</span>((
@@ -864,8 +849,7 @@
                 }
             }
             <span class="kw">if </span>pipeline.is_xlora() {
-                <span class="kw-2">*</span><span class="macro">deref_mut_refcell!</span>(seqs[<span class="number">0</span>]).scaling_cache() =
-                    pipeline.cache().get_scalings_cache().clone();
+                <span class="kw-2">*</span>seqs[<span class="number">0</span>].scaling_cache() = pipeline.cache().get_scalings_cache().clone();
             }
         }
     }
