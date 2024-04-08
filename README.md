@@ -3,13 +3,12 @@
 
 Mistral.rs is a LLM inference platform written in pure, safe Rust.
 
-## Upcoming features
+## Current work
 - More models: please submit requests [here](https://github.com/EricLBuehler/mistral.rs/issues/49).
 - X-LoRA: Scalings `topk` ([#48](https://github.com/EricLBuehler/mistral.rs/issues/48)).
 - X-LoRA: Softmax `topk` ([#48](https://github.com/EricLBuehler/mistral.rs/issues/48)).
 - PagedAttention ([#47](https://github.com/EricLBuehler/mistral.rs/pull/47)) ⭐ Active work.
 - Model grammar support with GBNF ([#59](https://github.com/EricLBuehler/mistral.rs/issues/59)). ⭐ Active work.
-- Apple silicon quantization ([#58](https://github.com/EricLBuehler/mistral.rs/issues/58)).
 - Parallel linear layers (sharding) ([#50](https://github.com/EricLBuehler/mistral.rs/issues/50)).
 - LoRA/multi-LoRA adapters support ([#61](https://github.com/EricLBuehler/mistral.rs/issues/61)). ⭐ Active work.
 
