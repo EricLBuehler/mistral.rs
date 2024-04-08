@@ -374,6 +374,10 @@
 <a href="#372" id="372">372</a>
 <a href="#373" id="373">373</a>
 <a href="#374" id="374">374</a>
+<a href="#375" id="375">375</a>
+<a href="#376" id="376">376</a>
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
@@ -718,6 +722,10 @@
                 * <span class="number">1000.</span>,
             avg_sample_tok_per_sec: (<span class="self">self</span>.total_toks <span class="kw">as </span>f32 / <span class="self">self</span>.total_sampling_time <span class="kw">as </span>f32)
                 * <span class="number">1000.</span>,
+            total_time_sec: <span class="self">self</span>.total_time <span class="kw">as </span>f32 * <span class="number">1000.</span>,
+            total_completion_time_sec: <span class="self">self</span>.total_completion_time <span class="kw">as </span>f32 * <span class="number">1000.</span>,
+            total_prompt_time_sec: <span class="self">self</span>.total_prompt_time <span class="kw">as </span>f32 * <span class="number">1000.</span>,
+            total_sampling_time_sec: <span class="self">self</span>.total_sampling_time <span class="kw">as </span>f32 * <span class="number">1000.</span>,
         }
     }
 
