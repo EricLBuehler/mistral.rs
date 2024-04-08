@@ -85,7 +85,6 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             (0, 0) => {
                 println!("0,0");
                 self.running = running;
-                panic!();
                 return SchedulerOutput {
                     prompt: vec![].into(),
                     completion: vec![].into(),
@@ -100,6 +99,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
                 self.waiting = Backer::new();
                 dbg!(self.running.len());
                 dbg!(self.waiting.iter().count());
+                panic!();
                 return SchedulerOutput {
                     prompt: self.running.iter_mut().collect::<Vec<_>>().into(),
                     completion: vec![].into(),
