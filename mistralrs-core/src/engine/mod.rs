@@ -154,7 +154,6 @@ impl Engine {
             let next_token_id = next_token.token;
             seq.add_token(next_token.clone());
             let is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
-            dbg!(is_done);
             // Handle streaming requests
             if seq.get_mut_group().is_streaming {
                 let tokenizer = pipeline.tokenizer().clone();
@@ -232,7 +231,7 @@ impl Engine {
             logprobs: logprobs.map(|l| Logprobs { content: Some(l) }),
         };
         seq.add_choice_to_group(choice);
-
+        dbg!(seq.get_mut_group().get_choices().to_vec());
         seq.get_mut_group().maybe_send_done_response(
             ChatCompletionResponse {
                 id: seq.id().to_string(),
