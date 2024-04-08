@@ -46,7 +46,7 @@ To use a derivative model, select the model architecture using the correct subco
 - **X-LoRA**: Model id, X-LoRA ordering
 - **X-LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and X-LoRA ordering
 
-See [this](#x-lora) section to determine if it is necessary to pass an X-LoRA ordering file, it is always necessary if the target modules or architecture changed, or if the adapter order changed.
+See [this](#x-lora) section to determine if it is necessary to prepare an X-LoRA ordering file, it is always necessary if the target modules or architecture changed, or if the adapter order changed.
 
 It is also important to check the chat template style of the model. If the HF hub repo has a `tokenizer_config.json` file, it is not necessary to specify. Otherwise, templates can be found in `chat_templates` and should be passed before the subcommand.
 
@@ -163,6 +163,8 @@ To start an X-LoRA server with the default weights and ordering (exactly as pres
 
 `./mistralrs-server --port 1234 x-lora-mistral -o x-lora-orderings/default-ordering.json`
 
+---
+
 ### X-LoRA
 **Preparing the X-LoRA Ordering File**
 The X-LoRA ordering file is necessary to prepare before inference with an X-LoRA model. However, it is easy with a provided [`script`](scripts/create_ordering.py)!
@@ -191,12 +193,10 @@ There are 2 scripts to prepare the ordering file. The ordering file is specific 
 
 A provide a [default ordering file](scripts/default-ordering.json) which contains the ordering for the X-LoRA model associated with [the paper](https://arxiv.org/abs/2402.07148) and the Huggingface repository: https://huggingface.co/lamm-mit/x-lora.
 
----
-
 **Quantized X-LoRA models**
 
 Mistral.rs supports running quantized models with X-LoRA. The X-LoRA layers will not be quantized, only the base model. Please note that
-using a high quantization level (eg., 4-bit) can distort the signal and prevent the classifier from acting properly. Therefore, it is better to use slightly higher levels such as 8-bit.
+using a high quantization level (eg., 4-bit) can distort the signal and prevent the classifier from acting properly. Therefore, it is better to use slightly lower levels such as 8-bit.
 
 **Supported X-LoRA quantized layers**
 - model.layers.{layer_idx}.self_attn.q_proj
@@ -206,6 +206,13 @@ using a high quantization level (eg., 4-bit) can distort the signal and prevent 
 - model.layers.{layer_idx}.mlp.up_proj
 - model.layers.{layer_idx}.mlp.down_proj
 - model.layers.{layer_idx}.mlp.gate_proj
+
+
+**Avoiding the scaling pass with non-granular scalings**
+
+The X-LoRA implementation supports non-granular scalings. This caches the scalings after `k` completion tokens are generated and they will be used for the remaining passes avoiding the scaling pass. The number of tokens to generate before caching is defined by setting `tgt_non_granular_index`. Setting `tgt_non_granular_index` will restrict the maximum running sequences to 1.
+
+---
 
 ### Chat Templates and Tokenizer
 **Chat Templates**

@@ -86,6 +86,8 @@ A quantized model should be handled by the `quantized_llama.rs` implementation. 
 
 
 ## 7) Adding an X-LoRA counterpart
+If you prefer, we can add an X-LoRA counterpart of your model when you submit a PR. However, if you wish to add it yourself, you can follow the below guide:
+
 To add an X-LoRA counterpart, start by copying your model to the `xlora_models` directory. 
 
 Then, implement `ScalingsMaker` for model. This requires that you change the original `forward` method to `inner_forward`. A new forward method should be written, which because it is the same across most models can be copied:
