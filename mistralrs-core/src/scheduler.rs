@@ -79,7 +79,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             .filter(|seq| seq.is_running())
             .collect::<Vec<_>>();
 
-        match (self.waiting.iter().count(), running.len()) {
+        match (waiting.iter().count(), running.len()) {
             (0, 0) => {
                 self.running = running;
                 return SchedulerOutput {
