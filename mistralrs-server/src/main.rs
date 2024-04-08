@@ -24,6 +24,7 @@ use axum::{
 };
 use candle_core::Device;
 use clap::Parser;
+use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
     ChatCompletionResponse, GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig,
@@ -156,13 +157,19 @@ fn parse_request(
         Some(StopTokens::SingleId(s)) => Some(InternalStopTokens::Ids(vec![s])),
         None => None,
     };
-    let mut messages = Vec::new();
-    for message in oairequest.messages {
-        let mut message_map = IndexMap::new();
-        message_map.insert("role".to_string(), message.role);
-        message_map.insert("content".to_string(), message.content);
-        messages.push(message_map);
-    }
+    let messages = match oairequest.messages {
+        Either::Left(req_messages) => {
+            let mut messages = Vec::new();
+            for message in req_messages {
+                let mut message_map = IndexMap::new();
+                message_map.insert("role".to_string(), message.role);
+                message_map.insert("content".to_string(), message.content);
+                messages.push(message_map);
+            }
+            Either::Left(messages)
+        }
+        Either::Right(prompt) => Either::Right(prompt),
+    };
 
     Request {
         id: state.next_request_id(),

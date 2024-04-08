@@ -1,4 +1,5 @@
 use candle_core::Result;
+use either::Either;
 use indexmap::IndexMap;
 use std::{
     cell::RefCell,
@@ -14,9 +15,9 @@ use loaders::{
     NormalLoader, QuantizedLoader, XLoraLoader, XLoraQuantizedLoader,
 };
 use pyo3::{
-    exceptions::PyValueError,
+    exceptions::{PyTypeError, PyValueError},
     prelude::*,
-    types::{PyDict, PyString},
+    types::{PyDict, PyList, PyString},
 };
 mod loaders;
 
@@ -144,7 +145,7 @@ impl Runner {
 #[derive(Debug)]
 /// An OpenAI API compatible chat completion request.
 struct ChatCompletionRequest {
-    messages: Vec<IndexMap<String, String>>,
+    messages: Either<Vec<IndexMap<String, String>>, String>,
     _model: String,
     logit_bias: Option<HashMap<u32, f32>>,
     logprobs: bool,
@@ -166,7 +167,7 @@ impl ChatCompletionRequest {
     #[pyo3(signature = (messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, repetition_penalty = None, stop_token_ids = None, temperature = None, top_p = None, top_k = None, stream=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
-        messages: Vec<Py<PyDict>>,
+        messages: Py<PyAny>,
         model: String,
         logprobs: bool,
         n_choices: usize,
@@ -181,30 +182,39 @@ impl ChatCompletionRequest {
         top_k: Option<usize>,
         stream: Option<bool>,
     ) -> PyResult<Self> {
-        let mut messages_vec = Vec::new();
-        for message in messages {
-            let messages_map = Python::with_gil(|py| {
-                let mapping = message.bind(py).as_mapping();
-                let mut messages_map = IndexMap::new();
-                for i in 0..mapping.len()? {
-                    let k = mapping
-                        .keys()?
-                        .get_item(i)?
-                        .downcast::<PyString>()?
-                        .extract::<String>()?;
-                    let v = mapping
-                        .values()?
-                        .get_item(i)?
-                        .downcast::<PyString>()?
-                        .extract::<String>()?;
-                    messages_map.insert(k, v);
+        let messages = Python::with_gil(|py| {
+            if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
+                let mut messages_vec = Vec::new();
+                for message in messages {
+                    let mapping = message.downcast::<PyDict>()?.as_mapping();
+                    let mut messages_map = IndexMap::new();
+                    for i in 0..mapping.len()? {
+                        let k = mapping
+                            .keys()?
+                            .get_item(i)?
+                            .downcast::<PyString>()?
+                            .extract::<String>()?;
+                        let v = mapping
+                            .values()?
+                            .get_item(i)?
+                            .downcast::<PyString>()?
+                            .extract::<String>()?;
+                        messages_map.insert(k, v);
+                    }
+                    messages_vec.push(messages_map);
                 }
-                Ok::<IndexMap<std::string::String, std::string::String>, PyErr>(messages_map)
-            })?;
-            messages_vec.push(messages_map);
-        }
+                Ok::<Either<Vec<IndexMap<String, String>>, String>, PyErr>(Either::Left(
+                    messages_vec,
+                ))
+            } else if let Ok(messages) = messages.bind(py).downcast_exact::<PyString>() {
+                let prompt = messages.extract::<String>()?;
+                Ok::<Either<Vec<IndexMap<String, String>>, String>, PyErr>(Either::Right(prompt))
+            } else {
+                return Err(PyTypeError::new_err("Expected a string or list of dicts."));
+            }
+        })?;
         Ok(Self {
-            messages: messages_vec,
+            messages,
             _model: model,
             logit_bias,
             logprobs,

@@ -16,7 +16,7 @@ crate-type = ["cdylib"]
 doc = false
 
 [dependencies]
-pyo3 = "0.21.0" # { version = "0.21.0", features = ["extension-module"] }
+pyo3 = { version = "0.21.0", features = ["either"] } # { version = "0.21.0", features = ["extension-module"] }
 mistralrs = { version = "0.1.0", path = "../mistralrs" }
 serde.workspace = true
 serde_json.workspace = true
@@ -24,6 +24,7 @@ candle-core.workspace = true
 indexmap.workspace = true
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
+either.workspace = true
 
 [features]
 cuda = ["candle-core/cuda", "mistralrs/cuda"]

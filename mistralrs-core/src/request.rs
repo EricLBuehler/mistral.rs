@@ -1,10 +1,11 @@
+use either::Either;
 use indexmap::IndexMap;
 
 use crate::{response::Response, sampler::SamplingParams};
 use std::{fmt::Debug, sync::mpsc::Sender};
 
 pub struct Request {
-    pub messages: Vec<IndexMap<String, String>>,
+    pub messages: Either<Vec<IndexMap<String, String>>, String>,
     pub sampling_params: SamplingParams,
     pub response: Sender<Response>,
     pub return_logprobs: bool,
