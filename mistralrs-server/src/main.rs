@@ -14,6 +14,7 @@ use std::{
 use anyhow::Result;
 use axum::{
     extract::{Json, State},
+    http::{self, Method},
     response::{
         sse::{Event, KeepAlive},
         IntoResponse, Sse,
