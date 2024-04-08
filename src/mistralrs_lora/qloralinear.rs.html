@@ -279,6 +279,10 @@
 <a href="#277" id="277">277</a>
 <a href="#278" id="278">278</a>
 <a href="#279" id="279">279</a>
+<a href="#280" id="280">280</a>
+<a href="#281" id="281">281</a>
+<a href="#282" id="282">282</a>
+<a href="#283" id="283">283</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{iter::zip, ops::Mul};
 
 <span class="kw">use </span>candle_core::{
@@ -483,6 +487,10 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="comment">//No fan_in_fan_out so no weight.transpose(0,1)
         </span><span class="kw">let </span><span class="kw-2">mut </span>result = <span class="self">self</span>.old.forward(input)<span class="question-mark">?</span>;
+        <span class="kw">if </span><span class="self">self</span>.merged {
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(result);
+        }
+
         <span class="kw">if </span><span class="self">self
             </span>.a_adapters
             .as_ref()
