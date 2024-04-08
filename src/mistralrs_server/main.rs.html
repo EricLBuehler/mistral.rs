@@ -812,6 +812,16 @@
 <a href="#810" id="810">810</a>
 <a href="#811" id="811">811</a>
 <a href="#812" id="812">812</a>
+<a href="#813" id="813">813</a>
+<a href="#814" id="814">814</a>
+<a href="#815" id="815">815</a>
+<a href="#816" id="816">816</a>
+<a href="#817" id="817">817</a>
+<a href="#818" id="818">818</a>
+<a href="#819" id="819">819</a>
+<a href="#820" id="820">820</a>
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     env,
     error::Error,
@@ -828,6 +838,7 @@
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{Json, State},
+    http::{<span class="self">self</span>, Method},
     response::{
         sse::{Event, KeepAlive},
         IntoResponse, Sse,
@@ -851,6 +862,7 @@
 <span class="kw">mod </span>model_selected;
 <span class="kw">mod </span>openai;
 
+<span class="kw">use </span>tower_http::cors::{AllowOrigin, CorsLayer};
 <span class="kw">use </span>tracing::{info, warn};
 <span class="kw">use </span>utoipa::OpenApi;
 <span class="kw">use </span>utoipa_swagger_ui::SwaggerUi;
@@ -1096,8 +1108,16 @@
     </span><span class="kw">struct </span>ApiDoc;
 
     <span class="kw">let </span>doc = { ApiDoc::openapi() };
+
+    <span class="kw">let </span>allow_origin = AllowOrigin::any();
+    <span class="kw">let </span>cors_layer = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers([http::header::CONTENT_TYPE])
+        .allow_origin(allow_origin);
+
     Router::new()
         .merge(SwaggerUi::new(<span class="string">"/docs"</span>).url(<span class="string">"/api-doc/openapi.json"</span>, doc))
+        .layer(cors_layer)
         .route(<span class="string">"/v1/chat/completions"</span>, post(chatcompletions))
         .route(<span class="string">"/v1/models"</span>, get(models))
         .route(<span class="string">"/health"</span>, get(health))
