@@ -66,7 +66,7 @@ impl GemmaLoader {
     ) -> PyResult<Self> {
         let order = if let Some(ref order_file) = order_file {
             let f = File::open(order_file.clone())
-                .expect(&format!("Could not load ordering file at {order_file}"));
+                .unwrap_or_else(|_| panic!("Could not load ordering file at {order_file}"));
             match serde_json::from_reader(f) {
                 Ok(x) => Some(x),
                 Err(y) => return Err(PyValueError::new_err(y.to_string())),

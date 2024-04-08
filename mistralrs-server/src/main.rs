@@ -408,9 +408,10 @@ async fn main() -> Result<()> {
             None,
             Some(xlora_model_id),
             ModelKind::XLoraNormal,
-            Some(serde_json::from_reader(File::open(order.clone()).expect(
-                &format!("Could not load ordering file at {order}"),
-            ))?),
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
@@ -447,9 +448,10 @@ async fn main() -> Result<()> {
             None,
             Some(xlora_model_id),
             ModelKind::Normal,
-            Some(serde_json::from_reader(File::open(order.clone()).expect(
-                &format!("Could not load ordering file at {order}"),
-            ))?),
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
@@ -541,9 +543,10 @@ async fn main() -> Result<()> {
             None,
             Some(xlora_model_id),
             ModelKind::QuantizedGGML,
-            Some(serde_json::from_reader(File::open(order.clone()).expect(
-                &format!("Could not load ordering file at {order}"),
-            ))?),
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
@@ -608,9 +611,10 @@ async fn main() -> Result<()> {
             None,
             Some(xlora_model_id),
             ModelKind::XLoraNormal,
-            Some(serde_json::from_reader(File::open(order.clone()).expect(
-                &format!("Could not load ordering file at {order}"),
-            ))?),
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
@@ -635,9 +639,10 @@ async fn main() -> Result<()> {
             quantized_filename,
             Some(xlora_model_id),
             ModelKind::XLoraGGUF,
-            Some(serde_json::from_reader(File::open(order.clone()).expect(
-                &format!("Could not load ordering file at {order}"),
-            ))?),
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
@@ -662,9 +667,10 @@ async fn main() -> Result<()> {
             quantized_filename,
             Some(xlora_model_id),
             ModelKind::XLoraGGUF,
-            Some(serde_json::from_reader(File::open(order.clone()).expect(
-                &format!("Could not load ordering file at {order}"),
-            ))?),
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
@@ -690,9 +696,10 @@ async fn main() -> Result<()> {
             quantized_filename,
             Some(xlora_model_id),
             ModelKind::XLoraGGUF,
-            Some(serde_json::from_reader(File::open(order.clone()).expect(
-                &format!("Could not load ordering file at {order}"),
-            ))?),
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
@@ -719,9 +726,10 @@ async fn main() -> Result<()> {
             quantized_filename,
             Some(xlora_model_id),
             ModelKind::XLoraGGML,
-            Some(serde_json::from_reader(File::open(order.clone()).expect(
-                &format!("Could not load ordering file at {order}"),
-            ))?),
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
             args.no_kv_cache,
             args.chat_template,
             tokenizer_json,
