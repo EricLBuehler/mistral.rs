@@ -342,10 +342,10 @@ impl SequenceGroup {
                 * 1000.,
             avg_sample_tok_per_sec: (self.total_toks as f32 / self.total_sampling_time as f32)
                 * 1000.,
-            total_time_sec: self.total_time as f32 * 1000.,
-            total_completion_time_sec: self.total_completion_time as f32 * 1000.,
-            total_prompt_time_sec: self.total_prompt_time as f32 * 1000.,
-            total_sampling_time_sec: self.total_sampling_time as f32 * 1000.,
+            total_time_sec: self.total_time as f32 / 1000.,
+            total_completion_time_sec: self.total_completion_time as f32 / 1000.,
+            total_prompt_time_sec: self.total_prompt_time as f32 / 1000.,
+            total_sampling_time_sec: self.total_sampling_time as f32 / 1000.,
         }
     }
 
