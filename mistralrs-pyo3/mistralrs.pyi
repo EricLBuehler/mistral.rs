@@ -8,7 +8,7 @@ class ChatCompletionRequest:
     about input data, sampling, and how to return the response.
     """
 
-    messages: list[dict[str, str]]
+    messages: list[dict[str, str]] | str
     model: str
     logit_bias: dict[int, float] | None = None
     logprobs: bool = False

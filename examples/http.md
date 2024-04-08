@@ -79,7 +79,7 @@ curl http://localhost:<port>/docs
 OpenAI compatible request.
 ```rust
 pub struct ChatCompletionRequest {
-    pub messages: Vec<Message>,
+    pub messages: Either<Vec<Message>, String>,
     pub model: String,
     pub logit_bias: Option<HashMap<u32, f32>>,
     // Default false

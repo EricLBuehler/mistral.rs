@@ -1,3 +1,4 @@
+use either::Either;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
@@ -29,7 +30,8 @@ fn default_1usize() -> usize {
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ChatCompletionRequest {
     #[schema(example = json!(vec![Message{content:"Why did the crab cross the road?".to_string(), role:"user".to_string(), name: None}]))]
-    pub messages: Vec<Message>,
+    #[serde(with = "either::serde_untagged")]
+    pub messages: Either<Vec<Message>, String>,
     #[schema(example = "mistral")]
     pub model: String,
     #[schema(example = json!(Option::None::<HashMap<u32, f32>>))]

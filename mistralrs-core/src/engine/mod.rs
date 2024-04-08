@@ -8,6 +8,7 @@ use std::{
 };
 
 use candle_core::{Device, Tensor};
+use either::Either;
 use tracing::warn;
 
 use crate::{
@@ -371,10 +372,15 @@ impl Engine {
     }
 
     fn add_request(&mut self, request: Request) {
-        let formatted_prompt = handle_seq_error!(
-            get_mut_arcmutex!(self.pipeline).apply_chat_template(request.messages.clone(), true),
-            request.response
-        );
+        let formatted_prompt = match request.messages {
+            Either::Left(messages) => {
+                handle_seq_error!(
+                    get_mut_arcmutex!(self.pipeline).apply_chat_template(messages, true),
+                    request.response
+                )
+            }
+            Either::Right(prompt) => prompt,
+        };
         let mut prompt = handle_seq_error!(
             get_mut_arcmutex!(self.pipeline).tokenize_prompt(&formatted_prompt),
             request.response
