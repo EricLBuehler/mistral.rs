@@ -61,7 +61,7 @@ class DType(Enum):
 class LoaderMixin:
     def load(
         self,
-        token_source: str,
+        token_source: str = "cache",
         max_seqs: int = 16,
         truncate_sequence: bool = False,
         logfile: str | None = None,
