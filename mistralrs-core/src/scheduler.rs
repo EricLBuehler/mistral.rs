@@ -88,23 +88,18 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
                 };
             }
             (_, 0) => {
-                println!("_,0");
                 for seq in waiting.into_iter() {
                     seq.set_state(SequenceState::RunningPrompt);
                     self.running.push(seq);
                 }
                 self.waiting = Backer::new();
-                dbg!(self.running.len());
-                dbg!(self.waiting.iter().count());
                 return SchedulerOutput {
                     prompt: self.running.iter_mut().collect::<Vec<_>>().into(),
                     completion: vec![].into(),
                 };
             }
             (0, _) => {
-                println!("0,_");
                 self.running = running;
-                dbg!(self.running.len());
                 return SchedulerOutput {
                     prompt: vec![].into(),
                     completion: self.running.iter_mut().collect::<Vec<_>>().into(),

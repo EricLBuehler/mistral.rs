@@ -57,7 +57,6 @@ impl Engine {
         loop {
             if let Ok(request) = self.rx.try_recv() {
                 self.add_request(request);
-                println!("got a request");
             }
             let mut scheduled = self.scheduler.schedule();
 
@@ -94,7 +93,6 @@ impl Engine {
             }
 
             if scheduled.prompt.len() > 0 {
-                println!("a");
                 // Run the prompt seqs
                 Self::set_none_cache(&mut *get_mut_arcmutex!(self.pipeline));
                 let logits = get_mut_arcmutex!(self.pipeline).forward(&scheduled.prompt, true);
@@ -156,6 +154,7 @@ impl Engine {
             let next_token_id = next_token.token;
             seq.add_token(next_token.clone());
             let is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
+            dbg!(is_done);
             // Handle streaming requests
             if seq.get_mut_group().is_streaming {
                 let tokenizer = pipeline.tokenizer().clone();
@@ -380,7 +379,6 @@ impl Engine {
             get_mut_arcmutex!(self.pipeline).tokenize_prompt(&formatted_prompt),
             request.response
         );
-        dbg!(&formatted_prompt);
         if prompt.len() > get_mut_arcmutex!(self.pipeline).get_max_seq_len() {
             if !self.truncate_sequence {
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
@@ -459,7 +457,6 @@ impl Engine {
             topk,
             topp,
         );
-        println!("adding seqs");
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {
             let seq = Sequence::new_waiting(
@@ -480,7 +477,6 @@ impl Engine {
             );
             self.id += 1;
             self.scheduler.add_seq(seq);
-            println!("added the seqs");
         }
     }
 }
