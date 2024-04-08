@@ -822,6 +822,13 @@
 <a href="#820" id="820">820</a>
 <a href="#821" id="821">821</a>
 <a href="#822" id="822">822</a>
+<a href="#823" id="823">823</a>
+<a href="#824" id="824">824</a>
+<a href="#825" id="825">825</a>
+<a href="#826" id="826">826</a>
+<a href="#827" id="827">827</a>
+<a href="#828" id="828">828</a>
+<a href="#829" id="829">829</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     env,
     error::Error,
@@ -848,6 +855,7 @@
 };
 <span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
+<span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_core::{
     ChatCompletionResponse, GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig,
@@ -980,13 +988,19 @@
         <span class="prelude-val">Some</span>(StopTokens::SingleId(s)) =&gt; <span class="prelude-val">Some</span>(InternalStopTokens::Ids(<span class="macro">vec!</span>[s])),
         <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
     };
-    <span class="kw">let </span><span class="kw-2">mut </span>messages = Vec::new();
-    <span class="kw">for </span>message <span class="kw">in </span>oairequest.messages {
-        <span class="kw">let </span><span class="kw-2">mut </span>message_map = IndexMap::new();
-        message_map.insert(<span class="string">"role"</span>.to_string(), message.role);
-        message_map.insert(<span class="string">"content"</span>.to_string(), message.content);
-        messages.push(message_map);
-    }
+    <span class="kw">let </span>messages = <span class="kw">match </span>oairequest.messages {
+        Either::Left(req_messages) =&gt; {
+            <span class="kw">let </span><span class="kw-2">mut </span>messages = Vec::new();
+            <span class="kw">for </span>message <span class="kw">in </span>req_messages {
+                <span class="kw">let </span><span class="kw-2">mut </span>message_map = IndexMap::new();
+                message_map.insert(<span class="string">"role"</span>.to_string(), message.role);
+                message_map.insert(<span class="string">"content"</span>.to_string(), message.content);
+                messages.push(message_map);
+            }
+            Either::Left(messages)
+        }
+        Either::Right(prompt) =&gt; Either::Right(prompt),
+    };
 
     Request {
         id: state.next_request_id(),

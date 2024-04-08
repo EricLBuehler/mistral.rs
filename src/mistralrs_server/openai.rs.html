@@ -80,7 +80,10 @@
 <a href="#78" id="78">78</a>
 <a href="#79" id="79">79</a>
 <a href="#80" id="80">80</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>serde::{Deserialize, Serialize};
+<a href="#81" id="81">81</a>
+<a href="#82" id="82">82</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
+<span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>std::collections::HashMap;
 <span class="kw">use </span>utoipa::ToSchema;
 
@@ -111,7 +114,8 @@
 <span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 </span><span class="kw">pub struct </span>ChatCompletionRequest {
     <span class="attr">#[schema(example = <span class="macro">json!</span>(<span class="macro">vec!</span>[Message{content:<span class="string">"Why did the crab cross the road?"</span>.to_string(), role:<span class="string">"user"</span>.to_string(), name: <span class="prelude-val">None</span>}]</span>))]
-    <span class="kw">pub </span>messages: Vec&lt;Message&gt;,
+    <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)]
+    </span><span class="kw">pub </span>messages: Either&lt;Vec&lt;Message&gt;, String&gt;,
     <span class="attr">#[schema(example = <span class="string">"mistral"</span>)]
     </span><span class="kw">pub </span>model: String,
     <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;HashMap&lt;u32, f32&gt;&gt;))]

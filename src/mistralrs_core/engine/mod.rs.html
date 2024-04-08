@@ -482,6 +482,12 @@
 <a href="#480" id="480">480</a>
 <a href="#481" id="481">481</a>
 <a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -492,6 +498,7 @@
 };
 
 <span class="kw">use </span>candle_core::{Device, Tensor};
+<span class="kw">use </span>either::Either;
 <span class="kw">use </span>tracing::warn;
 
 <span class="kw">use crate</span>::{
@@ -855,10 +862,15 @@
     }
 
     <span class="kw">fn </span>add_request(<span class="kw-2">&amp;mut </span><span class="self">self</span>, request: Request) {
-        <span class="kw">let </span>formatted_prompt = <span class="macro">handle_seq_error!</span>(
-            <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).apply_chat_template(request.messages.clone(), <span class="bool-val">true</span>),
-            request.response
-        );
+        <span class="kw">let </span>formatted_prompt = <span class="kw">match </span>request.messages {
+            Either::Left(messages) =&gt; {
+                <span class="macro">handle_seq_error!</span>(
+                    <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).apply_chat_template(messages, <span class="bool-val">true</span>),
+                    request.response
+                )
+            }
+            Either::Right(prompt) =&gt; prompt,
+        };
         <span class="kw">let </span><span class="kw-2">mut </span>prompt = <span class="macro">handle_seq_error!</span>(
             <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenize_prompt(<span class="kw-2">&amp;</span>formatted_prompt),
             request.response
