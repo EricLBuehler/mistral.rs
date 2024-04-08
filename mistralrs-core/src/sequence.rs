@@ -352,6 +352,7 @@ impl SequenceGroup {
     ) {
         if self.choices.len() == self.n_choices {
             // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
+            dbg!(&response);
             sender.send(Response::Done(response)).unwrap();
         }
     }

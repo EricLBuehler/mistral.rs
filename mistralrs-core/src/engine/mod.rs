@@ -231,7 +231,7 @@ impl Engine {
             logprobs: logprobs.map(|l| Logprobs { content: Some(l) }),
         };
         seq.add_choice_to_group(choice);
-        dbg!(seq.get_mut_group().get_choices().to_vec());
+
         seq.get_mut_group().maybe_send_done_response(
             ChatCompletionResponse {
                 id: seq.id().to_string(),
