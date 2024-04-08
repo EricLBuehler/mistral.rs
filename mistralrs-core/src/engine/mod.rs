@@ -60,44 +60,35 @@ impl Engine {
                 self.add_request(request);
             }
             let mut scheduled = self.scheduler.schedule();
+            let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
             if scheduled.completion.len() > 0 {
                 // Run the completion seqs
                 if !self.no_kv_cache {
-                    Self::clone_in_cache(
-                        &mut *get_mut_arcmutex!(self.pipeline),
-                        &mut scheduled.completion,
-                    );
+                    Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
                 }
-                let logits = get_mut_arcmutex!(self.pipeline).forward(&scheduled.completion, false);
-                Self::synchronize(get_mut_arcmutex!(self.pipeline).device());
+                let logits = pipeline.forward(&scheduled.completion, false);
+                Self::synchronize(pipeline.device());
 
                 let before_sample = Instant::now();
-                Self::sample_seqs(
-                    &mut *get_mut_arcmutex!(self.pipeline),
-                    &mut scheduled.completion,
-                    logits,
-                );
+                Self::sample_seqs(&mut *pipeline, &mut scheduled.completion, logits);
                 let sampling_time = before_sample.elapsed().as_millis();
                 for seq in scheduled.completion.iter_mut() {
                     seq.total_sampling_time += sampling_time;
                 }
 
                 if !self.no_kv_cache {
-                    Self::clone_out_cache(
-                        &mut *get_mut_arcmutex!(self.pipeline),
-                        &mut scheduled.completion,
-                    );
+                    Self::clone_out_cache(&mut *pipeline, &mut scheduled.completion);
                 } else {
-                    Self::set_none_cache(&mut *get_mut_arcmutex!(self.pipeline));
+                    Self::set_none_cache(&mut *pipeline);
                 }
             }
 
             if scheduled.prompt.len() > 0 {
                 // Run the prompt seqs
-                Self::set_none_cache(&mut *get_mut_arcmutex!(self.pipeline));
-                let logits = get_mut_arcmutex!(self.pipeline).forward(&scheduled.prompt, true);
-                Self::synchronize(get_mut_arcmutex!(self.pipeline).device());
+                Self::set_none_cache(&mut *pipeline);
+                let logits = pipeline.forward(&scheduled.prompt, true);
+                Self::synchronize(pipeline.device());
                 for seq in scheduled.prompt.iter_mut() {
                     seq.set_state(SequenceState::RunningCompletion);
                     let now = SystemTime::now()
@@ -111,23 +102,16 @@ impl Engine {
                 }
 
                 let before_sample = Instant::now();
-                Self::sample_seqs(
-                    &mut *get_mut_arcmutex!(self.pipeline),
-                    &mut scheduled.prompt,
-                    logits,
-                );
+                Self::sample_seqs(&mut *pipeline, &mut scheduled.prompt, logits);
                 let sampling_time = before_sample.elapsed().as_millis();
                 for seq in scheduled.prompt.iter_mut() {
                     seq.total_sampling_time += sampling_time;
                 }
 
                 if !self.no_kv_cache {
-                    Self::clone_out_cache(
-                        &mut *get_mut_arcmutex!(self.pipeline),
-                        &mut scheduled.prompt,
-                    );
+                    Self::clone_out_cache(&mut *pipeline, &mut scheduled.prompt);
                 } else {
-                    Self::set_none_cache(&mut *get_mut_arcmutex!(self.pipeline));
+                    Self::set_none_cache(&mut *pipeline);
                 }
             }
         }
