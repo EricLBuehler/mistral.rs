@@ -1,12 +1,15 @@
 use std::{iter::zip, ops::Mul};
 
-use candle_core::{quantized::QMatMul, DType, Module, Result, Shape, Tensor};
+use candle_core::{
+    quantized::{QMatMul, QTensor},
+    DType, Module, Result, Shape, Tensor,
+};
 use candle_nn::{init, Dropout, Linear, VarBuilder};
 use either::Either;
 
 use crate::{
     apply_scalings_to_x, get_maybe_topk_scalings, LinearLayerLike, LoraConfig, LoraLinearConfig,
-    Ordering,
+    Merge, Ordering,
 };
 
 #[derive(Debug)]
@@ -17,6 +20,7 @@ pub struct QLoraLinear {
     scale_adapters: Vec<f64>,
     dropout_adapters: Vec<Option<Dropout>>,
     layer_n: usize,
+    merged: bool,
 }
 
 impl QLoraLinear {
@@ -45,6 +49,7 @@ impl QLoraLinear {
                 scale_adapters: vec![],
                 dropout_adapters: vec![],
                 layer_n: usize::MAX,
+                merged: false,
             });
         }
 
@@ -134,6 +139,7 @@ impl QLoraLinear {
                 scale_adapters,
                 dropout_adapters,
                 layer_n: layer,
+                merged: false,
             })
         } else {
             Ok(QLoraLinear {
@@ -143,8 +149,37 @@ impl QLoraLinear {
                 scale_adapters,
                 dropout_adapters,
                 layer_n: layer,
+                merged: false,
             })
         }
+    }
+}
+
+impl Merge for QLoraLinear {
+    fn get_delta_weight(&self, adapter: usize) -> Result<Tensor> {
+        match (&self.a_adapters, &self.b_adapters) {
+            (Either::Left(a), Either::Left(b)) | (Either::Right((_, a)), Either::Right((_, b))) => {
+                let w_a = a[adapter].weight();
+                let w_b = b[adapter].weight();
+
+                w_b.matmul(w_a)? * self.scale_adapters[adapter]
+            }
+            _ => unreachable!("Both adapters must be Either::Left or Either::Right."),
+        }
+    }
+
+    fn merge_weights(&mut self) -> Result<()> {
+        let (mut w_base_layer, dtype) = match &self.old {
+            QMatMul::QTensor(q) => (q.dequantize(&q.device())?, q.dtype()),
+            QMatMul::Tensor(_) => unreachable!(),
+        };
+        for adapter in 0..self.scale_adapters.len() {
+            w_base_layer = (w_base_layer + self.get_delta_weight(adapter))?;
+        }
+        let new_w = QTensor::quantize(&w_base_layer, dtype)?;
+        self.old = QMatMul::from_qtensor(new_w)?;
+        self.merged = true;
+        Ok(())
     }
 }
 
