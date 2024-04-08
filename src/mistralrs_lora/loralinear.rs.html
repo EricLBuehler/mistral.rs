@@ -214,6 +214,37 @@
 <a href="#212" id="212">212</a>
 <a href="#213" id="213">213</a>
 <a href="#214" id="214">214</a>
+<a href="#215" id="215">215</a>
+<a href="#216" id="216">216</a>
+<a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a>
+<a href="#219" id="219">219</a>
+<a href="#220" id="220">220</a>
+<a href="#221" id="221">221</a>
+<a href="#222" id="222">222</a>
+<a href="#223" id="223">223</a>
+<a href="#224" id="224">224</a>
+<a href="#225" id="225">225</a>
+<a href="#226" id="226">226</a>
+<a href="#227" id="227">227</a>
+<a href="#228" id="228">228</a>
+<a href="#229" id="229">229</a>
+<a href="#230" id="230">230</a>
+<a href="#231" id="231">231</a>
+<a href="#232" id="232">232</a>
+<a href="#233" id="233">233</a>
+<a href="#234" id="234">234</a>
+<a href="#235" id="235">235</a>
+<a href="#236" id="236">236</a>
+<a href="#237" id="237">237</a>
+<a href="#238" id="238">238</a>
+<a href="#239" id="239">239</a>
+<a href="#240" id="240">240</a>
+<a href="#241" id="241">241</a>
+<a href="#242" id="242">242</a>
+<a href="#243" id="243">243</a>
+<a href="#244" id="244">244</a>
+<a href="#245" id="245">245</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{iter::zip, ops::Mul};
 
 <span class="kw">use </span>candle_core::{Module, <span class="prelude-ty">Result</span>, Shape, Tensor};
@@ -222,7 +253,7 @@
 
 <span class="kw">use crate</span>::{
     apply_scalings_to_x, frozenlinear::FrozenLinear, get_maybe_topk_scalings, LinearLayerLike,
-    LoraConfig, LoraLinearConfig,
+    LoraConfig, LoraLinearConfig, Merge,
 };
 
 <span class="attr">#[derive(Debug)]
@@ -233,6 +264,7 @@
     scale_adapters: Vec&lt;f64&gt;,
     dropout_adapters: Vec&lt;<span class="prelude-ty">Option</span>&lt;Dropout&gt;&gt;,
     layer_n: usize,
+    merged: bool,
 }
 
 <span class="kw">impl </span>LoraLinear {
@@ -322,6 +354,7 @@
                 scale_adapters,
                 dropout_adapters,
                 layer_n,
+                merged: <span class="bool-val">false</span>,
             })
         } <span class="kw">else </span>{
             <span class="prelude-val">Ok</span>(LoraLinear {
@@ -331,8 +364,33 @@
                 scale_adapters,
                 dropout_adapters,
                 layer_n,
+                merged: <span class="bool-val">false</span>,
             })
         }
+    }
+}
+
+<span class="kw">impl </span>Merge <span class="kw">for </span>LoraLinear {
+    <span class="kw">fn </span>get_delta_weight(<span class="kw-2">&amp;</span><span class="self">self</span>, adapter: usize) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">match </span>(<span class="kw-2">&amp;</span><span class="self">self</span>.a_adapters, <span class="kw-2">&amp;</span><span class="self">self</span>.b_adapters) {
+            (Either::Left(a), Either::Left(b)) | (Either::Right((<span class="kw">_</span>, a)), Either::Right((<span class="kw">_</span>, b))) =&gt; {
+                <span class="kw">let </span>w_a = a[adapter].weight();
+                <span class="kw">let </span>w_b = b[adapter].weight();
+
+                w_b.matmul(w_a)<span class="question-mark">? </span>* <span class="self">self</span>.scale_adapters[adapter]
+            }
+            <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(<span class="string">"Both adapters must be Either::Left or Either::Right."</span>),
+        }
+    }
+
+    <span class="kw">fn </span>merge_weights(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>w_base_layer = <span class="self">self</span>.old.weight().clone();
+        <span class="kw">for </span>adapter <span class="kw">in </span><span class="number">0</span>..<span class="self">self</span>.scale_adapters.len() {
+            w_base_layer = (w_base_layer + <span class="self">self</span>.get_delta_weight(adapter))<span class="question-mark">?</span>;
+        }
+        <span class="self">self</span>.old = FrozenLinear::new(w_base_layer, <span class="self">self</span>.old.bias().cloned())<span class="question-mark">?</span>;
+        <span class="self">self</span>.merged = <span class="bool-val">true</span>;
+        <span class="prelude-val">Ok</span>(())
     }
 }
 
@@ -354,6 +412,10 @@
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>result = <span class="self">self</span>.old.forward(input)<span class="question-mark">?</span>;
+
+        <span class="kw">if </span><span class="self">self</span>.merged {
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(result);
+        }
 
         <span class="kw">if </span>is_scaling_pass.is_some_and(|x| x == <span class="number">0.</span>) {
             <span class="kw">return </span><span class="prelude-val">Ok</span>(result);
