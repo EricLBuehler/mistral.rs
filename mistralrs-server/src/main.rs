@@ -14,6 +14,7 @@ use std::{
 use anyhow::Result;
 use axum::{
     extract::{Json, State},
+    http::{self, Method},
     response::{
         sse::{Event, KeepAlive},
         IntoResponse, Sse,
@@ -37,6 +38,7 @@ use crate::openai::ModelObject;
 mod model_selected;
 mod openai;
 
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{info, warn};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -282,8 +284,16 @@ fn get_router(state: Arc<MistralRs>) -> Router {
     struct ApiDoc;
 
     let doc = { ApiDoc::openapi() };
+
+    let allow_origin = AllowOrigin::any();
+    let cors_layer = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers([http::header::CONTENT_TYPE])
+        .allow_origin(allow_origin);
+
     Router::new()
         .merge(SwaggerUi::new("/docs").url("/api-doc/openapi.json", doc))
+        .layer(cors_layer)
         .route("/v1/chat/completions", post(chatcompletions))
         .route("/v1/models", get(models))
         .route("/health", get(health))
