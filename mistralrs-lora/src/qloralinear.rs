@@ -205,7 +205,7 @@ impl LinearLayerLike for QLoraLinear {
         if self.merged {
             return Ok(result);
         }
-        
+
         if self
             .a_adapters
             .as_ref()
