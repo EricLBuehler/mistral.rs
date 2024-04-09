@@ -69,17 +69,17 @@ impl Engine {
                 }
                 let logits = pipeline.forward(&scheduled.completion, false);
 
+                if !self.no_kv_cache {
+                    Self::clone_out_cache(&mut *pipeline, &mut scheduled.completion);
+                } else {
+                    Self::set_none_cache(&mut *pipeline);
+                }
+
                 let before_sample = Instant::now();
                 Self::sample_seqs(&mut *pipeline, &mut scheduled.completion, logits);
                 let sampling_time = before_sample.elapsed().as_millis();
                 for seq in scheduled.completion.iter_mut() {
                     seq.total_sampling_time += sampling_time;
-                }
-
-                if !self.no_kv_cache {
-                    Self::clone_out_cache(&mut *pipeline, &mut scheduled.completion);
-                } else {
-                    Self::set_none_cache(&mut *pipeline);
                 }
             }
 
