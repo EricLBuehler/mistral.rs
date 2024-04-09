@@ -88,6 +88,12 @@ impl Engine {
                 Self::set_none_cache(&mut *pipeline);
                 let logits = pipeline.forward(&scheduled.prompt, true);
 
+                if !self.no_kv_cache {
+                    Self::clone_out_cache(&mut *pipeline, &mut scheduled.prompt);
+                } else {
+                    Self::set_none_cache(&mut *pipeline);
+                }
+
                 for seq in scheduled.prompt.iter_mut() {
                     seq.set_state(SequenceState::RunningCompletion);
                     let now = SystemTime::now()
@@ -105,12 +111,6 @@ impl Engine {
                 let sampling_time = before_sample.elapsed().as_millis();
                 for seq in scheduled.prompt.iter_mut() {
                     seq.total_sampling_time += sampling_time;
-                }
-
-                if !self.no_kv_cache {
-                    Self::clone_out_cache(&mut *pipeline, &mut scheduled.prompt);
-                } else {
-                    Self::set_none_cache(&mut *pipeline);
                 }
             }
         }
