@@ -451,7 +451,7 @@ impl Pipeline for MixtralPipeline {
             self.no_kv_cache,
         )
         .unwrap();
-        let result = match self.model {
+        match self.model {
             Model::Normal(ref mut model) => {
                 model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)
             }
@@ -478,8 +478,7 @@ impl Pipeline for MixtralPipeline {
                 self.no_kv_cache,
                 &self.non_granular_state,
             ),
-        };
-        result
+        }
     }
     fn device(&self) -> &Device {
         match self.model {
