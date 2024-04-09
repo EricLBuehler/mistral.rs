@@ -22,6 +22,7 @@ Mistral.rs is a fast LLM inference platform written in pure, safe Rust. We suppo
 - Python API.
 - Apple silicon support with the Metal framework.
 - CPU inference with `mkl`, `accelerate` support and optimized backend.
+- Fast LoRA support with weight merging.
 
 **Supported models:**
 - Mistral 7B (v0.1 and v0.2)
@@ -64,8 +65,10 @@ To use a derivative model, select the model architecture using the correct subco
 - **Quantized**: Quantized model id, quantized filename, and tokenizer id
 - **X-LoRA**: Model id, X-LoRA ordering
 - **X-LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and X-LoRA ordering
+- **LoRA**: Model id, LoRA ordering
+- **LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and LoRA ordering
 
-See [this](#x-lora) section to determine if it is necessary to prepare an X-LoRA ordering file, it is always necessary if the target modules or architecture changed, or if the adapter order changed.
+See [this](#adapter-ordering-file) section to determine if it is necessary to prepare an X-LoRA/LoRA ordering file, it is always necessary if the target modules or architecture changed, or if the adapter order changed.
 
 It is also important to check the chat template style of the model. If the HF hub repo has a `tokenizer_config.json` file, it is not necessary to specify. Otherwise, templates can be found in `chat_templates` and should be passed before the subcommand.
 
@@ -184,11 +187,11 @@ To start an X-LoRA server with the default weights and ordering (exactly as pres
 
 ---
 
-### X-LoRA
-**Preparing the X-LoRA Ordering File**
-The X-LoRA ordering file is necessary to prepare before inference with an X-LoRA model. However, it is easy with a provided [`script`](scripts/create_ordering.py)!
+### Adapter ordering file
+**Preparing the X-LoRA/LoRA Ordering File**
+The X-LoRA/LoRA ordering file is necessary to prepare before inference with an X-LoRA model. However, it is easy with a provided [`script`](scripts/create_ordering.py)!
 
-The X-LoRA ordering JSON file contains 2 parts. The first is the order of the adapters and the second, the layer ordering. The layer ordering has been automatically generated and should not be manipulated as it controls the application of scalings. However the order of adapter should be an array of strings which are the adapter names corresponding to the order the adapters were specified during training. For example, if the adapters were specified as a dictionary:
+The X-LoRA/LoRA ordering JSON file contains 2 parts. The first is the order of the adapters and the second, the layer ordering. The layer ordering has been automatically generated and should not be manipulated as it controls the application of scalings. However the order of adapter should be an array of strings which are the adapter names corresponding to the order the adapters were specified during training. For example, if the adapters were specified as a dictionary:
 
 ```python
 adapters = {
@@ -212,12 +215,11 @@ There are 2 scripts to prepare the ordering file. The ordering file is specific 
 
 A provide a [default ordering file](scripts/default-ordering.json) which contains the ordering for the X-LoRA model associated with [the paper](https://arxiv.org/abs/2402.07148) and the Huggingface repository: https://huggingface.co/lamm-mit/x-lora.
 
-**Quantized X-LoRA models**
+**Quantized X-LoRA or LoRA models**
 
-Mistral.rs supports running quantized models with X-LoRA. The X-LoRA layers will not be quantized, only the base model. Please note that
-using a high quantization level (eg., 4-bit) can distort the signal and prevent the classifier from acting properly. Therefore, it is better to use slightly lower levels such as 8-bit.
+Mistral.rs supports running quantized models with X-LoRA or LoRA. The X-LoRA or LoRA adapter layers will not be quantized, only the base model. Please note that using a high quantization level (eg., 4-bit) can distort the signal and prevent the classifier from acting properly. Therefore, it is better to use slightly lower levels such as 8-bit.
 
-**Supported X-LoRA quantized layers**
+**Supported X-LoRA or LoRA quantized layers**
 - model.layers.{layer_idx}.self_attn.q_proj
 - model.layers.{layer_idx}.self_attn.k_proj
 - model.layers.{layer_idx}.self_attn.v_proj
