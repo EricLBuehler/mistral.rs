@@ -208,7 +208,7 @@ To start a server running Llama from GGML:
 
 An adapter model is a model with X-LoRA or LoRA. X-LoRA support is provided by selecting the `x-lora-*` architecture, and LoRA support by selecting the `lora-*` architecture. For both X-LoRA and LoRA, an ordering file (see [this section](#adapter-ordering-file) for preparing the ordering file) must be provided. The ordering file describes the ordering of layers and which adapters to use (and what order to use them in for X-LoRA).
 
-When using an adapter model with a quantized base model, if the ordering file specifies unsupported layers you will recieve an error.
+When using an adapter model with a quantized base model, if the ordering file specifies unsupported layers you will receive an error.
 
 **Supported X-LoRA or LoRA quantized layers**
 - model.layers.{layer_idx}.self_attn.q_proj
