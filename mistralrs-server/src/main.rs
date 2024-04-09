@@ -34,6 +34,7 @@ use mistralrs_core::{
 };
 use model_selected::ModelSelected;
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
+use serde::Serialize;
 
 use crate::openai::ModelObject;
 mod model_selected;
@@ -132,12 +133,31 @@ enum ChatCompletionResponder {
     Error(Box<dyn Error>),
 }
 
+#[derive(Serialize)]
+struct JsonError {
+    message: String,
+}
+
+impl JsonError {
+    pub fn new(message: String) -> Self {
+        Self { message }
+    }
+}
+
+impl IntoResponse for JsonError {
+    fn into_response(self) -> axum::response::Response {
+        let mut r = Json(self).into_response();
+        *r.status_mut() = http::StatusCode::INTERNAL_SERVER_ERROR;
+        r
+    }
+}
+
 impl IntoResponse for ChatCompletionResponder {
     fn into_response(self) -> axum::response::Response {
         match self {
             ChatCompletionResponder::Sse(s) => s.into_response(),
             ChatCompletionResponder::Json(s) => Json(s).into_response(),
-            ChatCompletionResponder::Error(e) => e.to_string().into_response(),
+            ChatCompletionResponder::Error(e) => JsonError::new(e.to_string()).into_response(),
         }
     }
 }
