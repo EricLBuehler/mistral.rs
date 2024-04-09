@@ -807,7 +807,7 @@ impl ModelWeights {
                 seqlen_offsets,
                 start_offsets_kernel,
                 None,
-                true,
+                false,
                 no_kv_cache,
                 None,
             )?
