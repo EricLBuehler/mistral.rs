@@ -121,6 +121,16 @@
 <a href="#119" id="119">119</a>
 <a href="#120" id="120">120</a>
 <a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>classifier;
 <span class="kw">mod </span>config;
 <span class="kw">mod </span>gemma;
@@ -137,6 +147,7 @@
 <span class="kw">pub use </span>gemma::XLoraModel <span class="kw">as </span>XLoraGemma;
 <span class="kw">pub use </span>llama::XLoraLlama;
 <span class="kw">pub use </span>mistral::XLoraModel <span class="kw">as </span>XLoraMistral;
+<span class="kw">use </span>mistralrs_lora::Ordering;
 <span class="kw">pub use </span>mixtral::XLoraModel <span class="kw">as </span>XLoraMixtral;
 <span class="kw">pub use </span>phi2::Model <span class="kw">as </span>XLoraPhi2;
 <span class="kw">pub use </span>quantized_llama::ModelWeights <span class="kw">as </span>XLoraModelWeights;
@@ -241,5 +252,14 @@
         }
         <span class="prelude-val">Ok</span>(scalings)
     }
+}
+
+<span class="kw">fn </span>verify_sanity_adapters(ordering: <span class="kw-2">&amp;</span>Ordering, supported_layers: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>str]) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    <span class="kw">for </span>path <span class="kw">in </span>ordering.layers.keys() {
+        <span class="kw">if </span>!supported_layers.contains(<span class="kw-2">&amp;</span>path.as_str()) {
+            <span class="macro">candle_core::bail!</span>(<span class="string">"Got a layer name `{path}` in the ordering, expected it to end with one of {supported_layers:?}"</span>);
+        }
+    }
+    <span class="prelude-val">Ok</span>(())
 }
 </code></pre></div></section></main></body></html>

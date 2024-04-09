@@ -532,6 +532,23 @@
 <a href="#530" id="530">530</a>
 <a href="#531" id="531">531</a>
 <a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -603,7 +620,7 @@
         block_idx: usize,
         kv_cache: <span class="kw-2">&amp;mut </span>LayerCaches,
         cache: <span class="kw-2">&amp;mut </span>Cache,
-        scalings: Tensor,
+        scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -768,7 +785,7 @@
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         x: <span class="kw-2">&amp;</span>Tensor,
-        scalings: Tensor,
+        scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -825,7 +842,7 @@
         block_idx: usize,
         kv_cache: <span class="kw-2">&amp;mut </span>LayerCaches,
         cache: <span class="kw-2">&amp;mut </span>Cache,
-        scalings: Tensor,
+        scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -884,7 +901,7 @@
     <span class="kw">pub </span>kv_cache: models::Cache,
     <span class="kw">pub </span>device: Device,
     cache: Cache,
-    xlora_classifier: XLoraClassifier,
+    xlora_classifier: <span class="prelude-ty">Option</span>&lt;XLoraClassifier&gt;,
     dtype: DType,
 }
 
@@ -895,7 +912,7 @@
         x: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
-        scalings: Tensor,
+        scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
@@ -923,11 +940,14 @@
                 <span class="kw-2">&amp;mut </span>cache,
                 <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache,
                 scalings.clone(),
-                <span class="self">self</span>.xlora_classifier.get_global_scaling_weight(),
+                <span class="self">self</span>.xlora_classifier
+                    .as_ref()
+                    .map(|classifier| classifier.get_global_scaling_weight())
+                    .unwrap_or(<span class="number">1.0</span>),
                 is_scaling_pass,
             )<span class="question-mark">?</span>;
         }
-        <span class="self">self</span>.ln_f.forward(<span class="kw-2">&amp;</span>x)
+        <span class="self">self</span>.ln_f.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>.to_dtype(DType::F32)
     }
 
     <span class="attr">#[allow(clippy::too_many_arguments)]
@@ -942,47 +962,65 @@
         no_kv_cache: bool,
         non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>(_b_size, seq_len_full) = input_ids_full.dims2()<span class="question-mark">?</span>;
         <span class="kw">let </span>(<span class="kw">_</span>, seq_len) = input_ids.dims2()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>scalings = <span class="self">self</span>.get_scalings(
-            input_ids,
-            input_ids_full,
-            seqlen_offsets,
-            seqlen_offsets_full,
-            <span class="kw-2">&amp;</span>start_offsets_kernel,
-            <span class="kw-2">&amp;</span>start_offsets_kernel_full,
-            no_kv_cache,
-            non_granular_state,
-        )<span class="question-mark">?</span>;
+        <span class="kw">if </span><span class="self">self</span>.xlora_classifier.is_some() {
+            <span class="kw">let </span>(_b_size, seq_len_full) = input_ids_full.dims2()<span class="question-mark">?</span>;
 
-        <span class="kw">if </span>no_kv_cache {
-            <span class="self">self</span>.inner_forward(
+            <span class="kw">let </span>scalings = <span class="self">self</span>.get_scalings(
+                input_ids,
                 input_ids_full,
+                seqlen_offsets,
                 seqlen_offsets_full,
-                start_offsets_kernel_full,
-                scalings,
-                <span class="bool-val">true</span>,
+                <span class="kw-2">&amp;</span>start_offsets_kernel,
+                <span class="kw-2">&amp;</span>start_offsets_kernel_full,
                 no_kv_cache,
-                <span class="prelude-val">None</span>,
-            )<span class="question-mark">?
-            </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?
-            </span>.i((.., seq_len_full - <span class="number">1</span>, ..))<span class="question-mark">?
-        </span>} <span class="kw">else </span>{
-            <span class="comment">// is_full_pass=true is ok because no_kv_cache=false
-            </span><span class="self">self</span>.inner_forward(
+                non_granular_state,
+            )<span class="question-mark">?</span>;
+
+            <span class="kw">if </span>no_kv_cache {
+                <span class="self">self</span>.inner_forward(
+                    input_ids_full,
+                    seqlen_offsets_full,
+                    start_offsets_kernel_full,
+                    <span class="prelude-val">Some</span>(scalings),
+                    <span class="bool-val">true</span>,
+                    no_kv_cache,
+                    <span class="prelude-val">None</span>,
+                )<span class="question-mark">?
+                </span>.contiguous()<span class="question-mark">?
+                </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?
+                </span>.i((.., seq_len_full - <span class="number">1</span>, ..))
+            } <span class="kw">else </span>{
+                <span class="comment">// is_full_pass=true is ok because no_kv_cache=false
+                </span><span class="self">self</span>.inner_forward(
+                    input_ids,
+                    seqlen_offsets,
+                    start_offsets_kernel,
+                    <span class="prelude-val">Some</span>(scalings),
+                    <span class="bool-val">true</span>,
+                    no_kv_cache,
+                    <span class="prelude-val">None</span>,
+                )<span class="question-mark">?
+                </span>.contiguous()<span class="question-mark">?
+                </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?
+                </span>.i((.., seq_len - <span class="number">1</span>, ..))
+            }
+        } <span class="kw">else </span>{
+            <span class="kw">let </span>(<span class="kw">_</span>, seq_len) = input_ids.dims2()<span class="question-mark">?</span>;
+            <span class="self">self</span>.inner_forward(
                 input_ids,
                 seqlen_offsets,
                 start_offsets_kernel,
-                scalings,
-                <span class="bool-val">true</span>,
+                <span class="prelude-val">None</span>,
+                <span class="bool-val">false</span>,
                 no_kv_cache,
                 <span class="prelude-val">None</span>,
             )<span class="question-mark">?
+            </span>.contiguous()<span class="question-mark">?
             </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?
-            </span>.i((.., seq_len - <span class="number">1</span>, ..))<span class="question-mark">?
-        </span>}
-        .to_dtype(DType::F32)
+            </span>.i((.., seq_len - <span class="number">1</span>, ..))
+        }
     }
 
     <span class="attr">#[allow(clippy::too_many_arguments)]
@@ -992,7 +1030,7 @@
         dtype: DType,
         device: <span class="kw-2">&amp;</span>Device,
         lora_config: <span class="kw-2">&amp;</span>Vec&lt;(String, LoraConfig)&gt;,
-        xlora_config: XLoraConfig,
+        xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         xlora_ordering: Ordering,
         no_kv_cache: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
@@ -1021,13 +1059,9 @@
             cache: Cache::new(!no_kv_cache, device)<span class="question-mark">?</span>,
             kv_cache: models::Cache::new(cfg.num_hidden_layers, <span class="bool-val">true</span>),
             device: device.clone(),
-            xlora_classifier: XLoraClassifier::new(
-                xlora_config,
-                count,
-                lora_config.len(),
-                vb,
-                <span class="bool-val">false</span>,
-            )<span class="question-mark">?</span>,
+            xlora_classifier: xlora_config.map(|xlora_config| {
+                XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, <span class="bool-val">false</span>).unwrap()
+            }),
             dtype,
         })
     }
@@ -1041,7 +1075,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>.kv_cache
     }
     <span class="kw">fn </span>get_classifier(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>XLoraClassifier {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.xlora_classifier
+        <span class="self">self</span>.xlora_classifier.as_ref().unwrap()
     }
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
@@ -1057,7 +1091,7 @@
             input_ids,
             seqlen_offsets,
             start_offsets_kernel,
-            scalings,
+            <span class="prelude-val">Some</span>(scalings),
             is_full_pass,
             no_kv_cache,
             is_scaling_pass,

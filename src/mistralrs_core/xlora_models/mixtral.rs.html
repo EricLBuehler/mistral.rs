@@ -703,7 +703,6 @@
 <a href="#701" id="701">701</a>
 <a href="#702" id="702">702</a>
 <a href="#703" id="703">703</a>
-<a href="#704" id="704">704</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
@@ -817,7 +816,7 @@
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
         kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
-        scalings: Tensor,
+        scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -957,7 +956,7 @@
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         xs: <span class="kw-2">&amp;</span>Tensor,
-        scalings: Tensor,
+        scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -1016,7 +1015,7 @@
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         xs: <span class="kw-2">&amp;</span>Tensor,
-        scalings: Tensor,
+        scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -1131,7 +1130,7 @@
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
         kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
-        scalings: Tensor,
+        scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -1169,7 +1168,7 @@
     <span class="kw">pub </span>cache: Cache,
     dtype: DType,
     <span class="kw">pub </span>max_seq_len: usize,
-    xlora_classifier: XLoraClassifier,
+    xlora_classifier: <span class="prelude-ty">Option</span>&lt;XLoraClassifier&gt;,
 }
 
 <span class="kw">impl </span>XLoraModel {
@@ -1177,7 +1176,7 @@
         cfg: <span class="kw-2">&amp;</span>Config,
         vb: VarBuilder,
         lora_config: <span class="kw-2">&amp;</span>Vec&lt;(String, LoraConfig)&gt;,
-        xlora_config: XLoraConfig,
+        xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         xlora_ordering: Ordering,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
@@ -1218,13 +1217,9 @@
             dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
             max_seq_len: cfg.max_position_embeddings,
-            xlora_classifier: XLoraClassifier::new(
-                xlora_config,
-                count,
-                lora_config.len(),
-                vb,
-                <span class="bool-val">false</span>,
-            )<span class="question-mark">?</span>,
+            xlora_classifier: xlora_config.map(|xlora_config| {
+                XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, <span class="bool-val">false</span>).unwrap()
+            }),
         })
     }
 
@@ -1279,7 +1274,7 @@
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
-        scalings: Tensor,
+        scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
@@ -1315,7 +1310,10 @@
                 start_offsets_kernel.clone(),
                 cache.get_mut(i).unwrap(),
                 scalings.clone(),
-                <span class="self">self</span>.xlora_classifier.get_global_scaling_weight(),
+                <span class="self">self</span>.xlora_classifier
+                    .as_ref()
+                    .map(|classifier| classifier.get_global_scaling_weight())
+                    .unwrap_or(<span class="number">1.0</span>),
                 is_scaling_pass,
             )<span class="question-mark">?
         </span>}
@@ -1353,7 +1351,7 @@
                 input_ids_full,
                 seqlen_offsets_full,
                 start_offsets_kernel_full,
-                scalings,
+                <span class="prelude-val">Some</span>(scalings),
                 <span class="bool-val">true</span>,
                 no_kv_cache,
                 <span class="prelude-val">None</span>,
@@ -1366,7 +1364,7 @@
                 input_ids,
                 seqlen_offsets,
                 start_offsets_kernel,
-                scalings,
+                <span class="prelude-val">Some</span>(scalings),
                 <span class="bool-val">true</span>,
                 no_kv_cache,
                 <span class="prelude-val">None</span>,
@@ -1385,7 +1383,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>.cache
     }
     <span class="kw">fn </span>get_classifier(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>XLoraClassifier {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.xlora_classifier
+        <span class="self">self</span>.xlora_classifier.as_ref().unwrap()
     }
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
@@ -1401,7 +1399,7 @@
             input_ids,
             seqlen_offsets,
             start_offsets_kernel,
-            scalings,
+            <span class="prelude-val">Some</span>(scalings),
             is_full_pass,
             no_kv_cache,
             is_scaling_pass,

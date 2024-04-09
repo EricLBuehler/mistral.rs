@@ -434,6 +434,36 @@
 <a href="#432" id="432">432</a>
 <a href="#433" id="433">433</a>
 <a href="#434" id="434">434</a>
+<a href="#435" id="435">435</a>
+<a href="#436" id="436">436</a>
+<a href="#437" id="437">437</a>
+<a href="#438" id="438">438</a>
+<a href="#439" id="439">439</a>
+<a href="#440" id="440">440</a>
+<a href="#441" id="441">441</a>
+<a href="#442" id="442">442</a>
+<a href="#443" id="443">443</a>
+<a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a>
+<a href="#450" id="450">450</a>
+<a href="#451" id="451">451</a>
+<a href="#452" id="452">452</a>
+<a href="#453" id="453">453</a>
+<a href="#454" id="454">454</a>
+<a href="#455" id="455">455</a>
+<a href="#456" id="456">456</a>
+<a href="#457" id="457">457</a>
+<a href="#458" id="458">458</a>
+<a href="#459" id="459">459</a>
+<a href="#460" id="460">460</a>
+<a href="#461" id="461">461</a>
+<a href="#462" id="462">462</a>
+<a href="#463" id="463">463</a>
+<a href="#464" id="464">464</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -522,6 +552,7 @@
     chat_template: ChatTemplate,
     non_granular_state: <span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
     model_id: String,
+    is_lora: bool,
 }
 
 <span class="kw">pub struct </span>Phi2Loader {
@@ -692,6 +723,7 @@
 
         <span class="macro">info!</span>(<span class="string">"Model config: {config:?}"</span>);
 
+        <span class="kw">let </span><span class="kw-2">mut </span>is_lora = <span class="bool-val">false</span>;
         <span class="kw">let </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
             ModelKind::QuantizedGGUF =&gt; <span class="macro">unreachable!</span>(),
             ModelKind::QuantizedGGML =&gt; <span class="macro">unreachable!</span>(),
@@ -738,6 +770,33 @@
             }
             ModelKind::XLoraGGUF =&gt; <span class="macro">unreachable!</span>(),
             ModelKind::XLoraGGML =&gt; <span class="macro">unreachable!</span>(),
+            ModelKind::LoraGGUF =&gt; <span class="macro">unreachable!</span>(),
+            ModelKind::LoraGGML =&gt; <span class="macro">unreachable!</span>(),
+            ModelKind::LoraNormal =&gt; {
+                <span class="kw">let </span>vb = from_mmaped_safetensors(
+                    paths.get_weight_filenames().to_vec(),
+                    paths
+                        .get_adapter_filenames()
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .map(|(<span class="kw">_</span>, x)| (<span class="kw-2">*</span>x).to_owned())
+                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+                    dtype.unwrap_or(default_dtype),
+                    device,
+                    <span class="bool-val">false</span>,
+                )<span class="question-mark">?</span>;
+
+                <span class="kw">let </span>model = XLoraPhi2::new(
+                    <span class="kw-2">&amp;</span>config,
+                    vb,
+                    paths.get_adapter_configs().as_ref().unwrap(),
+                    paths.get_classifier_config().as_ref().unwrap().clone(),
+                    paths.get_ordering().as_ref().unwrap().clone(),
+                )<span class="question-mark">?</span>;
+                is_lora = <span class="bool-val">true</span>;
+                Model::XLoraNormal(model)
+            }
         };
 
         <span class="kw">let </span>tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
@@ -760,6 +819,7 @@
                 }
             }),
             model_id: <span class="self">self</span>.model_id.clone(),
+            is_lora,
         })))
     }
 
@@ -795,11 +855,11 @@
             }
             Model::XLoraNormal(<span class="kw-2">ref mut </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
-                input_ids_full.as_ref().unwrap(),
+                input_ids_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>input_ids),
                 <span class="kw-2">&amp;</span>seqlen_offsets,
-                seqlen_offsets_full.as_ref().unwrap(),
-                seqlen_offsets_kernel,
-                seqlen_offsets_kernel_full.unwrap(),
+                seqlen_offsets_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>seqlen_offsets),
+                seqlen_offsets_kernel.clone(),
+                seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
                 <span class="self">self</span>.no_kv_cache,
                 <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state,
             ),
@@ -855,7 +915,7 @@
     <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.model {
             Model::Normal(<span class="kw">_</span>) =&gt; <span class="bool-val">false</span>,
-            Model::XLoraNormal(<span class="kw">_</span>) =&gt; <span class="bool-val">true</span>,
+            Model::XLoraNormal(<span class="kw">_</span>) =&gt; !<span class="self">self</span>.is_lora,
         }
     }
     <span class="kw">fn </span>has_no_kv_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {

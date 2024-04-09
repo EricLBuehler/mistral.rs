@@ -245,6 +245,7 @@
 <a href="#243" id="243">243</a>
 <a href="#244" id="244">244</a>
 <a href="#245" id="245">245</a>
+<a href="#246" id="246">246</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{iter::zip, ops::Mul};
 
 <span class="kw">use </span>candle_core::{Module, <span class="prelude-ty">Result</span>, Shape, Tensor};
@@ -407,7 +408,7 @@
     <span class="kw">fn </span>lora_forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         input: <span class="kw-2">&amp;</span>Tensor,
-        scalings: Tensor,
+        scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -420,6 +421,7 @@
         <span class="kw">if </span>is_scaling_pass.is_some_and(|x| x == <span class="number">0.</span>) {
             <span class="kw">return </span><span class="prelude-val">Ok</span>(result);
         }
+        <span class="kw">let </span>scalings = scalings.unwrap();
 
         <span class="kw">let </span>scalings = get_maybe_topk_scalings(scalings, <span class="self">self</span>.layer_n)<span class="question-mark">?</span>;
         <span class="kw">if </span><span class="self">self</span>.a_adapters.is_left() || scalings.dims3()<span class="question-mark">?</span>.<span class="number">1 </span>!= <span class="number">1 </span>{

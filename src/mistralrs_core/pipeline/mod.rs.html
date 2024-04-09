@@ -745,6 +745,12 @@
 <a href="#743" id="743">743</a>
 <a href="#744" id="744">744</a>
 <a href="#745" id="745">745</a>
+<a href="#746" id="746">746</a>
+<a href="#747" id="747">747</a>
+<a href="#748" id="748">748</a>
+<a href="#749" id="749">749</a>
+<a href="#750" id="750">750</a>
+<a href="#751" id="751">751</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -886,17 +892,23 @@
     XLoraGGML,
     QuantizedGGUF,
     QuantizedGGML,
+    LoraGGUF,
+    LoraGGML,
+    LoraNormal,
 }
 
 <span class="kw">impl </span>AsRef&lt;str&gt; <span class="kw">for </span>ModelKind {
     <span class="kw">fn </span>as_ref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str {
         <span class="kw">match </span><span class="self">self </span>{
-            ModelKind::Normal =&gt; <span class="string">"normal (no quant, no xlora)"</span>,
-            ModelKind::QuantizedGGML =&gt; <span class="string">"quantized from ggml (no xlora)"</span>,
-            ModelKind::QuantizedGGUF =&gt; <span class="string">"quantized from gguf (no xlora)"</span>,
+            ModelKind::Normal =&gt; <span class="string">"normal (no quant, no adapters)"</span>,
+            ModelKind::QuantizedGGML =&gt; <span class="string">"quantized from ggml (no adapters)"</span>,
+            ModelKind::QuantizedGGUF =&gt; <span class="string">"quantized from gguf (no adapters)"</span>,
             ModelKind::XLoraNormal =&gt; <span class="string">"x-lora (no quant)"</span>,
             ModelKind::XLoraGGML =&gt; <span class="string">"x-lora, quantized from ggml"</span>,
             ModelKind::XLoraGGUF =&gt; <span class="string">"x-lora, quantized from gguf"</span>,
+            ModelKind::LoraGGUF =&gt; <span class="string">"lora, quantized from gguf"</span>,
+            ModelKind::LoraGGML =&gt; <span class="string">"lora, quantized from ggml"</span>,
+            ModelKind::LoraNormal =&gt; <span class="string">"lora (no quant)"</span>,
         }
     }
 }

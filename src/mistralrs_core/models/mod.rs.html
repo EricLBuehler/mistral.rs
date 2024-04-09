@@ -114,6 +114,13 @@
 <a href="#112" id="112">112</a>
 <a href="#113" id="113">113</a>
 <a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+<a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
 
 <span class="kw">use </span>candle_core::{quantized::QTensor, <span class="prelude-ty">Result</span>, Tensor};
@@ -227,5 +234,12 @@
 <span class="attr">#[cfg(not(feature = <span class="string">"flash-attn"</span>))]
 </span><span class="kw">pub fn </span>flash_attn(<span class="kw">_</span>: <span class="kw-2">&amp;</span>Tensor, <span class="kw">_</span>: <span class="kw-2">&amp;</span>Tensor, <span class="kw">_</span>: <span class="kw-2">&amp;</span>Tensor, <span class="kw">_</span>: f32, <span class="kw">_</span>: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
     <span class="macro">unimplemented!</span>(<span class="string">"Compile with '--features flash-attn'"</span>)
+}
+
+<span class="kw">pub fn </span>verify_sanity_gguf(arch: <span class="kw-2">&amp;</span>str, expected_arch: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    <span class="kw">if </span>arch != expected_arch {
+        <span class="macro">candle_core::bail!</span>(<span class="string">"Expected `{expected_arch}` architecture, got `{arch}`."</span>);
+    }
+    <span class="prelude-val">Ok</span>(())
 }
 </code></pre></div></section></main></body></html>

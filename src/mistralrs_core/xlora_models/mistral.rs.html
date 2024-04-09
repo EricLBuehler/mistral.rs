@@ -603,6 +603,24 @@
 <a href="#601" id="601">601</a>
 <a href="#602" id="602">602</a>
 <a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a>
+<a href="#612" id="612">612</a>
+<a href="#613" id="613">613</a>
+<a href="#614" id="614">614</a>
+<a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
+<a href="#617" id="617">617</a>
+<a href="#618" id="618">618</a>
+<a href="#619" id="619">619</a>
+<a href="#620" id="620">620</a>
+<a href="#621" id="621">621</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -672,7 +690,7 @@
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         xs: <span class="kw-2">&amp;</span>Tensor,
-        scalings: Tensor,
+        scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -791,7 +809,7 @@
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
         kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
-        scalings: Tensor,
+        scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -921,7 +939,7 @@
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
         kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
-        scalings: Tensor,
+        scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -959,7 +977,7 @@
     <span class="kw">pub </span>device: Device,
     <span class="kw">pub </span>cache: Cache,
     <span class="kw">pub </span>max_seq_len: usize,
-    xlora_classifier: XLoraClassifier,
+    xlora_classifier: <span class="prelude-ty">Option</span>&lt;XLoraClassifier&gt;,
 }
 
 <span class="kw">impl </span>XLoraModel {
@@ -967,7 +985,7 @@
         cfg: <span class="kw-2">&amp;</span>Config,
         vb: VarBuilder,
         lora_config: <span class="kw-2">&amp;</span>Vec&lt;(String, LoraConfig)&gt;,
-        xlora_config: XLoraConfig,
+        xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         xlora_ordering: Ordering,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
@@ -1008,13 +1026,9 @@
             dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">true</span>),
             max_seq_len: cfg.max_position_embeddings,
-            xlora_classifier: XLoraClassifier::new(
-                xlora_config,
-                count,
-                lora_config.len(),
-                vb,
-                <span class="bool-val">false</span>,
-            )<span class="question-mark">?</span>,
+            xlora_classifier: xlora_config.map(|xlora_config| {
+                XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, <span class="bool-val">false</span>).unwrap()
+            }),
         })
     }
 
@@ -1072,7 +1086,7 @@
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
-        scalings: Tensor,
+        scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
@@ -1113,7 +1127,10 @@
                 start_offsets_kernel.clone(),
                 cache.get_mut(i).unwrap(),
                 scalings.clone(),
-                <span class="self">self</span>.xlora_classifier.get_global_scaling_weight(),
+                <span class="self">self</span>.xlora_classifier
+                    .as_ref()
+                    .map(|classifier| classifier.get_global_scaling_weight())
+                    .unwrap_or(<span class="number">1.0</span>),
                 is_scaling_pass,
             )<span class="question-mark">?
         </span>}
@@ -1132,45 +1149,64 @@
         no_kv_cache: bool,
         non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>(_b_size, seq_len_full) = input_ids_full.dims2()<span class="question-mark">?</span>;
         <span class="kw">let </span>(<span class="kw">_</span>, seq_len) = input_ids.dims2()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>scalings = <span class="self">self</span>.get_scalings(
-            input_ids,
-            input_ids_full,
-            seqlen_offsets,
-            seqlen_offsets_full,
-            <span class="kw-2">&amp;</span>start_offsets_kernel,
-            <span class="kw-2">&amp;</span>start_offsets_kernel_full,
-            no_kv_cache,
-            non_granular_state,
-        )<span class="question-mark">?</span>;
+        <span class="kw">if </span><span class="self">self</span>.xlora_classifier.is_some() {
+            <span class="kw">let </span>(_b_size, seq_len_full) = input_ids_full.dims2()<span class="question-mark">?</span>;
 
-        <span class="kw">if </span>no_kv_cache {
-            <span class="self">self</span>.inner_forward(
+            <span class="kw">let </span>scalings = <span class="self">self</span>.get_scalings(
+                input_ids,
                 input_ids_full,
+                seqlen_offsets,
                 seqlen_offsets_full,
-                start_offsets_kernel_full,
-                scalings,
-                <span class="bool-val">true</span>,
+                <span class="kw-2">&amp;</span>start_offsets_kernel,
+                <span class="kw-2">&amp;</span>start_offsets_kernel_full,
                 no_kv_cache,
-                <span class="prelude-val">None</span>,
-            )<span class="question-mark">?
-            </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?
-            </span>.narrow(<span class="number">1</span>, seq_len_full - <span class="number">1</span>, <span class="number">1</span>)
+                non_granular_state,
+            )<span class="question-mark">?</span>;
+
+            <span class="kw">if </span>no_kv_cache {
+                <span class="self">self</span>.inner_forward(
+                    input_ids_full,
+                    seqlen_offsets_full,
+                    start_offsets_kernel_full,
+                    <span class="prelude-val">Some</span>(scalings),
+                    <span class="bool-val">true</span>,
+                    no_kv_cache,
+                    <span class="prelude-val">None</span>,
+                )<span class="question-mark">?
+                </span>.contiguous()<span class="question-mark">?
+                </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?
+                </span>.i((.., seq_len_full - <span class="number">1</span>, ..))
+            } <span class="kw">else </span>{
+                <span class="comment">// is_full_pass=true is ok because no_kv_cache=false
+                </span><span class="self">self</span>.inner_forward(
+                    input_ids,
+                    seqlen_offsets,
+                    start_offsets_kernel,
+                    <span class="prelude-val">Some</span>(scalings),
+                    <span class="bool-val">true</span>,
+                    no_kv_cache,
+                    <span class="prelude-val">None</span>,
+                )<span class="question-mark">?
+                </span>.contiguous()<span class="question-mark">?
+                </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?
+                </span>.i((.., seq_len - <span class="number">1</span>, ..))
+            }
         } <span class="kw">else </span>{
-            <span class="comment">// is_full_pass=true is ok because no_kv_cache=false
-            </span><span class="self">self</span>.inner_forward(
+            <span class="kw">let </span>(<span class="kw">_</span>, seq_len) = input_ids.dims2()<span class="question-mark">?</span>;
+            <span class="self">self</span>.inner_forward(
                 input_ids,
                 seqlen_offsets,
                 start_offsets_kernel,
-                scalings,
-                <span class="bool-val">true</span>,
+                <span class="prelude-val">None</span>,
+                <span class="bool-val">false</span>,
                 no_kv_cache,
                 <span class="prelude-val">None</span>,
             )<span class="question-mark">?
+            </span>.contiguous()<span class="question-mark">?
             </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?
-            </span>.narrow(<span class="number">1</span>, seq_len - <span class="number">1</span>, <span class="number">1</span>)
+            </span>.i((.., seq_len - <span class="number">1</span>, ..))
         }
     }
 }
@@ -1183,7 +1219,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>.cache
     }
     <span class="kw">fn </span>get_classifier(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>XLoraClassifier {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.xlora_classifier
+        <span class="self">self</span>.xlora_classifier.as_ref().unwrap()
     }
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
@@ -1199,7 +1235,7 @@
             input_ids,
             seqlen_offsets,
             start_offsets_kernel,
-            scalings,
+            <span class="prelude-val">Some</span>(scalings),
             is_full_pass,
             no_kv_cache,
             is_scaling_pass,
