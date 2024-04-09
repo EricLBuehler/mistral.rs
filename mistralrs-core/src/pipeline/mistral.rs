@@ -89,6 +89,7 @@ pub struct MistralPipeline {
     chat_template: ChatTemplate,
     non_granular_state: Option<NonGranularState>,
     model_id: String,
+    is_lora: bool,
 }
 
 pub struct MistralLoader {
@@ -255,6 +256,7 @@ impl Loader for MistralLoader {
 
         info!("Model config: {config:?}");
 
+        let mut is_lora = false;
         let model = match self.kind {
             ModelKind::QuantizedGGUF => {
                 let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
@@ -362,6 +364,7 @@ impl Loader for MistralLoader {
                     paths.get_ordering().as_ref().unwrap(),
                     None,
                 )?;
+                is_lora = true;
                 Model::XLoraQuantized(model)
             }
         };
@@ -384,6 +387,7 @@ impl Loader for MistralLoader {
                 }
             }),
             model_id: self.model_id.clone(),
+            is_lora,
         })))
     }
 
@@ -498,7 +502,7 @@ impl Pipeline for MistralPipeline {
     fn is_xlora(&self) -> bool {
         match &self.model {
             Model::Normal(_) | Model::Quantized(_) => false,
-            Model::XLoraNormal(_) | Model::XLoraQuantized(_) => true,
+            Model::XLoraNormal(_) | Model::XLoraQuantized(_) => !self.is_lora,
         }
     }
     fn has_no_kv_cache(&self) -> bool {
