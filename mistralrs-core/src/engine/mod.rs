@@ -55,7 +55,7 @@ impl Engine {
     }
 
     pub fn run(&mut self) {
-        loop {
+        'lp: loop {
             if let Ok(request) = self.rx.try_recv() {
                 self.add_request(request);
             }
@@ -68,6 +68,22 @@ impl Engine {
                     Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
                 }
                 let logits = pipeline.forward(&scheduled.completion, false);
+
+                let logits = match logits {
+                    Ok(logits) => logits,
+                    Err(e) => {
+                        println!("COMPLETE - Model failed with error: {:?}", &e);
+                        for seq in scheduled.completion.iter_mut() {
+                            seq.responder()
+                                .send(Response::Error(e.to_string().into()))
+                                .unwrap();
+                            seq.set_state(SequenceState::Error);
+                        }
+                        Self::set_none_cache(&mut *pipeline);
+
+                        continue 'lp;
+                    }
+                };
 
                 if !self.no_kv_cache {
                     Self::clone_out_cache(&mut *pipeline, &mut scheduled.completion);
@@ -87,6 +103,21 @@ impl Engine {
                 // Run the prompt seqs
                 Self::set_none_cache(&mut *pipeline);
                 let logits = pipeline.forward(&scheduled.prompt, true);
+                let logits = match logits {
+                    Ok(logits) => logits,
+                    Err(e) => {
+                        println!("PROMPT - Model failed with error: {:?}", &e);
+                        for seq in scheduled.prompt.iter_mut() {
+                            seq.responder()
+                                .send(Response::Error(e.to_string().into()))
+                                .unwrap();
+                            seq.set_state(SequenceState::Error);
+                        }
+                        Self::set_none_cache(&mut *pipeline);
+
+                        continue 'lp;
+                    }
+                };
 
                 if !self.no_kv_cache {
                     Self::clone_out_cache(&mut *pipeline, &mut scheduled.prompt);

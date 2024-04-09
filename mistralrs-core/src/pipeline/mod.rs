@@ -225,7 +225,11 @@ fn apply_chat_template_to(
 }
 
 pub trait Pipeline: Send + Sync {
-    fn forward(&mut self, input_toks: &[&mut Sequence], is_prompt: bool) -> Tensor;
+    fn forward(
+        &mut self,
+        input_toks: &[&mut Sequence],
+        is_prompt: bool,
+    ) -> Result<Tensor, candle_core::Error>;
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
         let encoding = self
             .tokenizer()

@@ -371,7 +371,11 @@ impl Loader for GemmaLoader {
 }
 
 impl Pipeline for GemmaPipeline {
-    fn forward(&mut self, input_toks: &[&mut Sequence], is_prompt: bool) -> Tensor {
+    fn forward(
+        &mut self,
+        input_toks: &[&mut Sequence],
+        is_prompt: bool,
+    ) -> Result<Tensor, candle_core::Error> {
         let ModelInputs {
             input_ids,
             input_ids_full,
@@ -402,12 +406,7 @@ impl Pipeline for GemmaPipeline {
                 &self.non_granular_state,
             ),
         };
-        match result {
-            Ok(v) => v,
-            Err(e) => {
-                panic!("Model failed with error `{e}`. Please raise an issue.");
-            }
-        }
+        result
     }
     fn device(&self) -> &Device {
         match self.model {
