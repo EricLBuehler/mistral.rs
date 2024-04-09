@@ -373,11 +373,7 @@ impl Loader for MixtralLoader {
             }
             ModelKind::LoraNormal => {
                 let vb = from_mmaped_safetensors(
-                    paths
-                        .get_weight_filenames()
-                        .iter()
-                        .cloned()
-                        .collect::<Vec<_>>(),
+                    paths.get_weight_filenames().to_vec(),
                     paths
                         .get_adapter_filenames()
                         .as_ref()

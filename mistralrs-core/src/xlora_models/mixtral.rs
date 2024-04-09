@@ -678,7 +678,7 @@ impl ScalingsMaker for XLoraModel {
         &self.cache
     }
     fn get_classifier(&self) -> &XLoraClassifier {
-        &self.xlora_classifier.as_ref().unwrap()
+        self.xlora_classifier.as_ref().unwrap()
     }
     fn forward(
         &mut self,

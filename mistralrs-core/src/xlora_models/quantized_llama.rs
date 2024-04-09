@@ -758,7 +758,7 @@ impl ModelWeights {
     ) -> Result<Tensor> {
         let (_, seq_len) = input_ids.dims2()?;
 
-        if let Some(_) = self.xlora_classifier {
+        if self.xlora_classifier.is_some() {
             let (_b_size, seq_len_full) = input_ids_full.dims2()?;
 
             let scalings = self.get_scalings(
