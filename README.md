@@ -203,6 +203,8 @@ adapters = {
 
 The specified order would be `["math", "reasoning", "biology"]`.
 
+For LoRA models, the order of the adapters does not matter. You can reorder them or remove some to control which adapters will be used. However, for an X-LoRA model, the order of the adapters in the ordering file is important.
+
 There are 2 scripts to prepare the ordering file. The ordering file is specific to each architecture and set of target modules. Therefore, if either are changed, it is necessary to create a new ordering file using the first option. If only the adapter order or adapters changed, then it the second option should be used.
 
 1) From scratch: No ordering file for the architecture and target modules
