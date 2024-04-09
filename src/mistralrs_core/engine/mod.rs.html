@@ -462,6 +462,7 @@
 <a href="#460" id="460">460</a>
 <a href="#461" id="461">461</a>
 <a href="#462" id="462">462</a>
+<a href="#463" id="463">463</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -877,6 +878,7 @@
                             <span class="macro">format!</span>(<span class="string">"Stop sequence '{s:?}' encodes to multiple tokens when it should only encode to 1."</span>).into(),
                         ))
                         .unwrap();
+                    <span class="kw">return</span>;
                 }
                 stop_toks.push(toks[<span class="number">0</span>]);
                 stop_toks

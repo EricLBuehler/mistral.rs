@@ -1049,6 +1049,26 @@
 <a href="#1047" id="1047">1047</a>
 <a href="#1048" id="1048">1048</a>
 <a href="#1049" id="1049">1049</a>
+<a href="#1050" id="1050">1050</a>
+<a href="#1051" id="1051">1051</a>
+<a href="#1052" id="1052">1052</a>
+<a href="#1053" id="1053">1053</a>
+<a href="#1054" id="1054">1054</a>
+<a href="#1055" id="1055">1055</a>
+<a href="#1056" id="1056">1056</a>
+<a href="#1057" id="1057">1057</a>
+<a href="#1058" id="1058">1058</a>
+<a href="#1059" id="1059">1059</a>
+<a href="#1060" id="1060">1060</a>
+<a href="#1061" id="1061">1061</a>
+<a href="#1062" id="1062">1062</a>
+<a href="#1063" id="1063">1063</a>
+<a href="#1064" id="1064">1064</a>
+<a href="#1065" id="1065">1065</a>
+<a href="#1066" id="1066">1066</a>
+<a href="#1067" id="1067">1067</a>
+<a href="#1068" id="1068">1068</a>
+<a href="#1069" id="1069">1069</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     env,
     error::Error,
@@ -1085,6 +1105,7 @@
 };
 <span class="kw">use </span>model_selected::ModelSelected;
 <span class="kw">use </span>openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
+<span class="kw">use </span>serde::Serialize;
 
 <span class="kw">use </span><span class="kw">crate</span>::openai::ModelObject;
 <span class="kw">mod </span>model_selected;
@@ -1183,12 +1204,31 @@
     Error(Box&lt;<span class="kw">dyn </span>Error&gt;),
 }
 
+<span class="attr">#[derive(Serialize)]
+</span><span class="kw">struct </span>JsonError {
+    message: String,
+}
+
+<span class="kw">impl </span>JsonError {
+    <span class="kw">fn </span>new(message: String) -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{ message }
+    }
+}
+
+<span class="kw">impl </span>IntoResponse <span class="kw">for </span>JsonError {
+    <span class="kw">fn </span>into_response(<span class="self">self</span>) -&gt; axum::response::Response {
+        <span class="kw">let </span><span class="kw-2">mut </span>r = Json(<span class="self">self</span>).into_response();
+        <span class="kw-2">*</span>r.status_mut() = http::StatusCode::INTERNAL_SERVER_ERROR;
+        r
+    }
+}
+
 <span class="kw">impl </span>IntoResponse <span class="kw">for </span>ChatCompletionResponder {
     <span class="kw">fn </span>into_response(<span class="self">self</span>) -&gt; axum::response::Response {
         <span class="kw">match </span><span class="self">self </span>{
             ChatCompletionResponder::Sse(s) =&gt; s.into_response(),
             ChatCompletionResponder::Json(s) =&gt; Json(s).into_response(),
-            ChatCompletionResponder::Error(e) =&gt; e.to_string().into_response(),
+            ChatCompletionResponder::Error(e) =&gt; JsonError::new(e.to_string()).into_response(),
         }
     }
 }

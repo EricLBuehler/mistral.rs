@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ChatCompletionResponder"],"fn":["chatcompletions","get_router","health","main","models","parse_request","parse_token_source"],"mod":["model_selected","openai"],"struct":["Args","Streamer"]};
+window.SIDEBAR_ITEMS = {"enum":["ChatCompletionResponder"],"fn":["chatcompletions","get_router","health","main","models","parse_request","parse_token_source"],"mod":["model_selected","openai"],"struct":["Args","JsonError","Streamer"]};
