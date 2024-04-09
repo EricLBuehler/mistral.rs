@@ -1,7 +1,7 @@
 # mistral.rs
 [![Documentation](https://github.com/EricLBuehler/mistral.rs/actions/workflows/docs.yml/badge.svg)](https://ericlbuehler.github.io/mistral.rs/mistralrs/)
 
-Mistral.rs is a LLM inference platform written in pure, safe Rust.
+Mistral.rs is a fast LLM inference platform written in pure, safe Rust. We support inference on a variety of devices, quantization, and easy-to-use application with an Open-AI API compatible HTTP server and Python bindings.
 
 ## Current work
 - More models: please submit requests [here](https://github.com/EricLBuehler/mistral.rs/issues/49).
@@ -11,7 +11,7 @@ Mistral.rs is a LLM inference platform written in pure, safe Rust.
 - Model grammar support via BNF ([#59](https://github.com/EricLBuehler/mistral.rs/issues/59)). ⭐ Active work.
 - Parallel linear layers (sharding) ([#50](https://github.com/EricLBuehler/mistral.rs/issues/50)).
 - LoRA/multi-LoRA adapters support ([#61](https://github.com/EricLBuehler/mistral.rs/issues/61)). ⭐ Active work.
-- Prefix caching ([#91](https://github.com/EricLBuehler/mistral.rs/issues/91)). ⭐ Active work.
+- Prefix caching ([#95](https://github.com/EricLBuehler/mistral.rs/issues/95)). ⭐ Active work.
 
 ## Description
 - Fast performance with per-sequence and catch-up KV cache management technique.
