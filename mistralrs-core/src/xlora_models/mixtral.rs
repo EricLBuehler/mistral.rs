@@ -111,7 +111,7 @@ impl Attention {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
-        scalings: Tensor,
+        scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
@@ -251,7 +251,7 @@ impl BlockSparseTop2MLP {
     fn forward(
         &self,
         xs: &Tensor,
-        scalings: Tensor,
+        scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
@@ -310,7 +310,7 @@ impl SparseMoeBlock {
     fn forward(
         &self,
         xs: &Tensor,
-        scalings: Tensor,
+        scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
@@ -425,7 +425,7 @@ impl DecoderLayer {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
-        scalings: Tensor,
+        scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
@@ -573,7 +573,7 @@ impl XLoraModel {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        scalings: Tensor,
+        scalings: Option<Tensor>,
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
@@ -647,7 +647,7 @@ impl XLoraModel {
                 input_ids_full,
                 seqlen_offsets_full,
                 start_offsets_kernel_full,
-                scalings,
+                Some(scalings),
                 true,
                 no_kv_cache,
                 None,
@@ -660,7 +660,7 @@ impl XLoraModel {
                 input_ids,
                 seqlen_offsets,
                 start_offsets_kernel,
-                scalings,
+                Some(scalings),
                 true,
                 no_kv_cache,
                 None,
@@ -695,7 +695,7 @@ impl ScalingsMaker for XLoraModel {
             input_ids,
             seqlen_offsets,
             start_offsets_kernel,
-            scalings,
+            Some(scalings),
             is_full_pass,
             no_kv_cache,
             is_scaling_pass,

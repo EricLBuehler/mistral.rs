@@ -330,11 +330,40 @@ impl Loader for MistralLoader {
                     paths.get_adapter_configs().as_ref().unwrap(),
                     &vb,
                     paths.get_ordering().as_ref().unwrap(),
-                    paths.get_classifier_config().as_ref().unwrap().clone(),
+                    Some(paths.get_classifier_config().as_ref().unwrap().clone()),
                 )?;
                 Model::XLoraQuantized(model)
             }
             ModelKind::XLoraGGML => unreachable!(),
+            ModelKind::LoraGGUF => {
+                let vb = from_mmaped_safetensors(
+                    vec![],
+                    paths
+                        .get_adapter_filenames()
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .map(|(_, x)| (*x).to_owned())
+                        .collect::<Vec<_>>(),
+                    dtype.unwrap_or(default_dtype),
+                    device,
+                    false,
+                )?;
+
+                let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
+                let model = gguf_file::Content::read(&mut file)
+                    .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
+                let model = XLoraModelWeights::from_gguf(
+                    model,
+                    &mut file,
+                    device,
+                    paths.get_adapter_configs().as_ref().unwrap(),
+                    &vb,
+                    paths.get_ordering().as_ref().unwrap(),
+                    None,
+                )?;
+                Model::XLoraQuantized(model)
+            }
         };
 
         let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())

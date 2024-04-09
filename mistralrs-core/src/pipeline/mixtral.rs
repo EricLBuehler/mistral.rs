@@ -334,11 +334,12 @@ impl Loader for MixtralLoader {
                     paths.get_adapter_configs().as_ref().unwrap(),
                     &vb,
                     paths.get_ordering().as_ref().unwrap(),
-                    paths.get_classifier_config().as_ref().unwrap().clone(),
+                    Some(paths.get_classifier_config().as_ref().unwrap().clone()),
                 )?;
                 Model::XLoraQuantized(model)
             }
             ModelKind::XLoraGGML => unreachable!(),
+            ModelKind::LoraGGUF => unreachable!(),
         };
 
         let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())

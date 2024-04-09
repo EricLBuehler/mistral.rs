@@ -303,6 +303,7 @@ impl Loader for GemmaLoader {
             }
             ModelKind::XLoraGGUF => unreachable!(),
             ModelKind::XLoraGGML => unreachable!(),
+            ModelKind::LoraGGUF => unreachable!(),
         };
 
         let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())

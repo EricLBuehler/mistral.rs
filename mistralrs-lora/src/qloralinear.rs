@@ -196,7 +196,7 @@ impl LinearLayerLike for QLoraLinear {
     fn lora_forward(
         &self,
         input: &Tensor,
-        scalings: Tensor,
+        scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
@@ -205,6 +205,7 @@ impl LinearLayerLike for QLoraLinear {
         if self.merged {
             return Ok(result);
         }
+        let scalings = scalings.unwrap();
 
         if self
             .a_adapters

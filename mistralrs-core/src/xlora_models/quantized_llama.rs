@@ -6,7 +6,7 @@ use candle_core::quantized::QMatMul;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
-use mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Ordering, QLoraLinear};
+use mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear};
 
 use crate::models::{Cache, QRmsNorm};
 
@@ -26,7 +26,7 @@ impl Mlp {
     fn forward(
         &self,
         xs: &Tensor,
-        scalings: Tensor,
+        scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
@@ -65,7 +65,7 @@ impl MlpOrMoe {
     fn forward(
         &self,
         xs: &Tensor,
-        scalings: Tensor,
+        scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
@@ -175,7 +175,7 @@ impl LayerWeights {
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
-        scalings: Tensor,
+        scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
@@ -276,7 +276,7 @@ pub struct ModelWeights {
     masks: HashMap<usize, Tensor>,
     pub device: Device,
     pub cache: Cache,
-    xlora_classifier: XLoraClassifier,
+    xlora_classifier: Option<XLoraClassifier>,
     pub max_seq_len: usize,
 }
 
@@ -287,7 +287,7 @@ impl ModelWeights {
         lora_config: &[(String, LoraConfig)],
         vb: &VarBuilder,
         ordering: &Ordering,
-        xlora_config: XLoraConfig,
+        xlora_config: Option<XLoraConfig>,
     ) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
         let rotary = RotaryEmbedding::new_partial(
@@ -408,13 +408,10 @@ impl ModelWeights {
             masks: HashMap::new(),
             device: ct.device.clone(),
             cache: Cache::new(ct.hparams.n_layer as usize, true),
-            xlora_classifier: XLoraClassifier::new(
-                xlora_config,
-                count,
-                lora_config.len(),
-                vb.clone(),
-                true,
-            )?,
+            xlora_classifier: xlora_config.map(|xlora_config| {
+                XLoraClassifier::new(xlora_config, count, lora_config.len(), vb.clone(), true)
+                    .unwrap()
+            }),
             max_seq_len: MAX_SEQ_LEN as usize, // Cannot determine from ggml.
         })
     }
@@ -427,7 +424,7 @@ impl ModelWeights {
         lora_config: &[(String, LoraConfig)],
         vb: &VarBuilder,
         ordering: &Ordering,
-        xlora_config: XLoraConfig,
+        xlora_config: Option<XLoraConfig>,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle_core::bail!("cannot find {s} in metadata"),
@@ -621,6 +618,33 @@ impl ModelWeights {
                 rotary: rotary.clone(),
             })
         }
+        if xlora_config.is_none() {
+            // We are now a LoRA model so we must merge the weights
+            for layer in &mut layers {
+                layer.attention_wk.merge_weights()?;
+                layer.attention_wo.merge_weights()?;
+                layer.attention_wq.merge_weights()?;
+                layer.attention_wv.merge_weights()?;
+                match &mut layer.mlp_or_moe {
+                    MlpOrMoe::Mlp(ref mut m) => {
+                        m.feed_forward_w1.merge_weights()?;
+                        m.feed_forward_w2.merge_weights()?;
+                        m.feed_forward_w3.merge_weights()?;
+                    }
+                    MlpOrMoe::MoE {
+                        n_expert_used: _,
+                        feed_forward_gate_inp: _,
+                        experts,
+                    } => {
+                        for expert in experts {
+                            expert.feed_forward_w1.merge_weights()?;
+                            expert.feed_forward_w2.merge_weights()?;
+                            expert.feed_forward_w3.merge_weights()?;
+                        }
+                    }
+                }
+            }
+        }
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
             layers,
@@ -629,13 +653,10 @@ impl ModelWeights {
             masks: HashMap::new(),
             device: device.clone(),
             cache: Cache::new(block_count, true),
-            xlora_classifier: XLoraClassifier::new(
-                xlora_config,
-                count,
-                lora_config.len(),
-                vb.clone(),
-                true,
-            )?,
+            xlora_classifier: xlora_config.map(|xlora_config| {
+                XLoraClassifier::new(xlora_config, count, lora_config.len(), vb.clone(), true)
+                    .unwrap()
+            }),
             max_seq_len: md_get("llama.context_length")
                 .and_then(|m| m.to_u64())
                 .unwrap_or(MAX_SEQ_LEN as u64) as usize,
@@ -661,7 +682,7 @@ impl ModelWeights {
         x: &Tensor,
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        scalings: Tensor,
+        scalings: Option<Tensor>,
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
@@ -697,7 +718,10 @@ impl ModelWeights {
                 start_offsets_kernel.clone(),
                 cache.get_mut(i).unwrap(),
                 scalings.clone(),
-                self.xlora_classifier.get_global_scaling_weight(),
+                self.xlora_classifier
+                    .as_ref()
+                    .map(|classifier| classifier.get_global_scaling_weight())
+                    .unwrap_or(1.0),
                 is_scaling_pass,
             )?;
             let x = (attn + residual)?;
@@ -708,7 +732,10 @@ impl ModelWeights {
             let x = layer.mlp_or_moe.forward(
                 &x,
                 scalings.clone(),
-                self.xlora_classifier.get_global_scaling_weight(),
+                self.xlora_classifier
+                    .as_ref()
+                    .map(|classifier| classifier.get_global_scaling_weight())
+                    .unwrap_or(1.0),
                 is_scaling_pass,
             )?;
             let x = (x + residual)?;
@@ -729,40 +756,57 @@ impl ModelWeights {
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
     ) -> Result<Tensor> {
-        let (_b_size, seq_len_full) = input_ids_full.dims2()?;
         let (_, seq_len) = input_ids.dims2()?;
 
-        let scalings = self.get_scalings(
-            input_ids,
-            input_ids_full,
-            seqlen_offsets,
-            seqlen_offsets_full,
-            &start_offsets_kernel,
-            &start_offsets_kernel_full,
-            no_kv_cache,
-            non_granular_state,
-        )?;
+        if let Some(_) = self.xlora_classifier {
+            let (_b_size, seq_len_full) = input_ids_full.dims2()?;
 
-        if no_kv_cache {
-            self.inner_forward(
+            let scalings = self.get_scalings(
+                input_ids,
                 input_ids_full,
+                seqlen_offsets,
                 seqlen_offsets_full,
-                start_offsets_kernel_full,
-                scalings,
-                true,
+                &start_offsets_kernel,
+                &start_offsets_kernel_full,
                 no_kv_cache,
-                None,
-            )?
-            .contiguous()?
-            .apply(&self.output)?
-            .i((.., seq_len_full - 1, ..))
+                non_granular_state,
+            )?;
+
+            if no_kv_cache {
+                self.inner_forward(
+                    input_ids_full,
+                    seqlen_offsets_full,
+                    start_offsets_kernel_full,
+                    Some(scalings),
+                    true,
+                    no_kv_cache,
+                    None,
+                )?
+                .contiguous()?
+                .apply(&self.output)?
+                .i((.., seq_len_full - 1, ..))
+            } else {
+                // is_full_pass=true is ok because no_kv_cache=false
+                self.inner_forward(
+                    input_ids,
+                    seqlen_offsets,
+                    start_offsets_kernel,
+                    Some(scalings),
+                    true,
+                    no_kv_cache,
+                    None,
+                )?
+                .contiguous()?
+                .apply(&self.output)?
+                .i((.., seq_len - 1, ..))
+            }
         } else {
-            // is_full_pass=true is ok because no_kv_cache=false
+            let (_, seq_len) = input_ids.dims2()?;
             self.inner_forward(
                 input_ids,
                 seqlen_offsets,
                 start_offsets_kernel,
-                scalings,
+                None,
                 true,
                 no_kv_cache,
                 None,
@@ -782,7 +826,7 @@ impl ScalingsMaker for ModelWeights {
         &self.cache
     }
     fn get_classifier(&self) -> &XLoraClassifier {
-        &self.xlora_classifier
+        self.xlora_classifier.as_ref().unwrap()
     }
     fn forward(
         &mut self,
@@ -798,7 +842,7 @@ impl ScalingsMaker for ModelWeights {
             input_ids,
             seqlen_offsets,
             start_offsets_kernel,
-            scalings,
+            Some(scalings),
             is_full_pass,
             no_kv_cache,
             is_scaling_pass,
