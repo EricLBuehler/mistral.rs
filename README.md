@@ -182,22 +182,27 @@ To start a server serving Mistral on `localhost:1234`,
 Mistral.rs uses subcommands to control the model type. They are of format `<XLORA/LORA>-<ARCHITECTURE>-<QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
 
 **Quick examples:**
+
 - X-LoRA with no quantization
+
 To start an X-LoRA server with the default weights and ordering (exactly as presented in [the paper](https://arxiv.org/abs/2402.07148)):
 
 `./mistralrs-server --port 1234 x-lora-mistral -o orderings/default-ordering.json`
 
 - LoRA with a model from GGUF
+
 To start an LoRA server with adapters from the X-LoRA paper (you should modify the ordering file to use only one adapter, as the adapter static scalings are all 1 and so the signal will become distorted):
 
 `./mistralrs-server --port 1234 lora-mistral-gguf -o orderings/default-ordering.json`
 
 - With a model from GGUF
+
 To start a server running Llama from GGUF:
 
 `./mistralrs-server --port 1234 llama-gguf`
 
 - With a model from GGML
+
 To start a server running Llama from GGML:
 
 `./mistralrs-server --port 1234 llama-ggml`
