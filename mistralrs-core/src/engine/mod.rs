@@ -12,7 +12,7 @@ use either::Either;
 use tracing::warn;
 
 use crate::{
-    get_mut_arcmutex, handle_seq_error, handle_seq_error_stateaware,
+    get_mut_arcmutex, handle_pipeline_forward_error, handle_seq_error, handle_seq_error_stateaware,
     pipeline::Pipeline,
     request::Request,
     response::{
@@ -69,21 +69,7 @@ impl Engine {
                 }
                 let logits = pipeline.forward(&scheduled.completion, false);
 
-                let logits = match logits {
-                    Ok(logits) => logits,
-                    Err(e) => {
-                        println!("COMPLETE - Model failed with error: {:?}", &e);
-                        for seq in scheduled.completion.iter_mut() {
-                            seq.responder()
-                                .send(Response::Error(e.to_string().into()))
-                                .unwrap();
-                            seq.set_state(SequenceState::Error);
-                        }
-                        Self::set_none_cache(&mut *pipeline);
-
-                        continue 'lp;
-                    }
-                };
+                let logits = handle_pipeline_forward_error!(logits, &mut scheduled.completion, pipeline, 'lp);
 
                 if !self.no_kv_cache {
                     Self::clone_out_cache(&mut *pipeline, &mut scheduled.completion);
@@ -103,21 +89,8 @@ impl Engine {
                 // Run the prompt seqs
                 Self::set_none_cache(&mut *pipeline);
                 let logits = pipeline.forward(&scheduled.prompt, true);
-                let logits = match logits {
-                    Ok(logits) => logits,
-                    Err(e) => {
-                        println!("PROMPT - Model failed with error: {:?}", &e);
-                        for seq in scheduled.prompt.iter_mut() {
-                            seq.responder()
-                                .send(Response::Error(e.to_string().into()))
-                                .unwrap();
-                            seq.set_state(SequenceState::Error);
-                        }
-                        Self::set_none_cache(&mut *pipeline);
-
-                        continue 'lp;
-                    }
-                };
+                let logits =
+                    handle_pipeline_forward_error!(logits, &mut scheduled.prompt, pipeline, 'lp);
 
                 if !self.no_kv_cache {
                     Self::clone_out_cache(&mut *pipeline, &mut scheduled.prompt);

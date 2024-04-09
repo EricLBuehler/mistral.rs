@@ -45,6 +45,30 @@ macro_rules! handle_seq_error_stateaware {
 }
 
 #[macro_export]
+macro_rules! handle_pipeline_forward_error {
+    ($fallible:expr, $seq_slice:expr, $pipeline:expr, $label:tt) => {
+        match $fallible {
+            Ok(v) => v,
+            Err(e) => {
+                use $crate::response::Response;
+                use $crate::sequence::SequenceState;
+                use $crate::Engine;
+                println!("Model failed with error: {:?}", &e);
+                for seq in $seq_slice.iter_mut() {
+                    seq.responder()
+                        .send(Response::Error(e.to_string().into()))
+                        .unwrap();
+                    seq.set_state(SequenceState::Error);
+                }
+                Engine::set_none_cache(&mut *$pipeline);
+
+                continue $label;
+            }
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! get_mut_group {
     ($this:expr) => {
         loop {
