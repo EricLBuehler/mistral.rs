@@ -14,6 +14,7 @@ pub use config::XLoraConfig;
 pub use gemma::XLoraModel as XLoraGemma;
 pub use llama::XLoraLlama;
 pub use mistral::XLoraModel as XLoraMistral;
+use mistralrs_lora::Ordering;
 pub use mixtral::XLoraModel as XLoraMixtral;
 pub use phi2::Model as XLoraPhi2;
 pub use quantized_llama::ModelWeights as XLoraModelWeights;
@@ -118,4 +119,21 @@ trait ScalingsMaker {
         }
         Ok(scalings)
     }
+}
+
+fn verify_sanity_gguf_with_adapters(
+    arch: &str,
+    expected_arch: &str,
+    ordering: &Ordering,
+    supported_layers: &[&str],
+) -> Result<()> {
+    if arch != expected_arch {
+        candle_core::bail!("Expected `{expected_arch}` architecture, got `{arch}`.");
+    }
+    for (path, _) in &ordering.layers {
+        if !supported_layers.contains(&path.as_str()) {
+            candle_core::bail!("Got a layer name `{path}` in the ordering, expected it to end with one of {supported_layers:?}");
+        }
+    }
+    Ok(())
 }

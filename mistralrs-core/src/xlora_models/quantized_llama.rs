@@ -11,9 +11,18 @@ use mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Merge, Ordering,
 use crate::models::{Cache, QRmsNorm};
 
 use super::classifier::XLoraClassifier;
-use super::{NonGranularState, ScalingsMaker, XLoraConfig};
+use super::{verify_sanity_gguf_with_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
 
 const MAX_SEQ_LEN: u32 = 4096;
+const SUPPORTED_LAYERS: [&str; 7] = [
+    "self_attn.q_proj",
+    "self_attn.k_proj",
+    "self_attn.v_proj",
+    "self_attn.o_proj",
+    "mlp.up_proj",
+    "mlp.down_proj",
+    "mlp.gate_proj",
+];
 
 #[derive(Debug)]
 struct Mlp {
@@ -430,6 +439,12 @@ impl ModelWeights {
             None => candle_core::bail!("cannot find {s} in metadata"),
             Some(v) => Ok(v),
         };
+        verify_sanity_gguf_with_adapters(
+            md_get("general.architecture")?.to_string().unwrap(),
+            "llama",
+            &ordering,
+            &SUPPORTED_LAYERS,
+        )?;
 
         // Parameter extraction from metadata.
         let n_expert = md_get("llama.expert_count")

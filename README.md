@@ -204,6 +204,21 @@ To start a server running Llama from GGML:
 
 ---
 
+### Adapter model support: X-LoRA and LoRA
+
+An adapter model is a model with X-LoRA or LoRA. X-LoRA support is provided by selecting the `x-lora-*` architecture, and LoRA support by selecting the `lora-*` architecture. For both X-LoRA and LoRA, an ordering file (see [this section](#adapter-ordering-file) for preparing the ordering file) must be provided. The ordering file describes the ordering of layers and which adapters to use (and what order to use them in for X-LoRA).
+
+When using an adapter model with a quantized base model, if the ordering file specifies unsupported layers you will recieve an error.
+
+**Supported X-LoRA or LoRA quantized layers**
+- model.layers.{layer_idx}.self_attn.q_proj
+- model.layers.{layer_idx}.self_attn.k_proj
+- model.layers.{layer_idx}.self_attn.v_proj
+- model.layers.{layer_idx}.self_attn.o_proj
+- model.layers.{layer_idx}.mlp.up_proj
+- model.layers.{layer_idx}.mlp.down_proj
+- model.layers.{layer_idx}.mlp.gate_proj
+
 ### Adapter ordering file
 **Preparing the X-LoRA/LoRA Ordering File**
 The X-LoRA/LoRA ordering file is necessary to prepare before inference with an X-LoRA model. However, it is easy with a provided [`script`](scripts/create_ordering.py)!
@@ -237,15 +252,6 @@ A provide a [default ordering file](scripts/default-ordering.json) which contain
 **Quantized X-LoRA or LoRA models**
 
 Mistral.rs supports running quantized models with X-LoRA or LoRA. The X-LoRA or LoRA adapter layers will not be quantized, only the base model. Please note that using a high quantization level (eg., 4-bit) can distort the signal and prevent the classifier from acting properly. Therefore, it is better to use slightly lower levels such as 8-bit.
-
-**Supported X-LoRA or LoRA quantized layers**
-- model.layers.{layer_idx}.self_attn.q_proj
-- model.layers.{layer_idx}.self_attn.k_proj
-- model.layers.{layer_idx}.self_attn.v_proj
-- model.layers.{layer_idx}.self_attn.o_proj
-- model.layers.{layer_idx}.mlp.up_proj
-- model.layers.{layer_idx}.mlp.down_proj
-- model.layers.{layer_idx}.mlp.gate_proj
 
 
 **Avoiding the scaling pass with non-granular scalings**
