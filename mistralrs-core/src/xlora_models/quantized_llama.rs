@@ -8,10 +8,10 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear};
 
-use crate::models::{Cache, QRmsNorm};
+use crate::models::{verify_sanity_gguf, Cache, QRmsNorm};
 
 use super::classifier::XLoraClassifier;
-use super::{verify_sanity_gguf_with_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
+use super::{verify_sanity_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
 
 const MAX_SEQ_LEN: u32 = 4096;
 const SUPPORTED_LAYERS: [&str; 7] = [
@@ -439,12 +439,11 @@ impl ModelWeights {
             None => candle_core::bail!("cannot find {s} in metadata"),
             Some(v) => Ok(v),
         };
-        verify_sanity_gguf_with_adapters(
+        verify_sanity_gguf(
             md_get("general.architecture")?.to_string().unwrap(),
             "llama",
-            &ordering,
-            &SUPPORTED_LAYERS,
         )?;
+        verify_sanity_adapters(&ordering, &SUPPORTED_LAYERS)?;
 
         // Parameter extraction from metadata.
         let n_expert = md_get("llama.expert_count")
