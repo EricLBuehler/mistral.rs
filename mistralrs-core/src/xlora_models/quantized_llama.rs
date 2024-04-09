@@ -443,7 +443,7 @@ impl ModelWeights {
             md_get("general.architecture")?.to_string().unwrap(),
             "llama",
         )?;
-        verify_sanity_adapters(&ordering, &SUPPORTED_LAYERS)?;
+        verify_sanity_adapters(ordering, &SUPPORTED_LAYERS)?;
 
         // Parameter extraction from metadata.
         let n_expert = md_get("llama.expert_count")
