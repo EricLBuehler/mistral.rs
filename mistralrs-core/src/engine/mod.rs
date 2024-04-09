@@ -68,7 +68,6 @@ impl Engine {
                     Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
                 }
                 let logits = pipeline.forward(&scheduled.completion, false);
-
                 let logits = handle_pipeline_forward_error!(logits, &mut scheduled.completion, pipeline, 'lp);
 
                 if !self.no_kv_cache {
@@ -368,7 +367,7 @@ impl Engine {
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                 request
                     .response
-                    .send(Response::Error(
+                    .send(Response::ValidationError(
                         format!("Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?", get_mut_arcmutex!(self.pipeline).get_max_seq_len()).into(),
                     ))
                     .unwrap();
@@ -413,7 +412,7 @@ impl Engine {
                     // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                     request
                         .response
-                        .send(Response::Error(
+                        .send(Response::ValidationError(
                             format!("Stop sequence '{s:?}' encodes to multiple tokens when it should only encode to 1.").into(),
                         ))
                         .unwrap();

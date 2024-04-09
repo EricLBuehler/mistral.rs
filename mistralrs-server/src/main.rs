@@ -14,7 +14,7 @@ use std::{
 use anyhow::Result;
 use axum::{
     extract::{Json, State},
-    http::{self, Method},
+    http::{self, Method, StatusCode},
     response::{
         sse::{Event, KeepAlive},
         IntoResponse, Sse,
@@ -109,7 +109,10 @@ impl futures::Stream for Streamer {
         }
         match self.rx.try_recv() {
             Ok(resp) => match resp {
-                Response::Error(e) => {
+                Response::ValidationError(e) => {
+                    Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
+                }
+                Response::InternalError(e) => {
                     MistralRs::maybe_log_error(self.state.clone(), &*e);
                     Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
                 }
@@ -130,7 +133,8 @@ impl futures::Stream for Streamer {
 enum ChatCompletionResponder {
     Sse(Sse<Streamer>),
     Json(ChatCompletionResponse),
-    Error(Box<dyn Error>),
+    InternalError(Box<dyn Error>),
+    ValidationError(Box<dyn Error>),
 }
 
 #[derive(Serialize)]
@@ -142,14 +146,15 @@ impl JsonError {
     fn new(message: String) -> Self {
         Self { message }
     }
-}
-
-impl IntoResponse for JsonError {
-    fn into_response(self) -> axum::response::Response {
+    fn to_response(self, code: StatusCode) -> axum::response::Response {
         let mut r = Json(self).into_response();
-        *r.status_mut() = http::StatusCode::INTERNAL_SERVER_ERROR;
+        *r.status_mut() = code;
         r
     }
+}
+
+fn json_error(code: StatusCode, message: String) -> axum::response::Response {
+    JsonError::new(message).to_response(code)
 }
 
 impl IntoResponse for ChatCompletionResponder {
@@ -157,7 +162,12 @@ impl IntoResponse for ChatCompletionResponder {
         match self {
             ChatCompletionResponder::Sse(s) => s.into_response(),
             ChatCompletionResponder::Json(s) => Json(s).into_response(),
-            ChatCompletionResponder::Error(e) => JsonError::new(e.to_string()).into_response(),
+            ChatCompletionResponder::InternalError(e) => {
+                json_error(http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
+            ChatCompletionResponder::ValidationError(e) => {
+                json_error(http::StatusCode::UNPROCESSABLE_ENTITY, e.to_string())
+            }
         }
     }
 }
@@ -251,10 +261,11 @@ async fn chatcompletions(
         let response = rx.recv().unwrap();
 
         match response {
-            Response::Error(e) => {
+            Response::InternalError(e) => {
                 MistralRs::maybe_log_error(state, &*e);
-                ChatCompletionResponder::Error(e)
+                ChatCompletionResponder::InternalError(e)
             }
+            Response::ValidationError(e) => ChatCompletionResponder::ValidationError(e),
             Response::Done(response) => {
                 MistralRs::maybe_log_response(state, &response);
                 ChatCompletionResponder::Json(response)

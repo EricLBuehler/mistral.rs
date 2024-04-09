@@ -20,7 +20,7 @@ macro_rules! handle_seq_error {
             Err(e) => {
                 use $crate::response::Response;
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                $response.send(Response::Error(e.into())).unwrap();
+                $response.send(Response::InternalError(e.into())).unwrap();
                 return;
             }
         }
@@ -36,7 +36,7 @@ macro_rules! handle_seq_error_stateaware {
                 use $crate::response::Response;
                 use $crate::sequence::SequenceState;
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                $seq.responder().send(Response::Error(e.into())).unwrap();
+                $seq.responder().send(Response::InternalError(e.into())).unwrap();
                 $seq.set_state(SequenceState::Error);
                 return;
             }
@@ -56,7 +56,7 @@ macro_rules! handle_pipeline_forward_error {
                 println!("Model failed with error: {:?}", &e);
                 for seq in $seq_slice.iter_mut() {
                     seq.responder()
-                        .send(Response::Error(e.to_string().into()))
+                        .send(Response::InternalError(e.to_string().into()))
                         .unwrap();
                     seq.set_state(SequenceState::Error);
                 }
