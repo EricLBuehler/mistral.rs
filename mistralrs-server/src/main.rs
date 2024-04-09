@@ -139,7 +139,7 @@ struct JsonError {
 }
 
 impl JsonError {
-    pub fn new(message: String) -> Self {
+    fn new(message: String) -> Self {
         Self { message }
     }
 }
