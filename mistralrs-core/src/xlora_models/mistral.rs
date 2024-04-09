@@ -67,7 +67,7 @@ impl MLP {
     fn forward(
         &self,
         xs: &Tensor,
-        scalings: Tensor,
+        scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
@@ -186,7 +186,7 @@ impl Attention {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
-        scalings: Tensor,
+        scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
@@ -316,7 +316,7 @@ impl DecoderLayer {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
-        scalings: Tensor,
+        scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
@@ -354,7 +354,7 @@ pub struct XLoraModel {
     pub device: Device,
     pub cache: Cache,
     pub max_seq_len: usize,
-    xlora_classifier: XLoraClassifier,
+    xlora_classifier: Option<XLoraClassifier>,
 }
 
 impl XLoraModel {
@@ -362,7 +362,7 @@ impl XLoraModel {
         cfg: &Config,
         vb: VarBuilder,
         lora_config: &Vec<(String, LoraConfig)>,
-        xlora_config: XLoraConfig,
+        xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
@@ -403,13 +403,9 @@ impl XLoraModel {
             dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, true),
             max_seq_len: cfg.max_position_embeddings,
-            xlora_classifier: XLoraClassifier::new(
-                xlora_config,
-                count,
-                lora_config.len(),
-                vb,
-                false,
-            )?,
+            xlora_classifier: xlora_config.map(|xlora_config| {
+                XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
+            }),
         })
     }
 
@@ -467,7 +463,7 @@ impl XLoraModel {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        scalings: Tensor,
+        scalings: Option<Tensor>,
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
@@ -508,7 +504,10 @@ impl XLoraModel {
                 start_offsets_kernel.clone(),
                 cache.get_mut(i).unwrap(),
                 scalings.clone(),
-                self.xlora_classifier.get_global_scaling_weight(),
+                self.xlora_classifier
+                    .as_ref()
+                    .map(|classifier| classifier.get_global_scaling_weight())
+                    .unwrap_or(1.0),
                 is_scaling_pass,
             )?
         }
@@ -527,45 +526,64 @@ impl XLoraModel {
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
     ) -> Result<Tensor> {
-        let (_b_size, seq_len_full) = input_ids_full.dims2()?;
         let (_, seq_len) = input_ids.dims2()?;
 
-        let scalings = self.get_scalings(
-            input_ids,
-            input_ids_full,
-            seqlen_offsets,
-            seqlen_offsets_full,
-            &start_offsets_kernel,
-            &start_offsets_kernel_full,
-            no_kv_cache,
-            non_granular_state,
-        )?;
+        if self.xlora_classifier.is_some() {
+            let (_b_size, seq_len_full) = input_ids_full.dims2()?;
 
-        if no_kv_cache {
-            self.inner_forward(
+            let scalings = self.get_scalings(
+                input_ids,
                 input_ids_full,
+                seqlen_offsets,
                 seqlen_offsets_full,
-                start_offsets_kernel_full,
-                scalings,
-                true,
+                &start_offsets_kernel,
+                &start_offsets_kernel_full,
                 no_kv_cache,
-                None,
-            )?
-            .apply(&self.lm_head)?
-            .narrow(1, seq_len_full - 1, 1)
+                non_granular_state,
+            )?;
+
+            if no_kv_cache {
+                self.inner_forward(
+                    input_ids_full,
+                    seqlen_offsets_full,
+                    start_offsets_kernel_full,
+                    Some(scalings),
+                    true,
+                    no_kv_cache,
+                    None,
+                )?
+                .contiguous()?
+                .apply(&self.lm_head)?
+                .i((.., seq_len_full - 1, ..))
+            } else {
+                // is_full_pass=true is ok because no_kv_cache=false
+                self.inner_forward(
+                    input_ids,
+                    seqlen_offsets,
+                    start_offsets_kernel,
+                    Some(scalings),
+                    true,
+                    no_kv_cache,
+                    None,
+                )?
+                .contiguous()?
+                .apply(&self.lm_head)?
+                .i((.., seq_len - 1, ..))
+            }
         } else {
-            // is_full_pass=true is ok because no_kv_cache=false
+            let (_, seq_len) = input_ids.dims2()?;
             self.inner_forward(
                 input_ids,
                 seqlen_offsets,
                 start_offsets_kernel,
-                scalings,
-                true,
+                None,
+                false,
                 no_kv_cache,
                 None,
             )?
+            .contiguous()?
             .apply(&self.lm_head)?
-            .narrow(1, seq_len - 1, 1)
+            .i((.., seq_len - 1, ..))
         }
     }
 }
@@ -578,7 +596,7 @@ impl ScalingsMaker for XLoraModel {
         &self.cache
     }
     fn get_classifier(&self) -> &XLoraClassifier {
-        &self.xlora_classifier
+        self.xlora_classifier.as_ref().unwrap()
     }
     fn forward(
         &mut self,
@@ -594,7 +612,7 @@ impl ScalingsMaker for XLoraModel {
             input_ids,
             seqlen_offsets,
             start_offsets_kernel,
-            scalings,
+            Some(scalings),
             is_full_pass,
             no_kv_cache,
             is_scaling_pass,

@@ -139,17 +139,23 @@ pub enum ModelKind {
     XLoraGGML,
     QuantizedGGUF,
     QuantizedGGML,
+    LoraGGUF,
+    LoraGGML,
+    LoraNormal,
 }
 
 impl AsRef<str> for ModelKind {
     fn as_ref(&self) -> &str {
         match self {
-            ModelKind::Normal => "normal (no quant, no xlora)",
-            ModelKind::QuantizedGGML => "quantized from ggml (no xlora)",
-            ModelKind::QuantizedGGUF => "quantized from gguf (no xlora)",
+            ModelKind::Normal => "normal (no quant, no adapters)",
+            ModelKind::QuantizedGGML => "quantized from ggml (no adapters)",
+            ModelKind::QuantizedGGUF => "quantized from gguf (no adapters)",
             ModelKind::XLoraNormal => "x-lora (no quant)",
             ModelKind::XLoraGGML => "x-lora, quantized from ggml",
             ModelKind::XLoraGGUF => "x-lora, quantized from gguf",
+            ModelKind::LoraGGUF => "lora, quantized from gguf",
+            ModelKind::LoraGGML => "lora, quantized from ggml",
+            ModelKind::LoraNormal => "lora (no quant)",
         }
     }
 }

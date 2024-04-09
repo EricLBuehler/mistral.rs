@@ -22,6 +22,7 @@ Mistral.rs is a fast LLM inference platform written in pure, safe Rust. We suppo
 - Python API.
 - Apple silicon support with the Metal framework.
 - CPU inference with `mkl`, `accelerate` support and optimized backend.
+- Fast LoRA support with weight merging.
 
 **Supported models:**
 - Mistral 7B (v0.1 and v0.2)
@@ -30,13 +31,32 @@ Mistral.rs is a fast LLM inference platform written in pure, safe Rust. We suppo
 - Mixtral 8x7B
 - Phi 2
 
-|Model|GGUF|GGML|X-LoRA|X-LoRA+GGUF|X-LoRA+GGML|
-|--|--|--|--|--|--|
-|Mistral 7B |✅| |✅|✅| |
-|Gemma| | |✅| | |
-|Llama|✅|✅|✅|✅|✅|
-|Mixtral 8x7B|✅| |✅|✅|✅|
-|Phi 2| | |✅| | |
+**Quantization support**
+|Model|GGUF|GGML|
+|--|--|--|
+|Mistral 7B |✅| |
+|Gemma| | |
+|Llama|✅|✅|
+|Mixtral 8x7B|✅| |
+|Phi 2| | |
+
+**X-LoRA support**
+|Model|X-LoRA|X-LoRA+GGUF|X-LoRA+GGML|
+|--|--|--|--|
+|Mistral 7B |✅|✅| |
+|Gemma|✅| | |
+|Llama|✅|✅|✅|
+|Mixtral 8x7B|✅|✅| |
+|Phi 2|✅| | |
+
+**LoRA support**
+|Model|LoRA|LoRA+GGUF|LoRA+GGML|
+|--|--|--|--|
+|Mistral 7B |✅|✅| |
+|Gemma|✅| | |
+|Llama|✅|✅|✅|
+|Mixtral 8x7B|✅|✅| |
+|Phi 2|✅| | |
 
 **Using derivative models**
 To use a derivative model, select the model architecture using the correct subcommand. To see what can be passed for the architecture, pass `--help` after the subcommand. For example, when using a different model than the default, specify the following for the following types of models:
@@ -45,8 +65,10 @@ To use a derivative model, select the model architecture using the correct subco
 - **Quantized**: Quantized model id, quantized filename, and tokenizer id
 - **X-LoRA**: Model id, X-LoRA ordering
 - **X-LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and X-LoRA ordering
+- **LoRA**: Model id, LoRA ordering
+- **LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and LoRA ordering
 
-See [this](#x-lora) section to determine if it is necessary to prepare an X-LoRA ordering file, it is always necessary if the target modules or architecture changed, or if the adapter order changed.
+See [this](#adapter-ordering-file) section to determine if it is necessary to prepare an X-LoRA/LoRA ordering file, it is always necessary if the target modules or architecture changed, or if the adapter order changed.
 
 It is also important to check the chat template style of the model. If the HF hub repo has a `tokenizer_config.json` file, it is not necessary to specify. Otherwise, templates can be found in `chat_templates` and should be passed before the subcommand.
 
@@ -157,19 +179,56 @@ To start a server serving Mistral on `localhost:1234`,
 ./mistralrs-server --port 1234 --log output.log mistral
 ```
 
-Mistral.rs uses subcommands to control the model type. They are of format `<XLORA>-<ARCHITECTURE>-<QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
+Mistral.rs uses subcommands to control the model type. They are of format `<XLORA/LORA>-<ARCHITECTURE>-<QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
+
+**Quick examples:**
+
+- X-LoRA with no quantization
 
 To start an X-LoRA server with the default weights and ordering (exactly as presented in [the paper](https://arxiv.org/abs/2402.07148)):
 
-`./mistralrs-server --port 1234 x-lora-mistral -o x-lora-orderings/default-ordering.json`
+`./mistralrs-server --port 1234 x-lora-mistral -o orderings/default-ordering.json`
+
+- LoRA with a model from GGUF
+
+To start an LoRA server with adapters from the X-LoRA paper (you should modify the ordering file to use only one adapter, as the adapter static scalings are all 1 and so the signal will become distorted):
+
+`./mistralrs-server --port 1234 lora-mistral-gguf -o orderings/default-ordering.json`
+
+- With a model from GGUF
+
+To start a server running Llama from GGUF:
+
+`./mistralrs-server --port 1234 llama-gguf`
+
+- With a model from GGML
+
+To start a server running Llama from GGML:
+
+`./mistralrs-server --port 1234 llama-ggml`
 
 ---
 
-### X-LoRA
-**Preparing the X-LoRA Ordering File**
-The X-LoRA ordering file is necessary to prepare before inference with an X-LoRA model. However, it is easy with a provided [`script`](scripts/create_ordering.py)!
+### Adapter model support: X-LoRA and LoRA
 
-The X-LoRA ordering JSON file contains 2 parts. The first is the order of the adapters and the second, the layer ordering. The layer ordering has been automatically generated and should not be manipulated as it controls the application of scalings. However the order of adapter should be an array of strings which are the adapter names corresponding to the order the adapters were specified during training. For example, if the adapters were specified as a dictionary:
+An adapter model is a model with X-LoRA or LoRA. X-LoRA support is provided by selecting the `x-lora-*` architecture, and LoRA support by selecting the `lora-*` architecture. For both X-LoRA and LoRA, an ordering file (see [this section](#adapter-ordering-file) for preparing the ordering file) must be provided. The ordering file describes the ordering of layers and which adapters to use (and what order to use them in for X-LoRA).
+
+When using an adapter model with a quantized base model, if the ordering file specifies unsupported layers you will receive an error.
+
+**Supported X-LoRA or LoRA quantized layers**
+- model.layers.{layer_idx}.self_attn.q_proj
+- model.layers.{layer_idx}.self_attn.k_proj
+- model.layers.{layer_idx}.self_attn.v_proj
+- model.layers.{layer_idx}.self_attn.o_proj
+- model.layers.{layer_idx}.mlp.up_proj
+- model.layers.{layer_idx}.mlp.down_proj
+- model.layers.{layer_idx}.mlp.gate_proj
+
+### Adapter ordering file
+**Preparing the X-LoRA/LoRA Ordering File**
+The X-LoRA/LoRA ordering file is necessary to prepare before inference with an X-LoRA model. However, it is easy with a provided [`script`](scripts/create_ordering.py)!
+
+The X-LoRA/LoRA ordering JSON file contains 2 parts. The first is the order of the adapters and the second, the layer ordering. The layer ordering has been automatically generated and should not be manipulated as it controls the application of scalings. However the order of adapter should be an array of strings which are the adapter names corresponding to the order the adapters were specified during training. For example, if the adapters were specified as a dictionary:
 
 ```python
 adapters = {
@@ -180,6 +239,8 @@ adapters = {
 ```
 
 The specified order would be `["math", "reasoning", "biology"]`.
+
+For LoRA models, the order of the adapters does not matter. You can reorder them or remove some to control which adapters will be used. However, for an X-LoRA model, the order of the adapters in the ordering file is important.
 
 There are 2 scripts to prepare the ordering file. The ordering file is specific to each architecture and set of target modules. Therefore, if either are changed, it is necessary to create a new ordering file using the first option. If only the adapter order or adapters changed, then it the second option should be used.
 
@@ -193,19 +254,9 @@ There are 2 scripts to prepare the ordering file. The ordering file is specific 
 
 A provide a [default ordering file](scripts/default-ordering.json) which contains the ordering for the X-LoRA model associated with [the paper](https://arxiv.org/abs/2402.07148) and the Huggingface repository: https://huggingface.co/lamm-mit/x-lora.
 
-**Quantized X-LoRA models**
+**Quantized X-LoRA or LoRA models**
 
-Mistral.rs supports running quantized models with X-LoRA. The X-LoRA layers will not be quantized, only the base model. Please note that
-using a high quantization level (eg., 4-bit) can distort the signal and prevent the classifier from acting properly. Therefore, it is better to use slightly lower levels such as 8-bit.
-
-**Supported X-LoRA quantized layers**
-- model.layers.{layer_idx}.self_attn.q_proj
-- model.layers.{layer_idx}.self_attn.k_proj
-- model.layers.{layer_idx}.self_attn.v_proj
-- model.layers.{layer_idx}.self_attn.o_proj
-- model.layers.{layer_idx}.mlp.up_proj
-- model.layers.{layer_idx}.mlp.down_proj
-- model.layers.{layer_idx}.mlp.gate_proj
+Mistral.rs supports running quantized models with X-LoRA or LoRA. The X-LoRA or LoRA adapter layers will not be quantized, only the base model. Please note that using a high quantization level (eg., 4-bit) can distort the signal and prevent the classifier from acting properly. Therefore, it is better to use slightly lower levels such as 8-bit.
 
 
 **Avoiding the scaling pass with non-granular scalings**
