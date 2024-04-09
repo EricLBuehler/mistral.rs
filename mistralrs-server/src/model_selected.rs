@@ -456,4 +456,36 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
     },
+
+    /// Select the mistral model, with LoRA.
+    LoraMistralGGUF {
+        /// Model ID to load from
+        #[arg(short, long, default_value = "HuggingFaceH4/zephyr-7b-beta")]
+        model_id: String,
+
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(short, long)]
+        tokenizer_json: Option<String>,
+
+        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
+        #[arg(short = 'm', long, default_value = "TheBloke/zephyr-7B-beta-GGUF")]
+        quantized_model_id: Option<String>,
+
+        /// Quantized filename, only applicable if `quantized` is set.
+        #[arg(short = 'f', long, default_value = "zephyr-7b-beta.Q8_0.gguf")]
+        quantized_filename: Option<String>,
+
+        /// Model ID to load Xlora from
+        #[arg(short, long, default_value = "lamm-mit/x-lora")]
+        adapters_model_id: String,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
+
+        /// Ordering JSON file
+        #[arg(short, long)]
+        order: String,
+    },
 }

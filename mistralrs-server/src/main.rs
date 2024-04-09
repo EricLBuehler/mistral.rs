@@ -326,7 +326,8 @@ async fn main() -> Result<()> {
         | ModelSelected::MistralGGUF { .. }
         | ModelSelected::Mixtral { .. }
         | ModelSelected::MixtralGGUF { .. }
-        | ModelSelected::Phi2 { .. } => None,
+        | ModelSelected::Phi2 { .. }
+        | ModelSelected::LoraMistralGGUF { .. } => None,
         ModelSelected::XLoraGemma {
             tgt_non_granular_index,
             ..
@@ -771,6 +772,33 @@ async fn main() -> Result<()> {
             args.chat_template,
             tokenizer_json,
             None,
+        )),
+        ModelSelected::LoraMistralGGUF {
+            model_id,
+            tokenizer_json,
+            quantized_model_id,
+            quantized_filename,
+            adapters_model_id,
+            repeat_last_n,
+            order,
+        } => Box::new(MistralLoader::new(
+            model_id,
+            MistralSpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+            },
+            quantized_model_id,
+            quantized_filename,
+            Some(adapters_model_id),
+            ModelKind::LoraGGUF,
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
+            args.no_kv_cache,
+            args.chat_template,
+            tokenizer_json,
+            tgt_non_granular_index,
         )),
     };
 
