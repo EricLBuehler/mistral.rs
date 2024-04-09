@@ -413,6 +413,7 @@ impl Engine {
                             format!("Stop sequence '{s:?}' encodes to multiple tokens when it should only encode to 1.").into(),
                         ))
                         .unwrap();
+                    return;
                 }
                 stop_toks.push(toks[0]);
                 stop_toks
