@@ -68,19 +68,19 @@ impl Engine {
                 }
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.completion.clone(), false);
-                self.synchronize(get_mut_arcmutex!(self.pipeline).device());
+                //self.synchronize(get_mut_arcmutex!(self.pipeline).device());
+
+                if !self.no_kv_cache {
+                    self.clone_out_cache(&scheduled.completion);
+                } else {
+                    self.set_none_cache();
+                }
 
                 let before_sample = Instant::now();
                 self.sample_seqs(&scheduled.completion, logits);
                 let sampling_time = before_sample.elapsed().as_millis();
                 for seq in scheduled.completion.iter() {
                     deref_mut_refcell!(seq).total_sampling_time += sampling_time;
-                }
-
-                if !self.no_kv_cache {
-                    self.clone_out_cache(&scheduled.completion);
-                } else {
-                    self.set_none_cache();
                 }
             }
 
@@ -89,7 +89,7 @@ impl Engine {
                 self.set_none_cache();
                 let logits =
                     get_mut_arcmutex!(self.pipeline).forward(scheduled.prompt.clone(), true);
-                self.synchronize(get_mut_arcmutex!(self.pipeline).device());
+                //self.synchronize(get_mut_arcmutex!(self.pipeline).device());
                 for seq in scheduled.prompt.iter() {
                     deref_mut_refcell!(seq).set_state(SequenceState::RunningCompletion);
                     let now = SystemTime::now()
@@ -103,17 +103,17 @@ impl Engine {
                     deref_mut_refcell!(seq).prompt_timestamp = Some(now);
                 }
 
+                if !self.no_kv_cache {
+                    self.clone_out_cache(&scheduled.prompt);
+                } else {
+                    self.set_none_cache();
+                }
+
                 let before_sample = Instant::now();
                 self.sample_seqs(&scheduled.prompt, logits);
                 let sampling_time = before_sample.elapsed().as_millis();
                 for seq in scheduled.prompt.iter() {
                     deref_mut_refcell!(seq).total_sampling_time += sampling_time;
-                }
-
-                if !self.no_kv_cache {
-                    self.clone_out_cache(&scheduled.prompt);
-                } else {
-                    self.set_none_cache();
                 }
             }
         }
