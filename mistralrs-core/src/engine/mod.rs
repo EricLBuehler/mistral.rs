@@ -7,7 +7,7 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use candle_core::{Device, Tensor};
+use candle_core::Tensor;
 use either::Either;
 use tracing::warn;
 
@@ -68,7 +68,6 @@ impl Engine {
                     Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
                 }
                 let logits = pipeline.forward(&scheduled.completion, false);
-                Self::synchronize(pipeline.device());
 
                 let before_sample = Instant::now();
                 Self::sample_seqs(&mut *pipeline, &mut scheduled.completion, logits);
@@ -88,7 +87,7 @@ impl Engine {
                 // Run the prompt seqs
                 Self::set_none_cache(&mut *pipeline);
                 let logits = pipeline.forward(&scheduled.prompt, true);
-                Self::synchronize(pipeline.device());
+
                 for seq in scheduled.prompt.iter_mut() {
                     seq.set_state(SequenceState::RunningCompletion);
                     let now = SystemTime::now()
@@ -116,15 +115,6 @@ impl Engine {
             }
         }
     }
-
-    #[cfg(feature = "cuda")]
-    fn synchronize(dev: &Device) {
-        if let candle_core::Device::Cuda(dev) = dev {
-            dev.synchronize().unwrap();
-        }
-    }
-    #[cfg(not(feature = "cuda"))]
-    fn synchronize(_dev: &Device) {}
 
     fn sample_seqs(pipeline: &mut dyn Pipeline, seqs: &mut [&mut Sequence], logits: Tensor) {
         let seqs_len = seqs.len();
