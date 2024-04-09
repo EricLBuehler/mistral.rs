@@ -87,6 +87,7 @@ pub struct LlamaPipeline {
     chat_template: ChatTemplate,
     non_granular_state: Option<NonGranularState>,
     model_id: String,
+    is_lora: bool,
 }
 
 pub struct LlamaLoader {
@@ -225,6 +226,7 @@ impl Loader for LlamaLoader {
 
         info!("Model config: {basic_config:?}");
 
+        let mut is_lora = false;
         let model = match self.kind {
             ModelKind::QuantizedGGUF => {
                 let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
@@ -346,9 +348,97 @@ impl Loader for LlamaLoader {
                 )?;
                 Model::XLoraQuantized(model)
             }
-            ModelKind::LoraGGUF => unreachable!(),
-            ModelKind::LoraGGML => unreachable!(),
-            ModelKind::LoraNormal => unreachable!(),
+            ModelKind::LoraGGUF => {
+                let vb = from_mmaped_safetensors(
+                    vec![],
+                    paths
+                        .get_adapter_filenames()
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .map(|(_, x)| (*x).to_owned())
+                        .collect::<Vec<_>>(),
+                    dtype.unwrap_or(default_dtype),
+                    device,
+                    false,
+                )?;
+
+                let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
+                let model = ggml_file::Content::read(&mut file, device)
+                    .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
+                let model = XLoraModelWeights::from_ggml(
+                    model,
+                    self.config.gqa,
+                    paths.get_adapter_configs().as_ref().unwrap(),
+                    &vb,
+                    paths.get_ordering().as_ref().unwrap(),
+                    None,
+                )?;
+                is_lora = true;
+                Model::XLoraQuantized(model)
+            }
+            ModelKind::LoraGGML => {
+                let vb = from_mmaped_safetensors(
+                    vec![],
+                    paths
+                        .get_adapter_filenames()
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .map(|(_, x)| (*x).to_owned())
+                        .collect::<Vec<_>>(),
+                    dtype.unwrap_or(default_dtype),
+                    device,
+                    false,
+                )?;
+
+                let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
+                let model = gguf_file::Content::read(&mut file)
+                    .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
+                let model = XLoraModelWeights::from_gguf(
+                    model,
+                    &mut file,
+                    device,
+                    paths.get_adapter_configs().as_ref().unwrap(),
+                    &vb,
+                    paths.get_ordering().as_ref().unwrap(),
+                    None,
+                )?;
+                is_lora = true;
+                Model::XLoraQuantized(model)
+            }
+            ModelKind::LoraNormal => {
+                let vb = from_mmaped_safetensors(
+                    paths
+                        .get_weight_filenames()
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                    paths
+                        .get_adapter_filenames()
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .map(|(_, x)| (*x).to_owned())
+                        .collect::<Vec<_>>(),
+                    dtype.unwrap_or(default_dtype),
+                    device,
+                    false,
+                )?;
+
+                let model = XLoraLlama::load(
+                    vb,
+                    &basic_config.into_config(self.config.use_flash_attn),
+                    dtype.unwrap_or(default_dtype),
+                    device,
+                    paths.get_adapter_configs().as_ref().unwrap(),
+                    None,
+                    paths.get_ordering().as_ref().unwrap().clone(),
+                    self.no_kv_cache,
+                )?;
+                is_lora = true;
+                Model::XLoraNormal(model)
+            }
         };
 
         let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
@@ -369,6 +459,7 @@ impl Loader for LlamaLoader {
                 }
             }),
             model_id: self.model_id.clone(),
+            is_lora,
         })))
     }
 
@@ -407,21 +498,21 @@ impl Pipeline for LlamaPipeline {
             }
             Model::XLoraNormal(ref mut model) => model.forward(
                 &input_ids,
-                input_ids_full.as_ref().unwrap(),
+                input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,
-                seqlen_offsets_full.as_ref().unwrap(),
-                seqlen_offsets_kernel,
-                seqlen_offsets_kernel_full.unwrap(),
+                seqlen_offsets_full.as_ref().unwrap_or(&seqlen_offsets),
+                seqlen_offsets_kernel.clone(),
+                seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
                 self.no_kv_cache,
                 &self.non_granular_state,
             ),
             Model::XLoraQuantized(ref mut model) => model.forward(
                 &input_ids,
-                input_ids_full.as_ref().unwrap(),
+                input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,
-                seqlen_offsets_full.as_ref().unwrap(),
-                seqlen_offsets_kernel,
-                seqlen_offsets_kernel_full.unwrap(),
+                seqlen_offsets_full.as_ref().unwrap_or(&seqlen_offsets),
+                seqlen_offsets_kernel.clone(),
+                seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
                 self.no_kv_cache,
                 &self.non_granular_state,
             ),
@@ -482,7 +573,7 @@ impl Pipeline for LlamaPipeline {
     fn is_xlora(&self) -> bool {
         match &self.model {
             Model::Normal(_) | Model::Quantized(_) => false,
-            Model::XLoraNormal(_) | Model::XLoraQuantized(_) => true,
+            Model::XLoraNormal(_) | Model::XLoraQuantized(_) => !self.is_lora,
         }
     }
     fn has_no_kv_cache(&self) -> bool {

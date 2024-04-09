@@ -86,6 +86,7 @@ pub struct Phi2Pipeline {
     chat_template: ChatTemplate,
     non_granular_state: Option<NonGranularState>,
     model_id: String,
+    is_lora: bool,
 }
 
 pub struct Phi2Loader {
@@ -256,6 +257,7 @@ impl Loader for Phi2Loader {
 
         info!("Model config: {config:?}");
 
+        let mut is_lora = false;
         let model = match self.kind {
             ModelKind::QuantizedGGUF => unreachable!(),
             ModelKind::QuantizedGGML => unreachable!(),
@@ -304,7 +306,35 @@ impl Loader for Phi2Loader {
             ModelKind::XLoraGGML => unreachable!(),
             ModelKind::LoraGGUF => unreachable!(),
             ModelKind::LoraGGML => unreachable!(),
-            ModelKind::LoraNormal => unreachable!(),
+            ModelKind::LoraNormal => {
+                let vb = from_mmaped_safetensors(
+                    paths
+                        .get_weight_filenames()
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                    paths
+                        .get_adapter_filenames()
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .map(|(_, x)| (*x).to_owned())
+                        .collect::<Vec<_>>(),
+                    dtype.unwrap_or(default_dtype),
+                    device,
+                    false,
+                )?;
+
+                let model = XLoraPhi2::new(
+                    &config,
+                    vb,
+                    paths.get_adapter_configs().as_ref().unwrap(),
+                    paths.get_classifier_config().as_ref().unwrap().clone(),
+                    paths.get_ordering().as_ref().unwrap().clone(),
+                )?;
+                is_lora = true;
+                Model::XLoraNormal(model)
+            }
         };
 
         let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
@@ -327,6 +357,7 @@ impl Loader for Phi2Loader {
                 }
             }),
             model_id: self.model_id.clone(),
+            is_lora,
         })))
     }
 
@@ -362,11 +393,11 @@ impl Pipeline for Phi2Pipeline {
             }
             Model::XLoraNormal(ref mut model) => model.forward(
                 &input_ids,
-                input_ids_full.as_ref().unwrap(),
+                input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,
-                seqlen_offsets_full.as_ref().unwrap(),
-                seqlen_offsets_kernel,
-                seqlen_offsets_kernel_full.unwrap(),
+                seqlen_offsets_full.as_ref().unwrap_or(&seqlen_offsets),
+                seqlen_offsets_kernel.clone(),
+                seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
                 self.no_kv_cache,
                 &self.non_granular_state,
             ),
@@ -422,7 +453,7 @@ impl Pipeline for Phi2Pipeline {
     fn is_xlora(&self) -> bool {
         match &self.model {
             Model::Normal(_) => false,
-            Model::XLoraNormal(_) => true,
+            Model::XLoraNormal(_) => !self.is_lora,
         }
     }
     fn has_no_kv_cache(&self) -> bool {

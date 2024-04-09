@@ -30,13 +30,32 @@ Mistral.rs is a fast LLM inference platform written in pure, safe Rust. We suppo
 - Mixtral 8x7B
 - Phi 2
 
-|Model|GGUF|GGML|X-LoRA|X-LoRA+GGUF|X-LoRA+GGML|
-|--|--|--|--|--|--|
-|Mistral 7B |✅| |✅|✅| |
-|Gemma| | |✅| | |
-|Llama|✅|✅|✅|✅|✅|
-|Mixtral 8x7B|✅| |✅|✅|✅|
-|Phi 2| | |✅| | |
+**Quantization support**
+|Model|GGUF|GGML|
+|--|--|--|
+|Mistral 7B |✅| |
+|Gemma| | |
+|Llama|✅|✅|
+|Mixtral 8x7B|✅| |
+|Phi 2| | |
+
+**X-LoRA support**
+|Model|X-LoRA|X-LoRA+GGUF|X-LoRA+GGML|
+|--|--|--|--|
+|Mistral 7B |✅|✅| |
+|Gemma|✅| | |
+|Llama|✅|✅|✅|
+|Mixtral 8x7B|✅|✅| |
+|Phi 2|✅| | |
+
+**LoRA support**
+|Model|LoRA|LoRA+GGUF|LoRA+GGML|
+|--|--|--|--|
+|Mistral 7B |✅|✅| |
+|Gemma|✅| | |
+|Llama|✅|✅|✅|
+|Mixtral 8x7B|✅|✅| |
+|Phi 2|✅| | |
 
 **Using derivative models**
 To use a derivative model, select the model architecture using the correct subcommand. To see what can be passed for the architecture, pass `--help` after the subcommand. For example, when using a different model than the default, specify the following for the following types of models:
