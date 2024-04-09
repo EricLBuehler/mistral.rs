@@ -463,7 +463,7 @@ pub struct XLoraModel {
     pub cache: Cache,
     dtype: DType,
     pub max_seq_len: usize,
-    xlora_classifier: XLoraClassifier,
+    xlora_classifier: Option<XLoraClassifier>,
 }
 
 impl XLoraModel {
@@ -471,7 +471,7 @@ impl XLoraModel {
         cfg: &Config,
         vb: VarBuilder,
         lora_config: &Vec<(String, LoraConfig)>,
-        xlora_config: XLoraConfig,
+        xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
@@ -512,13 +512,9 @@ impl XLoraModel {
             dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: cfg.max_position_embeddings,
-            xlora_classifier: XLoraClassifier::new(
-                xlora_config,
-                count,
-                lora_config.len(),
-                vb,
-                false,
-            )?,
+            xlora_classifier: xlora_config.map(|xlora_config| {
+                XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
+            }),
         })
     }
 
@@ -609,7 +605,10 @@ impl XLoraModel {
                 start_offsets_kernel.clone(),
                 cache.get_mut(i).unwrap(),
                 scalings.clone(),
-                self.xlora_classifier.get_global_scaling_weight(),
+                self.xlora_classifier
+                    .as_ref()
+                    .map(|classifier| classifier.get_global_scaling_weight())
+                    .unwrap_or(1.0),
                 is_scaling_pass,
             )?
         }
@@ -679,7 +678,7 @@ impl ScalingsMaker for XLoraModel {
         &self.cache
     }
     fn get_classifier(&self) -> &XLoraClassifier {
-        &self.xlora_classifier
+        &self.xlora_classifier.as_ref().unwrap()
     }
     fn forward(
         &mut self,

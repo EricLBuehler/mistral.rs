@@ -303,6 +303,8 @@ impl Loader for Phi2Loader {
             ModelKind::XLoraGGUF => unreachable!(),
             ModelKind::XLoraGGML => unreachable!(),
             ModelKind::LoraGGUF => unreachable!(),
+            ModelKind::LoraGGML => unreachable!(),
+            ModelKind::LoraNormal => unreachable!(),
         };
 
         let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())

@@ -140,6 +140,8 @@ pub enum ModelKind {
     QuantizedGGUF,
     QuantizedGGML,
     LoraGGUF,
+    LoraGGML,
+    LoraNormal,
 }
 
 impl AsRef<str> for ModelKind {
@@ -152,6 +154,8 @@ impl AsRef<str> for ModelKind {
             ModelKind::XLoraGGML => "x-lora, quantized from ggml",
             ModelKind::XLoraGGUF => "x-lora, quantized from gguf",
             ModelKind::LoraGGUF => "lora, quantized from gguf",
+            ModelKind::LoraGGML => "lora, quantized from ggml",
+            ModelKind::LoraNormal => "lora (no quant)",
         }
     }
 }
