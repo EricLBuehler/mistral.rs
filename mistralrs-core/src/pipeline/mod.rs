@@ -4,14 +4,10 @@ mod mistral;
 mod mixtral;
 mod phi2;
 use crate::{sampler::Logprobs, sequence::SequenceRecognizer};
-use aici_abi::{
-    svob::SimpleVob,
-    toktree::{Recognizer, TokTrie},
-};
+use aici_abi::toktree::TokTrie;
 use core::fmt;
 use either::Either;
 pub use gemma::{GemmaLoader, GemmaSpecificConfig, GEMMA_IS_GPTX};
-use half::vec;
 use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
     Repo, RepoType,
@@ -314,51 +310,63 @@ pub trait Pipeline: Send + Sync {
             .saturating_sub(self.get_repeat_last_n());
         let ctxt = seq.get_toks()[start_at..].to_vec();
 
-        let res = seq
-            .sampler()
-            .sample(&logits, Some(&ctxt), return_logprobs)?;
+        let first_lobprobs_response =
+            seq.sampler()
+                .sample(&logits, Some(&ctxt), return_logprobs)?;
 
-        let next_token_id = res.token;
-
-        match &mut seq.recognizer {
+        let bias_if_not_allowed = match &mut seq.recognizer {
             SequenceRecognizer::Regex(ref mut rx) => {
+                // TODO: reduce duplication, both branches are exactly the same
+                let next_token_id = first_lobprobs_response.token;
                 let is_allowed = self.tok_trie().token_allowed(rx, next_token_id);
-                let vocab_size = self.tokenizer().get_vocab_size(true);
-                if !is_allowed {
-                    let mut svob = SimpleVob::alloc(vocab_size);
-                    self.tok_trie().compute_bias(rx, &mut svob);
-                    let mut acc = vec![0.0; vocab_size as usize];
-                    svob.apply_to(&mut acc);
 
-                    let new_logits =
-                        (logits + Tensor::from_slice(&acc, acc.len(), self.device())?)?;
-
-                    let new_res =
-                        seq.sampler()
-                            .sample(&new_logits, Some(&ctxt), return_logprobs)?;
-                    let next_token_id = new_res.token;
-                    let trie = self.tok_trie();
-                    let bytes = trie.token(next_token_id);
-                    for b in bytes {
-                        rx.push_byte(*b);
-                    }
-                    Ok(new_res)
+                if is_allowed {
+                    None
                 } else {
-                    let trie = self.tok_trie();
-                    let bytes = trie.token(next_token_id);
-                    for b in bytes {
-                        rx.push_byte(*b);
-                    }
-                    Ok(res)
+                    let mut token_set = self.tok_trie().alloc_token_set();
+                    self.tok_trie().compute_bias(rx, &mut token_set);
+                    Some(token_set)
                 }
             }
             SequenceRecognizer::Cfg(ref mut cfg) => {
+                // TODO: reduce duplication, both branches are exactly the same
+                let next_token_id = first_lobprobs_response.token;
                 let is_allowed = self.tok_trie().token_allowed(cfg, next_token_id);
-                dbg!(is_allowed);
-                Ok(res)
+
+                if is_allowed {
+                    None
+                } else {
+                    let mut token_set = self.tok_trie().alloc_token_set();
+                    self.tok_trie().compute_bias(cfg, &mut token_set);
+                    Some(token_set)
+                }
             }
-            SequenceRecognizer::None => Ok(res),
+            SequenceRecognizer::None => None,
+        };
+        let second_logprobs_response = match bias_if_not_allowed {
+            Some(token_set) => {
+                let mut acc = vec![-f32::INFINITY; self.tok_trie().vocab_size()];
+                token_set.apply_to(&mut acc);
+                let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), self.device())?)?;
+
+                seq.sampler()
+                    .sample(&new_logits, Some(&ctxt), return_logprobs)?
+            }
+            None => first_lobprobs_response,
+        };
+
+        match seq.recognizer {
+            SequenceRecognizer::Regex(ref mut rx) => {
+                self.tok_trie()
+                    .append_token(rx, second_logprobs_response.token);
+            }
+            SequenceRecognizer::Cfg(ref mut cfg) => {
+                self.tok_trie()
+                    .append_token(cfg, second_logprobs_response.token);
+            }
+            SequenceRecognizer::None => {}
         }
+        Ok(second_logprobs_response)
     }
 }
 
