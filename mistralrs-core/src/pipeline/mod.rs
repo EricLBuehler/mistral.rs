@@ -3,7 +3,7 @@ mod llama;
 mod mistral;
 mod mixtral;
 mod phi2;
-use crate::{sampler::Logprobs, sequence::SequenceRecognizer};
+use crate::{get_bias_if_not_allowed, sampler::Logprobs, sequence::SequenceRecognizer};
 use aici_abi::toktree::TokTrie;
 use core::fmt;
 use either::Either;
@@ -316,30 +316,10 @@ pub trait Pipeline: Send + Sync {
 
         let bias_if_not_allowed = match &mut seq.recognizer {
             SequenceRecognizer::Regex(ref mut rx) => {
-                // TODO: reduce duplication, both branches are exactly the same
-                let next_token_id = first_lobprobs_response.token;
-                let is_allowed = self.tok_trie().token_allowed(rx, next_token_id);
-
-                if is_allowed {
-                    None
-                } else {
-                    let mut token_set = self.tok_trie().alloc_token_set();
-                    self.tok_trie().compute_bias(rx, &mut token_set);
-                    Some(token_set)
-                }
+                get_bias_if_not_allowed!(self, rx, first_lobprobs_response.token)
             }
             SequenceRecognizer::Cfg(ref mut cfg) => {
-                // TODO: reduce duplication, both branches are exactly the same
-                let next_token_id = first_lobprobs_response.token;
-                let is_allowed = self.tok_trie().token_allowed(cfg, next_token_id);
-
-                if is_allowed {
-                    None
-                } else {
-                    let mut token_set = self.tok_trie().alloc_token_set();
-                    self.tok_trie().compute_bias(cfg, &mut token_set);
-                    Some(token_set)
-                }
+                get_bias_if_not_allowed!(self, cfg, first_lobprobs_response.token)
             }
             SequenceRecognizer::None => None,
         };

@@ -33,7 +33,7 @@ use mistralrs_core::{
     SamplingParams, SchedulerMethod, StopTokens as InternalStopTokens, TokenSource,
 };
 use model_selected::ModelSelected;
-use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
+use openai::{ChatCompletionGrammar, ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use serde::Serialize;
 
 use crate::openai::ModelObject;
@@ -262,8 +262,12 @@ fn parse_request(
         response: tx,
         return_logprobs: oairequest.logprobs,
         is_streaming: oairequest.stream.unwrap_or(false),
-        // TODO: fixme
-        constraint: Constraint::Regex(r"\d+".to_string()),
+
+        constraint: match oairequest.grammar {
+            Some(ChatCompletionGrammar::Yacc(yacc)) => Constraint::Yacc(yacc),
+            Some(ChatCompletionGrammar::Regex(regex)) => Constraint::Regex(regex),
+            None => Constraint::None,
+        },
     }
 }
 

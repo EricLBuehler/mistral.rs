@@ -354,7 +354,7 @@ impl Engine {
             Constraint::Regex(rx) => {
                 SequenceRecognizer::Regex(StackRecognizer::from(RecRx::from_rx(&rx)))
             }
-            Constraint::Cfg(cfg) => SequenceRecognizer::Cfg(
+            Constraint::Yacc(cfg) => SequenceRecognizer::Cfg(
                 // TODO: handle error
                 CfgParser::from_yacc(&cfg).unwrap(),
             ),

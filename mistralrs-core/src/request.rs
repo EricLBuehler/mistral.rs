@@ -6,7 +6,7 @@ use std::{fmt::Debug, sync::mpsc::Sender};
 
 pub enum Constraint {
     Regex(String),
-    Cfg(String),
+    Yacc(String),
     None,
 }
 
