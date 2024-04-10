@@ -112,7 +112,7 @@ impl Runner {
                     top_k: request.top_k,
                     top_p: request.top_p,
                     top_n_logprobs: request.top_logprobs.unwrap_or(1),
-                    repeat_penalty: request.repetition_penalty,
+                    frequency_penalty: request.repetition_penalty,
                     presence_penalty: request.presence_penalty,
                     max_len: request.max_tokens,
                     stop_toks,

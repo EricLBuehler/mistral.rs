@@ -434,7 +434,7 @@ impl Engine {
             Some(request.sampling_params.temperature.unwrap_or(1.0)),
             request.sampling_params.top_n_logprobs,
             tokenizer.clone(),
-            request.sampling_params.repeat_penalty,
+            request.sampling_params.frequency_penalty,
             request.sampling_params.presence_penalty,
             request.sampling_params.logits_bias.clone(),
             topk,
