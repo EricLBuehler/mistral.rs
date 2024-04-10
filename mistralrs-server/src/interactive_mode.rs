@@ -6,7 +6,7 @@ use std::{
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{MistralRs, Request, Response, SamplingParams};
-use tracing::{info, warn};
+use tracing::{error, info};
 
 pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
     let sender = mistralrs.get_sender();
@@ -51,21 +51,35 @@ pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
         let mut assistant_output = String::new();
         loop {
             let resp = rx.try_recv();
-            if let Ok(Response::Chunk(chunk)) = resp {
-                let choice = &chunk.choices[0];
-                if choice.stopreason.is_some() {
-                    if matches!(choice.stopreason.as_ref().unwrap().as_str(), "length") {
-                        print!("...");
+            if let Ok(resp) = resp {
+                match resp {
+                    Response::Chunk(chunk) => {
+                        let choice = &chunk.choices[0];
+                        if choice.stopreason.is_some() {
+                            if matches!(choice.stopreason.as_ref().unwrap().as_str(), "length") {
+                                print!("...");
+                            }
+                            break;
+                        } else {
+                            assistant_output.push_str(&choice.delta.content);
+                            print!("{}", choice.delta.content);
+                            io::stdout().flush().unwrap();
+                        }
                     }
-                    break;
-                } else {
-                    assistant_output.push_str(&choice.delta.content);
-                    print!("{}", choice.delta.content);
-                    io::stdout().flush().unwrap();
+                    Response::InternalError(e) => {
+                        error!("Got an internal error: {e:?}");
+                        break 'outer;
+                    }
+                    Response::ModelError(e, resp) => {
+                        error!("Got a model error: {e:?}, response: {resp:?}");
+                        break 'outer;
+                    }
+                    Response::ValidationError(e) => {
+                        error!("Got a validation error: {e:?}");
+                        break 'outer;
+                    }
+                    Response::Done(_) => unreachable!(),
                 }
-            } else if let Ok(Response::Error(e)) = resp {
-                warn!("Got an error: {e:?}");
-                break 'outer;
             }
         }
         let mut assistant_message = IndexMap::new();
