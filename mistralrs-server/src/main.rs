@@ -37,9 +37,11 @@ use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use serde::Serialize;
 
 use crate::openai::ModelObject;
+mod interactive_mode;
 mod model_selected;
 mod openai;
 
+use interactive_mode::interactive_mode;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{info, warn};
 use utoipa::OpenApi;
@@ -92,6 +94,10 @@ struct Args {
     /// Defaults to using a cached token.
     #[arg(long, default_value_t = TokenSource::CacheToken, value_parser = parse_token_source)]
     token_source: TokenSource,
+
+    /// Enter interactive mode instead of serving a chat server.
+    #[clap(long, short, action)]
+    interactive_mode: bool,
 }
 
 struct Streamer {
@@ -199,7 +205,7 @@ fn parse_request(
             top_k: oairequest.top_k,
             top_p: oairequest.top_p,
             top_n_logprobs: oairequest.top_logprobs.unwrap_or(1),
-            repeat_penalty: oairequest.repetition_penalty,
+            frequency_penalty: oairequest.repetition_penalty,
             presence_penalty: oairequest.presence_penalty,
             max_len: oairequest.max_tokens,
             stop_toks,
@@ -1046,6 +1052,7 @@ async fn main() -> Result<()> {
     info!("Model kind is: {}", loader.get_kind().as_ref());
     let pipeline = loader.load_model(None, args.token_source, None, &device)?;
     info!("Model loaded.");
+
     let mistralrs = MistralRs::new(
         pipeline,
         SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
@@ -1053,6 +1060,10 @@ async fn main() -> Result<()> {
         args.truncate_sequence,
         args.no_kv_cache,
     );
+
+    if args.interactive_mode {
+        return Ok(interactive_mode(mistralrs));
+    }
 
     let app = get_router(mistralrs);
 
