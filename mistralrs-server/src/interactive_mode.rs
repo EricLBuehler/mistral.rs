@@ -58,6 +58,7 @@ pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
                 } else {
                     assistant_output.push_str(&choice.delta.content);
                     print!("{}", choice.delta.content);
+                    io::stdout().flush().unwrap();
                 }
             } else if let Ok(Response::Error(e)) = resp {
                 warn!("Got an error: {e:?}");
