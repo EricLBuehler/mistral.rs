@@ -180,6 +180,14 @@ To start a server serving Mistral on `localhost:1234`,
 
 Mistral.rs uses subcommands to control the model type. They are of format `<XLORA/LORA>-<ARCHITECTURE>-<QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
 
+**Interactive mode:**
+
+You can launch interactive mode, a simple chat application running in the terminal, by passing `-i`:
+
+```bash
+./mistralrs-server -i mistral-gguf
+```
+
 **Quick examples:**
 
 - X-LoRA with no quantization
