@@ -53,47 +53,54 @@ macro_rules! handle_pipeline_forward_error {
                 use $crate::response::Response;
                 use $crate::sequence::SequenceState;
                 use $crate::Engine;
-                // use $crate::response::SYSTEM_FINGERPRINT;
+                use $crate::response::SYSTEM_FINGERPRINT;
                 println!("{} - Model failed with error: {:?}", $stage, &e);
-                // for seq in $seq_slice.iter_mut() {
-                //     let res = match $pipeline
-                //         .tokenizer()
-                //         .decode(&seq.get_toks()[seq.prompt_tokens()..], false)
-                //     {
-                //         Ok(v) => v,
-                //         Err(_) => "".to_string(),
-                //     };
-                //     let choice = Choice {
-                //         stopreason: "error".to_string(),
-                //         index: seq.get_response_index(),
-                //         message: ResponseMessage {
-                //             content: res,
-                //             role: "assistant".to_string(),
-                //         },
-                //         logprobs: None,
-                //     };
-                //     seq.add_choice_to_group(choice);
-                // }
                 for seq in $seq_slice.iter_mut() {
-                    // let group = seq.get_mut_group();
+                    // Step 1: Add all choices to groups
+                    let res = match $pipeline
+                        .tokenizer()
+                        .decode(&seq.get_toks()[seq.prompt_tokens()..], false)
+                    {
+                        Ok(v) => v,
+                        Err(_) => "".to_string(),
+                    };
+                    let choice = Choice {
+                        stopreason: "error".to_string(),
+                        index: seq.get_response_index(),
+                        message: ResponseMessage {
+                            content: res,
+                            role: "assistant".to_string(),
+                        },
+                        logprobs: None,
+                    };
+                    seq.add_choice_to_group(choice);
+                }
+                for seq in $seq_slice.iter_mut() {
+                    // Step 2: Respond with all groups
+                    let group = seq.get_mut_group();
 
-                    // let partial_completion_response = ChatCompletionResponse {
-                    //     id: seq.id().to_string(),
-                    //     choices: group.get_choices().to_vec(),
-                    //     created: seq.creation_time(),
-                    //     model: $pipeline.name(),
-                    //     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
-                    //     object: "chat.completion".to_string(),
-                    //     usage: group.get_usage(),
-                    // };
+                    let partial_completion_response = ChatCompletionResponse {
+                        id: seq.id().to_string(),
+                        choices: group.get_choices().to_vec(),
+                        created: seq.creation_time(),
+                        model: $pipeline.name(),
+                        system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                        object: "chat.completion".to_string(),
+                        usage: group.get_usage(),
+                    };
 
                     seq.responder()
-                        .send(Response::InternalError(
-                            e.to_string().into()
+                        .send(Response::ModelError(
+                            e.to_string(),
+                            partial_completion_response
                         ))
                         .unwrap();
+                }
+                for seq in $seq_slice.iter_mut() {
+                    // Step 3: Set state - This cannot be done in Step 2 as `group` is locking the refcell
                     seq.set_state(SequenceState::Error);
                 }
+
                 Engine::set_none_cache(&mut *$pipeline);
 
                 continue $label;
