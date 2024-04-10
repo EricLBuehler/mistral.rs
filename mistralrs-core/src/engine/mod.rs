@@ -402,6 +402,14 @@ impl Engine {
                 warn!("Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation.", request.id, currently_over, prompt_len - prompt.len());
             }
         }
+        let prefill_cache = if let Some(cache) = handle_seq_error!(
+            self.prefix_cacher.search_for_matching_cache(&prompt),
+            request.response
+        ) {
+            Some(cache)
+        } else {
+            None
+        };
 
         let topk = request
             .sampling_params
@@ -472,6 +480,11 @@ impl Engine {
                 response_index,
                 now.as_secs(),
             );
+            let seq = if let Some(prefill_cache) = prefill_cache.clone() {
+                seq.prefill(prefill_cache)
+            } else {
+                seq
+            };
             self.id += 1;
             self.scheduler.add_seq(seq);
         }

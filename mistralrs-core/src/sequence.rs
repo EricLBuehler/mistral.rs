@@ -10,6 +10,7 @@ use tokenizers::Tokenizer;
 
 use crate::{
     get_mut_group,
+    models::LayerCaches,
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
     ChatCompletionResponse, ChatCompletionUsage,
@@ -40,6 +41,7 @@ pub enum SequenceState {
     RunningCompletion,
     Waiting,
     Error,
+    RunningPrefillPrompt,
 }
 
 pub struct Sequence {
@@ -58,8 +60,8 @@ pub struct Sequence {
 
     // Cache
     scaling_cache: Option<Tensor>,
-    cache: Vec<Option<(Tensor, Tensor)>>,
-    xlora_cache: Option<Vec<Option<(Tensor, Tensor)>>>,
+    cache: LayerCaches,
+    xlora_cache: Option<LayerCaches>,
 
     // Mutables
     tokens: Vec<u32>,
@@ -121,6 +123,12 @@ impl Sequence {
             response_index,
             creation_time,
         }
+    }
+
+    pub fn prefill(mut self, cache: LayerCaches) -> Self {
+        self.cache = cache;
+        self.set_state(SequenceState::RunningCompletion);
+        self
     }
 
     pub fn len(&self) -> usize {

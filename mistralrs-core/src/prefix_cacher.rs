@@ -47,4 +47,26 @@ impl PrefixCacheManager {
         }
         Ok(self.caches.len() - self.n_on_device)
     }
+
+    /// Search for a matching cache given some toks
+    pub fn search_for_matching_cache(&self, toks: &[u32]) -> Result<Option<LayerCaches>> {
+        if let Some(cache) = self.caches.get(toks) {
+            Ok(Some(cache.clone()))
+        } else if let Some(cache) = self.cpu_caches.get(toks) {
+            let mut new_cache = Vec::new();
+            for layer in cache {
+                if let Some((ref q, ref k)) = layer {
+                    new_cache.push(Some((
+                        q.to_device(&Device::Cpu)?,
+                        k.to_device(&Device::Cpu)?,
+                    )));
+                } else {
+                    new_cache.push(None);
+                }
+            }
+            Ok(Some(new_cache))
+        } else {
+            Ok(None)
+        }
+    }
 }
