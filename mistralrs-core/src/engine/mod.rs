@@ -352,11 +352,11 @@ impl Engine {
     fn build_sequence_recognizer(constraint: &Constraint) -> SequenceRecognizer {
         match constraint {
             Constraint::Regex(rx) => {
-                SequenceRecognizer::Regex(StackRecognizer::from(RecRx::from_rx(&rx)))
+                SequenceRecognizer::Regex(StackRecognizer::from(RecRx::from_rx(rx)).into())
             }
             Constraint::Yacc(cfg) => SequenceRecognizer::Cfg(
                 // TODO: handle error
-                CfgParser::from_yacc(&cfg).unwrap(),
+                CfgParser::from_yacc(cfg).unwrap().into(),
             ),
             Constraint::None => SequenceRecognizer::None,
         }

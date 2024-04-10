@@ -44,8 +44,8 @@ pub enum SequenceState {
 }
 
 pub enum SequenceRecognizer {
-    Regex(StackRecognizer<StateID, RecRx>),
-    Cfg(CfgParser),
+    Regex(Box<StackRecognizer<StateID, RecRx>>),
+    Cfg(Box<CfgParser>),
     None,
 }
 pub struct Sequence {

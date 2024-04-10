@@ -316,10 +316,10 @@ pub trait Pipeline: Send + Sync {
 
         let bias_if_not_allowed = match &mut seq.recognizer {
             SequenceRecognizer::Regex(ref mut rx) => {
-                get_bias_if_not_allowed!(self, rx, first_lobprobs_response.token)
+                get_bias_if_not_allowed!(self, rx.as_mut(), first_lobprobs_response.token)
             }
             SequenceRecognizer::Cfg(ref mut cfg) => {
-                get_bias_if_not_allowed!(self, cfg, first_lobprobs_response.token)
+                get_bias_if_not_allowed!(self, cfg.as_mut(), first_lobprobs_response.token)
             }
             SequenceRecognizer::None => None,
         };
@@ -338,11 +338,11 @@ pub trait Pipeline: Send + Sync {
         match seq.recognizer {
             SequenceRecognizer::Regex(ref mut rx) => {
                 self.tok_trie()
-                    .append_token(rx, second_logprobs_response.token);
+                    .append_token(rx.as_mut(), second_logprobs_response.token);
             }
             SequenceRecognizer::Cfg(ref mut cfg) => {
                 self.tok_trie()
-                    .append_token(cfg, second_logprobs_response.token);
+                    .append_token(cfg.as_mut(), second_logprobs_response.token);
             }
             SequenceRecognizer::None => {}
         }
