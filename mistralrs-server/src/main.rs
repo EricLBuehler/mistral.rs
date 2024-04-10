@@ -94,6 +94,14 @@ struct Args {
     token_source: TokenSource,
 }
 
+#[derive(Debug)]
+struct ModelErrorMessage(String);
+impl std::fmt::Display for ModelErrorMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+impl std::error::Error for ModelErrorMessage {}
 struct Streamer {
     rx: Receiver<Response>,
     is_done: bool,
@@ -112,6 +120,13 @@ impl futures::Stream for Streamer {
                 Response::ValidationError(e) => {
                     Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
                 }
+                Response::ModelError(msg, _) => {
+                    MistralRs::maybe_log_error(
+                        self.state.clone(),
+                        &ModelErrorMessage(msg.to_string()),
+                    );
+                    Poll::Ready(Some(Ok(Event::default().data(msg))))
+                }
                 Response::InternalError(e) => {
                     MistralRs::maybe_log_error(self.state.clone(), &*e);
                     Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
@@ -123,7 +138,7 @@ impl futures::Stream for Streamer {
                     MistralRs::maybe_log_response(self.state.clone(), &response);
                     Poll::Ready(Some(Event::default().json_data(response)))
                 }
-                _ => unreachable!(),
+                Response::Done(_) => unreachable!(),
             },
             Err(_) => Poll::Pending,
         }

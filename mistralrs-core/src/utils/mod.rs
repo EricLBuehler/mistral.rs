@@ -54,7 +54,8 @@ macro_rules! handle_pipeline_forward_error {
                 use $crate::sequence::SequenceState;
                 use $crate::Engine;
                 use $crate::response::SYSTEM_FINGERPRINT;
-                println!("{} - Model failed with error: {:?}", $stage, &e);
+                use tracing::error;
+                error!("{} - Model failed with error: {:?}", $stage, &e);
                 for seq in $seq_slice.iter_mut() {
                     // Step 1: Add all choices to groups
                     let res = match $pipeline
