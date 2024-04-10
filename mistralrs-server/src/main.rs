@@ -1062,7 +1062,8 @@ async fn main() -> Result<()> {
     );
 
     if args.interactive_mode {
-        return Ok(interactive_mode(mistralrs));
+        interactive_mode(mistralrs);
+        return Ok(());
     }
 
     let app = get_router(mistralrs);

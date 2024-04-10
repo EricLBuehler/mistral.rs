@@ -1,5 +1,5 @@
 use std::{
-    io,
+    io::{self, Write},
     sync::{mpsc::channel, Arc},
 };
 
@@ -14,6 +14,7 @@ pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
     'outer: loop {
         let mut prompt = String::new();
         print!("> ");
+        io::stdout().flush().unwrap();
         io::stdin()
             .read_line(&mut prompt)
             .expect("Failed to get input");
@@ -49,13 +50,14 @@ pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
             let resp = rx.try_recv();
             if let Ok(Response::Chunk(chunk)) = resp {
                 let choice = &chunk.choices[0];
-                print!("{}", choice.delta.content);
-                assistant_output.push_str(&choice.delta.content);
                 if choice.stopreason.is_some() {
                     if matches!(choice.stopreason.as_ref().unwrap().as_str(), "length") {
                         print!("...");
                     }
                     break;
+                } else {
+                    assistant_output.push_str(&choice.delta.content);
+                    print!("{}", choice.delta.content);
                 }
             } else if let Ok(Response::Error(e)) = resp {
                 warn!("Got an error: {e:?}");
