@@ -545,8 +545,6 @@
 <a href="#543" id="543">543</a>
 <a href="#544" id="544">544</a>
 <a href="#545" id="545">545</a>
-<a href="#546" id="546">546</a>
-<a href="#547" id="547">547</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -980,7 +978,11 @@
 }
 
 <span class="kw">impl </span>Pipeline <span class="kw">for </span>MixtralPipeline {
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;mut </span><span class="self">self</span>, input_toks: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence], is_prompt: bool) -&gt; Tensor {
+    <span class="kw">fn </span>forward(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        input_toks: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
+        is_prompt: bool,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor, candle_core::Error&gt; {
         <span class="kw">let </span>ModelInputs {
             input_ids,
             input_ids_full,
@@ -996,7 +998,7 @@
             <span class="self">self</span>.no_kv_cache,
         )
         .unwrap();
-        <span class="kw">let </span>result = <span class="kw">match </span><span class="self">self</span>.model {
+        <span class="kw">match </span><span class="self">self</span>.model {
             Model::Normal(<span class="kw-2">ref mut </span>model) =&gt; {
                 model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets, seqlen_offsets_kernel)
             }
@@ -1023,12 +1025,6 @@
                 <span class="self">self</span>.no_kv_cache,
                 <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state,
             ),
-        };
-        <span class="kw">match </span>result {
-            <span class="prelude-val">Ok</span>(v) =&gt; v,
-            <span class="prelude-val">Err</span>(e) =&gt; {
-                <span class="macro">panic!</span>(<span class="string">"Model failed with error `{e}`. Please raise an issue."</span>);
-            }
         }
     }
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {

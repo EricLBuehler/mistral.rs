@@ -751,6 +751,10 @@
 <a href="#749" id="749">749</a>
 <a href="#750" id="750">750</a>
 <a href="#751" id="751">751</a>
+<a href="#752" id="752">752</a>
+<a href="#753" id="753">753</a>
+<a href="#754" id="754">754</a>
+<a href="#755" id="755">755</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -978,7 +982,11 @@
 }
 
 <span class="kw">pub trait </span>Pipeline: Send + Sync {
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;mut </span><span class="self">self</span>, input_toks: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence], is_prompt: bool) -&gt; Tensor;
+    <span class="kw">fn </span>forward(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        input_toks: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
+        is_prompt: bool,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor, candle_core::Error&gt;;
     <span class="kw">fn </span>tokenize_prompt(<span class="kw-2">&amp;</span><span class="self">self</span>, prompt: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u32&gt;&gt; {
         <span class="kw">let </span>encoding = <span class="self">self
             </span>.tokenizer()

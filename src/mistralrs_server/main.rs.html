@@ -1069,6 +1069,59 @@
 <a href="#1067" id="1067">1067</a>
 <a href="#1068" id="1068">1068</a>
 <a href="#1069" id="1069">1069</a>
+<a href="#1070" id="1070">1070</a>
+<a href="#1071" id="1071">1071</a>
+<a href="#1072" id="1072">1072</a>
+<a href="#1073" id="1073">1073</a>
+<a href="#1074" id="1074">1074</a>
+<a href="#1075" id="1075">1075</a>
+<a href="#1076" id="1076">1076</a>
+<a href="#1077" id="1077">1077</a>
+<a href="#1078" id="1078">1078</a>
+<a href="#1079" id="1079">1079</a>
+<a href="#1080" id="1080">1080</a>
+<a href="#1081" id="1081">1081</a>
+<a href="#1082" id="1082">1082</a>
+<a href="#1083" id="1083">1083</a>
+<a href="#1084" id="1084">1084</a>
+<a href="#1085" id="1085">1085</a>
+<a href="#1086" id="1086">1086</a>
+<a href="#1087" id="1087">1087</a>
+<a href="#1088" id="1088">1088</a>
+<a href="#1089" id="1089">1089</a>
+<a href="#1090" id="1090">1090</a>
+<a href="#1091" id="1091">1091</a>
+<a href="#1092" id="1092">1092</a>
+<a href="#1093" id="1093">1093</a>
+<a href="#1094" id="1094">1094</a>
+<a href="#1095" id="1095">1095</a>
+<a href="#1096" id="1096">1096</a>
+<a href="#1097" id="1097">1097</a>
+<a href="#1098" id="1098">1098</a>
+<a href="#1099" id="1099">1099</a>
+<a href="#1100" id="1100">1100</a>
+<a href="#1101" id="1101">1101</a>
+<a href="#1102" id="1102">1102</a>
+<a href="#1103" id="1103">1103</a>
+<a href="#1104" id="1104">1104</a>
+<a href="#1105" id="1105">1105</a>
+<a href="#1106" id="1106">1106</a>
+<a href="#1107" id="1107">1107</a>
+<a href="#1108" id="1108">1108</a>
+<a href="#1109" id="1109">1109</a>
+<a href="#1110" id="1110">1110</a>
+<a href="#1111" id="1111">1111</a>
+<a href="#1112" id="1112">1112</a>
+<a href="#1113" id="1113">1113</a>
+<a href="#1114" id="1114">1114</a>
+<a href="#1115" id="1115">1115</a>
+<a href="#1116" id="1116">1116</a>
+<a href="#1117" id="1117">1117</a>
+<a href="#1118" id="1118">1118</a>
+<a href="#1119" id="1119">1119</a>
+<a href="#1120" id="1120">1120</a>
+<a href="#1121" id="1121">1121</a>
+<a href="#1122" id="1122">1122</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     env,
     error::Error,
@@ -1085,7 +1138,7 @@
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{Json, State},
-    http::{<span class="self">self</span>, Method},
+    http::{<span class="self">self</span>, Method, StatusCode},
     response::{
         sse::{Event, KeepAlive},
         IntoResponse, Sse,
@@ -1165,6 +1218,14 @@
     </span>token_source: TokenSource,
 }
 
+<span class="attr">#[derive(Debug)]
+</span><span class="kw">struct </span>ModelErrorMessage(String);
+<span class="kw">impl </span>std::fmt::Display <span class="kw">for </span>ModelErrorMessage {
+    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
+        <span class="macro">write!</span>(f, <span class="string">"{}"</span>, <span class="self">self</span>.<span class="number">0</span>)
+    }
+}
+<span class="kw">impl </span>std::error::Error <span class="kw">for </span>ModelErrorMessage {}
 <span class="kw">struct </span>Streamer {
     rx: Receiver&lt;Response&gt;,
     is_done: bool,
@@ -1180,7 +1241,17 @@
         }
         <span class="kw">match </span><span class="self">self</span>.rx.try_recv() {
             <span class="prelude-val">Ok</span>(resp) =&gt; <span class="kw">match </span>resp {
-                Response::Error(e) =&gt; {
+                Response::ModelError(msg, <span class="kw">_</span>) =&gt; {
+                    MistralRs::maybe_log_error(
+                        <span class="self">self</span>.state.clone(),
+                        <span class="kw-2">&amp;</span>ModelErrorMessage(msg.to_string()),
+                    );
+                    Poll::Ready(<span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>(Event::default().data(msg))))
+                }
+                Response::ValidationError(e) =&gt; {
+                    Poll::Ready(<span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>(Event::default().data(e.to_string()))))
+                }
+                Response::InternalError(e) =&gt; {
                     MistralRs::maybe_log_error(<span class="self">self</span>.state.clone(), <span class="kw-2">&amp;*</span>e);
                     Poll::Ready(<span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>(Event::default().data(e.to_string()))))
                 }
@@ -1191,7 +1262,7 @@
                     MistralRs::maybe_log_response(<span class="self">self</span>.state.clone(), <span class="kw-2">&amp;</span>response);
                     Poll::Ready(<span class="prelude-val">Some</span>(Event::default().json_data(response)))
                 }
-                <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
+                Response::Done(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
             },
             <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; Poll::Pending,
         }
@@ -1201,7 +1272,17 @@
 <span class="kw">enum </span>ChatCompletionResponder {
     Sse(Sse&lt;Streamer&gt;),
     Json(ChatCompletionResponse),
-    Error(Box&lt;<span class="kw">dyn </span>Error&gt;),
+    ModelError(String, ChatCompletionResponse),
+    InternalError(Box&lt;<span class="kw">dyn </span>Error&gt;),
+    ValidationError(Box&lt;<span class="kw">dyn </span>Error&gt;),
+}
+
+<span class="kw">trait </span>ErrorToResponse: Serialize {
+    <span class="kw">fn </span>to_response(<span class="kw-2">&amp;</span><span class="self">self</span>, code: StatusCode) -&gt; axum::response::Response {
+        <span class="kw">let </span><span class="kw-2">mut </span>r = Json(<span class="self">self</span>).into_response();
+        <span class="kw-2">*</span>r.status_mut() = code;
+        r
+    }
 }
 
 <span class="attr">#[derive(Serialize)]
@@ -1214,21 +1295,40 @@
         <span class="self">Self </span>{ message }
     }
 }
+<span class="kw">impl </span>ErrorToResponse <span class="kw">for </span>JsonError {}
 
-<span class="kw">impl </span>IntoResponse <span class="kw">for </span>JsonError {
-    <span class="kw">fn </span>into_response(<span class="self">self</span>) -&gt; axum::response::Response {
-        <span class="kw">let </span><span class="kw-2">mut </span>r = Json(<span class="self">self</span>).into_response();
-        <span class="kw-2">*</span>r.status_mut() = http::StatusCode::INTERNAL_SERVER_ERROR;
-        r
+<span class="attr">#[derive(Serialize)]
+</span><span class="kw">struct </span>JsonModelError {
+    message: String,
+    partial_response: ChatCompletionResponse,
+}
+
+<span class="kw">impl </span>JsonModelError {
+    <span class="kw">fn </span>new(message: String, partial_response: ChatCompletionResponse) -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{
+            message,
+            partial_response,
+        }
     }
 }
+
+<span class="kw">impl </span>ErrorToResponse <span class="kw">for </span>JsonModelError {}
 
 <span class="kw">impl </span>IntoResponse <span class="kw">for </span>ChatCompletionResponder {
     <span class="kw">fn </span>into_response(<span class="self">self</span>) -&gt; axum::response::Response {
         <span class="kw">match </span><span class="self">self </span>{
             ChatCompletionResponder::Sse(s) =&gt; s.into_response(),
             ChatCompletionResponder::Json(s) =&gt; Json(s).into_response(),
-            ChatCompletionResponder::Error(e) =&gt; JsonError::new(e.to_string()).into_response(),
+            ChatCompletionResponder::InternalError(e) =&gt; {
+                JsonError::new(e.to_string()).to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+            }
+            ChatCompletionResponder::ValidationError(e) =&gt; {
+                JsonError::new(e.to_string()).to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
+            }
+            ChatCompletionResponder::ModelError(msg, response) =&gt; {
+                JsonModelError::new(msg, response)
+                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+            }
         }
     }
 }
@@ -1322,10 +1422,16 @@
         <span class="kw">let </span>response = rx.recv().unwrap();
 
         <span class="kw">match </span>response {
-            Response::Error(e) =&gt; {
+            Response::InternalError(e) =&gt; {
                 MistralRs::maybe_log_error(state, <span class="kw-2">&amp;*</span>e);
-                ChatCompletionResponder::Error(e)
+                ChatCompletionResponder::InternalError(e)
             }
+            Response::ModelError(msg, response) =&gt; {
+                MistralRs::maybe_log_error(state.clone(), <span class="kw-2">&amp;</span>ModelErrorMessage(msg.to_string()));
+                MistralRs::maybe_log_response(state, <span class="kw-2">&amp;</span>response);
+                ChatCompletionResponder::ModelError(msg, response)
+            }
+            Response::ValidationError(e) =&gt; ChatCompletionResponder::ValidationError(e),
             Response::Done(response) =&gt; {
                 MistralRs::maybe_log_response(state, <span class="kw-2">&amp;</span>response);
                 ChatCompletionResponder::Json(response)
