@@ -46,17 +46,51 @@ macro_rules! handle_seq_error_stateaware {
 
 #[macro_export]
 macro_rules! handle_pipeline_forward_error {
-    ($fallible:expr, $seq_slice:expr, $pipeline:expr, $label:tt) => {
+    ($stage: tt, $fallible:expr, $seq_slice:expr, $pipeline:expr, $label:tt) => {
         match $fallible {
             Ok(v) => v,
             Err(e) => {
                 use $crate::response::Response;
                 use $crate::sequence::SequenceState;
                 use $crate::Engine;
-                println!("Model failed with error: {:?}", &e);
+                // use $crate::response::SYSTEM_FINGERPRINT;
+                println!("{} - Model failed with error: {:?}", $stage, &e);
+                // for seq in $seq_slice.iter_mut() {
+                //     let res = match $pipeline
+                //         .tokenizer()
+                //         .decode(&seq.get_toks()[seq.prompt_tokens()..], false)
+                //     {
+                //         Ok(v) => v,
+                //         Err(_) => "".to_string(),
+                //     };
+                //     let choice = Choice {
+                //         stopreason: "error".to_string(),
+                //         index: seq.get_response_index(),
+                //         message: ResponseMessage {
+                //             content: res,
+                //             role: "assistant".to_string(),
+                //         },
+                //         logprobs: None,
+                //     };
+                //     seq.add_choice_to_group(choice);
+                // }
                 for seq in $seq_slice.iter_mut() {
+                    // let group = seq.get_mut_group();
+
+                    // let partial_completion_response = ChatCompletionResponse {
+                    //     id: seq.id().to_string(),
+                    //     choices: group.get_choices().to_vec(),
+                    //     created: seq.creation_time(),
+                    //     model: $pipeline.name(),
+                    //     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                    //     object: "chat.completion".to_string(),
+                    //     usage: group.get_usage(),
+                    // };
+
                     seq.responder()
-                        .send(Response::InternalError(e.to_string().into()))
+                        .send(Response::InternalError(
+                            e.to_string().into()
+                        ))
                         .unwrap();
                     seq.set_state(SequenceState::Error);
                 }

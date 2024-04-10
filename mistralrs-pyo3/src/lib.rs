@@ -138,6 +138,7 @@ impl Runner {
                     Ok(serde_json::to_string(&response).unwrap())
                 }
                 Response::Chunk(_) => unreachable!(),
+                Response::ModelError(msg, _) => Err(PyValueError::new_err(msg.to_string())),
             }
         })
     }

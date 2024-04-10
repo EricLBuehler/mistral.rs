@@ -88,6 +88,7 @@ pub struct ChatCompletionChunkResponse {
 pub enum Response {
     InternalError(Box<dyn Error + Send + Sync>),
     ValidationError(Box<dyn Error + Send + Sync>),
+    ModelError(String, ChatCompletionResponse),
     Done(ChatCompletionResponse),
     Chunk(ChatCompletionChunkResponse),
 }

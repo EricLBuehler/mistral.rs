@@ -1,8 +1,9 @@
 import openai
+import httpx
 
 openai.api_key = "EMPTY"
-
 openai.base_url = "http://localhost:1234/v1/"
+openai.http_client = httpx.Client(event_hooks={"request": [print], "response": [print]})
 
 messages = []
 prompt = input("Enter system prompt >>> ")
