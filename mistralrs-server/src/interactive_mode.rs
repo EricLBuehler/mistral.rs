@@ -6,11 +6,12 @@ use std::{
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{MistralRs, Request, Response, SamplingParams};
+use tracing::warn;
 
 pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
     let sender = mistralrs.get_sender();
     let mut messages = Vec::new();
-    loop {
+    'outer: loop {
         let mut prompt = String::new();
         print!("> ");
         io::stdin()
@@ -45,7 +46,8 @@ pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
 
         let mut assistant_output = String::new();
         loop {
-            if let Ok(Response::Chunk(chunk)) = rx.try_recv() {
+            let resp = rx.try_recv();
+            if let Ok(Response::Chunk(chunk)) = resp {
                 let choice = &chunk.choices[0];
                 print!("{}", choice.delta.content);
                 assistant_output.push_str(&choice.delta.content);
@@ -55,6 +57,9 @@ pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
                     }
                     break;
                 }
+            } else if let Ok(Response::Error(e)) = resp {
+                warn!("Got an error: {e:?}");
+                break 'outer;
             }
         }
         let mut assistant_message = IndexMap::new();
