@@ -14,7 +14,7 @@ use tracing::warn;
 use crate::{
     get_mut_arcmutex, handle_pipeline_forward_error, handle_seq_error, handle_seq_error_stateaware,
     pipeline::Pipeline,
-    prefix_cacher::PrefixCacheManager,
+    prefix_cacher::{MatchingCache, PrefixCacheManager},
     request::Request,
     response::{
         ChatCompletionResponse, Choice, ChunkChoice, Delta, Logprobs, Response, ResponseLogprob,
@@ -477,7 +477,10 @@ impl Engine {
                 now.as_secs(),
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
-                seq.prefill(prefill_cache)
+                match prefill_cache {
+                    MatchingCache::Verbatim(cache) => seq.prefill(cache),
+                    MatchingCache::Subset(cache, toks) => seq.prefill_subset(cache, toks),
+                }
             } else {
                 seq
             };

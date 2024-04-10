@@ -57,6 +57,7 @@ pub struct Sequence {
     responder: Sender<Response>,
     response_index: usize,
     creation_time: u64,
+    prefill_prompt_toks: Option<Vec<u32>>,
 
     // Cache
     scaling_cache: Option<Tensor>,
@@ -122,12 +123,20 @@ impl Sequence {
             total_sampling_time: 0,
             response_index,
             creation_time,
+            prefill_prompt_toks: None,
         }
     }
 
     pub fn prefill(mut self, cache: LayerCaches) -> Self {
         self.cache = cache;
         self.set_state(SequenceState::RunningCompletion);
+        self
+    }
+
+    pub fn prefill_subset(mut self, cache: LayerCaches, toks: Vec<u32>) -> Self {
+        self.cache = cache;
+        self.prefill_prompt_toks = Some(toks);
+        self.set_state(SequenceState::RunningPrefillPrompt);
         self
     }
 
@@ -142,6 +151,7 @@ impl Sequence {
     pub fn is_running(&self) -> bool {
         self.state.get() == SequenceState::RunningCompletion
             || self.state.get() == SequenceState::RunningPrompt
+            || self.state.get() == SequenceState::RunningPrefillPrompt
     }
 
     pub fn is_completion(&self) -> bool {
@@ -150,6 +160,7 @@ impl Sequence {
 
     pub fn is_prompt(&self) -> bool {
         self.state.get() == SequenceState::RunningPrompt
+            || self.state.get() == SequenceState::RunningPrefillPrompt
     }
 
     pub fn is_waiting(&self) -> bool {
@@ -157,6 +168,9 @@ impl Sequence {
     }
 
     pub fn get_toks(&self) -> &[u32] {
+        if let Some(toks) = &self.prefill_prompt_toks {
+            return toks;
+        }
         &self.tokens
     }
 

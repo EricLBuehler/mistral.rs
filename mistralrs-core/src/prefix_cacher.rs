@@ -10,6 +10,12 @@ pub struct PrefixCacheManager {
     pub n_on_device: usize,
 }
 
+#[derive(Clone)]
+pub enum MatchingCache {
+    Verbatim(LayerCaches),
+    Subset(LayerCaches, Vec<u32>),
+}
+
 impl PrefixCacheManager {
     pub fn new(device: Device, n_on_device: usize) -> Self {
         PrefixCacheManager {
@@ -48,24 +54,53 @@ impl PrefixCacheManager {
         Ok(self.caches.len() - self.n_on_device)
     }
 
+    pub fn promote_into_device_cache(
+        &mut self,
+        toks: Vec<u32>,
+        cache: &LayerCaches,
+    ) -> Result<LayerCaches> {
+        let mut new_cache = Vec::new();
+        for layer in cache {
+            if let Some((ref q, ref k)) = layer {
+                new_cache.push(Some((
+                    q.to_device(&self.device)?,
+                    k.to_device(&self.device)?,
+                )));
+            } else {
+                new_cache.push(None);
+            }
+        }
+        // Load it into the cache
+        self.caches.insert(toks, new_cache.clone());
+        Ok(new_cache)
+    }
+
     /// Search for a matching cache given some toks
-    pub fn search_for_matching_cache(&self, toks: &[u32]) -> Result<Option<LayerCaches>> {
+    pub fn search_for_matching_cache(&mut self, toks: &[u32]) -> Result<Option<MatchingCache>> {
         if let Some(cache) = self.caches.get(toks) {
-            Ok(Some(cache.clone()))
-        } else if let Some(cache) = self.cpu_caches.get(toks) {
-            let mut new_cache = Vec::new();
-            for layer in cache {
-                if let Some((ref q, ref k)) = layer {
-                    new_cache.push(Some((
-                        q.to_device(&self.device)?,
-                        k.to_device(&self.device)?,
+            Ok(Some(MatchingCache::Verbatim(cache.clone())))
+        } else if let Some(cache) = self.cpu_caches.get(toks).cloned() {
+            Ok(Some(MatchingCache::Verbatim(
+                self.promote_into_device_cache(toks.to_vec(), &cache)?,
+            )))
+        } else {
+            // Look for token ids such that they begins with `toks`
+            for (ids, cache) in &self.caches {
+                if &ids[0..toks.len()] == toks {
+                    return Ok(Some(MatchingCache::Subset(
+                        cache.clone(),
+                        toks[ids.len()..].to_vec(),
                     )));
-                } else {
-                    new_cache.push(None);
                 }
             }
-            Ok(Some(new_cache))
-        } else {
+            for (ids, cache) in self.cpu_caches.clone() {
+                if &ids[0..toks.len()] == toks {
+                    return Ok(Some(MatchingCache::Subset(
+                        self.promote_into_device_cache(toks.to_vec(), &cache)?,
+                        toks[ids.len()..].to_vec(),
+                    )));
+                }
+            }
             Ok(None)
         }
     }
