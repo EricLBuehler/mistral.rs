@@ -23,6 +23,10 @@ Mistral.rs is a fast LLM inference platform written in pure, safe Rust. We suppo
 - CPU inference with `mkl`, `accelerate` support and optimized backend.
 - Fast LoRA support with weight merging.
 
+
+This is a demo of interactive mode with streaming running Mistral GGUF.
+https://github.com/EricLBuehler/mistral.rs/assets/65165915/12749b91-43af-4ac9-883c-3f02681ea676
+
 **Supported models:**
 - Mistral 7B (v0.1 and v0.2)
 - Gemma
