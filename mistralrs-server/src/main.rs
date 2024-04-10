@@ -14,7 +14,7 @@ use std::{
 use anyhow::Result;
 use axum::{
     extract::{Json, State},
-    http::{self, Method},
+    http::{self, Method, StatusCode},
     response::{
         sse::{Event, KeepAlive},
         IntoResponse, Sse,
@@ -100,6 +100,14 @@ struct Args {
     interactive_mode: bool,
 }
 
+#[derive(Debug)]
+struct ModelErrorMessage(String);
+impl std::fmt::Display for ModelErrorMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+impl std::error::Error for ModelErrorMessage {}
 struct Streamer {
     rx: Receiver<Response>,
     is_done: bool,
@@ -115,7 +123,17 @@ impl futures::Stream for Streamer {
         }
         match self.rx.try_recv() {
             Ok(resp) => match resp {
-                Response::Error(e) => {
+                Response::ModelError(msg, _) => {
+                    MistralRs::maybe_log_error(
+                        self.state.clone(),
+                        &ModelErrorMessage(msg.to_string()),
+                    );
+                    Poll::Ready(Some(Ok(Event::default().data(msg))))
+                }
+                Response::ValidationError(e) => {
+                    Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
+                }
+                Response::InternalError(e) => {
                     MistralRs::maybe_log_error(self.state.clone(), &*e);
                     Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
                 }
@@ -126,7 +144,7 @@ impl futures::Stream for Streamer {
                     MistralRs::maybe_log_response(self.state.clone(), &response);
                     Poll::Ready(Some(Event::default().json_data(response)))
                 }
-                _ => unreachable!(),
+                Response::Done(_) => unreachable!(),
             },
             Err(_) => Poll::Pending,
         }
@@ -136,7 +154,17 @@ impl futures::Stream for Streamer {
 enum ChatCompletionResponder {
     Sse(Sse<Streamer>),
     Json(ChatCompletionResponse),
-    Error(Box<dyn Error>),
+    ModelError(String, ChatCompletionResponse),
+    InternalError(Box<dyn Error>),
+    ValidationError(Box<dyn Error>),
+}
+
+trait ErrorToResponse: Serialize {
+    fn to_response(&self, code: StatusCode) -> axum::response::Response {
+        let mut r = Json(self).into_response();
+        *r.status_mut() = code;
+        r
+    }
 }
 
 #[derive(Serialize)]
@@ -149,21 +177,40 @@ impl JsonError {
         Self { message }
     }
 }
+impl ErrorToResponse for JsonError {}
 
-impl IntoResponse for JsonError {
-    fn into_response(self) -> axum::response::Response {
-        let mut r = Json(self).into_response();
-        *r.status_mut() = http::StatusCode::INTERNAL_SERVER_ERROR;
-        r
+#[derive(Serialize)]
+struct JsonModelError {
+    message: String,
+    partial_response: ChatCompletionResponse,
+}
+
+impl JsonModelError {
+    fn new(message: String, partial_response: ChatCompletionResponse) -> Self {
+        Self {
+            message,
+            partial_response,
+        }
     }
 }
+
+impl ErrorToResponse for JsonModelError {}
 
 impl IntoResponse for ChatCompletionResponder {
     fn into_response(self) -> axum::response::Response {
         match self {
             ChatCompletionResponder::Sse(s) => s.into_response(),
             ChatCompletionResponder::Json(s) => Json(s).into_response(),
-            ChatCompletionResponder::Error(e) => JsonError::new(e.to_string()).into_response(),
+            ChatCompletionResponder::InternalError(e) => {
+                JsonError::new(e.to_string()).to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+            }
+            ChatCompletionResponder::ValidationError(e) => {
+                JsonError::new(e.to_string()).to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
+            }
+            ChatCompletionResponder::ModelError(msg, response) => {
+                JsonModelError::new(msg, response)
+                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+            }
         }
     }
 }
@@ -257,10 +304,16 @@ async fn chatcompletions(
         let response = rx.recv().unwrap();
 
         match response {
-            Response::Error(e) => {
+            Response::InternalError(e) => {
                 MistralRs::maybe_log_error(state, &*e);
-                ChatCompletionResponder::Error(e)
+                ChatCompletionResponder::InternalError(e)
             }
+            Response::ModelError(msg, response) => {
+                MistralRs::maybe_log_error(state.clone(), &ModelErrorMessage(msg.to_string()));
+                MistralRs::maybe_log_response(state, &response);
+                ChatCompletionResponder::ModelError(msg, response)
+            }
+            Response::ValidationError(e) => ChatCompletionResponder::ValidationError(e),
             Response::Done(response) => {
                 MistralRs::maybe_log_response(state, &response);
                 ChatCompletionResponder::Json(response)
