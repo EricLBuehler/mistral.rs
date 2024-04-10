@@ -6,11 +6,25 @@ use std::{
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{MistralRs, Request, Response, SamplingParams};
-use tracing::warn;
+use tracing::{info, warn};
 
 pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
     let sender = mistralrs.get_sender();
     let mut messages = Vec::new();
+
+    let sampling_params = SamplingParams {
+        temperature: Some(0.1),
+        top_k: Some(32),
+        top_p: Some(0.1),
+        top_n_logprobs: 0,
+        frequency_penalty: Some(0.1),
+        presence_penalty: Some(0.1),
+        max_len: Some(4096),
+        stop_toks: None,
+        logits_bias: None,
+        n_choices: 1,
+    };
+    info!("Starting interactive loop with sampling params: {sampling_params:?}");
     'outer: loop {
         let mut prompt = String::new();
         print!("> ");
@@ -27,18 +41,7 @@ pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
         let req = Request {
             id: mistralrs.next_request_id(),
             messages: Either::Left(messages.clone()),
-            sampling_params: SamplingParams {
-                temperature: Some(0.1),
-                top_k: Some(32),
-                top_p: Some(0.1),
-                top_n_logprobs: 0,
-                frequency_penalty: Some(0.1),
-                presence_penalty: Some(0.1),
-                max_len: Some(256),
-                stop_toks: None,
-                logits_bias: None,
-                n_choices: 1,
-            },
+            sampling_params: sampling_params.clone(),
             response: tx,
             return_logprobs: false,
             is_streaming: true,
