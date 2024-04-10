@@ -272,8 +272,11 @@ impl Sequence {
             .expect("Time travel has occurred!")
             .as_millis();
 
-        get_mut_group!(self).total_completion_time += now - self.prompt_timestamp.unwrap();
-        get_mut_group!(self).total_prompt_time += self.prompt_timestamp.unwrap() - self.timestamp;
+        if let Some(ts) = self.prompt_timestamp {
+            get_mut_group!(self).total_completion_time += now - ts;
+            get_mut_group!(self).total_prompt_time += ts - self.timestamp;
+        }
+
         get_mut_group!(self).total_time += now - self.timestamp;
 
         get_mut_group!(self).total_prompt_toks += self.prompt_len;

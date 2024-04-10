@@ -12,7 +12,7 @@ use either::Either;
 use tracing::warn;
 
 use crate::{
-    get_mut_arcmutex, handle_seq_error, handle_seq_error_stateaware,
+    get_mut_arcmutex, handle_pipeline_forward_error, handle_seq_error, handle_seq_error_stateaware,
     pipeline::Pipeline,
     request::Request,
     response::{
@@ -55,7 +55,7 @@ impl Engine {
     }
 
     pub fn run(&mut self) {
-        loop {
+        'lp: loop {
             if let Ok(request) = self.rx.try_recv() {
                 self.add_request(request);
             }
@@ -68,6 +68,7 @@ impl Engine {
                     Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
                 }
                 let logits = pipeline.forward(&scheduled.completion, false);
+                let logits = handle_pipeline_forward_error!("completion", logits, &mut scheduled.completion, pipeline, 'lp);
 
                 if !self.no_kv_cache {
                     Self::clone_out_cache(&mut *pipeline, &mut scheduled.completion);
@@ -87,6 +88,7 @@ impl Engine {
                 // Run the prompt seqs
                 Self::set_none_cache(&mut *pipeline);
                 let logits = pipeline.forward(&scheduled.prompt, true);
+                let logits = handle_pipeline_forward_error!("prompt", logits, &mut scheduled.prompt, pipeline, 'lp);
 
                 if !self.no_kv_cache {
                     Self::clone_out_cache(&mut *pipeline, &mut scheduled.prompt);
@@ -364,7 +366,7 @@ impl Engine {
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                 request
                     .response
-                    .send(Response::Error(
+                    .send(Response::ValidationError(
                         format!("Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?", get_mut_arcmutex!(self.pipeline).get_max_seq_len()).into(),
                     ))
                     .unwrap();
@@ -409,7 +411,7 @@ impl Engine {
                     // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                     request
                         .response
-                        .send(Response::Error(
+                        .send(Response::ValidationError(
                             format!("Stop sequence '{s:?}' encodes to multiple tokens when it should only encode to 1.").into(),
                         ))
                         .unwrap();

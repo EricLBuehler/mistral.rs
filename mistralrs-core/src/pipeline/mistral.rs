@@ -427,7 +427,11 @@ impl Loader for MistralLoader {
 }
 
 impl Pipeline for MistralPipeline {
-    fn forward(&mut self, input_toks: &[&mut Sequence], is_prompt: bool) -> Tensor {
+    fn forward(
+        &mut self,
+        input_toks: &[&mut Sequence],
+        is_prompt: bool,
+    ) -> Result<Tensor, candle_core::Error> {
         let ModelInputs {
             input_ids,
             input_ids_full,
@@ -443,7 +447,7 @@ impl Pipeline for MistralPipeline {
             self.no_kv_cache,
         )
         .unwrap();
-        let result = match self.model {
+        match self.model {
             Model::Normal(ref mut model) => {
                 model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)
             }
@@ -470,12 +474,6 @@ impl Pipeline for MistralPipeline {
                 self.no_kv_cache,
                 &self.non_granular_state,
             ),
-        };
-        match result {
-            Ok(v) => v,
-            Err(e) => {
-                panic!("Model failed with error `{e}`. Please raise an issue.");
-            }
         }
     }
     fn device(&self) -> &Device {
