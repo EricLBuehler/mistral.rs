@@ -117,9 +117,6 @@ impl futures::Stream for Streamer {
         }
         match self.rx.try_recv() {
             Ok(resp) => match resp {
-                Response::ValidationError(e) => {
-                    Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
-                }
                 Response::ModelError(msg, _) => {
                     MistralRs::maybe_log_error(
                         self.state.clone(),
@@ -127,7 +124,7 @@ impl futures::Stream for Streamer {
                     );
                     Poll::Ready(Some(Ok(Event::default().data(msg))))
                 }
-                Response::InternalError(e) => {
+                Response::ValidationError(e) | Response::InternalError(e) => {
                     MistralRs::maybe_log_error(self.state.clone(), &*e);
                     Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
                 }
@@ -303,10 +300,14 @@ async fn chatcompletions(
                 ChatCompletionResponder::InternalError(e)
             }
             Response::ModelError(msg, response) => {
+                MistralRs::maybe_log_error(state.clone(), &ModelErrorMessage(msg.to_string()));
                 MistralRs::maybe_log_response(state, &response);
                 ChatCompletionResponder::ModelError(msg, response)
             }
-            Response::ValidationError(e) => ChatCompletionResponder::ValidationError(e),
+            Response::ValidationError(e) => {
+                MistralRs::maybe_log_error(state, &*e);
+                ChatCompletionResponder::ValidationError(e)
+            }
             Response::Done(response) => {
                 MistralRs::maybe_log_response(state, &response);
                 ChatCompletionResponder::Json(response)
