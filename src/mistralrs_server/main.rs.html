@@ -1122,6 +1122,20 @@
 <a href="#1120" id="1120">1120</a>
 <a href="#1121" id="1121">1121</a>
 <a href="#1122" id="1122">1122</a>
+<a href="#1123" id="1123">1123</a>
+<a href="#1124" id="1124">1124</a>
+<a href="#1125" id="1125">1125</a>
+<a href="#1126" id="1126">1126</a>
+<a href="#1127" id="1127">1127</a>
+<a href="#1128" id="1128">1128</a>
+<a href="#1129" id="1129">1129</a>
+<a href="#1130" id="1130">1130</a>
+<a href="#1131" id="1131">1131</a>
+<a href="#1132" id="1132">1132</a>
+<a href="#1133" id="1133">1133</a>
+<a href="#1134" id="1134">1134</a>
+<a href="#1135" id="1135">1135</a>
+<a href="#1136" id="1136">1136</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     env,
     error::Error,
@@ -1161,9 +1175,11 @@
 <span class="kw">use </span>serde::Serialize;
 
 <span class="kw">use </span><span class="kw">crate</span>::openai::ModelObject;
+<span class="kw">mod </span>interactive_mode;
 <span class="kw">mod </span>model_selected;
 <span class="kw">mod </span>openai;
 
+<span class="kw">use </span>interactive_mode::interactive_mode;
 <span class="kw">use </span>tower_http::cors::{AllowOrigin, CorsLayer};
 <span class="kw">use </span>tracing::{info, warn};
 <span class="kw">use </span>utoipa::OpenApi;
@@ -1182,7 +1198,7 @@
 
     <span class="doccomment">/// Port to serve on.
     </span><span class="attr">#[arg(short, long)]
-    </span>port: String,
+    </span>port: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
     <span class="doccomment">/// Log all responses and requests to this file
     </span><span class="attr">#[clap(long, short)]
@@ -1216,6 +1232,10 @@
     /// Defaults to using a cached token.
     </span><span class="attr">#[arg(long, default_value_t = TokenSource::CacheToken, value_parser = parse_token_source)]
     </span>token_source: TokenSource,
+
+    <span class="doccomment">/// Enter interactive mode instead of serving a chat server.
+    </span><span class="attr">#[clap(long, short, action)]
+    </span>interactive_mode: bool,
 }
 
 <span class="attr">#[derive(Debug)]
@@ -1370,7 +1390,7 @@
             top_k: oairequest.top_k,
             top_p: oairequest.top_p,
             top_n_logprobs: oairequest.top_logprobs.unwrap_or(<span class="number">1</span>),
-            repeat_penalty: oairequest.repetition_penalty,
+            frequency_penalty: oairequest.repetition_penalty,
             presence_penalty: oairequest.presence_penalty,
             max_len: oairequest.max_tokens,
             stop_toks,
@@ -2223,6 +2243,7 @@
     <span class="macro">info!</span>(<span class="string">"Model kind is: {}"</span>, loader.get_kind().as_ref());
     <span class="kw">let </span>pipeline = loader.load_model(<span class="prelude-val">None</span>, args.token_source, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>;
     <span class="macro">info!</span>(<span class="string">"Model loaded."</span>);
+
     <span class="kw">let </span>mistralrs = MistralRs::new(
         pipeline,
         SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
@@ -2231,6 +2252,13 @@
         args.no_kv_cache,
     );
 
+    <span class="kw">if </span>args.interactive_mode {
+        interactive_mode(mistralrs);
+        <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+    }
+
+    <span class="kw">let </span>port = args.port.expect(<span class="string">"Expected port to be specified."</span>);
+
     <span class="kw">let </span>app = get_router(mistralrs);
 
     <span class="kw">let </span>ip = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>ip) = args.serve_ip {
@@ -2238,8 +2266,8 @@
     } <span class="kw">else </span>{
         <span class="string">"0.0.0.0"</span>.to_string()
     };
-    <span class="kw">let </span>listener = tokio::net::TcpListener::bind(<span class="macro">format!</span>(<span class="string">"{ip}:{}"</span>, args.port)).<span class="kw">await</span><span class="question-mark">?</span>;
-    <span class="macro">info!</span>(<span class="string">"Serving on http://{ip}:{}."</span>, args.port);
+    <span class="kw">let </span>listener = tokio::net::TcpListener::bind(<span class="macro">format!</span>(<span class="string">"{ip}:{}"</span>, port)).<span class="kw">await</span><span class="question-mark">?</span>;
+    <span class="macro">info!</span>(<span class="string">"Serving on http://{ip}:{}."</span>, port);
     axum::serve(listener, app).<span class="kw">await</span><span class="question-mark">?</span>;
 
     <span class="prelude-val">Ok</span>(())
