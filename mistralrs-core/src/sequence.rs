@@ -5,15 +5,16 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use candle_core::Tensor;
-use tokenizers::Tokenizer;
-
 use crate::{
     get_mut_group,
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
     ChatCompletionResponse, ChatCompletionUsage,
 };
+use aici_abi::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx};
+use candle_core::Tensor;
+use regex_automata::util::primitives::StateID;
+use tokenizers::Tokenizer;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum StopReason {
@@ -42,6 +43,11 @@ pub enum SequenceState {
     Error,
 }
 
+pub enum SequenceRecognizer {
+    Regex(StackRecognizer<StateID, RecRx>),
+    Cfg(CfgParser),
+    None,
+}
 pub struct Sequence {
     // Metadata, const
     id: usize,
@@ -72,6 +78,8 @@ pub struct Sequence {
     group: Rc<RefCell<SequenceGroup>>,
     pub total_sampling_time: u128,
     state: Cell<SequenceState>,
+
+    pub recognizer: SequenceRecognizer,
 }
 
 impl Sequence {
@@ -91,6 +99,7 @@ impl Sequence {
         group: Rc<RefCell<SequenceGroup>>,
         response_index: usize,
         creation_time: u64,
+        recognizer: SequenceRecognizer,
     ) -> Self {
         let prompt_len = tokens.len();
         Self {
@@ -120,6 +129,7 @@ impl Sequence {
             total_sampling_time: 0,
             response_index,
             creation_time,
+            recognizer,
         }
     }
 

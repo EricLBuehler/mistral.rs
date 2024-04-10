@@ -4,6 +4,12 @@ use indexmap::IndexMap;
 use crate::{response::Response, sampler::SamplingParams};
 use std::{fmt::Debug, sync::mpsc::Sender};
 
+pub enum Constraint {
+    Regex(String),
+    Cfg(String),
+    None,
+}
+
 pub struct Request {
     pub messages: Either<Vec<IndexMap<String, String>>, String>,
     pub sampling_params: SamplingParams,
@@ -11,6 +17,7 @@ pub struct Request {
     pub return_logprobs: bool,
     pub is_streaming: bool,
     pub id: usize,
+    pub constraint: Constraint,
 }
 
 impl Debug for Request {

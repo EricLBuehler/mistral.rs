@@ -3,10 +3,15 @@ mod llama;
 mod mistral;
 mod mixtral;
 mod phi2;
-use crate::sampler::Logprobs;
+use crate::{sampler::Logprobs, sequence::SequenceRecognizer};
+use aici_abi::{
+    svob::SimpleVob,
+    toktree::{Recognizer, TokTrie},
+};
 use core::fmt;
 use either::Either;
 pub use gemma::{GemmaLoader, GemmaSpecificConfig, GEMMA_IS_GPTX};
+use half::vec;
 use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
     Repo, RepoType,
@@ -19,7 +24,14 @@ use mistralrs_lora::{LoraConfig, Ordering};
 pub use mixtral::{MixtralLoader, MixtralSpecificConfig, MIXTRAL_IS_GPTX};
 pub use phi2::{Phi2Loader, Phi2SpecificConfig, PHI2_IS_GPTX};
 use serde::Deserialize;
-use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
+use std::{
+    collections::HashMap,
+    fs,
+    iter::repeat,
+    path::PathBuf,
+    str::FromStr,
+    sync::{Arc, Mutex},
+};
 use tokenizers::Tokenizer;
 
 use anyhow::Result;
@@ -241,6 +253,7 @@ pub trait Pipeline: Send + Sync {
     fn num_hidden_layers(&self) -> usize;
     fn cache(&self) -> &Cache;
     fn tokenizer(&self) -> Tokenizer;
+    fn tok_trie(&self) -> Arc<TokTrie>;
     fn eos_tok(&self) -> u32;
     fn name(&self) -> String;
     fn get_max_seq_len(&self) -> usize;
@@ -301,9 +314,51 @@ pub trait Pipeline: Send + Sync {
             .saturating_sub(self.get_repeat_last_n());
         let ctxt = seq.get_toks()[start_at..].to_vec();
 
-        Ok(seq
+        let res = seq
             .sampler()
-            .sample(&logits, Some(&ctxt), return_logprobs)?)
+            .sample(&logits, Some(&ctxt), return_logprobs)?;
+
+        let next_token_id = res.token;
+
+        match &mut seq.recognizer {
+            SequenceRecognizer::Regex(ref mut rx) => {
+                let is_allowed = self.tok_trie().token_allowed(rx, next_token_id);
+                let vocab_size = self.tokenizer().get_vocab_size(true);
+                if !is_allowed {
+                    let mut svob = SimpleVob::alloc(vocab_size);
+                    self.tok_trie().compute_bias(rx, &mut svob);
+                    let mut acc = vec![0.0; vocab_size as usize];
+                    svob.apply_to(&mut acc);
+
+                    let new_logits =
+                        (logits + Tensor::from_slice(&acc, acc.len(), self.device())?)?;
+
+                    let new_res =
+                        seq.sampler()
+                            .sample(&new_logits, Some(&ctxt), return_logprobs)?;
+                    let next_token_id = new_res.token;
+                    let trie = self.tok_trie();
+                    let bytes = trie.token(next_token_id);
+                    for b in bytes {
+                        rx.push_byte(*b);
+                    }
+                    Ok(new_res)
+                } else {
+                    let trie = self.tok_trie();
+                    let bytes = trie.token(next_token_id);
+                    for b in bytes {
+                        rx.push_byte(*b);
+                    }
+                    Ok(res)
+                }
+            }
+            SequenceRecognizer::Cfg(ref mut cfg) => {
+                let is_allowed = self.tok_trie().token_allowed(cfg, next_token_id);
+                dbg!(is_allowed);
+                Ok(res)
+            }
+            SequenceRecognizer::None => Ok(res),
+        }
     }
 }
 

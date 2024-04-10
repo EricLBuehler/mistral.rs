@@ -5,6 +5,7 @@ use super::{
 use crate::deserialize_chat_template;
 use crate::models::llama::MAX_SEQ_LEN;
 use crate::models::Cache;
+use crate::utils::bintokens::build_tok_trie;
 use crate::xlora_models::{NonGranularState, XLoraConfig, XLoraLlama, XLoraModelWeights};
 use crate::{
     models::llama::{Llama as NormalModel, LlamaConfig},
@@ -12,6 +13,7 @@ use crate::{
     sequence::Sequence,
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
 };
+use aici_abi::toktree::TokTrie;
 use anyhow::Result;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Tensor};
@@ -82,6 +84,7 @@ impl ModelPaths for LlamaModelPaths<PathBuf> {
 pub struct LlamaPipeline {
     model: Model,
     tokenizer: Tokenizer,
+    tok_trie: Arc<TokTrie>,
     config: LlamaSpecificConfig,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
@@ -444,6 +447,7 @@ impl Loader for LlamaLoader {
 
         Ok(Box::new(Mutex::new(LlamaPipeline {
             model,
+            tok_trie: build_tok_trie(tokenizer.clone()).into(),
             tokenizer,
             config: self.config,
             no_kv_cache: self.no_kv_cache,
@@ -578,5 +582,9 @@ impl Pipeline for LlamaPipeline {
     }
     fn get_non_granular_state(&self) -> &Option<NonGranularState> {
         &self.non_granular_state
+    }
+
+    fn tok_trie(&self) -> Arc<aici_abi::toktree::TokTrie> {
+        self.tok_trie.clone()
     }
 }

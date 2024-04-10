@@ -27,10 +27,10 @@ use clap::Parser;
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    ChatCompletionResponse, GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig,
-    Loader, MistralLoader, MistralRs, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig,
-    ModelKind, Phi2Loader, Phi2SpecificConfig, Request, Response, SamplingParams, SchedulerMethod,
-    StopTokens as InternalStopTokens, TokenSource,
+    ChatCompletionResponse, Constraint, GemmaLoader, GemmaSpecificConfig, LlamaLoader,
+    LlamaSpecificConfig, Loader, MistralLoader, MistralRs, MistralSpecificConfig, MixtralLoader,
+    MixtralSpecificConfig, ModelKind, Phi2Loader, Phi2SpecificConfig, Request, Response,
+    SamplingParams, SchedulerMethod, StopTokens as InternalStopTokens, TokenSource,
 };
 use model_selected::ModelSelected;
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
@@ -262,6 +262,8 @@ fn parse_request(
         response: tx,
         return_logprobs: oairequest.logprobs,
         is_streaming: oairequest.stream.unwrap_or(false),
+        // TODO: fixme
+        constraint: Constraint::Regex(r"\d+".to_string()),
     }
 }
 

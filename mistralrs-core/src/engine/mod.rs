@@ -7,6 +7,7 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
+use aici_abi::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx};
 use candle_core::Tensor;
 use either::Either;
 use tracing::warn;
@@ -21,8 +22,8 @@ use crate::{
     },
     sampler::Sampler,
     scheduler::{Scheduler, SchedulerMethod},
-    sequence::{Sequence, SequenceGroup, SequenceState, StopReason},
-    StopTokens,
+    sequence::{Sequence, SequenceGroup, SequenceRecognizer, SequenceState, StopReason},
+    Constraint, StopTokens,
 };
 
 const SEED: u64 = 0;
@@ -129,6 +130,7 @@ impl Engine {
             let sampled = pipeline.sample(logits_per_seq, seq, return_logprobs);
             let next_token = handle_seq_error_stateaware!(sampled, seq);
             let next_token_id = next_token.token;
+
             seq.add_token(next_token.clone());
             let is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
             // Handle streaming requests
@@ -347,6 +349,19 @@ impl Engine {
         }
     }
 
+    fn build_sequence_recognizer(constraint: &Constraint) -> SequenceRecognizer {
+        match constraint {
+            Constraint::Regex(rx) => {
+                SequenceRecognizer::Regex(StackRecognizer::from(RecRx::from_rx(&rx)))
+            }
+            Constraint::Cfg(cfg) => SequenceRecognizer::Cfg(
+                // TODO: handle error
+                CfgParser::from_yacc(&cfg).unwrap(),
+            ),
+            Constraint::None => SequenceRecognizer::None,
+        }
+    }
+
     fn add_request(&mut self, request: Request) {
         let formatted_prompt = match request.messages {
             Either::Left(messages) => {
@@ -457,6 +472,7 @@ impl Engine {
                 group.clone(),
                 response_index,
                 now.as_secs(),
+                Self::build_sequence_recognizer(&request.constraint),
             );
             self.id += 1;
             self.scheduler.add_seq(seq);
