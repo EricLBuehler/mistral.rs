@@ -30,7 +30,9 @@ fn default_1usize() -> usize {
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 #[serde(tag = "type", content = "value")]
 pub enum ChatCompletionGrammar {
+    #[serde(rename = "regex")]
     Regex(String),
+    #[serde(rename = "yacc")]
     Yacc(String),
 }
 
