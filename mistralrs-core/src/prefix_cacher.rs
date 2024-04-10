@@ -57,8 +57,8 @@ impl PrefixCacheManager {
             for layer in cache {
                 if let Some((ref q, ref k)) = layer {
                     new_cache.push(Some((
-                        q.to_device(&Device::Cpu)?,
-                        k.to_device(&Device::Cpu)?,
+                        q.to_device(&self.device)?,
+                        k.to_device(&self.device)?,
                     )));
                 } else {
                     new_cache.push(None);

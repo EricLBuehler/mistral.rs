@@ -117,7 +117,7 @@ impl Engine {
                     .iter_mut()
                     .take(self.prefix_cacher.n_on_device)
                 {
-                    self.prefix_cacher.add_sequence(*seq);
+                    self.prefix_cacher.add_sequence(seq);
                 }
                 // Evict all the other seqs
                 handle_pipeline_forward_error!("evict", self.prefix_cacher.evict_to_cpu(), &mut scheduled.prompt, pipeline, 'lp);
@@ -402,14 +402,10 @@ impl Engine {
                 warn!("Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation.", request.id, currently_over, prompt_len - prompt.len());
             }
         }
-        let prefill_cache = if let Some(cache) = handle_seq_error!(
+        let prefill_cache = handle_seq_error!(
             self.prefix_cacher.search_for_matching_cache(&prompt),
             request.response
-        ) {
-            Some(cache)
-        } else {
-            None
-        };
+        );
 
         let topk = request
             .sampling_params
