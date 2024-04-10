@@ -60,7 +60,7 @@ struct Args {
 
     /// Port to serve on.
     #[arg(short, long)]
-    port: String,
+    port: Option<String>,
 
     /// Log all responses and requests to this file
     #[clap(long, short)]
@@ -1066,6 +1066,8 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    let port = args.port.expect("Expected port to be specified.");
+
     let app = get_router(mistralrs);
 
     let ip = if let Some(ref ip) = args.serve_ip {
@@ -1073,8 +1075,8 @@ async fn main() -> Result<()> {
     } else {
         "0.0.0.0".to_string()
     };
-    let listener = tokio::net::TcpListener::bind(format!("{ip}:{}", args.port)).await?;
-    info!("Serving on http://{ip}:{}.", args.port);
+    let listener = tokio::net::TcpListener::bind(format!("{ip}:{}", port)).await?;
+    info!("Serving on http://{ip}:{}.", port);
     axum::serve(listener, app).await?;
 
     Ok(())
