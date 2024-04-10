@@ -14,7 +14,7 @@ use std::{
 use anyhow::Result;
 use axum::{
     extract::{Json, State},
-    http::{self, Method},
+    http::{self, Method, StatusCode},
     response::{
         sse::{Event, KeepAlive},
         IntoResponse, Sse,
@@ -34,11 +34,14 @@ use mistralrs_core::{
 };
 use model_selected::ModelSelected;
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
+use serde::Serialize;
 
 use crate::openai::ModelObject;
+mod interactive_mode;
 mod model_selected;
 mod openai;
 
+use interactive_mode::interactive_mode;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{info, warn};
 use utoipa::OpenApi;
@@ -57,7 +60,7 @@ struct Args {
 
     /// Port to serve on.
     #[arg(short, long)]
-    port: String,
+    port: Option<String>,
 
     /// Log all responses and requests to this file
     #[clap(long, short)]
@@ -91,8 +94,20 @@ struct Args {
     /// Defaults to using a cached token.
     #[arg(long, default_value_t = TokenSource::CacheToken, value_parser = parse_token_source)]
     token_source: TokenSource,
+
+    /// Enter interactive mode instead of serving a chat server.
+    #[clap(long, short, action)]
+    interactive_mode: bool,
 }
 
+#[derive(Debug)]
+struct ModelErrorMessage(String);
+impl std::fmt::Display for ModelErrorMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+impl std::error::Error for ModelErrorMessage {}
 struct Streamer {
     rx: Receiver<Response>,
     is_done: bool,
@@ -108,7 +123,17 @@ impl futures::Stream for Streamer {
         }
         match self.rx.try_recv() {
             Ok(resp) => match resp {
-                Response::Error(e) => {
+                Response::ModelError(msg, _) => {
+                    MistralRs::maybe_log_error(
+                        self.state.clone(),
+                        &ModelErrorMessage(msg.to_string()),
+                    );
+                    Poll::Ready(Some(Ok(Event::default().data(msg))))
+                }
+                Response::ValidationError(e) => {
+                    Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
+                }
+                Response::InternalError(e) => {
                     MistralRs::maybe_log_error(self.state.clone(), &*e);
                     Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
                 }
@@ -119,7 +144,7 @@ impl futures::Stream for Streamer {
                     MistralRs::maybe_log_response(self.state.clone(), &response);
                     Poll::Ready(Some(Event::default().json_data(response)))
                 }
-                _ => unreachable!(),
+                Response::Done(_) => unreachable!(),
             },
             Err(_) => Poll::Pending,
         }
@@ -129,15 +154,63 @@ impl futures::Stream for Streamer {
 enum ChatCompletionResponder {
     Sse(Sse<Streamer>),
     Json(ChatCompletionResponse),
-    Error(Box<dyn Error>),
+    ModelError(String, ChatCompletionResponse),
+    InternalError(Box<dyn Error>),
+    ValidationError(Box<dyn Error>),
 }
+
+trait ErrorToResponse: Serialize {
+    fn to_response(&self, code: StatusCode) -> axum::response::Response {
+        let mut r = Json(self).into_response();
+        *r.status_mut() = code;
+        r
+    }
+}
+
+#[derive(Serialize)]
+struct JsonError {
+    message: String,
+}
+
+impl JsonError {
+    fn new(message: String) -> Self {
+        Self { message }
+    }
+}
+impl ErrorToResponse for JsonError {}
+
+#[derive(Serialize)]
+struct JsonModelError {
+    message: String,
+    partial_response: ChatCompletionResponse,
+}
+
+impl JsonModelError {
+    fn new(message: String, partial_response: ChatCompletionResponse) -> Self {
+        Self {
+            message,
+            partial_response,
+        }
+    }
+}
+
+impl ErrorToResponse for JsonModelError {}
 
 impl IntoResponse for ChatCompletionResponder {
     fn into_response(self) -> axum::response::Response {
         match self {
             ChatCompletionResponder::Sse(s) => s.into_response(),
             ChatCompletionResponder::Json(s) => Json(s).into_response(),
-            ChatCompletionResponder::Error(e) => e.to_string().into_response(),
+            ChatCompletionResponder::InternalError(e) => {
+                JsonError::new(e.to_string()).to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+            }
+            ChatCompletionResponder::ValidationError(e) => {
+                JsonError::new(e.to_string()).to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
+            }
+            ChatCompletionResponder::ModelError(msg, response) => {
+                JsonModelError::new(msg, response)
+                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+            }
         }
     }
 }
@@ -179,7 +252,7 @@ fn parse_request(
             top_k: oairequest.top_k,
             top_p: oairequest.top_p,
             top_n_logprobs: oairequest.top_logprobs.unwrap_or(1),
-            repeat_penalty: oairequest.repetition_penalty,
+            frequency_penalty: oairequest.repetition_penalty,
             presence_penalty: oairequest.presence_penalty,
             max_len: oairequest.max_tokens,
             stop_toks,
@@ -231,10 +304,16 @@ async fn chatcompletions(
         let response = rx.recv().unwrap();
 
         match response {
-            Response::Error(e) => {
+            Response::InternalError(e) => {
                 MistralRs::maybe_log_error(state, &*e);
-                ChatCompletionResponder::Error(e)
+                ChatCompletionResponder::InternalError(e)
             }
+            Response::ModelError(msg, response) => {
+                MistralRs::maybe_log_error(state.clone(), &ModelErrorMessage(msg.to_string()));
+                MistralRs::maybe_log_response(state, &response);
+                ChatCompletionResponder::ModelError(msg, response)
+            }
+            Response::ValidationError(e) => ChatCompletionResponder::ValidationError(e),
             Response::Done(response) => {
                 MistralRs::maybe_log_response(state, &response);
                 ChatCompletionResponder::Json(response)
@@ -326,7 +405,15 @@ async fn main() -> Result<()> {
         | ModelSelected::MistralGGUF { .. }
         | ModelSelected::Mixtral { .. }
         | ModelSelected::MixtralGGUF { .. }
-        | ModelSelected::Phi2 { .. } => None,
+        | ModelSelected::Phi2 { .. }
+        | ModelSelected::XLoraPhi2 { .. }
+        | ModelSelected::LoraMistralGGUF { .. }
+        | ModelSelected::LoraMistral { .. }
+        | ModelSelected::LoraLlama { .. }
+        | ModelSelected::LoraLlamaGGML { .. }
+        | ModelSelected::LoraLlamaGGUF { .. }
+        | ModelSelected::LoraMixtral { .. }
+        | ModelSelected::LoraMixtralGGUF { .. } => None,
         ModelSelected::XLoraGemma {
             tgt_non_granular_index,
             ..
@@ -772,6 +859,218 @@ async fn main() -> Result<()> {
             tokenizer_json,
             None,
         )),
+        ModelSelected::XLoraPhi2 {
+            model_id,
+            tokenizer_json,
+            xlora_model_id,
+            repeat_last_n,
+            order,
+            tgt_non_granular_index,
+        } => Box::new(Phi2Loader::new(
+            model_id,
+            Phi2SpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+            },
+            None,
+            None,
+            Some(xlora_model_id),
+            ModelKind::XLoraNormal,
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
+            args.no_kv_cache,
+            args.chat_template,
+            tokenizer_json,
+            tgt_non_granular_index,
+        )),
+        ModelSelected::LoraMistralGGUF {
+            tok_model_id,
+            tokenizer_json,
+            quantized_model_id,
+            quantized_filename,
+            adapters_model_id,
+            repeat_last_n,
+            order,
+        } => Box::new(MistralLoader::new(
+            tok_model_id,
+            MistralSpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+            },
+            quantized_model_id,
+            quantized_filename,
+            Some(adapters_model_id),
+            ModelKind::LoraGGUF,
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
+            args.no_kv_cache,
+            args.chat_template,
+            tokenizer_json,
+            tgt_non_granular_index,
+        )),
+        ModelSelected::LoraMistral {
+            model_id,
+            tokenizer_json,
+            adapters_model_id,
+            repeat_last_n,
+            order,
+        } => Box::new(MistralLoader::new(
+            model_id,
+            MistralSpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+            },
+            None,
+            None,
+            Some(adapters_model_id),
+            ModelKind::LoraNormal,
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
+            args.no_kv_cache,
+            args.chat_template,
+            tokenizer_json,
+            tgt_non_granular_index,
+        )),
+        ModelSelected::LoraMixtral {
+            model_id,
+            tokenizer_json,
+            adapters_model_id,
+            repeat_last_n,
+            order,
+        } => Box::new(MistralLoader::new(
+            model_id,
+            MistralSpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+            },
+            None,
+            None,
+            Some(adapters_model_id),
+            ModelKind::LoraNormal,
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
+            args.no_kv_cache,
+            args.chat_template,
+            tokenizer_json,
+            tgt_non_granular_index,
+        )),
+        ModelSelected::LoraMixtralGGUF {
+            tok_model_id,
+            tokenizer_json,
+            quantized_model_id,
+            quantized_filename,
+            adapters_model_id,
+            repeat_last_n,
+            order,
+        } => Box::new(MistralLoader::new(
+            tok_model_id,
+            MistralSpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+            },
+            quantized_model_id,
+            quantized_filename,
+            Some(adapters_model_id),
+            ModelKind::LoraGGUF,
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
+            args.no_kv_cache,
+            args.chat_template,
+            tokenizer_json,
+            tgt_non_granular_index,
+        )),
+        ModelSelected::LoraLlama {
+            model_id,
+            tokenizer_json,
+            adapters_model_id,
+            repeat_last_n,
+            order,
+        } => Box::new(MistralLoader::new(
+            model_id,
+            MistralSpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+            },
+            None,
+            None,
+            Some(adapters_model_id),
+            ModelKind::LoraNormal,
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
+            args.no_kv_cache,
+            args.chat_template,
+            tokenizer_json,
+            tgt_non_granular_index,
+        )),
+        ModelSelected::LoraLlamaGGUF {
+            tok_model_id,
+            tokenizer_json,
+            quantized_model_id,
+            quantized_filename,
+            adapters_model_id,
+            repeat_last_n,
+            order,
+        } => Box::new(LlamaLoader::new(
+            tok_model_id,
+            LlamaSpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+                gqa: 0,
+            },
+            quantized_model_id,
+            quantized_filename,
+            Some(adapters_model_id),
+            ModelKind::LoraGGUF,
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
+            args.no_kv_cache,
+            args.chat_template,
+            tokenizer_json,
+            tgt_non_granular_index,
+        )),
+        ModelSelected::LoraLlamaGGML {
+            tok_model_id,
+            tokenizer_json,
+            quantized_model_id,
+            quantized_filename,
+            adapters_model_id,
+            repeat_last_n,
+            order,
+            gqa,
+        } => Box::new(LlamaLoader::new(
+            tok_model_id,
+            LlamaSpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+                gqa,
+            },
+            quantized_model_id,
+            quantized_filename,
+            Some(adapters_model_id),
+            ModelKind::LoraGGML,
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
+            args.no_kv_cache,
+            args.chat_template,
+            tokenizer_json,
+            tgt_non_granular_index,
+        )),
     };
 
     #[cfg(feature = "metal")]
@@ -806,6 +1105,7 @@ async fn main() -> Result<()> {
     info!("Model kind is: {}", loader.get_kind().as_ref());
     let pipeline = loader.load_model(None, args.token_source, None, &device)?;
     info!("Model loaded.");
+
     let mistralrs = MistralRs::new(
         pipeline,
         SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
@@ -814,6 +1114,13 @@ async fn main() -> Result<()> {
         args.no_kv_cache,
     );
 
+    if args.interactive_mode {
+        interactive_mode(mistralrs);
+        return Ok(());
+    }
+
+    let port = args.port.expect("Expected port to be specified.");
+
     let app = get_router(mistralrs);
 
     let ip = if let Some(ref ip) = args.serve_ip {
@@ -821,8 +1128,8 @@ async fn main() -> Result<()> {
     } else {
         "0.0.0.0".to_string()
     };
-    let listener = tokio::net::TcpListener::bind(format!("{ip}:{}", args.port)).await?;
-    info!("Serving on http://{ip}:{}.", args.port);
+    let listener = tokio::net::TcpListener::bind(format!("{ip}:{}", port)).await?;
+    info!("Serving on http://{ip}:{}.", port);
     axum::serve(listener, app).await?;
 
     Ok(())

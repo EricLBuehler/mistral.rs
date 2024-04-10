@@ -22,7 +22,7 @@ pub struct SamplingParams {
     pub top_k: Option<usize>,
     pub top_p: Option<f64>,
     pub top_n_logprobs: usize,
-    pub repeat_penalty: Option<f32>,
+    pub frequency_penalty: Option<f32>,
     pub presence_penalty: Option<f32>,
     pub stop_toks: Option<StopTokens>,
     pub max_len: Option<usize>,
@@ -37,7 +37,7 @@ pub struct Sampler {
     temperature: Option<f64>,
     top_n_logprobs: usize,
     tokenizer: Tokenizer,
-    repeat_penalty: Option<f32>,
+    frequency_penalty: Option<f32>,
     presence_penalty: Option<f32>,
     logits_bias: Option<HashMap<u32, f32>>,
     topk: i64,
@@ -67,7 +67,7 @@ impl Sampler {
         temperature: Option<f64>,
         top_n_logprobs: usize,
         tokenizer: Tokenizer,
-        repeat_penalty: Option<f32>,
+        frequency_penalty: Option<f32>,
         presence_penalty: Option<f32>,
         logits_bias: Option<HashMap<u32, f32>>,
         topk: i64,
@@ -83,7 +83,7 @@ impl Sampler {
             temperature,
             top_n_logprobs,
             tokenizer,
-            repeat_penalty,
+            frequency_penalty,
             presence_penalty,
             logits_bias,
             topk,
@@ -249,7 +249,7 @@ impl Sampler {
     fn apply_repeat_presence_penalty(
         logits: &Tensor,
         presence_penalty: f32,
-        repeat_penalty: f32,
+        frequency_penalty: f32,
         context: &[u32],
     ) -> Result<Tensor> {
         //mu[j] -> mu[j] - c[j] * alpha_frequency - float(c[j] > 0) * alpha_presence
@@ -258,7 +258,7 @@ impl Sampler {
         for (token_id, logit) in logits.iter_mut().enumerate() {
             let count = context.iter().filter(|x| **x as usize == token_id).count();
             *logit = *logit
-                - count as f32 * repeat_penalty
+                - count as f32 * frequency_penalty
                 - if count > 0 { 1. } else { 0. } * presence_penalty;
         }
         let logits_len = logits.len();
@@ -269,7 +269,7 @@ impl Sampler {
     ///
     /// If the temperature is `None`, argmax sampling is used. Otherwise, the selected sampling is used.
     /// With `top-p` sampling, if the `top-p` value is `<= 0.0` or `>= 1.0`, multinomial sampling is used.
-    /// If `repeat_penalty.is_some()` or `presence_penalty.is_some()`, then `penalty_ctxt` must be provided.
+    /// If `frequency_penalty.is_some()` or `presence_penalty.is_some()`, then `penalty_ctxt` must be provided.
     pub fn sample(
         &mut self,
         logits: &Tensor,
@@ -278,7 +278,7 @@ impl Sampler {
     ) -> Result<Logprobs> {
         let logits = logits.to_dtype(DType::F32)?;
 
-        let logits = if self.repeat_penalty.is_none() && self.presence_penalty.is_none() {
+        let logits = if self.frequency_penalty.is_none() && self.presence_penalty.is_none() {
             logits
         } else {
             if penalty_ctxt.is_none() {
@@ -287,7 +287,7 @@ impl Sampler {
             Self::apply_repeat_presence_penalty(
                 &logits,
                 self.presence_penalty.unwrap_or(0.),
-                self.repeat_penalty.unwrap_or(0.),
+                self.frequency_penalty.unwrap_or(0.),
                 penalty_ctxt.unwrap(),
             )?
         };

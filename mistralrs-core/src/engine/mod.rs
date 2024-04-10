@@ -7,12 +7,12 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use candle_core::{Device, Tensor};
+use candle_core::Tensor;
 use either::Either;
 use tracing::warn;
 
 use crate::{
-    get_mut_arcmutex, handle_seq_error, handle_seq_error_stateaware,
+    get_mut_arcmutex, handle_pipeline_forward_error, handle_seq_error, handle_seq_error_stateaware,
     pipeline::Pipeline,
     request::Request,
     response::{
@@ -55,49 +55,47 @@ impl Engine {
     }
 
     pub fn run(&mut self) {
-        loop {
+        'lp: loop {
             if let Ok(request) = self.rx.try_recv() {
                 self.add_request(request);
             }
             let mut scheduled = self.scheduler.schedule();
+            let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
             if scheduled.completion.len() > 0 {
                 // Run the completion seqs
                 if !self.no_kv_cache {
-                    Self::clone_in_cache(
-                        &mut *get_mut_arcmutex!(self.pipeline),
-                        &mut scheduled.completion,
-                    );
+                    Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
                 }
-                let logits = get_mut_arcmutex!(self.pipeline).forward(&scheduled.completion, false);
-                Self::synchronize(get_mut_arcmutex!(self.pipeline).device());
+                let logits = pipeline.forward(&scheduled.completion, false);
+                let logits = handle_pipeline_forward_error!("completion", logits, &mut scheduled.completion, pipeline, 'lp);
+
+                if !self.no_kv_cache {
+                    Self::clone_out_cache(&mut *pipeline, &mut scheduled.completion);
+                } else {
+                    Self::set_none_cache(&mut *pipeline);
+                }
 
                 let before_sample = Instant::now();
-                Self::sample_seqs(
-                    &mut *get_mut_arcmutex!(self.pipeline),
-                    &mut scheduled.completion,
-                    logits,
-                );
+                Self::sample_seqs(&mut *pipeline, &mut scheduled.completion, logits);
                 let sampling_time = before_sample.elapsed().as_millis();
                 for seq in scheduled.completion.iter_mut() {
                     seq.total_sampling_time += sampling_time;
-                }
-
-                if !self.no_kv_cache {
-                    Self::clone_out_cache(
-                        &mut *get_mut_arcmutex!(self.pipeline),
-                        &mut scheduled.completion,
-                    );
-                } else {
-                    Self::set_none_cache(&mut *get_mut_arcmutex!(self.pipeline));
                 }
             }
 
             if scheduled.prompt.len() > 0 {
                 // Run the prompt seqs
-                Self::set_none_cache(&mut *get_mut_arcmutex!(self.pipeline));
-                let logits = get_mut_arcmutex!(self.pipeline).forward(&scheduled.prompt, true);
-                Self::synchronize(get_mut_arcmutex!(self.pipeline).device());
+                Self::set_none_cache(&mut *pipeline);
+                let logits = pipeline.forward(&scheduled.prompt, true);
+                let logits = handle_pipeline_forward_error!("prompt", logits, &mut scheduled.prompt, pipeline, 'lp);
+
+                if !self.no_kv_cache {
+                    Self::clone_out_cache(&mut *pipeline, &mut scheduled.prompt);
+                } else {
+                    Self::set_none_cache(&mut *pipeline);
+                }
+
                 for seq in scheduled.prompt.iter_mut() {
                     seq.set_state(SequenceState::RunningCompletion);
                     let now = SystemTime::now()
@@ -111,36 +109,14 @@ impl Engine {
                 }
 
                 let before_sample = Instant::now();
-                Self::sample_seqs(
-                    &mut *get_mut_arcmutex!(self.pipeline),
-                    &mut scheduled.prompt,
-                    logits,
-                );
+                Self::sample_seqs(&mut *pipeline, &mut scheduled.prompt, logits);
                 let sampling_time = before_sample.elapsed().as_millis();
                 for seq in scheduled.prompt.iter_mut() {
                     seq.total_sampling_time += sampling_time;
                 }
-
-                if !self.no_kv_cache {
-                    Self::clone_out_cache(
-                        &mut *get_mut_arcmutex!(self.pipeline),
-                        &mut scheduled.prompt,
-                    );
-                } else {
-                    Self::set_none_cache(&mut *get_mut_arcmutex!(self.pipeline));
-                }
             }
         }
     }
-
-    #[cfg(feature = "cuda")]
-    fn synchronize(dev: &Device) {
-        if let candle_core::Device::Cuda(dev) = dev {
-            dev.synchronize().unwrap();
-        }
-    }
-    #[cfg(not(feature = "cuda"))]
-    fn synchronize(_dev: &Device) {}
 
     fn sample_seqs(pipeline: &mut dyn Pipeline, seqs: &mut [&mut Sequence], logits: Tensor) {
         let seqs_len = seqs.len();
@@ -390,7 +366,7 @@ impl Engine {
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                 request
                     .response
-                    .send(Response::Error(
+                    .send(Response::ValidationError(
                         format!("Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?", get_mut_arcmutex!(self.pipeline).get_max_seq_len()).into(),
                     ))
                     .unwrap();
@@ -435,10 +411,11 @@ impl Engine {
                     // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                     request
                         .response
-                        .send(Response::Error(
+                        .send(Response::ValidationError(
                             format!("Stop sequence '{s:?}' encodes to multiple tokens when it should only encode to 1.").into(),
                         ))
                         .unwrap();
+                    return;
                 }
                 stop_toks.push(toks[0]);
                 stop_toks
@@ -457,7 +434,7 @@ impl Engine {
             Some(request.sampling_params.temperature.unwrap_or(1.0)),
             request.sampling_params.top_n_logprobs,
             tokenizer.clone(),
-            request.sampling_params.repeat_penalty,
+            request.sampling_params.frequency_penalty,
             request.sampling_params.presence_penalty,
             request.sampling_params.logits_bias.clone(),
             topk,

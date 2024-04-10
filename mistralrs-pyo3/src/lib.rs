@@ -112,7 +112,7 @@ impl Runner {
                     top_k: request.top_k,
                     top_p: request.top_p,
                     top_n_logprobs: request.top_logprobs.unwrap_or(1),
-                    repeat_penalty: request.repetition_penalty,
+                    frequency_penalty: request.repetition_penalty,
                     presence_penalty: request.presence_penalty,
                     max_len: request.max_tokens,
                     stop_toks,
@@ -130,12 +130,15 @@ impl Runner {
             let response = rx.recv().unwrap();
 
             match response {
-                Response::Error(e) => Err(PyValueError::new_err(e.to_string())),
+                Response::ValidationError(e) | Response::InternalError(e) => {
+                    Err(PyValueError::new_err(e.to_string()))
+                }
                 Response::Done(response) => {
                     MistralRs::maybe_log_response(self.runner.clone(), &response);
                     Ok(serde_json::to_string(&response).unwrap())
                 }
                 Response::Chunk(_) => unreachable!(),
+                Response::ModelError(msg, _) => Err(PyValueError::new_err(msg.to_string())),
             }
         })
     }

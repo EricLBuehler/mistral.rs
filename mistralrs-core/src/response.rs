@@ -58,6 +58,10 @@ pub struct ChatCompletionUsage {
     pub avg_prompt_tok_per_sec: f32,
     pub avg_compl_tok_per_sec: f32,
     pub avg_sample_tok_per_sec: f32,
+    pub total_time_sec: f32,
+    pub total_prompt_time_sec: f32,
+    pub total_completion_time_sec: f32,
+    pub total_sampling_time_sec: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -82,7 +86,9 @@ pub struct ChatCompletionChunkResponse {
 }
 
 pub enum Response {
-    Error(Box<dyn Error + Send + Sync>),
+    InternalError(Box<dyn Error + Send + Sync>),
+    ValidationError(Box<dyn Error + Send + Sync>),
+    ModelError(String, ChatCompletionResponse),
     Done(ChatCompletionResponse),
     Chunk(ChatCompletionChunkResponse),
 }

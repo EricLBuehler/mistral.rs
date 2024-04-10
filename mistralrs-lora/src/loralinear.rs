@@ -160,7 +160,7 @@ impl LinearLayerLike for LoraLinear {
     fn lora_forward(
         &self,
         input: &Tensor,
-        scalings: Tensor,
+        scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
@@ -173,6 +173,7 @@ impl LinearLayerLike for LoraLinear {
         if is_scaling_pass.is_some_and(|x| x == 0.) {
             return Ok(result);
         }
+        let scalings = scalings.unwrap();
 
         let scalings = get_maybe_topk_scalings(scalings, self.layer_n)?;
         if self.a_adapters.is_left() || scalings.dims3()?.1 != 1 {

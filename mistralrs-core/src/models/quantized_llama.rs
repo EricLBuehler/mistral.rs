@@ -7,7 +7,7 @@ use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 
-use super::{Cache, QRmsNorm};
+use super::{verify_sanity_gguf, Cache, QRmsNorm};
 
 const MAX_SEQ_LEN: u32 = 4096;
 
@@ -290,6 +290,10 @@ impl ModelWeights {
             None => candle_core::bail!("cannot find {s} in metadata"),
             Some(v) => Ok(v),
         };
+        verify_sanity_gguf(
+            md_get("general.architecture")?.to_string().unwrap(),
+            "llama",
+        )?;
 
         // Parameter extraction from metadata.
         let n_expert = md_get("llama.expert_count")
