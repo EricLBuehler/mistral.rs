@@ -37,7 +37,10 @@ impl PrefixCacheManager {
     /// the maximum allowed. Returns the number of evicted sequences.
     pub fn evict_to_cpu(&mut self) -> Result<usize> {
         // Intentionally evict the first ones first, as they are the oldest
-        for (ids, cache) in self.caches.drain(0..self.caches.len() - self.n_on_device) {
+        for (ids, cache) in self
+            .caches
+            .drain(0..self.caches.len().saturating_sub(self.n_on_device))
+        {
             let mut new_cache = Vec::new();
             for layer in cache {
                 if let Some((ref q, ref k)) = layer {
