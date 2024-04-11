@@ -9,6 +9,7 @@ Mistral.rs is a fast LLM inference platform written in pure, safe Rust. We suppo
 - X-LoRA: Softmax `topk` ([#48](https://github.com/EricLBuehler/mistral.rs/issues/48)).
 - PagedAttention ([#47](https://github.com/EricLBuehler/mistral.rs/pull/47)) ⭐ Active work.
 - Parallel linear layers (sharding) ([#50](https://github.com/EricLBuehler/mistral.rs/issues/50)).
+- Phi2 Python support
 
 ## Description
 - Fast performance with per-sequence and catch-up KV cache management technique.
