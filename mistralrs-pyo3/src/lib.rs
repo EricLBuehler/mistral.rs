@@ -170,6 +170,152 @@ impl Runner {
             }
         })
     }
+
+    /// Send an OpenAI API compatible request, returning raw JSON.
+    fn send_completion_request(&mut self, request: Py<CompletionRequest>) -> PyResult<String> {
+        let (tx, rx) = channel();
+        Python::with_gil(|py| {
+            let request = request.bind(py).borrow();
+            let stop_toks = request
+                .stop_token_ids
+                .as_ref()
+                .map(|x| StopTokens::Ids(x.to_vec()));
+            let constraint = if request.grammar_type == Some("regex".to_string()) {
+                if request.grammar.is_none() {
+                    return Err(PyValueError::new_err(
+                        "Grammar type is specified but not grammar text",
+                    ));
+                }
+                Constraint::Regex(request.grammar.as_ref().unwrap().clone())
+            } else if request.grammar_type == Some("yacc".to_string()) {
+                if request.grammar.is_none() {
+                    return Err(PyValueError::new_err(
+                        "Grammar type is specified but not grammar text",
+                    ));
+                }
+                Constraint::Yacc(request.grammar.as_ref().unwrap().clone())
+            } else if request.grammar_type.is_some() {
+                return Err(PyValueError::new_err(
+                    "Grammar type is specified but is not `regex` or `yacc`",
+                ));
+            } else {
+                Constraint::None
+            };
+            let model_request = _Request {
+                id: {
+                    let l = NEXT_REQUEST_ID.lock().unwrap();
+                    let last = &mut *l.borrow_mut();
+                    let last_v = *last;
+                    *last += 1;
+                    last_v
+                },
+                messages: Either::Right(request.prompt.clone()),
+                sampling_params: SamplingParams {
+                    temperature: request.temperature,
+                    top_k: request.top_k,
+                    top_p: request.top_p,
+                    top_n_logprobs: 1,
+                    frequency_penalty: request.frequency_penalty,
+                    presence_penalty: request.presence_penalty,
+                    max_len: request.max_tokens,
+                    stop_toks,
+                    logits_bias: request.logit_bias.clone(),
+                    n_choices: request.n_choices,
+                },
+                response: tx,
+                return_logprobs: false,
+                is_streaming: false,
+                constraint,
+                request_type: RequestType::Completion,
+                suffix: request.suffix.clone(),
+            };
+
+            MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
+            let sender = self.runner.get_sender();
+            sender.send(model_request).unwrap();
+            let response = rx.recv().unwrap();
+
+            match response {
+                Response::ValidationError(e) | Response::InternalError(e) => {
+                    Err(PyValueError::new_err(e.to_string()))
+                }
+                Response::Done(response) => {
+                    MistralRs::maybe_log_response(self.runner.clone(), &response);
+                    Ok(serde_json::to_string(&response).unwrap())
+                }
+                Response::ModelError(msg, _) => Err(PyValueError::new_err(msg.to_string())),
+                Response::Chunk(_) => unreachable!(),
+                Response::CompletionDone(_) => unreachable!(),
+                Response::CompletionModelError(_, _) => unreachable!(),
+            }
+        })
+    }
+}
+
+#[pyclass]
+#[derive(Debug)]
+/// An OpenAI API compatible completion request.
+struct CompletionRequest {
+    _model: String,
+    prompt: String,
+    best_of: usize,
+    echo_prompt: bool,
+    presence_penalty: Option<f32>,
+    frequency_penalty: Option<f32>,
+    logit_bias: Option<HashMap<u32, f32>>,
+    max_tokens: Option<usize>,
+    n_choices: usize,
+    stop_token_ids: Option<Vec<u32>>,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    suffix: Option<String>,
+    top_k: Option<usize>,
+    grammar: Option<String>,
+    grammar_type: Option<String>,
+}
+
+#[pymethods]
+impl CompletionRequest {
+    #[new]
+    #[pyo3(signature = (prompt, model, best_of = 1, echo_prompt = false, presence_penalty=None,frequency_penalty=None,logit_bias=None,max_tokens=None,n_choices=1,stop_token_ids=None,temperature=None,top_p=None,suffix=None,top_k=None, grammar = None, grammar_type = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        prompt: String,
+        model: String,
+        best_of: usize,
+        echo_prompt: bool,
+        presence_penalty: Option<f32>,
+        frequency_penalty: Option<f32>,
+        logit_bias: Option<HashMap<u32, f32>>,
+        max_tokens: Option<usize>,
+        n_choices: usize,
+        stop_token_ids: Option<Vec<u32>>,
+        temperature: Option<f64>,
+        top_p: Option<f64>,
+        suffix: Option<String>,
+        top_k: Option<usize>,
+        grammar: Option<String>,
+        grammar_type: Option<String>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            prompt,
+            best_of,
+            echo_prompt,
+            suffix,
+            _model: model,
+            logit_bias,
+            max_tokens,
+            n_choices,
+            presence_penalty,
+            frequency_penalty,
+            stop_token_ids,
+            temperature,
+            top_p,
+            top_k,
+            grammar,
+            grammar_type,
+        })
+    }
 }
 
 #[pyclass]
