@@ -267,14 +267,15 @@ impl Sequence {
         } else if self.tokens.len().saturating_sub(self.prompt_len) == max_model_len {
             Some(StopReason::ModelLength(max_model_len))
         } else {
-            let text_acc = self.generated_text(tokenizer);
-            if self.stop_strings.iter().any(|s| text_acc.contains(s)) {
-                // TODO: a different stop reason?
-                // TODO: strip the stop string from the generated text?
-                Some(StopReason::StopTok(tok))
-            } else {
-                None
+            if !self.stop_strings.is_empty() {
+                let text_acc = self.generated_text(tokenizer);
+                if self.stop_strings.iter().any(|s| text_acc.contains(s)) {
+                    // TODO: a different stop reason?
+                    // TODO: strip the stop string from the generated text?
+                    return Some(StopReason::StopTok(tok));
+                }
             }
+            None
         }
     }
 
