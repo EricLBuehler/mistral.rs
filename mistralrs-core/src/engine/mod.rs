@@ -349,17 +349,15 @@ impl Engine {
         }
     }
 
-    fn build_sequence_recognizer(constraint: &Constraint) -> SequenceRecognizer {
-        match constraint {
+    fn build_sequence_recognizer(constraint: &Constraint) -> anyhow::Result<SequenceRecognizer> {
+        let recognizer = match constraint {
             Constraint::Regex(rx) => {
                 SequenceRecognizer::Regex(StackRecognizer::from(RecRx::from_rx(rx)).into())
             }
-            Constraint::Yacc(cfg) => SequenceRecognizer::Cfg(
-                // TODO: handle error
-                CfgParser::from_yacc(cfg).unwrap().into(),
-            ),
+            Constraint::Yacc(cfg) => SequenceRecognizer::Cfg(CfgParser::from_yacc(cfg)?.into()),
             Constraint::None => SequenceRecognizer::None,
-        }
+        };
+        Ok(recognizer)
     }
 
     fn add_request(&mut self, request: Request) {
@@ -455,6 +453,18 @@ impl Engine {
             topk,
             topp,
         );
+        let recognizer = match Self::build_sequence_recognizer(&request.constraint) {
+            Ok(recognizer) => recognizer,
+            Err(err) => {
+                request
+                    .response
+                    .send(Response::ValidationError(
+                        format!("Invalid grammar. {}", err).into(),
+                    ))
+                    .unwrap();
+                return;
+            }
+        };
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {
             let seq = Sequence::new_waiting(
@@ -472,7 +482,7 @@ impl Engine {
                 group.clone(),
                 response_index,
                 now.as_secs(),
-                Self::build_sequence_recognizer(&request.constraint),
+                recognizer.clone(),
             );
             self.id += 1;
             self.scheduler.add_seq(seq);

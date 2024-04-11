@@ -7,6 +7,7 @@ use cfgrammar::{
 };
 use lrtable::{from_yacc, Action, Minimiser, StIdx, StateTable};
 use rustc_hash::FxHashMap;
+use std::sync::Arc;
 use std::{cell::RefCell, vec};
 use vob::{vob, Vob};
 
@@ -22,14 +23,16 @@ enum ParseResult {
     Continue,
 }
 
+#[derive(Clone)]
 struct CfgStats {
     yacc_actions: usize,
     states_pushed: usize,
 }
 
+#[derive(Clone)]
 pub struct CfgParser {
-    grm: YaccGrammar<StorageT>,
-    stable: StateTable<StorageT>,
+    grm: Arc<YaccGrammar<StorageT>>,
+    stable: Arc<StateTable<StorageT>>,
     lexer: Lexer,
     byte_states: Vec<ByteState>,
     pat_idx_to_tidx: Vec<TIdx<u32>>,
@@ -227,8 +230,8 @@ impl CfgParser {
             .collect::<Vec<_>>();
 
         let mut cfg = CfgParser {
-            grm,
-            stable,
+            grm: grm.into(),
+            stable: stable.into(),
             lexer: dfa,
             byte_states: vec![byte_state],
             pat_idx_to_tidx,

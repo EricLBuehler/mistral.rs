@@ -43,6 +43,7 @@ pub enum SequenceState {
     Error,
 }
 
+#[derive(Clone)]
 pub enum SequenceRecognizer {
     Regex(Box<StackRecognizer<StateID, RecRx>>),
     Cfg(Box<CfgParser>),

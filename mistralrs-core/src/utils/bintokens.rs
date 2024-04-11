@@ -6,7 +6,7 @@ use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use tokenizers::{normalizers::Sequence, NormalizerWrapper, Tokenizer};
-use tracing::warn;
+use tracing::{error, warn};
 
 #[derive(Serialize, Deserialize)]
 pub struct ByteTokenizer {
@@ -145,7 +145,7 @@ impl ByteTokenizer {
                     let bytes = match bytes {
                         Ok(b) => b,
                         Err(e) => {
-                            println!("error: {} for {:?}", e, tok_name);
+                            error!("error: {} for {:?}", e, tok_name);
                             continue;
                         }
                     };

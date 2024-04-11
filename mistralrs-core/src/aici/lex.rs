@@ -53,6 +53,7 @@ impl VobIdx {
     }
 }
 
+#[derive(Clone)]
 pub struct VobSet {
     vobs: Vec<Vob>,
     by_vob: FxHashMap<Vob, VobIdx>,
@@ -115,6 +116,7 @@ impl VobSet {
     }
 }
 
+#[derive(Clone)]
 pub struct Lexer {
     dfa: dense::DFA<Vec<u32>>,
     initial: LexerState,
