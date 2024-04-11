@@ -41,7 +41,7 @@ while True:
     prompt = input(">>> ")
     completion = openai.completions.create(
         model="mistral",
-        prompt="Rust is a ",
+        prompt=prompt,
         max_tokens=256,
         frequency_penalty=1.0,
         top_p=0.1,
