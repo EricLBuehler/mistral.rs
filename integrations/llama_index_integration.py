@@ -307,19 +307,6 @@ class MistralRS(CustomLLM):
                     f"Invalid model architecture {arch}. Expected <x-lora>-arch-<gguf | ggml>."
                 )
 
-        self._runner = loader.load(
-            token_source=model_kwargs.get("token_source", {"source": "cache"})[
-                "source"
-            ],  # default source is "cache"
-            max_seqs=model_kwargs.get("max_seqs", DEFAULT_MAX_SEQS),
-            logfile=None,
-            revision=model_kwargs.get("revision", None),
-            token_source_value=model_kwargs.get("token_source", {"value": None})[
-                "value"
-            ],
-            dtype=None,
-        )
-
         super().__init__(
             model_path=model_id,
             model_url=model_id,
@@ -335,6 +322,19 @@ class MistralRS(CustomLLM):
             completion_to_prompt=completion_to_prompt,
             pydantic_program_mode=pydantic_program_mode,
             output_parser=output_parser,
+        )
+
+        self._runner = loader.load(
+            token_source=model_kwargs.get("token_source", {"source": "cache"})[
+                "source"
+            ],  # default source is "cache"
+            max_seqs=model_kwargs.get("max_seqs", DEFAULT_MAX_SEQS),
+            logfile=None,
+            revision=model_kwargs.get("revision", None),
+            token_source_value=model_kwargs.get("token_source", {"value": None})[
+                "value"
+            ],
+            dtype=None,
         )
 
     @classmethod
@@ -360,13 +360,13 @@ class MistralRS(CustomLLM):
             model="",
             max_tokens=self.generate_kwargs["max_tokens"],
             logit_bias=None,
-            logprobs="top_logprobs" in self.generate_kwargs,
-            top_logprobs=self.generate_kwargs.get("top_logprobs", None),
+            logprobs=False,
+            top_logprobs=None,
             top_k=self.generate_kwargs["top_k"],
             top_p=self.generate_kwargs["top_p"],
-            presence_penalty=self.generate_kwargs["presence_penalty"],
-            repetition_penalty=self.generate_kwargs["repetition_penalty"],
-            temperature=self.generate_kwargs["temperature"],
+            presence_penalty=self.generate_kwargs.get("presence_penalty", None),
+            repetition_penalty=self.generate_kwargs.get("repetition_penalty", None),
+            temperature=self.generate_kwargs.get("temperature", None),
         )
         completion_response = self._runner.send_chat_completion_request(request)
         json_resp = json.loads(completion_response)
@@ -374,7 +374,6 @@ class MistralRS(CustomLLM):
             CompletionResponse(
                 text=json_resp["choices"][0]["message"]["content"],
                 raw=json_resp,
-                logprobs=json_resp["choices"][0]["logprobs"],
             )
         )
 
@@ -390,7 +389,25 @@ class MistralRS(CustomLLM):
     def complete(
         self, prompt: str, formatted: bool = False, **kwargs: Any
     ) -> CompletionResponse:
-        raise NotImplementedError(".complete is not implemented yet.")
+        request = ChatCompletionRequest(
+            messages=prompt,
+            model="",
+            max_tokens=self.generate_kwargs["max_tokens"],
+            logit_bias=None,
+            logprobs=False,
+            top_logprobs=None,
+            top_k=self.generate_kwargs["top_k"],
+            top_p=self.generate_kwargs["top_p"],
+            presence_penalty=self.generate_kwargs.get("presence_penalty", None),
+            repetition_penalty=self.generate_kwargs.get("repetition_penalty", None),
+            temperature=self.generate_kwargs.get("temperature", None),
+        )
+        completion_response = self._runner.send_chat_completion_request(request)
+        json_resp = json.loads(completion_response)
+        return CompletionResponse(
+            text=json_resp["choices"][0]["message"]["content"],
+            raw=json_resp,
+        )
 
     @llm_completion_callback()
     def stream_complete(
