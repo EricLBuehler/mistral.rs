@@ -22,6 +22,8 @@ class ChatCompletionRequest:
     top_p: float | None = None
     stream: bool = False
     top_k: int | None = None
+    grammar: str | None = None
+    grammar_type: str | None = None
 
 class Runner:
     """
