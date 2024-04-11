@@ -8,6 +8,7 @@ use std::{
 use crate::aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx};
 use crate::{
     get_mut_group,
+    models::LayerCaches,
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
     ChatCompletionResponse, ChatCompletionUsage,
@@ -41,6 +42,7 @@ pub enum SequenceState {
     RunningCompletion,
     Waiting,
     Error,
+    RunningPrefillPrompt,
 }
 
 #[derive(Clone)]
@@ -62,11 +64,12 @@ pub struct Sequence {
     responder: Sender<Response>,
     response_index: usize,
     creation_time: u64,
+    prefill_prompt_toks: Option<Vec<u32>>,
 
     // Cache
     scaling_cache: Option<Tensor>,
-    cache: Vec<Option<(Tensor, Tensor)>>,
-    xlora_cache: Option<Vec<Option<(Tensor, Tensor)>>>,
+    cache: LayerCaches,
+    xlora_cache: Option<LayerCaches>,
 
     // Mutables
     tokens: Vec<u32>,
@@ -131,7 +134,27 @@ impl Sequence {
             response_index,
             creation_time,
             recognizer,
+            prefill_prompt_toks: None,
         }
+    }
+
+    pub fn prefill(mut self, cache: LayerCaches) -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time travel has occurred!")
+            .as_millis();
+        self.prompt_timestamp = Some(now);
+
+        self.cache = cache;
+        self.set_state(SequenceState::RunningCompletion);
+        self
+    }
+
+    pub fn prefill_subset(mut self, cache: LayerCaches, toks: Vec<u32>) -> Self {
+        self.cache = cache;
+        self.prefill_prompt_toks = Some(toks);
+        self.set_state(SequenceState::RunningPrefillPrompt);
+        self
     }
 
     pub fn len(&self) -> usize {
@@ -145,6 +168,7 @@ impl Sequence {
     pub fn is_running(&self) -> bool {
         self.state.get() == SequenceState::RunningCompletion
             || self.state.get() == SequenceState::RunningPrompt
+            || self.state.get() == SequenceState::RunningPrefillPrompt
     }
 
     pub fn is_completion(&self) -> bool {
@@ -153,6 +177,7 @@ impl Sequence {
 
     pub fn is_prompt(&self) -> bool {
         self.state.get() == SequenceState::RunningPrompt
+            || self.state.get() == SequenceState::RunningPrefillPrompt
     }
 
     pub fn is_waiting(&self) -> bool {
@@ -160,6 +185,9 @@ impl Sequence {
     }
 
     pub fn get_toks(&self) -> &[u32] {
+        if let Some(toks) = &self.prefill_prompt_toks {
+            return toks;
+        }
         &self.tokens
     }
 

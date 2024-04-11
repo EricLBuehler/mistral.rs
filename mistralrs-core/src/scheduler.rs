@@ -66,7 +66,12 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
     }
 
     pub fn add_seq(&mut self, seq: Sequence) {
-        self.waiting.add(seq);
+        if seq.is_running() {
+            // prefill case
+            self.running.push(seq);
+        } else {
+            self.waiting.add(seq);
+        }
     }
 
     /// Schedule all sequences based on their state and the available space.

@@ -15,6 +15,7 @@ use tracing::warn;
 use crate::{
     get_mut_arcmutex, handle_pipeline_forward_error, handle_seq_error, handle_seq_error_stateaware,
     pipeline::Pipeline,
+    prefix_cacher::{MatchingCache, PrefixCacheManager},
     request::Request,
     response::{
         ChatCompletionResponse, Choice, ChunkChoice, Delta, Logprobs, Response, ResponseLogprob,
@@ -35,6 +36,7 @@ pub struct Engine {
     id: usize,
     truncate_sequence: bool,
     no_kv_cache: bool,
+    prefix_cacher: PrefixCacheManager,
 }
 
 impl Engine {
@@ -45,6 +47,7 @@ impl Engine {
         truncate_sequence: bool,
         no_kv_cache: bool,
     ) -> Self {
+        let device = get_mut_arcmutex!(pipeline).device().clone();
         Self {
             rx,
             pipeline,
@@ -52,6 +55,7 @@ impl Engine {
             id: 0,
             truncate_sequence,
             no_kv_cache,
+            prefix_cacher: PrefixCacheManager::new(device, 1), // TODO(EricLBuehler): not have this hardcoded
         }
     }
 
@@ -108,6 +112,16 @@ impl Engine {
                     seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
                     seq.prompt_timestamp = Some(now);
                 }
+
+                for seq in scheduled
+                    .prompt
+                    .iter_mut()
+                    .take(self.prefix_cacher.n_on_device)
+                {
+                    self.prefix_cacher.add_sequence(seq);
+                }
+                // Evict all the other seqs
+                handle_pipeline_forward_error!("evict", self.prefix_cacher.evict_to_cpu(), &mut scheduled.prompt, pipeline, 'lp);
 
                 let before_sample = Instant::now();
                 Self::sample_seqs(&mut *pipeline, &mut scheduled.prompt, logits);
@@ -424,6 +438,10 @@ impl Engine {
                 warn!("Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation.", request.id, currently_over, prompt_len - prompt.len());
             }
         }
+        let prefill_cache = handle_seq_error!(
+            self.prefix_cacher.search_for_matching_cache(&prompt),
+            request.response
+        );
 
         let topk = request
             .sampling_params
@@ -507,6 +525,14 @@ impl Engine {
                 now.as_secs(),
                 recognizer.clone(),
             );
+            let seq = if let Some(prefill_cache) = prefill_cache.clone() {
+                match prefill_cache {
+                    MatchingCache::Verbatim(cache) => seq.prefill(cache),
+                    MatchingCache::Subset(cache, toks) => seq.prefill_subset(cache, toks),
+                }
+            } else {
+                seq
+            };
             self.id += 1;
             self.scheduler.add_seq(seq);
         }

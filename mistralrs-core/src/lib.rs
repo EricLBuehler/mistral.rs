@@ -21,6 +21,7 @@ mod aici;
 mod engine;
 mod models;
 mod pipeline;
+mod prefix_cacher;
 mod request;
 mod response;
 mod sampler;
