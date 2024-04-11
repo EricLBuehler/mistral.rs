@@ -582,10 +582,20 @@
 <a href="#580" id="580">580</a>
 <a href="#581" id="581">581</a>
 <a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a>
+<a href="#588" id="588">588</a>
+<a href="#589" id="589">589</a>
+<a href="#590" id="590">590</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, ChatTemplate, Loader, ModelInputs,
     ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
 };
+<span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
+<span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
 <span class="kw">use </span><span class="kw">crate</span>::deserialize_chat_template;
 <span class="kw">use </span><span class="kw">crate</span>::models::llama::MAX_SEQ_LEN;
 <span class="kw">use </span><span class="kw">crate</span>::models::Cache;
@@ -666,6 +676,7 @@
 <span class="kw">pub struct </span>LlamaPipeline {
     model: Model,
     tokenizer: Tokenizer,
+    tok_trie: TokTrie,
     config: LlamaSpecificConfig,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
@@ -1028,6 +1039,7 @@
 
         <span class="prelude-val">Ok</span>(Box::new(Mutex::new(LlamaPipeline {
             model,
+            tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer,
             config: <span class="self">self</span>.config,
             no_kv_cache: <span class="self">self</span>.no_kv_cache,
@@ -1162,6 +1174,10 @@
     }
     <span class="kw">fn </span>get_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;NonGranularState&gt; {
         <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state
+    }
+
+    <span class="kw">fn </span>tok_trie(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>TokTrie {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.tok_trie
     }
 }
 </code></pre></div></section></main></body></html>

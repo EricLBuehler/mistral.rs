@@ -462,10 +462,19 @@
 <a href="#460" id="460">460</a>
 <a href="#461" id="461">461</a>
 <a href="#462" id="462">462</a>
+<a href="#463" id="463">463</a>
+<a href="#464" id="464">464</a>
+<a href="#465" id="465">465</a>
+<a href="#466" id="466">466</a>
+<a href="#467" id="467">467</a>
+<a href="#468" id="468">468</a>
+<a href="#469" id="469">469</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
 };
+<span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
+<span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
 <span class="kw">use </span><span class="kw">crate</span>::deserialize_chat_template;
 <span class="kw">use </span><span class="kw">crate</span>::models::Cache;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
@@ -545,6 +554,7 @@
 <span class="kw">pub struct </span>Phi2Pipeline {
     model: Model,
     tokenizer: Tokenizer,
+    tok_trie: TokTrie,
     config: Phi2SpecificConfig,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
@@ -806,6 +816,7 @@
 
         <span class="prelude-val">Ok</span>(Box::new(Mutex::new(Phi2Pipeline {
             model,
+            tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer,
             config: <span class="self">self</span>.config,
             no_kv_cache: <span class="self">self</span>.no_kv_cache,
@@ -922,6 +933,9 @@
     }
     <span class="kw">fn </span>get_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;NonGranularState&gt; {
         <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state
+    }
+    <span class="kw">fn </span>tok_trie(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>TokTrie {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.tok_trie
     }
 }
 </code></pre></div></section></main></body></html>

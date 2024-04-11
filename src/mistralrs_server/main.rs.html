@@ -1136,6 +1136,12 @@
 <a href="#1134" id="1134">1134</a>
 <a href="#1135" id="1135">1135</a>
 <a href="#1136" id="1136">1136</a>
+<a href="#1137" id="1137">1137</a>
+<a href="#1138" id="1138">1138</a>
+<a href="#1139" id="1139">1139</a>
+<a href="#1140" id="1140">1140</a>
+<a href="#1141" id="1141">1141</a>
+<a href="#1142" id="1142">1142</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     env,
     error::Error,
@@ -1165,13 +1171,13 @@
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_core::{
-    ChatCompletionResponse, GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig,
-    Loader, MistralLoader, MistralRs, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig,
-    ModelKind, Phi2Loader, Phi2SpecificConfig, Request, Response, SamplingParams, SchedulerMethod,
-    StopTokens <span class="kw">as </span>InternalStopTokens, TokenSource,
+    ChatCompletionResponse, Constraint, GemmaLoader, GemmaSpecificConfig, LlamaLoader,
+    LlamaSpecificConfig, Loader, MistralLoader, MistralRs, MistralSpecificConfig, MixtralLoader,
+    MixtralSpecificConfig, ModelKind, Phi2Loader, Phi2SpecificConfig, Request, Response,
+    SamplingParams, SchedulerMethod, StopTokens <span class="kw">as </span>InternalStopTokens, TokenSource,
 };
 <span class="kw">use </span>model_selected::ModelSelected;
-<span class="kw">use </span>openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
+<span class="kw">use </span>openai::{ChatCompletionGrammar, ChatCompletionRequest, Message, ModelObjects, StopTokens};
 <span class="kw">use </span>serde::Serialize;
 
 <span class="kw">use </span><span class="kw">crate</span>::openai::ModelObject;
@@ -1400,6 +1406,12 @@
         response: tx,
         return_logprobs: oairequest.logprobs,
         is_streaming: oairequest.stream.unwrap_or(<span class="bool-val">false</span>),
+
+        constraint: <span class="kw">match </span>oairequest.grammar {
+            <span class="prelude-val">Some</span>(ChatCompletionGrammar::Yacc(yacc)) =&gt; Constraint::Yacc(yacc),
+            <span class="prelude-val">Some</span>(ChatCompletionGrammar::Regex(regex)) =&gt; Constraint::Regex(regex),
+            <span class="prelude-val">None </span>=&gt; Constraint::None,
+        },
     }
 }
 

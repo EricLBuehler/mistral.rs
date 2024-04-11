@@ -381,6 +381,17 @@
 <a href="#379" id="379">379</a>
 <a href="#380" id="380">380</a>
 <a href="#381" id="381">381</a>
+<a href="#382" id="382">382</a>
+<a href="#383" id="383">383</a>
+<a href="#384" id="384">384</a>
+<a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a>
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
+<a href="#392" id="392">392</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
@@ -388,15 +399,16 @@
     time::{SystemTime, UNIX_EPOCH},
 };
 
-<span class="kw">use </span>candle_core::Tensor;
-<span class="kw">use </span>tokenizers::Tokenizer;
-
+<span class="kw">use </span><span class="kw">crate</span>::aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx};
 <span class="kw">use crate</span>::{
     get_mut_group,
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
     ChatCompletionResponse, ChatCompletionUsage,
 };
+<span class="kw">use </span>candle_core::Tensor;
+<span class="kw">use </span>regex_automata::util::primitives::StateID;
+<span class="kw">use </span>tokenizers::Tokenizer;
 
 <span class="attr">#[derive(Clone, Copy, PartialEq, Debug)]
 </span><span class="kw">pub enum </span>StopReason {
@@ -425,6 +437,12 @@
     Error,
 }
 
+<span class="attr">#[derive(Clone)]
+</span><span class="kw">pub enum </span>SequenceRecognizer {
+    Regex(Box&lt;StackRecognizer&lt;StateID, RecRx&gt;&gt;),
+    Cfg(Box&lt;CfgParser&gt;),
+    <span class="prelude-val">None</span>,
+}
 <span class="kw">pub struct </span>Sequence {
     <span class="comment">// Metadata, const
     </span>id: usize,
@@ -455,6 +473,8 @@
     group: Rc&lt;RefCell&lt;SequenceGroup&gt;&gt;,
     <span class="kw">pub </span>total_sampling_time: u128,
     state: Cell&lt;SequenceState&gt;,
+
+    <span class="kw">pub </span>recognizer: SequenceRecognizer,
 }
 
 <span class="kw">impl </span>Sequence {
@@ -474,6 +494,7 @@
         group: Rc&lt;RefCell&lt;SequenceGroup&gt;&gt;,
         response_index: usize,
         creation_time: u64,
+        recognizer: SequenceRecognizer,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>prompt_len = tokens.len();
         <span class="self">Self </span>{
@@ -503,6 +524,7 @@
             total_sampling_time: <span class="number">0</span>,
             response_index,
             creation_time,
+            recognizer,
         }
     }
 

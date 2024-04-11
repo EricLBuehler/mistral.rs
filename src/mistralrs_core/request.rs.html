@@ -24,11 +24,24 @@
 <a href="#22" id="22">22</a>
 <a href="#23" id="23">23</a>
 <a href="#24" id="24">24</a>
+<a href="#25" id="25">25</a>
+<a href="#26" id="26">26</a>
+<a href="#27" id="27">27</a>
+<a href="#28" id="28">28</a>
+<a href="#29" id="29">29</a>
+<a href="#30" id="30">30</a>
+<a href="#31" id="31">31</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 
 <span class="kw">use crate</span>::{response::Response, sampler::SamplingParams};
 <span class="kw">use </span>std::{fmt::Debug, sync::mpsc::Sender};
+
+<span class="kw">pub enum </span>Constraint {
+    Regex(String),
+    Yacc(String),
+    <span class="prelude-val">None</span>,
+}
 
 <span class="kw">pub struct </span>Request {
     <span class="kw">pub </span>messages: Either&lt;Vec&lt;IndexMap&lt;String, String&gt;&gt;, String&gt;,
@@ -37,6 +50,7 @@
     <span class="kw">pub </span>return_logprobs: bool,
     <span class="kw">pub </span>is_streaming: bool,
     <span class="kw">pub </span>id: usize,
+    <span class="kw">pub </span>constraint: Constraint,
 }
 
 <span class="kw">impl </span>Debug <span class="kw">for </span>Request {
