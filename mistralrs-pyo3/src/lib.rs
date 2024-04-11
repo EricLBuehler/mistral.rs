@@ -147,6 +147,7 @@ impl Runner {
                 is_streaming: request.stream,
                 constraint,
                 request_type: RequestType::Chat,
+                suffix: None,
             };
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));

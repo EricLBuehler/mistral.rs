@@ -39,15 +39,15 @@ eos_toks = ["</s>", "<eos>", "<|endoftext|>"]
 
 while True:
     prompt = input(">>> ")
-    completion = openai.chat.completions.create(
+    completion = openai.completions.create(
         model="mistral",
-        messages=prompt,
+        prompt="Rust is a ",
         max_tokens=256,
         frequency_penalty=1.0,
         top_p=0.1,
         temperature=0,
     )
-    resp = completion.choices[0].message.content
+    resp = completion.choices[0].text
     for eos in eos_toks:
         if resp.endswith(eos):
             out = resp[: -len(eos)]

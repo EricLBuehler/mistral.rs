@@ -5,7 +5,11 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx};
+use crate::{
+    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
+    response::{CompletionChoice, CompletionChunkResponse},
+    CompletionResponse,
+};
 use crate::{
     get_mut_group,
     models::LayerCaches,
@@ -65,6 +69,7 @@ pub struct Sequence {
     response_index: usize,
     creation_time: u64,
     prefill_prompt_toks: Option<Vec<u32>>,
+    pub suffix: Option<String>,
 
     // Cache
     scaling_cache: Option<Tensor>,
@@ -104,6 +109,7 @@ impl Sequence {
         response_index: usize,
         creation_time: u64,
         recognizer: SequenceRecognizer,
+        suffix: Option<String>,
     ) -> Self {
         let prompt_len = tokens.len();
         Self {
@@ -135,6 +141,7 @@ impl Sequence {
             creation_time,
             recognizer,
             prefill_prompt_toks: None,
+            suffix,
         }
     }
 
@@ -303,9 +310,7 @@ impl Sequence {
         self.prompt_timestamp
     }
 
-    pub fn add_choice_to_group(&self, choice: Choice) {
-        get_mut_group!(self).choices.push(choice);
-
+    fn update_time_info(&self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time travel has occurred!")
@@ -322,6 +327,16 @@ impl Sequence {
         get_mut_group!(self).total_toks += self.len();
 
         get_mut_group!(self).total_sampling_time += self.total_sampling_time;
+    }
+
+    pub fn add_choice_to_group(&self, choice: Choice) {
+        get_mut_group!(self).choices.push(choice);
+        self.update_time_info();
+    }
+
+    pub fn add_completion_choice_to_group(&self, choice: CompletionChoice) {
+        get_mut_group!(self).completion_choices.push(choice);
+        self.update_time_info();
     }
 
     pub fn get_response_index(&self) -> usize {
@@ -346,14 +361,17 @@ pub struct SequenceGroup {
     pub total_completion_time: u128,
     pub total_sampling_time: u128,
     choices: Vec<Choice>,
+    completion_choices: Vec<CompletionChoice>,
     pub streaming_chunks: Vec<ChunkChoice>,
     pub is_streaming: bool,
+    pub is_chat: bool,
 }
 
 impl SequenceGroup {
-    pub fn new(n_choices: usize, is_streaming: bool) -> Self {
+    pub fn new(n_choices: usize, is_streaming: bool, is_chat: bool) -> Self {
         Self {
             choices: Vec::new(),
+            completion_choices: Vec::new(),
             n_choices,
             total_prompt_toks: 0,
             total_toks: 0,
@@ -363,11 +381,16 @@ impl SequenceGroup {
             total_sampling_time: 0,
             streaming_chunks: Vec::new(),
             is_streaming,
+            is_chat,
         }
     }
 
     pub fn get_choices(&self) -> &[Choice] {
         &self.choices
+    }
+
+    pub fn get_completion_choices(&self) -> &[CompletionChoice] {
+        &self.completion_choices
     }
 
     pub fn get_usage(&self) -> Usage {
@@ -415,6 +438,33 @@ impl SequenceGroup {
                 }))
                 .unwrap();
             self.streaming_chunks.clear();
+        }
+    }
+
+    pub fn maybe_send_completion_done_response(
+        &self,
+        response: CompletionResponse,
+        sender: Sender<Response>,
+    ) {
+        if self.choices.len() == self.n_choices {
+            // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
+            sender.send(Response::CompletionDone(response)).unwrap();
+        }
+    }
+
+    pub fn maybe_send_completion_streaming_response(
+        &mut self,
+        seq: &Sequence,
+        chunk: String,
+        is_done: bool,
+    ) {
+        if self.streaming_chunks.len() == self.n_choices && self.is_streaming {
+            seq.responder()
+                .send(Response::CompletionChunk(CompletionChunkResponse {
+                    data: chunk,
+                    done: is_done,
+                }))
+                .unwrap();
         }
     }
 }

@@ -47,6 +47,7 @@ pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
             is_streaming: true,
             constraint: Constraint::None,
             request_type: RequestType::Chat,
+            suffix: None,
         };
         sender.send(req).unwrap();
 

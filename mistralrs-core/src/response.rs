@@ -86,25 +86,12 @@ pub struct ChatCompletionChunkResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct CompletionResponseLogprob {
-    pub token: String,
-    pub logprob: f32,
-    pub bytes: Vec<u8>,
-    pub top_logprobs: Vec<TopLogprob>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct CompletionLogprobs {
-    pub content: Option<Vec<ResponseLogprob>>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct CompletionChoice {
     #[serde(rename = "finish_reason")]
     pub stopreason: String,
     pub index: usize,
     pub text: String,
-    pub logprobs: Option<CompletionLogprobs>,
+    pub logprobs: Option<()>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -127,11 +114,11 @@ pub struct CompletionChunkResponse {
 pub enum Response {
     InternalError(Box<dyn Error + Send + Sync>),
     ValidationError(Box<dyn Error + Send + Sync>),
-    // Chat specific
+    // Chat
     ModelError(String, ChatCompletionResponse),
     Done(ChatCompletionResponse),
     Chunk(ChatCompletionChunkResponse),
-    // Completion specific
+    // Completion
     CompletionModelError(String, CompletionResponse),
     CompletionDone(CompletionResponse),
     CompletionChunk(CompletionChunkResponse),

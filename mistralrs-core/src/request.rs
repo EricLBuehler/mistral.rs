@@ -10,7 +10,7 @@ pub enum Constraint {
     None,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum RequestType {
     Chat,
     Completion,
@@ -25,6 +25,7 @@ pub struct Request {
     pub id: usize,
     pub constraint: Constraint,
     pub request_type: RequestType,
+    pub suffix: Option<String>,
 }
 
 impl Debug for Request {

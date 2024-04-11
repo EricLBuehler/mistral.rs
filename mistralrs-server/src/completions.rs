@@ -26,6 +26,7 @@ use mistralrs_core::{
     StopTokens as InternalStopTokens,
 };
 use serde::Serialize;
+use tracing::warn;
 
 #[derive(Debug)]
 struct ModelErrorMessage(String);
@@ -159,6 +160,10 @@ fn parse_request(
         None => None,
     };
 
+    if oairequest.logprobs.is_some() {
+        warn!("Completion requests do not support logprobs.");
+    }
+
     Request {
         id: state.next_request_id(),
         messages: Either::Right(oairequest.prompt),
@@ -166,7 +171,7 @@ fn parse_request(
             temperature: oairequest.temperature,
             top_k: oairequest.top_k,
             top_p: oairequest.top_p,
-            top_n_logprobs: oairequest.logprobs.unwrap_or(1),
+            top_n_logprobs: 1,
             frequency_penalty: oairequest.frequency_penalty,
             presence_penalty: oairequest.presence_penalty,
             max_len: oairequest.max_tokens,
@@ -175,8 +180,9 @@ fn parse_request(
             n_choices: oairequest.n_choices,
         },
         response: tx,
-        return_logprobs: oairequest.logprobs.is_some(),
+        return_logprobs: false,
         is_streaming: oairequest.stream.unwrap_or(false),
+        suffix: oairequest.suffix,
 
         constraint: match oairequest.grammar {
             Some(Grammar::Yacc(yacc)) => Constraint::Yacc(yacc),

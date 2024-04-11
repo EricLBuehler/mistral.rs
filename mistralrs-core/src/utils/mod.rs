@@ -65,37 +65,68 @@ macro_rules! handle_pipeline_forward_error {
                         Ok(v) => v,
                         Err(_) => "".to_string(),
                     };
-                    let choice = Choice {
-                        stopreason: "error".to_string(),
-                        index: seq.get_response_index(),
-                        message: ResponseMessage {
-                            content: res,
-                            role: "assistant".to_string(),
-                        },
-                        logprobs: None,
-                    };
-                    seq.add_choice_to_group(choice);
+
+                    let group = seq.get_mut_group();
+                    if group.is_chat {
+                        let choice = Choice {
+                            stopreason: "error".to_string(),
+                            index: seq.get_response_index(),
+                            message: ResponseMessage {
+                                content: res,
+                                role: "assistant".to_string(),
+                            },
+                            logprobs: None,
+                        };
+                        seq.add_choice_to_group(choice);
+                    } else {
+                        let choice = CompletionChoice {
+                            stopreason: "error".to_string(),
+                            index: seq.get_response_index(),
+                            text: res,
+                            logprobs: None,
+                        };
+                        seq.add_completion_choice_to_group(choice);
+                    }
                 }
                 for seq in $seq_slice.iter_mut() {
                     // Step 2: Respond with all groups
                     let group = seq.get_mut_group();
 
-                    let partial_completion_response = ChatCompletionResponse {
-                        id: seq.id().to_string(),
-                        choices: group.get_choices().to_vec(),
-                        created: seq.creation_time(),
-                        model: $pipeline.name(),
-                        system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
-                        object: "chat.completion".to_string(),
-                        usage: group.get_usage(),
-                    };
+                    if group.is_chat {
+                        let partial_completion_response = ChatCompletionResponse {
+                            id: seq.id().to_string(),
+                            choices: group.get_choices().to_vec(),
+                            created: seq.creation_time(),
+                            model: $pipeline.name(),
+                            system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                            object: "chat.completion".to_string(),
+                            usage: group.get_usage(),
+                        };
 
-                    seq.responder()
-                        .send(Response::ModelError(
-                            e.to_string(),
-                            partial_completion_response
-                        ))
-                        .unwrap();
+                        seq.responder()
+                            .send(Response::ModelError(
+                                e.to_string(),
+                                partial_completion_response
+                            ))
+                            .unwrap();
+                    } else {
+                        let partial_completion_response = CompletionResponse {
+                            id: seq.id().to_string(),
+                            choices: group.get_completion_choices().to_vec(),
+                            created: seq.creation_time(),
+                            model: $pipeline.name(),
+                            system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                            object: "text_completion".to_string(),
+                            usage: group.get_usage(),
+                        };
+
+                        seq.responder()
+                            .send(Response::CompletionModelError(
+                                e.to_string(),
+                                partial_completion_response
+                            ))
+                            .unwrap();
+                    }
                 }
                 for seq in $seq_slice.iter_mut() {
                     // Step 3: Set state - This cannot be done in Step 2 as `group` is locking the refcell
