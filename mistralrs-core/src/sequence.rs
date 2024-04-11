@@ -128,6 +128,12 @@ impl Sequence {
     }
 
     pub fn prefill(mut self, cache: LayerCaches) -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time travel has occurred!")
+            .as_millis();
+        self.prompt_timestamp = Some(now);
+
         self.cache = cache;
         self.set_state(SequenceState::RunningCompletion);
         self
