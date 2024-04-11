@@ -23,6 +23,7 @@ pub enum StopReason {
     StopTok(u32),
     Length(usize),
     ModelLength(usize),
+    StopString(/* Index in the list of stop strings */ usize),
 }
 
 impl ToString for StopReason {
@@ -30,7 +31,7 @@ impl ToString for StopReason {
         match self {
             StopReason::Eos => "stop".to_string(),
             StopReason::Length(_) | StopReason::ModelLength(_) => "length".to_string(),
-            StopReason::StopTok(_) => "stop".to_string(),
+            StopReason::StopTok(_) | StopReason::StopString(_) => "stop".to_string(),
         }
     }
 }
@@ -269,10 +270,10 @@ impl Sequence {
         } else {
             if !self.stop_strings.is_empty() {
                 let text_acc = self.generated_text(tokenizer)?;
-                if self.stop_strings.iter().any(|s| text_acc.contains(s)) {
-                    // TODO: a different stop reason?
-                    // TODO: strip the stop string from the generated text?
-                    return Ok(Some(StopReason::StopTok(tok)));
+                for (idx, s) in self.stop_strings.iter().enumerate() {
+                    if text_acc.contains(s) {
+                        return Ok(Some(StopReason::StopString(idx)));
+                    }
                 }
             }
             Ok(None)
