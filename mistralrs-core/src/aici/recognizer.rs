@@ -86,22 +86,3 @@ impl<S: Copy + Debug, R: FunctionalRecognizer<S>> Recognizer for StackRecognizer
         }
     }
 }
-
-#[derive(Clone)]
-pub struct AnythingGoes {}
-
-impl FunctionalRecognizer<()> for AnythingGoes {
-    fn initial(&self) {}
-
-    fn append(&self, state: (), _byte: u8) {
-        state
-    }
-
-    fn byte_allowed(&self, _state: (), _byte: u8) -> bool {
-        true
-    }
-
-    fn special_allowed(&self, _state: (), _tok: SpecialToken) -> bool {
-        true
-    }
-}

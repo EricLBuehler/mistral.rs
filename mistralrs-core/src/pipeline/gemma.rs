@@ -82,7 +82,7 @@ impl ModelPaths for GemmaModelPaths<PathBuf> {
 pub struct GemmaPipeline {
     model: Model,
     tokenizer: Tokenizer,
-    tok_trie: Arc<TokTrie>,
+    tok_trie: TokTrie,
     config: GemmaSpecificConfig,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
@@ -467,7 +467,7 @@ impl Pipeline for GemmaPipeline {
     fn get_non_granular_state(&self) -> &Option<NonGranularState> {
         &self.non_granular_state
     }
-    fn tok_trie(&self) -> Arc<crate::aici::toktree::TokTrie> {
-        self.tok_trie.clone()
+    fn tok_trie(&self) -> &crate::aici::toktree::TokTrie {
+        &self.tok_trie
     }
 }
