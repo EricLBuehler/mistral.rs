@@ -392,6 +392,34 @@
 <a href="#390" id="390">390</a>
 <a href="#391" id="391">391</a>
 <a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
+<a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
+<a href="#400" id="400">400</a>
+<a href="#401" id="401">401</a>
+<a href="#402" id="402">402</a>
+<a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
+<a href="#405" id="405">405</a>
+<a href="#406" id="406">406</a>
+<a href="#407" id="407">407</a>
+<a href="#408" id="408">408</a>
+<a href="#409" id="409">409</a>
+<a href="#410" id="410">410</a>
+<a href="#411" id="411">411</a>
+<a href="#412" id="412">412</a>
+<a href="#413" id="413">413</a>
+<a href="#414" id="414">414</a>
+<a href="#415" id="415">415</a>
+<a href="#416" id="416">416</a>
+<a href="#417" id="417">417</a>
+<a href="#418" id="418">418</a>
+<a href="#419" id="419">419</a>
+<a href="#420" id="420">420</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
@@ -402,6 +430,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx};
 <span class="kw">use crate</span>::{
     get_mut_group,
+    models::LayerCaches,
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
     ChatCompletionResponse, ChatCompletionUsage,
@@ -435,6 +464,7 @@
     RunningCompletion,
     Waiting,
     Error,
+    RunningPrefillPrompt,
 }
 
 <span class="attr">#[derive(Clone)]
@@ -456,11 +486,12 @@
     responder: Sender&lt;Response&gt;,
     response_index: usize,
     creation_time: u64,
+    prefill_prompt_toks: <span class="prelude-ty">Option</span>&lt;Vec&lt;u32&gt;&gt;,
 
     <span class="comment">// Cache
     </span>scaling_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
-    cache: Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt;,
-    xlora_cache: <span class="prelude-ty">Option</span>&lt;Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt;&gt;,
+    cache: LayerCaches,
+    xlora_cache: <span class="prelude-ty">Option</span>&lt;LayerCaches&gt;,
 
     <span class="comment">// Mutables
     </span>tokens: Vec&lt;u32&gt;,
@@ -525,8 +556,28 @@
             response_index,
             creation_time,
             recognizer,
+            prefill_prompt_toks: <span class="prelude-val">None</span>,
         }
     }
+
+    <span class="kw">pub fn </span>prefill(<span class="kw-2">mut </span><span class="self">self</span>, cache: LayerCaches) -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span>now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect(<span class="string">"Time travel has occurred!"</span>)
+            .as_millis();
+        <span class="self">self</span>.prompt_timestamp = <span class="prelude-val">Some</span>(now);
+
+        <span class="self">self</span>.cache = cache;
+        <span class="self">self</span>.set_state(SequenceState::RunningCompletion);
+        <span class="self">self
+    </span>}
+
+    <span class="kw">pub fn </span>prefill_subset(<span class="kw-2">mut </span><span class="self">self</span>, cache: LayerCaches, toks: Vec&lt;u32&gt;) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.cache = cache;
+        <span class="self">self</span>.prefill_prompt_toks = <span class="prelude-val">Some</span>(toks);
+        <span class="self">self</span>.set_state(SequenceState::RunningPrefillPrompt);
+        <span class="self">self
+    </span>}
 
     <span class="kw">pub fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="self">self</span>.tokens.len()
@@ -539,6 +590,7 @@
     <span class="kw">pub fn </span>is_running(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="self">self</span>.state.get() == SequenceState::RunningCompletion
             || <span class="self">self</span>.state.get() == SequenceState::RunningPrompt
+            || <span class="self">self</span>.state.get() == SequenceState::RunningPrefillPrompt
     }
 
     <span class="kw">pub fn </span>is_completion(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
@@ -547,6 +599,7 @@
 
     <span class="kw">pub fn </span>is_prompt(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="self">self</span>.state.get() == SequenceState::RunningPrompt
+            || <span class="self">self</span>.state.get() == SequenceState::RunningPrefillPrompt
     }
 
     <span class="kw">pub fn </span>is_waiting(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
@@ -554,6 +607,9 @@
     }
 
     <span class="kw">pub fn </span>get_toks(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[u32] {
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(toks) = <span class="kw-2">&amp;</span><span class="self">self</span>.prefill_prompt_toks {
+            <span class="kw">return </span>toks;
+        }
         <span class="kw-2">&amp;</span><span class="self">self</span>.tokens
     }
 

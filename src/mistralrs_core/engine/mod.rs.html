@@ -514,6 +514,32 @@
 <a href="#512" id="512">512</a>
 <a href="#513" id="513">513</a>
 <a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
+<a href="#519" id="519">519</a>
+<a href="#520" id="520">520</a>
+<a href="#521" id="521">521</a>
+<a href="#522" id="522">522</a>
+<a href="#523" id="523">523</a>
+<a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -531,6 +557,7 @@
 <span class="kw">use crate</span>::{
     get_mut_arcmutex, handle_pipeline_forward_error, handle_seq_error, handle_seq_error_stateaware,
     pipeline::Pipeline,
+    prefix_cacher::{MatchingCache, PrefixCacheManager},
     request::Request,
     response::{
         ChatCompletionResponse, Choice, ChunkChoice, Delta, Logprobs, Response, ResponseLogprob,
@@ -551,6 +578,7 @@
     id: usize,
     truncate_sequence: bool,
     no_kv_cache: bool,
+    prefix_cacher: PrefixCacheManager,
 }
 
 <span class="kw">impl </span>Engine {
@@ -561,6 +589,7 @@
         truncate_sequence: bool,
         no_kv_cache: bool,
     ) -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span>device = <span class="macro">get_mut_arcmutex!</span>(pipeline).device().clone();
         <span class="self">Self </span>{
             rx,
             pipeline,
@@ -568,7 +597,8 @@
             id: <span class="number">0</span>,
             truncate_sequence,
             no_kv_cache,
-        }
+            prefix_cacher: PrefixCacheManager::new(device, <span class="number">1</span>), <span class="comment">// TODO(EricLBuehler): not have this hardcoded
+        </span>}
     }
 
     <span class="kw">pub fn </span>run(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
@@ -624,6 +654,16 @@
                     seq.prompt_tok_per_sec = prompt_tok_per_sec * <span class="number">1000.</span>;
                     seq.prompt_timestamp = <span class="prelude-val">Some</span>(now);
                 }
+
+                <span class="kw">for </span>seq <span class="kw">in </span>scheduled
+                    .prompt
+                    .iter_mut()
+                    .take(<span class="self">self</span>.prefix_cacher.n_on_device)
+                {
+                    <span class="self">self</span>.prefix_cacher.add_sequence(seq);
+                }
+                <span class="comment">// Evict all the other seqs
+                </span><span class="macro">handle_pipeline_forward_error!</span>(<span class="string">"evict"</span>, <span class="self">self</span>.prefix_cacher.evict_to_cpu(), <span class="kw-2">&amp;mut </span>scheduled.prompt, pipeline, <span class="lifetime">'lp</span>);
 
                 <span class="kw">let </span>before_sample = Instant::now();
                 <span class="self">Self</span>::sample_seqs(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.prompt, logits);
@@ -940,6 +980,10 @@
                 <span class="macro">warn!</span>(<span class="string">"Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation."</span>, request.id, currently_over, prompt_len - prompt.len());
             }
         }
+        <span class="kw">let </span>prefill_cache = <span class="macro">handle_seq_error!</span>(
+            <span class="self">self</span>.prefix_cacher.search_for_matching_cache(<span class="kw-2">&amp;</span>prompt),
+            request.response
+        );
 
         <span class="kw">let </span>topk = request
             .sampling_params
@@ -1023,6 +1067,14 @@
                 now.as_secs(),
                 recognizer.clone(),
             );
+            <span class="kw">let </span>seq = <span class="kw">if let </span><span class="prelude-val">Some</span>(prefill_cache) = prefill_cache.clone() {
+                <span class="kw">match </span>prefill_cache {
+                    MatchingCache::Verbatim(cache) =&gt; seq.prefill(cache),
+                    MatchingCache::Subset(cache, toks) =&gt; seq.prefill_subset(cache, toks),
+                }
+            } <span class="kw">else </span>{
+                seq
+            };
             <span class="self">self</span>.id += <span class="number">1</span>;
             <span class="self">self</span>.scheduler.add_seq(seq);
         }
