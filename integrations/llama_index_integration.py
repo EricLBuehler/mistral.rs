@@ -53,6 +53,7 @@ DEFAULT_TOP_LOGPROBS = 10
 DEFAULT_REPEAT_LAST_N = 64
 DEFAULT_MAX_SEQS = 10
 
+
 class MistralRS(CustomLLM):
     r"""MistralRS LLM.
 
@@ -188,7 +189,7 @@ class MistralRS(CustomLLM):
         if len(splits) == 1:
             model = splits[0]
         elif len(splits) == 2 and is_xlora:
-            model = splits[1] 
+            model = splits[1]
         elif len(splits) == 2 and not is_xlora and (is_ggml or is_gguf):
             model = splits[0]
         elif len(splits) == 2 and is_xlora and (is_ggml or is_gguf):
@@ -215,7 +216,9 @@ class MistralRS(CustomLLM):
                     model_id,
                     no_kv_cache=model_kwargs.get("no_kv_cache", False),
                     use_flash_attn=True,  # will be disabled by &
-                    repeat_last_n=model_kwargs.get("repeat_last_n", DEFAULT_REPEAT_LAST_N),
+                    repeat_last_n=model_kwargs.get(
+                        "repeat_last_n", DEFAULT_REPEAT_LAST_N
+                    ),
                     gqa=model_kwargs.get("gqa", None),
                     chat_template=model_kwargs.get("chat_template", None),
                     tokenizer_json=model_kwargs.get("tokenizer_json", None),
@@ -227,7 +230,9 @@ class MistralRS(CustomLLM):
                     is_gguf=True,
                     no_kv_cache=model_kwargs.get("no_kv_cache", False),
                     use_flash_attn=True,  # will be disabled by &
-                    repeat_last_n=model_kwargs.get("repeat_last_n", DEFAULT_REPEAT_LAST_N),
+                    repeat_last_n=model_kwargs.get(
+                        "repeat_last_n", DEFAULT_REPEAT_LAST_N
+                    ),
                     gqa=model_kwargs.get("gqa", None),
                     quantized_model_id=quantized_model_id,
                     quantized_filename=quantized_filename,
@@ -241,7 +246,9 @@ class MistralRS(CustomLLM):
                     is_gguf=False,
                     no_kv_cache=model_kwargs.get("no_kv_cache", False),
                     use_flash_attn=True,  # will be disabled by &
-                    repeat_last_n=model_kwargs.get("repeat_last_n", DEFAULT_REPEAT_LAST_N),
+                    repeat_last_n=model_kwargs.get(
+                        "repeat_last_n", DEFAULT_REPEAT_LAST_N
+                    ),
                     gqa=model_kwargs.get("gqa", None),
                     quantized_model_id=quantized_model_id,
                     quantized_filename=quantized_filename,
@@ -254,7 +261,9 @@ class MistralRS(CustomLLM):
                     model_id,
                     no_kv_cache=model_kwargs.get("no_kv_cache", False),
                     use_flash_attn=True,  # will be disabled by &
-                    repeat_last_n=model_kwargs.get("repeat_last_n", DEFAULT_REPEAT_LAST_N),
+                    repeat_last_n=model_kwargs.get(
+                        "repeat_last_n", DEFAULT_REPEAT_LAST_N
+                    ),
                     gqa=model_kwargs.get("gqa", None),
                     order_file=xlora_order_file,
                     xlora_model_id=xlora_model_id,
@@ -299,7 +308,9 @@ class MistralRS(CustomLLM):
                 )
 
         self._runner = loader.load(
-            token_source=model_kwargs.get("token_source", {"source": "cache"})["source"], # default source is "cache"
+            token_source=model_kwargs.get("token_source", {"source": "cache"})[
+                "source"
+            ],  # default source is "cache"
             max_seqs=model_kwargs.get("max_seqs", DEFAULT_MAX_SEQS),
             logfile=None,
             revision=model_kwargs.get("revision", None),

@@ -84,6 +84,12 @@ pub struct ChatTemplate {
     use_default_system_prompt: Option<bool>,
 }
 
+impl ChatTemplate {
+    pub fn has_chat_template(&self) -> bool {
+        self.chat_template.is_some()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum TokenSource {
     Literal(String),
@@ -701,12 +707,11 @@ macro_rules! deserialize_chat_template {
                         }
                     },
                     None => {
-                        info!("No specified chat template, loading default chat template at `./default.json`.");
+                        info!("No specified chat template. No chat template will be used. Only prompts will be accepted, not messages.");
                         deser.insert(
                             "chat_template".to_string(),
-                            Value::String(fs::read_to_string("./default.json")?),
+                            Value::Null,
                         );
-                        info!("Default chat template loaded.");
                     }
                 };
                 let ser = serde_json::to_string_pretty(&deser).unwrap();

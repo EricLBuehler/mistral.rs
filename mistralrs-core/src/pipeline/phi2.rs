@@ -340,8 +340,10 @@ impl Loader for Phi2Loader {
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
 
         let mut chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
-        chat_template.chat_template = Some("{% for message in messages %}{% if message['role'] == 'system' %}{raise_exception('System prompt not supported')}{% endif %}{% if message['role'] == 'user' %}{{ 'Instruct: '+message['content'] + '\n' }}{% endif %}{% if message['role'] == 'assistant' %}{{ 'Output: '+message['content'] + '\n' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ 'Output:' }}{% endif %}".to_string());
-        warn!("The chat template for Phi 2 is being used as: `{:?}`. If this is not desired behavior please raise an issue.", &chat_template.chat_template);
+        chat_template.chat_template = chat_template.chat_template.map(|_| "{% for message in messages %}{% if message['role'] == 'system' %}{raise_exception('System prompt not supported')}{% endif %}{% if message['role'] == 'user' %}{{ 'Instruct: '+message['content'] + '\n' }}{% endif %}{% if message['role'] == 'assistant' %}{{ 'Output: '+message['content'] + '\n' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ 'Output:' }}{% endif %}".to_string());
+        if let Some(c) = chat_template.chat_template.as_ref() {
+            warn!("The chat template for Phi 2 is being used as: `{:?}`. If this is not desired behavior please raise an issue.", &c);
+        }
 
         Ok(Box::new(Mutex::new(Phi2Pipeline {
             model,
