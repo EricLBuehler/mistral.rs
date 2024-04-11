@@ -49,7 +49,7 @@ impl futures::Stream for Streamer {
         if self.is_done {
             return Poll::Ready(None);
         }
-        match self.rx.try_recv() {
+        match self.rx.recv() {
             Ok(resp) => match resp {
                 Response::CompletionModelError(msg, _) => {
                     MistralRs::maybe_log_error(
