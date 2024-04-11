@@ -9,6 +9,7 @@ use lrtable::{from_yacc, Action, Minimiser, StIdx, StateTable};
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use std::{cell::RefCell, vec};
+use tracing::debug;
 use vob::{vob, Vob};
 
 type StorageT = u32;
@@ -131,10 +132,10 @@ impl CfgParser {
         };
 
         if false {
-            println!("core\n{}\n\n", sgraph.pp(&grm, true));
+            debug!("core\n{}\n\n", sgraph.pp(&grm, true));
             for pidx in grm.iter_pidxs() {
                 let prod = grm.prod(pidx);
-                println!("{:?} -> {}", prod, prod.len());
+                debug!("{:?} -> {}", prod, prod.len());
             }
         }
 
@@ -187,7 +188,7 @@ impl CfgParser {
             }
         }
 
-        println!("patterns: {:?}", friendly_pattern_names);
+        debug!("patterns: {:?}", friendly_pattern_names);
 
         let mut vobset = VobSet::new();
         // all-zero has to be inserted first
@@ -252,7 +253,7 @@ impl CfgParser {
         // compute viable set of initial tokens
         cfg.byte_states[0].viable = cfg.viable_vobidx(cfg_start);
         if LOG_PARSER {
-            println!(
+            debug!(
                 "initial viable: {:?}",
                 cfg.vobset.resolve(cfg.byte_states[0].viable)
             );
@@ -283,7 +284,7 @@ impl CfgParser {
             let act = self.stable.action(stidx, lexeme);
 
             if LOG_PARSER {
-                println!(
+                debug!(
                     "parse: {:?} {:?} -> {:?}",
                     pstack,
                     self.friendly_token_name(lexeme),
@@ -316,10 +317,10 @@ impl CfgParser {
 
     #[allow(dead_code)]
     fn print_viable(&self, lbl: &str, vob: &Vob) {
-        println!("viable tokens {}:", lbl);
+        debug!("viable tokens {}:", lbl);
         for (idx, b) in vob.iter().enumerate() {
             if b {
-                println!("  {}: {}", idx, self.friendly_pattern_names[idx]);
+                debug!("  {}: {}", idx, self.friendly_pattern_names[idx]);
             }
         }
     }
@@ -348,7 +349,7 @@ impl CfgParser {
             Some((ls, Some(pat_idx))) => ("parse", self.run_parser(pat_idx, &top, ls)),
         };
         if LOG_PARSER {
-            println!(
+            debug!(
                 " -> {} {}",
                 info,
                 if res.is_none() { "error" } else { "ok" }
@@ -375,16 +376,14 @@ impl CfgParser {
             let mut s = self.stats.borrow_mut();
             s.yacc_actions += 1;
         }
-        if LOG_PARSER {
-            println!();
-        }
+
         let pstack = self.pstack_for(top);
         if self.skip_patterns[pat_idx] {
             let stidx = *pstack.last().unwrap();
             let viable = self.viable_vobidx(stidx);
             //self.print_viable("reset", &viable);
             if LOG_PARSER {
-                println!("parse: {:?} skip", pstack);
+                debug!("parse: {:?} skip", pstack);
             }
             // reset viable states - they have been narrowed down to SKIP
             self.mk_byte_state(ls, top.parse_stack_idx, viable)
