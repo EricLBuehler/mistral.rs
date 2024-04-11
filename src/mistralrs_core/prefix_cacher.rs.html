@@ -107,6 +107,9 @@
 <a href="#105" id="105">105</a>
 <a href="#106" id="106">106</a>
 <a href="#107" id="107">107</a>
+<a href="#108" id="108">108</a>
+<a href="#109" id="109">109</a>
+<a href="#110" id="110">110</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>indexmap::IndexMap;
 
@@ -146,7 +149,10 @@
     /// the maximum allowed. Returns the number of evicted sequences.
     </span><span class="kw">pub fn </span>evict_to_cpu(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="comment">// Intentionally evict the first ones first, as they are the oldest
-        </span><span class="kw">for </span>(ids, cache) <span class="kw">in </span><span class="self">self</span>.caches.drain(<span class="number">0</span>..<span class="self">self</span>.caches.len() - <span class="self">self</span>.n_on_device) {
+        </span><span class="kw">for </span>(ids, cache) <span class="kw">in </span><span class="self">self
+            </span>.caches
+            .drain(<span class="number">0</span>..<span class="self">self</span>.caches.len().saturating_sub(<span class="self">self</span>.n_on_device))
+        {
             <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
             <span class="kw">for </span>layer <span class="kw">in </span>cache {
                 <span class="kw">if let </span><span class="prelude-val">Some</span>((<span class="kw-2">ref </span>q, <span class="kw-2">ref </span>k)) = layer {
