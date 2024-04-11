@@ -86,6 +86,8 @@ impl NormalLoader {
     ///
     /// - `max_seqs=16`: Maximum running sequences at any time.
     ///
+    /// - `prefix_cache_n=16`: Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
+    ///
     /// - `truncate_sequence=False`:
     /// If a sequence is larger than the maximum model length, truncate the number
     /// of tokens such that the sequence will fit at most the maximum length.
@@ -98,12 +100,13 @@ impl NormalLoader {
     /// - `token_source_value=None`: Value of token source value for `token_source`
     ///
     /// - `dtype=None`: Datatype to load the model into, only applicable for non-quantized models.
-    #[pyo3(signature = (token_source = "cache", max_seqs = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None, dtype = None))]
+    #[pyo3(signature = (token_source = "cache", max_seqs = 16, prefix_cache_n = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None, dtype = None))]
     #[allow(clippy::too_many_arguments)]
     fn load(
         &mut self,
         token_source: &str,
         max_seqs: usize,
+        prefix_cache_n: usize,
         truncate_sequence: bool,
         logfile: Option<String>,
         revision: Option<String>,
@@ -114,6 +117,7 @@ impl NormalLoader {
             let elems: &[Py<PyAny>] = &[
                 token_source.into_py(py),
                 max_seqs.into_py(py),
+                prefix_cache_n.into_py(py),
                 truncate_sequence.into_py(py),
                 logfile.into_py(py),
                 revision.into_py(py),
@@ -212,6 +216,8 @@ impl XLoraLoader {
     ///
     /// - `max_seqs=16`: Maximum running sequences at any time.
     ///
+    /// - `prefix_cache_n=16`: Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
+    ///
     /// - `truncate_sequence=False`:
     /// If a sequence is larger than the maximum model length, truncate the number
     /// of tokens such that the sequence will fit at most the maximum length.
@@ -224,12 +230,13 @@ impl XLoraLoader {
     /// - `token_source_value=None`: Value of token source value for `token_source`
     ///
     /// - `dtype=None`: Datatype to load the model into, only applicable for non-quantized models.
-    #[pyo3(signature = (token_source = "cache", max_seqs = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None, dtype = None))]
+    #[pyo3(signature = (token_source = "cache", max_seqs = 16, prefix_cache_n = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None, dtype = None))]
     #[allow(clippy::too_many_arguments)]
     fn load(
         &mut self,
         token_source: &str,
         max_seqs: usize,
+        prefix_cache_n: usize,
         truncate_sequence: bool,
         logfile: Option<String>,
         revision: Option<String>,
@@ -240,6 +247,7 @@ impl XLoraLoader {
             let elems: &[Py<PyAny>] = &[
                 token_source.into_py(py),
                 max_seqs.into_py(py),
+                prefix_cache_n.into_py(py),
                 truncate_sequence.into_py(py),
                 logfile.into_py(py),
                 revision.into_py(py),
@@ -341,6 +349,8 @@ impl QuantizedLoader {
     ///
     /// - `max_seqs=16`: Maximum running sequences at any time.
     ///
+    /// - `prefix_cache_n=16`: Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
+    ///
     /// - `truncate_sequence=False`:
     /// If a sequence is larger than the maximum model length, truncate the number
     /// of tokens such that the sequence will fit at most the maximum length.
@@ -353,12 +363,13 @@ impl QuantizedLoader {
     /// - `token_source_value=None`: Value of token source value for `token_source`
     ///
     /// - `dtype=None`: Datatype to load the model into, only applicable for non-quantized models.
-    #[pyo3(signature = (token_source = "cache", max_seqs = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None, dtype = None))]
+    #[pyo3(signature = (token_source = "cache", max_seqs = 16, prefix_cache_n = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None, dtype = None))]
     #[allow(clippy::too_many_arguments)]
     fn load(
         &mut self,
         token_source: &str,
         max_seqs: usize,
+        prefix_cache_n: usize,
         truncate_sequence: bool,
         logfile: Option<String>,
         revision: Option<String>,
@@ -369,6 +380,7 @@ impl QuantizedLoader {
             let elems: &[Py<PyAny>] = &[
                 token_source.into_py(py),
                 max_seqs.into_py(py),
+                prefix_cache_n.into_py(py),
                 truncate_sequence.into_py(py),
                 logfile.into_py(py),
                 revision.into_py(py),
@@ -479,6 +491,8 @@ impl XLoraQuantizedLoader {
     ///
     /// - `max_seqs=16`: Maximum running sequences at any time.
     ///
+    /// - `prefix_cache_n=16`: Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
+    ///
     /// - `truncate_sequence=False`:
     /// If a sequence is larger than the maximum model length, truncate the number
     /// of tokens such that the sequence will fit at most the maximum length.
@@ -491,12 +505,13 @@ impl XLoraQuantizedLoader {
     /// - `token_source_value=None`: Value of token source value for `token_source`
     ///
     /// - `dtype=None`: Datatype to load the model into, only applicable for non-quantized models.
-    #[pyo3(signature = (token_source = "cache", max_seqs = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None, dtype = None))]
+    #[pyo3(signature = (token_source = "cache", max_seqs = 16, prefix_cache_n = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None, dtype = None))]
     #[allow(clippy::too_many_arguments)]
     fn load(
         &mut self,
         token_source: &str,
         max_seqs: usize,
+        prefix_cache_n: usize,
         truncate_sequence: bool,
         logfile: Option<String>,
         revision: Option<String>,
@@ -507,6 +522,7 @@ impl XLoraQuantizedLoader {
             let elems: &[Py<PyAny>] = &[
                 token_source.into_py(py),
                 max_seqs.into_py(py),
+                prefix_cache_n.into_py(py),
                 truncate_sequence.into_py(py),
                 logfile.into_py(py),
                 revision.into_py(py),
