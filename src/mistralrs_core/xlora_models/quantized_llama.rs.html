@@ -861,10 +861,6 @@
 <a href="#859" id="859">859</a>
 <a href="#860" id="860">860</a>
 <a href="#861" id="861">861</a>
-<a href="#862" id="862">862</a>
-<a href="#863" id="863">863</a>
-<a href="#864" id="864">864</a>
-<a href="#865" id="865">865</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -1135,11 +1131,7 @@
             <span class="prelude-val">Ok</span>(x)
         } <span class="kw">else </span>{
             <span class="kw">let </span>(b_sz, n_kv_head, seq_len, head_dim) = x.dims4()<span class="question-mark">?</span>;
-            <span class="kw">let </span>x = x
-                .unsqueeze(<span class="number">2</span>)<span class="question-mark">?
-                </span>.expand((b_sz, n_kv_head, n_rep, seq_len, head_dim))<span class="question-mark">?
-                </span>.reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))<span class="question-mark">?</span>;
-            <span class="prelude-val">Ok</span>(x)
+            Tensor::cat(<span class="kw-2">&amp;</span><span class="macro">vec!</span>[<span class="kw-2">&amp;</span>x; n_rep], <span class="number">2</span>)<span class="question-mark">?</span>.reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))
         }
     }
 }
