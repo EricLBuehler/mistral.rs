@@ -791,6 +791,11 @@
 <a href="#789" id="789">789</a>
 <a href="#790" id="790">790</a>
 <a href="#791" id="791">791</a>
+<a href="#792" id="792">792</a>
+<a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a>
+<a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -875,6 +880,12 @@
     <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)]
     </span>unk_token: Either&lt;String, AddedTokensDecoder&gt;,
     use_default_system_prompt: <span class="prelude-ty">Option</span>&lt;bool&gt;,
+}
+
+<span class="kw">impl </span>ChatTemplate {
+    <span class="kw">pub fn </span>has_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="self">self</span>.chat_template.is_some()
+    }
 }
 
 <span class="attr">#[derive(Debug, Clone)]
@@ -1494,12 +1505,11 @@
                         }
                     },
                     <span class="prelude-val">None </span>=&gt; {
-                        <span class="macro">info!</span>(<span class="string">"No specified chat template, loading default chat template at `./default.json`."</span>);
+                        <span class="macro">info!</span>(<span class="string">"No specified chat template. No chat template will be used. Only prompts will be accepted, not messages."</span>);
                         deser.insert(
                             <span class="string">"chat_template"</span>.to_string(),
-                            Value::String(fs::read_to_string(<span class="string">"./default.json"</span>)<span class="question-mark">?</span>),
+                            Value::Null,
                         );
-                        <span class="macro">info!</span>(<span class="string">"Default chat template loaded."</span>);
                     }
                 };
                 <span class="kw">let </span>ser = serde_json::to_string_pretty(<span class="kw-2">&amp;</span>deser).unwrap();
