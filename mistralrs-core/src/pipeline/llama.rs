@@ -2,6 +2,7 @@ use super::{
     calculate_inputs, get_model_paths, get_xlora_paths, ChatTemplate, Loader, ModelInputs,
     ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
 };
+use crate::aici::toktree::TokTrie;
 use crate::deserialize_chat_template;
 use crate::models::llama::MAX_SEQ_LEN;
 use crate::models::Cache;
@@ -13,7 +14,6 @@ use crate::{
     sequence::Sequence,
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
 };
-use crate::aici::toktree::TokTrie;
 use anyhow::Result;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Tensor};
