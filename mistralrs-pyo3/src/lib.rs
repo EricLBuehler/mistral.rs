@@ -100,6 +100,27 @@ impl Runner {
                 .stop_token_ids
                 .as_ref()
                 .map(|x| StopTokens::Ids(x.to_vec()));
+            let constraint = if request.grammar_type == Some("regex".to_string()) {
+                if request.grammar.is_none() {
+                    return Err(PyValueError::new_err(
+                        "Grammar type is specified but not grammar text",
+                    ));
+                }
+                Constraint::Regex(request.grammar.as_ref().unwrap().clone())
+            } else if request.grammar_type == Some("yacc".to_string()) {
+                if request.grammar.is_none() {
+                    return Err(PyValueError::new_err(
+                        "Grammar type is specified but not grammar text",
+                    ));
+                }
+                Constraint::Yacc(request.grammar.as_ref().unwrap().clone())
+            } else if request.grammar_type.is_some() {
+                return Err(PyValueError::new_err(
+                    "Grammar type is specified but is not `regex` or `yacc`",
+                ));
+            } else {
+                Constraint::None
+            };
             let model_request = _Request {
                 id: {
                     let l = NEXT_REQUEST_ID.lock().unwrap();
@@ -124,7 +145,7 @@ impl Runner {
                 response: tx,
                 return_logprobs: request.logprobs,
                 is_streaming: request.stream,
-                constraint: Constraint::None,
+                constraint,
             };
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -165,12 +186,14 @@ struct ChatCompletionRequest {
     top_p: Option<f64>,
     stream: bool,
     top_k: Option<usize>,
+    grammar: Option<String>,
+    grammar_type: Option<String>,
 }
 
 #[pymethods]
 impl ChatCompletionRequest {
     #[new]
-    #[pyo3(signature = (messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, repetition_penalty = None, stop_token_ids = None, temperature = None, top_p = None, top_k = None, stream=false))]
+    #[pyo3(signature = (messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, repetition_penalty = None, stop_token_ids = None, temperature = None, top_p = None, top_k = None, stream=false, grammar = None, grammar_type = None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         messages: Py<PyAny>,
@@ -187,6 +210,8 @@ impl ChatCompletionRequest {
         top_p: Option<f64>,
         top_k: Option<usize>,
         stream: Option<bool>,
+        grammar: Option<String>,
+        grammar_type: Option<String>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -234,6 +259,8 @@ impl ChatCompletionRequest {
             top_p,
             top_k,
             stream: stream.unwrap_or(false),
+            grammar,
+            grammar_type,
         })
     }
 }
