@@ -3,7 +3,7 @@ import openai
 openai.api_key = "EMPTY"
 
 openai.base_url = "http://localhost:1234/v1/"
-# """
+
 messages = []
 prompt = input("Enter system prompt >>> ")
 if len(prompt) > 0:
