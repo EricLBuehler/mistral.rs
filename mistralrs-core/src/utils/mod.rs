@@ -66,8 +66,7 @@ macro_rules! handle_pipeline_forward_error {
                         Err(_) => "".to_string(),
                     };
 
-                    let group = seq.get_mut_group();
-                    if group.is_chat {
+                    if seq.get_mut_group().is_chat {
                         let choice = Choice {
                             stopreason: "error".to_string(),
                             index: seq.get_response_index(),

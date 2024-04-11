@@ -235,8 +235,7 @@ impl Engine {
             seq.responder()
         );
 
-        let group = seq.get_mut_group();
-        if group.is_chat {
+        if seq.get_mut_group().is_chat {
             let choice = Choice {
                 stopreason: reason.to_string(),
                 index: seq.get_response_index(),
@@ -257,6 +256,7 @@ impl Engine {
             seq.add_completion_choice_to_group(choice);
         }
 
+        let group = seq.get_mut_group();
         if group.is_chat {
             group.maybe_send_done_response(
                 ChatCompletionResponse {
