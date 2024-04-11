@@ -134,7 +134,7 @@ pub struct ChatCompletionResponse {
     pub model: &'static str,
     pub system_fingerprint: String,
     pub object: String,
-    pub usage: ChatCompletionUsage,
+    pub usage: Usage,
 }
 ```
 
@@ -186,9 +186,9 @@ pub struct TopLogprob {
 }
 ```
 
-### `ChatCompletionUsage`
+### `Usage`
 ```rust
-pub struct ChatCompletionUsage {
+pub struct Usage {
     pub completion_tokens: usize,
     pub prompt_tokens: usize,
     pub total_tokens: usize,

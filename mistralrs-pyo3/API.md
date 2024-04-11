@@ -95,13 +95,13 @@ Request is a class with a constructor which accepts the following arguments. It 
 - `max_tokens: usize | None`
 - `n_choices: usize`
 - `presence_penalty: float | None`
-- `repetition_penalty: float | None`
+- `frequency_penalty: float | None`
 - `stop_token_ids: list[int] | None`
 - `temperature: float | None`
 - `top_p: float | None`
 - `top_k: usize | None`
 
-`ChatCompletionRequest(messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, repetition_penalty = None, stop_token_ids = None, temperature = None, top_p = None, top_k = None)`
+`ChatCompletionRequest(messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, frequency_penalty = None, stop_token_ids = None, temperature = None, top_p = None, top_k = None)`
 
 ## `ModelKind`
 - Normal

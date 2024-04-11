@@ -29,7 +29,7 @@ fn default_1usize() -> usize {
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 #[serde(tag = "type", content = "value")]
-pub enum ChatCompletionGrammar {
+pub enum Grammar {
     #[serde(rename = "regex")]
     Regex(String),
     #[serde(rename = "yacc")]
@@ -58,9 +58,8 @@ pub struct ChatCompletionRequest {
     pub n_choices: usize,
     #[schema(example = json!(Option::None::<f32>))]
     pub presence_penalty: Option<f32>,
-    #[serde(rename = "frequency_penalty")]
     #[schema(example = json!(Option::None::<f32>))]
-    pub repetition_penalty: Option<f32>,
+    pub frequency_penalty: Option<f32>,
     #[serde(rename = "stop")]
     #[schema(example = json!(Option::None::<StopTokens>))]
     pub stop_seqs: Option<StopTokens>,
@@ -75,8 +74,8 @@ pub struct ChatCompletionRequest {
     #[schema(example = json!(Option::None::<usize>))]
     pub top_k: Option<usize>,
 
-    #[schema(example = json!(Option::None::<ChatCompletionGrammar>))]
-    pub grammar: Option<ChatCompletionGrammar>,
+    #[schema(example = json!(Option::None::<Grammar>))]
+    pub grammar: Option<Grammar>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -91,4 +90,53 @@ pub struct ModelObject {
 pub struct ModelObjects {
     pub object: &'static str,
     pub data: Vec<ModelObject>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct CompletionRequest {
+    #[schema(example = "mistral")]
+    pub model: String,
+    #[schema(example = "Say this is a test.")]
+    pub prompt: String,
+    #[serde(default = "default_1usize")]
+    #[schema(example = 1)]
+    pub best_of: usize,
+    #[serde(rename = "echo")]
+    #[serde(default = "default_false")]
+    #[schema(example = false)]
+    pub echo_prompt: bool,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub presence_penalty: Option<f32>,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub frequency_penalty: Option<f32>,
+    #[schema(example = json!(Option::None::<HashMap<u32, f32>>))]
+    pub logit_bias: Option<HashMap<u32, f32>>,
+    #[schema(example = json!(Option::None::<usize>))]
+    pub logprobs: Option<usize>,
+    #[schema(example = 16)]
+    pub max_tokens: Option<usize>,
+    #[serde(rename = "n")]
+    #[serde(default = "default_1usize")]
+    #[schema(example = 1)]
+    pub n_choices: usize,
+    #[serde(rename = "stop")]
+    #[schema(example = json!(Option::None::<StopTokens>))]
+    pub stop_seqs: Option<StopTokens>,
+    #[schema(example = true)]
+    pub stream: Option<bool>,
+    #[schema(example = 0.7)]
+    pub temperature: Option<f64>,
+    #[schema(example = json!(Option::None::<f64>))]
+    pub top_p: Option<f64>,
+    #[schema(example = json!(Option::None::<String>))]
+    pub suffix: Option<String>,
+    #[serde(rename = "user")]
+    pub _user: Option<String>,
+
+    // mistral.rs additional
+    #[schema(example = json!(Option::None::<usize>))]
+    pub top_k: Option<usize>,
+
+    #[schema(example = json!(Option::None::<Grammar>))]
+    pub grammar: Option<Grammar>,
 }

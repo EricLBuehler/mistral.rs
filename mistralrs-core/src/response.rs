@@ -50,7 +50,7 @@ pub struct ChunkChoice {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ChatCompletionUsage {
+pub struct Usage {
     pub completion_tokens: usize,
     pub prompt_tokens: usize,
     pub total_tokens: usize,
@@ -72,7 +72,7 @@ pub struct ChatCompletionResponse {
     pub model: String,
     pub system_fingerprint: String,
     pub object: String,
-    pub usage: ChatCompletionUsage,
+    pub usage: Usage,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,10 +85,54 @@ pub struct ChatCompletionChunkResponse {
     pub object: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct CompletionResponseLogprob {
+    pub token: String,
+    pub logprob: f32,
+    pub bytes: Vec<u8>,
+    pub top_logprobs: Vec<TopLogprob>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CompletionLogprobs {
+    pub content: Option<Vec<ResponseLogprob>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CompletionChoice {
+    #[serde(rename = "finish_reason")]
+    pub stopreason: String,
+    pub index: usize,
+    pub text: String,
+    pub logprobs: Option<CompletionLogprobs>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CompletionResponse {
+    pub id: String,
+    pub choices: Vec<CompletionChoice>,
+    pub created: u64,
+    pub model: String,
+    pub system_fingerprint: String,
+    pub object: String,
+    pub usage: Usage,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CompletionChunkResponse {
+    pub data: String,
+    pub done: bool,
+}
+
 pub enum Response {
     InternalError(Box<dyn Error + Send + Sync>),
     ValidationError(Box<dyn Error + Send + Sync>),
+    // Chat specific
     ModelError(String, ChatCompletionResponse),
     Done(ChatCompletionResponse),
     Chunk(ChatCompletionChunkResponse),
+    // Completion specific
+    CompletionModelError(String, CompletionResponse),
+    CompletionDone(CompletionResponse),
+    CompletionChunk(CompletionChunkResponse),
 }

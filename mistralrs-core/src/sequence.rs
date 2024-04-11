@@ -11,7 +11,7 @@ use crate::{
     models::LayerCaches,
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
-    ChatCompletionResponse, ChatCompletionUsage,
+    ChatCompletionResponse, Usage,
 };
 use candle_core::Tensor;
 use regex_automata::util::primitives::StateID;
@@ -370,9 +370,9 @@ impl SequenceGroup {
         &self.choices
     }
 
-    pub fn get_usage(&self) -> ChatCompletionUsage {
+    pub fn get_usage(&self) -> Usage {
         #[allow(clippy::cast_precision_loss)]
-        ChatCompletionUsage {
+        Usage {
             completion_tokens: self.total_toks - self.total_prompt_toks,
             prompt_tokens: self.total_prompt_toks,
             total_tokens: self.total_toks,

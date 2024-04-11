@@ -9,7 +9,7 @@ use std::{
 };
 
 use ::mistralrs::{
-    Constraint, MistralRs, Request as _Request, Response, SamplingParams, StopTokens,
+    Constraint, MistralRs, Request as _Request, RequestType, Response, SamplingParams, StopTokens,
 };
 use candle_core::Device;
 use loaders::{
@@ -135,7 +135,7 @@ impl Runner {
                     top_k: request.top_k,
                     top_p: request.top_p,
                     top_n_logprobs: request.top_logprobs.unwrap_or(1),
-                    frequency_penalty: request.repetition_penalty,
+                    frequency_penalty: request.frequency_penalty,
                     presence_penalty: request.presence_penalty,
                     max_len: request.max_tokens,
                     stop_toks,
@@ -146,6 +146,7 @@ impl Runner {
                 return_logprobs: request.logprobs,
                 is_streaming: request.stream,
                 constraint,
+                request_type: RequestType::Chat,
             };
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -161,8 +162,11 @@ impl Runner {
                     MistralRs::maybe_log_response(self.runner.clone(), &response);
                     Ok(serde_json::to_string(&response).unwrap())
                 }
-                Response::Chunk(_) => unreachable!(),
                 Response::ModelError(msg, _) => Err(PyValueError::new_err(msg.to_string())),
+                Response::Chunk(_) => unreachable!(),
+                Response::CompletionChunk(_) => unreachable!(),
+                Response::CompletionDone(_) => unreachable!(),
+                Response::CompletionModelError(_, _) => unreachable!(),
             }
         })
     }
@@ -180,7 +184,7 @@ struct ChatCompletionRequest {
     max_tokens: Option<usize>,
     n_choices: usize,
     presence_penalty: Option<f32>,
-    repetition_penalty: Option<f32>,
+    frequency_penalty: Option<f32>,
     stop_token_ids: Option<Vec<u32>>,
     temperature: Option<f64>,
     top_p: Option<f64>,
@@ -193,7 +197,7 @@ struct ChatCompletionRequest {
 #[pymethods]
 impl ChatCompletionRequest {
     #[new]
-    #[pyo3(signature = (messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, repetition_penalty = None, stop_token_ids = None, temperature = None, top_p = None, top_k = None, stream=false, grammar = None, grammar_type = None))]
+    #[pyo3(signature = (messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, frequency_penalty = None, stop_token_ids = None, temperature = None, top_p = None, top_k = None, stream=false, grammar = None, grammar_type = None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         messages: Py<PyAny>,
@@ -204,7 +208,7 @@ impl ChatCompletionRequest {
         top_logprobs: Option<usize>,
         max_tokens: Option<usize>,
         presence_penalty: Option<f32>,
-        repetition_penalty: Option<f32>,
+        frequency_penalty: Option<f32>,
         stop_token_ids: Option<Vec<u32>>,
         temperature: Option<f64>,
         top_p: Option<f64>,
@@ -253,7 +257,7 @@ impl ChatCompletionRequest {
             max_tokens,
             n_choices,
             presence_penalty,
-            repetition_penalty,
+            frequency_penalty,
             stop_token_ids,
             temperature,
             top_p,
