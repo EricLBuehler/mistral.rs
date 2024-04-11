@@ -82,7 +82,7 @@ impl ModelPaths for GemmaModelPaths<PathBuf> {
 pub struct GemmaPipeline {
     model: Model,
     tokenizer: Tokenizer,
-    tok_trie: TokTrie,
+    tok_trie: Arc<TokTrie>,
     config: GemmaSpecificConfig,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
@@ -349,7 +349,7 @@ impl Loader for GemmaLoader {
 
         Ok(Box::new(Mutex::new(GemmaPipeline {
             model,
-            tok_trie: build_tok_trie(tokenizer.clone()),
+            tok_trie: build_tok_trie(tokenizer.clone()).into(),
             tokenizer,
             config: self.config,
             no_kv_cache: self.no_kv_cache,
@@ -467,7 +467,7 @@ impl Pipeline for GemmaPipeline {
     fn get_non_granular_state(&self) -> &Option<NonGranularState> {
         &self.non_granular_state
     }
-    fn tok_trie(&self) -> &TokTrie {
-        &self.tok_trie
+    fn tok_trie(&self) -> Arc<TokTrie> {
+        self.tok_trie.clone()
     }
 }

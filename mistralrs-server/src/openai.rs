@@ -15,8 +15,6 @@ pub struct Message {
 pub enum StopTokens {
     Multi(Vec<String>),
     Single(String),
-    MultiId(Vec<u32>),
-    SingleId(u32),
 }
 
 fn default_false() -> bool {

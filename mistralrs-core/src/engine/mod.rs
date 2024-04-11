@@ -147,7 +147,12 @@ impl Engine {
             let next_token_id = next_token.token;
 
             seq.add_token(next_token.clone());
-            let is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
+            let is_done = seq.is_done(
+                next_token_id,
+                eos_tok,
+                pipeline.get_max_seq_len(),
+                &pipeline.tokenizer(),
+            );
             // Handle streaming requests
             if seq.get_mut_group().is_streaming {
                 let tokenizer = pipeline.tokenizer().clone();
@@ -452,28 +457,48 @@ impl Engine {
         let topp = request.sampling_params.top_p.unwrap_or(1.0);
         let num_hidden_layers = get_mut_arcmutex!(self.pipeline).num_hidden_layers();
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
+        let tok_trie = get_mut_arcmutex!(self.pipeline).tok_trie();
 
-        let stop_toks = match request.sampling_params.stop_toks {
-            None => vec![],
-            Some(StopTokens::Ids(ref i)) => i.clone(),
+        let (stop_toks, stop_strings) = match request.sampling_params.stop_toks {
+            None => (vec![], vec![]),
+            Some(StopTokens::Ids(ref i)) => {
+                for id in i {
+                    // We can't use ` ` (space) as a stop token because other tokens like ` moon` start with a space.
+                    if tok_trie.has_extensions(tok_trie.token(*id)) {
+                        request
+                            .response
+                            .send(Response::ValidationError(
+                                format!("Stop token {:?} is also a prefix of other tokens and cannot be used as a stop token.", tok_trie.token_str(*id)).into(),
+                            ))
+                            .unwrap();
+                        return;
+                    }
+                }
+
+                (i.clone(), vec![])
+            }
             Some(StopTokens::Seqs(ref s)) => {
                 let mut stop_toks = Vec::new();
-                let encoded = tokenizer.encode(s.clone(), false);
-                let toks = handle_seq_error!(encoded, request.response)
-                    .get_ids()
-                    .to_vec();
-                if toks.len() > 1 {
-                    // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                    request
-                        .response
-                        .send(Response::ValidationError(
-                            format!("Stop sequence '{s:?}' encodes to multiple tokens when it should only encode to 1.").into(),
-                        ))
-                        .unwrap();
-                    return;
+                let mut stop_strings: Vec<String> = Vec::new();
+
+                for stop_txt in s {
+                    let encoded = tokenizer.encode(stop_txt.to_string(), false);
+                    let toks = handle_seq_error!(encoded, request.response)
+                        .get_ids()
+                        .to_vec();
+
+                    if toks.len() == 1 {
+                        if tok_trie.has_extensions(tok_trie.token(toks[0])) {
+                            stop_strings.push(stop_txt.clone());
+                        } else {
+                            stop_toks.push(toks[0]);
+                        }
+                    } else {
+                        stop_strings.push(stop_txt.clone());
+                    }
                 }
-                stop_toks.push(toks[0]);
-                stop_toks
+
+                (stop_toks, stop_strings)
             }
         };
 
@@ -518,6 +543,7 @@ impl Engine {
                 request.response.clone(),
                 sampler.clone(),
                 stop_toks.clone(),
+                stop_strings.clone(),
                 request.sampling_params.max_len,
                 request.return_logprobs,
                 get_mut_arcmutex!(self.pipeline).is_xlora(),

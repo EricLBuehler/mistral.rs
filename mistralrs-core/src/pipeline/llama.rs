@@ -84,7 +84,7 @@ impl ModelPaths for LlamaModelPaths<PathBuf> {
 pub struct LlamaPipeline {
     model: Model,
     tokenizer: Tokenizer,
-    tok_trie: TokTrie,
+    tok_trie: Arc<TokTrie>,
     config: LlamaSpecificConfig,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
@@ -447,7 +447,7 @@ impl Loader for LlamaLoader {
 
         Ok(Box::new(Mutex::new(LlamaPipeline {
             model,
-            tok_trie: build_tok_trie(tokenizer.clone()),
+            tok_trie: build_tok_trie(tokenizer.clone()).into(),
             tokenizer,
             config: self.config,
             no_kv_cache: self.no_kv_cache,
@@ -584,7 +584,7 @@ impl Pipeline for LlamaPipeline {
         &self.non_granular_state
     }
 
-    fn tok_trie(&self) -> &TokTrie {
-        &self.tok_trie
+    fn tok_trie(&self) -> Arc<TokTrie> {
+        self.tok_trie.clone()
     }
 }
