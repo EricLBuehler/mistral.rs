@@ -1,7 +1,7 @@
 // Originally from https://github.com/microsoft/aici/blob/64f0b551dee49e320e9b3b92289f3d6f2e888276/aicirt/src/bintokens.rs
 // Licensed under the MIT license
 
-use aici_abi::{bytes::TokRxInfo, toktree::TokTrie};
+use crate::aici::{bytes::TokRxInfo, toktree::TokTrie};
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};

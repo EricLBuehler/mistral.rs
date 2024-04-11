@@ -5,13 +5,13 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx};
 use crate::{
     get_mut_group,
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
     ChatCompletionResponse, ChatCompletionUsage,
 };
-use aici_abi::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx};
 use candle_core::Tensor;
 use regex_automata::util::primitives::StateID;
 use tokenizers::Tokenizer;

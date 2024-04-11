@@ -7,7 +7,7 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use aici_abi::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx};
+use crate::aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx};
 use candle_core::Tensor;
 use either::Either;
 use tracing::warn;

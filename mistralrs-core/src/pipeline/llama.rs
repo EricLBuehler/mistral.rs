@@ -13,7 +13,7 @@ use crate::{
     sequence::Sequence,
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
 };
-use aici_abi::toktree::TokTrie;
+use crate::aici::toktree::TokTrie;
 use anyhow::Result;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Tensor};
@@ -584,7 +584,7 @@ impl Pipeline for LlamaPipeline {
         &self.non_granular_state
     }
 
-    fn tok_trie(&self) -> Arc<aici_abi::toktree::TokTrie> {
+    fn tok_trie(&self) -> Arc<crate::aici::toktree::TokTrie> {
         self.tok_trie.clone()
     }
 }

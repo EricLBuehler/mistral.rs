@@ -17,6 +17,7 @@ use engine::Engine;
 pub use mistralrs_lora::Ordering;
 pub use pipeline::Pipeline;
 
+mod aici;
 mod engine;
 mod models;
 mod pipeline;

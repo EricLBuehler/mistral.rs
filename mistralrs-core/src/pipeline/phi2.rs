@@ -2,6 +2,7 @@ use super::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
 };
+use crate::aici::toktree::TokTrie;
 use crate::deserialize_chat_template;
 use crate::models::Cache;
 use crate::pipeline::ChatTemplate;
@@ -13,7 +14,6 @@ use crate::{
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
     xlora_models::XLoraPhi2,
 };
-use aici_abi::toktree::TokTrie;
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Activation;
@@ -463,7 +463,7 @@ impl Pipeline for Phi2Pipeline {
     fn get_non_granular_state(&self) -> &Option<NonGranularState> {
         &self.non_granular_state
     }
-    fn tok_trie(&self) -> Arc<aici_abi::toktree::TokTrie> {
+    fn tok_trie(&self) -> Arc<crate::aici::toktree::TokTrie> {
         self.tok_trie.clone()
     }
 }
