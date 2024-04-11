@@ -36,10 +36,10 @@ intel-mkl-src = { workspace = true, optional = true }
 tracing.workspace = true
 rand = "0.8.5"
 regex-automata = "0.4.6"
-rustc-hash = { version = "1.1.0" }
-vob = { version = "3.0.3" }
-cfgrammar = { version = "0.13.3" }
-lrtable = { version = "0.13.3" }
+rustc-hash = "1.1.0"
+vob = "3.0.3"
+cfgrammar = "0.13.3"
+lrtable = "0.13.3"
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
