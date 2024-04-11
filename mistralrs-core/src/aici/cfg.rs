@@ -43,15 +43,15 @@ pub struct CfgParser {
 }
 
 fn is_rx(name: &str) -> bool {
-    name.len() > 2 && name.starts_with("/") && name.ends_with("/")
+    name.len() > 2 && name.starts_with('/') && name.ends_with('/')
 }
 
 fn quote_rx(name: &str) -> String {
     name.chars()
         .map(|ch| {
-            if ('0' <= ch && ch <= '9')
-                || ('a' <= ch && ch <= 'z')
-                || ('A' <= ch && ch <= 'Z')
+            if ch.is_ascii_digit()
+                || ch.is_ascii_lowercase()
+                || ch.is_ascii_uppercase()
                 || '<' == ch
                 || '>' == ch
             {
@@ -174,7 +174,7 @@ impl CfgParser {
             for pidx in grm.rule_to_prods(ridx) {
                 let toks = grm.prod(*pidx);
                 if let [Symbol::Token(tidx)] = toks {
-                    let idx = *tidx_to_pat_idx.get(&tidx).unwrap();
+                    let idx = *tidx_to_pat_idx.get(tidx).unwrap();
                     // this doesn't seem very useful
                     // friendly_pattern_names[idx] = rname.to_string();
                     if rname == "SKIP" {
@@ -469,10 +469,7 @@ impl Recognizer for CfgParser {
                 if let Some(st) = self.try_push(None) {
                     let tidx = self.grm.eof_token_idx();
                     let mut pstack = self.pstack_for(&st).clone();
-                    match self.parse_lexeme(tidx, &mut pstack) {
-                        ParseResult::Accept => true,
-                        _ => false,
-                    }
+                    matches!(self.parse_lexeme(tidx, &mut pstack), ParseResult::Accept)
                 } else {
                     false
                 }

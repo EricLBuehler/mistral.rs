@@ -1,7 +1,4 @@
-use crate::aici::{
-    recognizer::{FunctionalRecognizer, StackRecognizer},
-    toktree::SpecialToken,
-};
+use crate::aici::{recognizer::FunctionalRecognizer, toktree::SpecialToken};
 use regex_automata::{
     dfa::{dense, Automaton},
     util::{primitives::StateID, syntax},
@@ -14,11 +11,9 @@ pub struct RecRx {
     dfa: dense::DFA<Vec<u32>>,
 }
 
-pub type RxStackRecognizer = StackRecognizer<StateID, RecRx>;
-
 impl RecRx {
     pub fn from_rx(rx: &str) -> Self {
-        let rx = if rx.ends_with("$") {
+        let rx = if rx.ends_with('$') {
             rx.to_string()
         } else {
             rx.to_string() + "$"
@@ -30,10 +25,6 @@ impl RecRx {
             .unwrap();
         println!("dfa: {} bytes", dfa.memory_usage());
         Self { dfa }
-    }
-
-    pub fn to_stack_recognizer(self) -> RxStackRecognizer {
-        StackRecognizer::from(self)
     }
 }
 

@@ -41,7 +41,7 @@ impl SimpleVob {
     pub fn num_set(&self) -> usize {
         self.data.iter().map(|x| x.count_ones() as usize).sum()
     }
-
+    #[allow(clippy::cast_possible_truncation)]
     pub fn negated(&self, size: usize) -> Self {
         let mut r = Self::new();
         r.data = self.data.iter().map(|x| !x).collect();
@@ -116,7 +116,7 @@ impl SimpleVob {
 
 impl Index<usize> for SimpleVob {
     type Output = bool;
-
+    #[allow(clippy::cast_possible_truncation)]
     fn index(&self, index: usize) -> &Self::Output {
         if self.is_allowed(index as TokenId) {
             &true

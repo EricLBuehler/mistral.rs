@@ -35,6 +35,7 @@ pub struct VobIdx {
 }
 
 impl VobIdx {
+    #[allow(clippy::cast_possible_truncation)]
     pub fn new(v: usize) -> Self {
         VobIdx { v: v as u32 }
     }
@@ -152,19 +153,18 @@ impl Lexer {
         incoming.insert(initial, Vec::new());
 
         // TIME: 1.5ms
-        while todo.len() > 0 {
-            let s = todo.pop().unwrap();
+        while let Some(s) = todo.pop() {
             for b in 0..=255 {
                 let s2 = dfa.next_state(s, b);
-                if !incoming.contains_key(&s2) {
+                incoming.entry(s2).or_insert_with(|| {
                     todo.push(s2);
-                    incoming.insert(s2, Vec::new());
-                }
+                    Vec::new()
+                });
                 incoming.get_mut(&s2).unwrap().push(s);
             }
         }
 
-        let states = incoming.keys().map(|x| *x).collect::<Vec<_>>();
+        let states = incoming.keys().copied().collect::<Vec<_>>();
         let mut reachable_patterns = FxHashMap::default();
 
         for s in &states {
@@ -336,7 +336,7 @@ fn vob_and_is_zero(a: &Vob, b: &Vob) -> bool {
             return false;
         }
     }
-    return true;
+    true
 }
 
 fn vob_is_zero(v: &Vob) -> bool {

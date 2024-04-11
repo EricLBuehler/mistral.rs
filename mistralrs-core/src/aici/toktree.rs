@@ -4,10 +4,7 @@
 use rustc_hash::FxHashMap;
 
 use crate::aici::{
-    bytes::{
-        box_from_bytes, clone_as_bytes, clone_vec_as_bytes, to_hex_string, vec_from_bytes,
-        TokRxInfo, TokenId,
-    },
+    bytes::{to_hex_string, TokRxInfo, TokenId},
     svob::SimpleVob,
 };
 
@@ -61,21 +58,6 @@ pub struct TokTrie {
 }
 
 #[repr(C)]
-pub struct TokTrieHeader {
-    magic: u32,
-    hd_size: u32,
-    trie_bytes: u32,
-    token_offset_bytes: u32,
-    token_data_bytes: u32,
-    info: TokRxInfo,
-    align: [u32; 0],
-}
-
-impl TokTrieHeader {
-    const MAGIC: u32 = 0x558b6fd3;
-}
-
-#[repr(C)]
 pub struct TrieNode {
     // byte:token
     bits: u32,
@@ -119,13 +101,14 @@ impl TrieNode {
 }
 
 impl TokTrie {
-    pub fn from(info: &TokRxInfo, words: &Vec<Vec<u8>>) -> Self {
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn from(info: &TokRxInfo, words: &[Vec<u8>]) -> Self {
         let mut trie = TrieHash::new(0xff);
         let mut token_offsets = Vec::new();
         let mut token_data = Vec::new();
         assert!(info.vocab_size == words.len() as u32);
         for (idx, word) in words.iter().enumerate() {
-            if word.len() > 0 {
+            if !word.is_empty() {
                 trie.insert(word, idx as u32);
             }
             assert!(word.len() < 0xff);
@@ -155,7 +138,7 @@ impl TokTrie {
             if tok_ids.len() == 1 && tok_ids[0] != tok_id {
                 self.token_duplicates
                     .entry(tok_ids[0])
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(tok_id);
             }
         }
@@ -171,7 +154,7 @@ impl TokTrie {
     }
 
     fn next_node(&self, n: &TrieNode) -> usize {
-        return self.node_offset(n) + n.subtree_size();
+        self.node_offset(n) + n.subtree_size()
     }
 
     pub fn info(&self) -> &TokRxInfo {
@@ -194,13 +177,13 @@ impl TokTrie {
         r.resize(self.vocab_size() + 1);
         r
     }
-
+    #[allow(clippy::cast_possible_truncation)]
     pub fn token_set_dbg(&self, ts: &SimpleVob) -> String {
         let max_examples = 50;
 
         let ts_neg = ts.negated(self.vocab_size());
         let use_neg = ts_neg.num_set() * 20 < ts.num_set();
-        let ts1 = if use_neg { &ts_neg } else { &ts };
+        let ts1 = if use_neg { &ts_neg } else { ts };
         let num_set = ts1.num_set();
         let max_tok = std::cmp::min(max_examples, num_set);
         let mut token_names = Vec::new();
@@ -235,7 +218,7 @@ impl TokTrie {
             .iter()
             .map(|t| {
                 let s = self.token_dbg(*t);
-                if s.starts_with("\"") {
+                if s.starts_with('"') {
                     let inner = s[1..s.len() - 1].to_string();
                     let b = s.as_bytes();
                     // for " [\w]..." and " " the sep in front is implicit
@@ -262,7 +245,7 @@ impl TokTrie {
         } else {
             // format!("{:?}[{}]", self.token_str(idx), idx)
             let s = self.token_str(idx);
-            if s.len() == 0 {
+            if s.is_empty() {
                 format!("EMPTY[{}]", idx)
             } else if !s.contains('\u{fffd}') {
                 format!("{:?}", s)
@@ -297,7 +280,7 @@ impl TokTrie {
 
     pub fn greedy_tokenize(&self, bytes: &[u8]) -> Vec<TokenId> {
         let mut r = Vec::new();
-        if bytes.len() == 0 {
+        if bytes.is_empty() {
             return r;
         }
 
@@ -320,7 +303,7 @@ impl TokTrie {
                     n = self.root();
                 }
             }
-            idx = idx + 1;
+            idx += 1;
         }
         r.push(last_tok.unwrap());
         r
@@ -344,7 +327,7 @@ impl TokTrie {
     }
 
     pub fn prefix_token_id(&self, bytes: &[u8]) -> (TokenId, usize) {
-        assert!(bytes.len() > 0);
+        assert!(!bytes.is_empty());
         let mut last = (0, 0);
         let mut n = self.root();
         for (idx, byte) in bytes.iter().enumerate() {
@@ -356,31 +339,7 @@ impl TokTrie {
                 last = (tok, idx + 1);
             }
         }
-        return last;
-    }
-
-    pub fn from_bytes(bytes: &[u8]) -> Self {
-        let pref = std::mem::size_of::<TokTrieHeader>();
-        let hd = *box_from_bytes::<TokTrieHeader>(&bytes[0..pref]);
-        assert!(hd.magic == TokTrieHeader::MAGIC);
-        assert!(hd.hd_size as usize == pref);
-
-        let trie_end = pref + hd.trie_bytes as usize;
-        let nodes = vec_from_bytes(&bytes[pref..trie_end]);
-        let offsets_end = trie_end + hd.token_offset_bytes as usize;
-        let token_offsets = vec_from_bytes(&bytes[trie_end..offsets_end]);
-        let token_data = vec_from_bytes(&bytes[offsets_end..]);
-
-        let mut r = TokTrie {
-            info: hd.info,
-            token_offsets,
-            token_data,
-            nodes,
-            max_token_len: 0,
-            token_duplicates: FxHashMap::default(),
-        };
-        r.finalize_ctor();
-        r
+        last
     }
 
     pub fn max_token_len(&self) -> usize {
@@ -411,59 +370,12 @@ impl TokTrie {
         }
     }
 
-    pub fn serialize(&self) -> Vec<u8> {
-        let mut trie_data = clone_vec_as_bytes(&self.nodes);
-        let mut token_offsets = clone_vec_as_bytes(&self.token_offsets);
-        let mut token_data = clone_vec_as_bytes(&self.token_data);
-
-        let hd = TokTrieHeader {
-            magic: TokTrieHeader::MAGIC,
-            hd_size: std::mem::size_of::<TokTrieHeader>() as u32,
-            trie_bytes: trie_data.len() as u32,
-            token_offset_bytes: token_offsets.len() as u32,
-            token_data_bytes: trie_data.len() as u32,
-            info: self.info.clone(),
-            align: [],
-        };
-
-        let mut bytes = clone_as_bytes(&hd);
-        bytes.append(&mut trie_data);
-        bytes.append(&mut token_offsets);
-        bytes.append(&mut token_data);
-        bytes
-    }
-
     pub fn root(&self) -> &TrieNode {
         &self.nodes[0]
     }
 
-    pub fn check_against(&self, tokens: &Vec<Vec<u8>>) {
-        let vocab_size = tokens.len();
-        for idx in 0..vocab_size {
-            let bytes = &tokens[idx];
-            let tid = idx as TokenId;
-            assert!(bytes == self.token(tid));
-            let root = self.root();
-            if bytes.len() > 0 {
-                let tid2 = self
-                    .child_at_bytes(root, &bytes)
-                    .unwrap()
-                    .token_id()
-                    .unwrap();
-                if tid != tid2 {
-                    assert!(self.token_duplicates[&tid2].contains(&tid));
-                }
-            }
-        }
-    }
-
     pub fn child_at_byte<'a>(&'a self, n: &'a TrieNode, byte: u8) -> Option<&'a TrieNode> {
-        for child in self.node_children(n) {
-            if child.byte() == byte {
-                return Some(child);
-            }
-        }
-        None
+        self.node_children(n).find(|&child| child.byte() == byte)
     }
 
     pub fn node_children(&self, n: &TrieNode) -> NodeChildren {
@@ -491,13 +403,13 @@ impl TokTrie {
 
     pub fn compute_bias_ext(&self, r: &mut impl Recognizer, logits: &mut SimpleVob, start: &[u8]) {
         logits.set_all(false);
-        for tok in vec![SpecialToken::EndOfSentence] {
+        for tok in [SpecialToken::EndOfSentence] {
             if r.special_allowed(tok) {
                 logits.allow_token(self.special_token(tok))
             }
         }
         // all prefixes of 'start' are also allowed
-        if start.len() > 0 {
+        if !start.is_empty() {
             for len in 1..start.len() - 1 {
                 let bytes = &start[0..len];
                 if let Some(tok) = self.token_id(bytes) {
@@ -554,6 +466,7 @@ impl TokTrie {
     pub fn add_bias(&self, r: &mut impl Recognizer, toks: &mut SimpleVob, start: &[u8]) {
         r.trie_started();
         let n = self.child_at_bytes(self.root(), start).unwrap();
+        #[allow(clippy::cast_possible_truncation)]
         let defl_tok = self.vocab_size() as u32;
         let off = self.node_offset(n);
         let mut p = off + 1;
@@ -616,7 +529,7 @@ impl TrieHash {
         }
     }
     fn insert(&mut self, word: &[u8], token_id: u32) {
-        if word.len() == 0 {
+        if word.is_empty() {
             // Some tokenizers have duplicate tokens...
             // we just override
             // assert!(self.token_id == NO_TOKEN);
@@ -653,6 +566,7 @@ impl TrieHash {
             }
         }
     }
+    #[allow(clippy::cast_possible_truncation)]
     fn serialize(&mut self, data: &mut Vec<TrieNode>, num_parents: u8) {
         let idx = data.len();
         let mut num_ch = self.children.len();
