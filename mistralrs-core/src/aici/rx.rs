@@ -23,7 +23,7 @@ impl RecRx {
             .syntax(syntax::Config::new().unicode(false).utf8(false))
             .build(&rx)
             .unwrap();
-        println!("dfa: {} bytes", dfa.memory_usage());
+
         Self { dfa }
     }
 }
