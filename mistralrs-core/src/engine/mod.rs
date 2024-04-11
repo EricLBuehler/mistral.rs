@@ -383,6 +383,16 @@ impl Engine {
             }
             Either::Right(prompt) => prompt,
         };
+        if formatted_prompt.is_empty() {
+            // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
+            request
+                .response
+                .send(Response::ValidationError(
+                    "Received an empty prompt.".into(),
+                ))
+                .unwrap();
+            return;
+        }
         let mut prompt = handle_seq_error!(
             get_mut_arcmutex!(self.pipeline).tokenize_prompt(&formatted_prompt),
             request.response
