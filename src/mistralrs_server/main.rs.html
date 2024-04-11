@@ -1142,6 +1142,11 @@
 <a href="#1140" id="1140">1140</a>
 <a href="#1141" id="1141">1141</a>
 <a href="#1142" id="1142">1142</a>
+<a href="#1143" id="1143">1143</a>
+<a href="#1144" id="1144">1144</a>
+<a href="#1145" id="1145">1145</a>
+<a href="#1146" id="1146">1146</a>
+<a href="#1147" id="1147">1147</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     env,
     error::Error,
@@ -1242,6 +1247,10 @@
     <span class="doccomment">/// Enter interactive mode instead of serving a chat server.
     </span><span class="attr">#[clap(long, short, action)]
     </span>interactive_mode: bool,
+
+    <span class="doccomment">/// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
+    </span><span class="attr">#[arg(long, default_value_t = <span class="number">16</span>)]
+    </span>prefix_cache_n: usize,
 }
 
 <span class="attr">#[derive(Debug)]
@@ -2262,6 +2271,7 @@
         args.log,
         args.truncate_sequence,
         args.no_kv_cache,
+        args.prefix_cache_n,
     );
 
     <span class="kw">if </span>args.interactive_mode {

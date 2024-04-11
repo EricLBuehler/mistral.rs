@@ -141,6 +141,14 @@
 <a href="#139" id="139">139</a>
 <a href="#140" id="140">140</a>
 <a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -200,6 +208,7 @@
         log: <span class="prelude-ty">Option</span>&lt;String&gt;,
         truncate_sequence: bool,
         no_kv_cache: bool,
+        prefix_cache_n: usize,
     ) -&gt; Arc&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>(tx, rx) = channel();
 
@@ -215,7 +224,14 @@
         });
 
         thread::spawn(<span class="kw">move </span>|| {
-            <span class="kw">let </span><span class="kw-2">mut </span>engine = Engine::new(rx, pipeline, method, truncate_sequence, no_kv_cache);
+            <span class="kw">let </span><span class="kw-2">mut </span>engine = Engine::new(
+                rx,
+                pipeline,
+                method,
+                truncate_sequence,
+                no_kv_cache,
+                prefix_cache_n,
+            );
             engine.run();
         });
 

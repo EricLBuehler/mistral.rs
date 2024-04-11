@@ -540,6 +540,7 @@
 <a href="#538" id="538">538</a>
 <a href="#539" id="539">539</a>
 <a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -588,6 +589,7 @@
         method: SchedulerMethod,
         truncate_sequence: bool,
         no_kv_cache: bool,
+        prefix_cache_n: usize,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>device = <span class="macro">get_mut_arcmutex!</span>(pipeline).device().clone();
         <span class="self">Self </span>{
@@ -597,7 +599,7 @@
             id: <span class="number">0</span>,
             truncate_sequence,
             no_kv_cache,
-            prefix_cacher: PrefixCacheManager::new(device, <span class="number">1</span>), <span class="comment">// TODO(EricLBuehler): not have this hardcoded
+            prefix_cacher: PrefixCacheManager::new(device, prefix_cache_n), <span class="comment">// TODO(EricLBuehler): not have this hardcoded
         </span>}
     }
 
