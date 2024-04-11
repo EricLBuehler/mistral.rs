@@ -1,24 +1,16 @@
 use std::{
-    env,
     error::Error,
-    pin::Pin,
     sync::{
-        mpsc::{channel, Receiver, Sender},
+        mpsc::{channel, Sender},
         Arc,
     },
-    task::{Context, Poll},
-    time::Duration,
 };
 
 use crate::openai::{CompletionRequest, Grammar, StopTokens};
-use anyhow::Result;
 use axum::{
     extract::{Json, State},
     http::{self, StatusCode},
-    response::{
-        sse::{Event, KeepAlive},
-        IntoResponse, Sse,
-    },
+    response::IntoResponse,
 };
 use either::Either;
 use mistralrs_core::{
@@ -36,54 +28,7 @@ impl std::fmt::Display for ModelErrorMessage {
     }
 }
 impl std::error::Error for ModelErrorMessage {}
-pub struct Streamer {
-    rx: Receiver<Response>,
-    is_done: bool,
-    state: Arc<MistralRs>,
-}
-
-impl futures::Stream for Streamer {
-    type Item = Result<Event, axum::Error>;
-
-    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.is_done {
-            return Poll::Ready(None);
-        }
-        match self.rx.recv() {
-            Ok(resp) => match resp {
-                Response::CompletionModelError(msg, _) => {
-                    MistralRs::maybe_log_error(
-                        self.state.clone(),
-                        &ModelErrorMessage(msg.to_string()),
-                    );
-                    Poll::Ready(Some(Ok(Event::default().data(msg))))
-                }
-                Response::ValidationError(e) => {
-                    Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
-                }
-                Response::InternalError(e) => {
-                    MistralRs::maybe_log_error(self.state.clone(), &*e);
-                    Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
-                }
-                Response::CompletionChunk(response) => {
-                    if response.done {
-                        self.is_done = true;
-                    }
-                    MistralRs::maybe_log_response(self.state.clone(), &response);
-                    Poll::Ready(Some(Ok(Event::default().data(response.data))))
-                }
-                Response::CompletionDone(_) => unreachable!(),
-                Response::Chunk(_) => unreachable!(),
-                Response::Done(_) => unreachable!(),
-                Response::ModelError(_, _) => unreachable!(),
-            },
-            Err(_) => Poll::Pending,
-        }
-    }
-}
-
 pub enum CompletionResponder {
-    Sse(Sse<Streamer>),
     Json(CompletionResponse),
     ModelError(String, CompletionResponse),
     InternalError(Box<dyn Error>),
@@ -130,7 +75,6 @@ impl ErrorToResponse for JsonModelError {}
 impl IntoResponse for CompletionResponder {
     fn into_response(self) -> axum::response::Response {
         match self {
-            CompletionResponder::Sse(s) => s.into_response(),
             CompletionResponder::Json(s) => Json(s).into_response(),
             CompletionResponder::InternalError(e) => {
                 JsonError::new(e.to_string()).to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
@@ -164,6 +108,10 @@ fn parse_request(
         warn!("Completion requests do not support logprobs.");
     }
 
+    if oairequest._stream.is_some_and(|x| x) {
+        warn!("Completion requests do not support streaming.");
+    }
+
     Request {
         id: state.next_request_id(),
         messages: Either::Right(oairequest.prompt),
@@ -181,7 +129,7 @@ fn parse_request(
         },
         response: tx,
         return_logprobs: false,
-        is_streaming: oairequest.stream.unwrap_or(false),
+        is_streaming: false,
         suffix: oairequest.suffix,
 
         constraint: match oairequest.grammar {
@@ -209,48 +157,40 @@ pub async fn completions(
     let request = parse_request(oairequest, state.clone(), tx);
     let is_streaming = request.is_streaming;
     let sender = state.get_sender();
-    sender.send(request).unwrap();
+
+    if request.return_logprobs {
+        return CompletionResponder::ValidationError(
+            "Completion requests do not support logprobs.".into(),
+        );
+    }
 
     if is_streaming {
-        let streamer = Streamer {
-            rx,
-            is_done: false,
-            state,
-        };
+        return CompletionResponder::ValidationError(
+            "Completion requests do not support streaming.".into(),
+        );
+    }
 
-        CompletionResponder::Sse(
-            Sse::new(streamer).keep_alive(
-                KeepAlive::new()
-                    .interval(Duration::from_millis(
-                        env::var("KEEP_ALIVE_INTERVAL")
-                            .map(|val| val.parse::<u64>().unwrap_or(1000))
-                            .unwrap_or(1000),
-                    ))
-                    .text("keep-alive-text"),
-            ),
-        )
-    } else {
-        let response = rx.recv().unwrap();
+    sender.send(request).unwrap();
 
-        match response {
-            Response::InternalError(e) => {
-                MistralRs::maybe_log_error(state, &*e);
-                CompletionResponder::InternalError(e)
-            }
-            Response::CompletionModelError(msg, response) => {
-                MistralRs::maybe_log_error(state.clone(), &ModelErrorMessage(msg.to_string()));
-                MistralRs::maybe_log_response(state, &response);
-                CompletionResponder::ModelError(msg, response)
-            }
-            Response::ValidationError(e) => CompletionResponder::ValidationError(e),
-            Response::CompletionDone(response) => {
-                MistralRs::maybe_log_response(state, &response);
-                CompletionResponder::Json(response)
-            }
-            Response::CompletionChunk(_) => unreachable!(),
-            Response::Chunk(_) => unreachable!(),
-            Response::Done(_) => unreachable!(),
-            Response::ModelError(_, _) => unreachable!(),
+    let response = rx.recv().unwrap();
+
+    match response {
+        Response::InternalError(e) => {
+            MistralRs::maybe_log_error(state, &*e);
+            CompletionResponder::InternalError(e)
         }
+        Response::CompletionModelError(msg, response) => {
+            MistralRs::maybe_log_error(state.clone(), &ModelErrorMessage(msg.to_string()));
+            MistralRs::maybe_log_response(state, &response);
+            CompletionResponder::ModelError(msg, response)
+        }
+        Response::ValidationError(e) => CompletionResponder::ValidationError(e),
+        Response::CompletionDone(response) => {
+            MistralRs::maybe_log_response(state, &response);
+            CompletionResponder::Json(response)
+        }
+        Response::Chunk(_) => unreachable!(),
+        Response::Done(_) => unreachable!(),
+        Response::ModelError(_, _) => unreachable!(),
     }
 }

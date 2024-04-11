@@ -165,7 +165,6 @@ impl Runner {
                 }
                 Response::ModelError(msg, _) => Err(PyValueError::new_err(msg.to_string())),
                 Response::Chunk(_) => unreachable!(),
-                Response::CompletionChunk(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
                 Response::CompletionModelError(_, _) => unreachable!(),
             }

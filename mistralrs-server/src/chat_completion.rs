@@ -73,7 +73,6 @@ impl futures::Stream for Streamer {
                     Poll::Ready(Some(Event::default().json_data(response)))
                 }
                 Response::Done(_) => unreachable!(),
-                Response::CompletionChunk(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
                 Response::CompletionModelError(_, _) => unreachable!(),
             },
@@ -259,7 +258,6 @@ pub async fn chatcompletions(
                 ChatCompletionResponder::Json(response)
             }
             Response::Chunk(_) => unreachable!(),
-            Response::CompletionChunk(_) => unreachable!(),
             Response::CompletionDone(_) => unreachable!(),
             Response::CompletionModelError(_, _) => unreachable!(),
         }

@@ -122,8 +122,8 @@ pub struct CompletionRequest {
     #[serde(rename = "stop")]
     #[schema(example = json!(Option::None::<StopTokens>))]
     pub stop_seqs: Option<StopTokens>,
-    #[schema(example = true)]
-    pub stream: Option<bool>,
+    #[serde(rename = "stream")]
+    pub _stream: Option<bool>,
     #[schema(example = 0.7)]
     pub temperature: Option<f64>,
     #[schema(example = json!(Option::None::<f64>))]

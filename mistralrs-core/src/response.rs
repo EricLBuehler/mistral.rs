@@ -105,12 +105,6 @@ pub struct CompletionResponse {
     pub usage: Usage,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct CompletionChunkResponse {
-    pub data: String,
-    pub done: bool,
-}
-
 pub enum Response {
     InternalError(Box<dyn Error + Send + Sync>),
     ValidationError(Box<dyn Error + Send + Sync>),
@@ -121,5 +115,4 @@ pub enum Response {
     // Completion
     CompletionModelError(String, CompletionResponse),
     CompletionDone(CompletionResponse),
-    CompletionChunk(CompletionChunkResponse),
 }

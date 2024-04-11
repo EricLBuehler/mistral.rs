@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
-    response::{CompletionChoice, CompletionChunkResponse},
+    response::CompletionChoice,
     CompletionResponse,
 };
 use crate::{
@@ -449,22 +449,6 @@ impl SequenceGroup {
         if self.completion_choices.len() == self.n_choices {
             // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
             sender.send(Response::CompletionDone(response)).unwrap();
-        }
-    }
-
-    pub fn maybe_send_completion_streaming_response(
-        &mut self,
-        seq: &Sequence,
-        chunk: String,
-        is_done: bool,
-    ) {
-        if self.is_streaming {
-            seq.responder()
-                .send(Response::CompletionChunk(CompletionChunkResponse {
-                    data: chunk,
-                    done: is_done,
-                }))
-                .unwrap();
         }
     }
 }

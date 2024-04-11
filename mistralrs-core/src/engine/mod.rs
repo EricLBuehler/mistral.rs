@@ -182,22 +182,6 @@ impl Engine {
                     seq.get_mut_group()
                         .maybe_send_streaming_response(seq, pipeline.name());
                 }
-            } else if seq.get_mut_group().is_streaming {
-                let tokenizer = pipeline.tokenizer().clone();
-                if let Some(mut delta) =
-                    handle_seq_error!(seq.get_delta(&tokenizer), seq.responder())
-                {
-                    let seq_is_done = is_done.is_some();
-                    if let Some(reason) = is_done {
-                        seq.set_state(SequenceState::Done(reason));
-                        if let Some(ref suffix) = seq.suffix {
-                            delta = delta + suffix;
-                        }
-                    }
-
-                    seq.get_mut_group()
-                        .maybe_send_completion_streaming_response(seq, delta, seq_is_done);
-                }
             } else if let Some(reason) = is_done {
                 Self::finish_seq(pipeline, seq, reason);
                 pipeline.reset_non_granular_state();

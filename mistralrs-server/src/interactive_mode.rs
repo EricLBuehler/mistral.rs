@@ -82,7 +82,6 @@ pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
                         break 'outer;
                     }
                     Response::Done(_) => unreachable!(),
-                    Response::CompletionChunk(_) => unreachable!(),
                     Response::CompletionDone(_) => unreachable!(),
                     Response::CompletionModelError(_, _) => unreachable!(),
                 }
