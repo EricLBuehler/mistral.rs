@@ -405,7 +405,7 @@ impl Loader for MistralLoader {
 
         Ok(Box::new(Mutex::new(MistralPipeline {
             model,
-            tok_trie: build_tok_trie(tokenizer.clone()).into(),
+            tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer,
             config: self.config,
             no_kv_cache: self.no_kv_cache,
