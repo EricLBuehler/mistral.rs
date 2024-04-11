@@ -10,10 +10,10 @@ pub enum Constraint {
     None,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum RequestType {
     Chat,
-    Completion,
+    Completion { echo_prompt: bool },
 }
 
 pub struct Request {

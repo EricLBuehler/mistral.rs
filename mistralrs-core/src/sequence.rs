@@ -70,6 +70,7 @@ pub struct Sequence {
     creation_time: u64,
     prefill_prompt_toks: Option<Vec<u32>>,
     pub suffix: Option<String>,
+    pub prefix: Option<String>,
 
     // Cache
     scaling_cache: Option<Tensor>,
@@ -110,6 +111,7 @@ impl Sequence {
         creation_time: u64,
         recognizer: SequenceRecognizer,
         suffix: Option<String>,
+        prefix: Option<String>,
     ) -> Self {
         let prompt_len = tokens.len();
         Self {
@@ -142,6 +144,7 @@ impl Sequence {
             recognizer,
             prefill_prompt_toks: None,
             suffix,
+            prefix,
         }
     }
 

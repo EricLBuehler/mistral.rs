@@ -556,6 +556,15 @@ impl Engine {
                 now.as_secs(),
                 recognizer.clone(),
                 request.suffix.clone(),
+                if let RequestType::Completion { echo_prompt } = request.request_type.clone() {
+                    if echo_prompt {
+                        Some(formatted_prompt.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                },
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 match prefill_cache {

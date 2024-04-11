@@ -138,7 +138,9 @@ fn parse_request(
             None => Constraint::None,
         },
 
-        request_type: RequestType::Completion,
+        request_type: RequestType::Completion {
+            echo_prompt: oairequest.echo_prompt,
+        },
     }
 }
 

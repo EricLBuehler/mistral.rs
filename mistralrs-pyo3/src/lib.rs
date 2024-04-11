@@ -226,7 +226,9 @@ impl Runner {
                 return_logprobs: false,
                 is_streaming: false,
                 constraint,
-                request_type: RequestType::Completion,
+                request_type: RequestType::Completion {
+                    echo_prompt: request.echo_prompt,
+                },
                 suffix: request.suffix.clone(),
             };
 
