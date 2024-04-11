@@ -361,6 +361,19 @@ impl Engine {
     }
 
     fn add_request(&mut self, request: Request) {
+        if request.messages.is_left()
+            && !get_mut_arcmutex!(self.pipeline)
+                .get_chat_template()
+                .has_chat_template()
+        {
+            // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
+            request
+                    .response
+                    .send(Response::ValidationError(
+                        "Received messages for a model which does not have a chat template. Either use a different model or pass a single string as the prompt".into(),
+                    )).unwrap();
+            return;
+        }
         let formatted_prompt = match request.messages {
             Either::Left(messages) => {
                 handle_seq_error!(
