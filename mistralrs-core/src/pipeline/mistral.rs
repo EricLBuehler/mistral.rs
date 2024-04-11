@@ -2,6 +2,8 @@ use super::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
 };
+use crate::aici::bintokens::build_tok_trie;
+use crate::aici::toktree::TokTrie;
 use crate::deserialize_chat_template;
 use crate::models::Cache;
 use crate::pipeline::ChatTemplate;
@@ -84,6 +86,7 @@ impl ModelPaths for MistralModelPaths<PathBuf> {
 pub struct MistralPipeline {
     model: Model,
     tokenizer: Tokenizer,
+    tok_trie: TokTrie,
     config: MistralSpecificConfig,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
@@ -402,6 +405,7 @@ impl Loader for MistralLoader {
 
         Ok(Box::new(Mutex::new(MistralPipeline {
             model,
+            tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer,
             config: self.config,
             no_kv_cache: self.no_kv_cache,
@@ -537,5 +541,8 @@ impl Pipeline for MistralPipeline {
     }
     fn get_non_granular_state(&self) -> &Option<NonGranularState> {
         &self.non_granular_state
+    }
+    fn tok_trie(&self) -> &TokTrie {
+        &self.tok_trie
     }
 }

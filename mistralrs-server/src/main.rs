@@ -27,13 +27,13 @@ use clap::Parser;
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    ChatCompletionResponse, GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig,
-    Loader, MistralLoader, MistralRs, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig,
-    ModelKind, Phi2Loader, Phi2SpecificConfig, Request, Response, SamplingParams, SchedulerMethod,
-    StopTokens as InternalStopTokens, TokenSource,
+    ChatCompletionResponse, Constraint, GemmaLoader, GemmaSpecificConfig, LlamaLoader,
+    LlamaSpecificConfig, Loader, MistralLoader, MistralRs, MistralSpecificConfig, MixtralLoader,
+    MixtralSpecificConfig, ModelKind, Phi2Loader, Phi2SpecificConfig, Request, Response,
+    SamplingParams, SchedulerMethod, StopTokens as InternalStopTokens, TokenSource,
 };
 use model_selected::ModelSelected;
-use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
+use openai::{ChatCompletionGrammar, ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use serde::Serialize;
 
 use crate::openai::ModelObject;
@@ -262,6 +262,12 @@ fn parse_request(
         response: tx,
         return_logprobs: oairequest.logprobs,
         is_streaming: oairequest.stream.unwrap_or(false),
+
+        constraint: match oairequest.grammar {
+            Some(ChatCompletionGrammar::Yacc(yacc)) => Constraint::Yacc(yacc),
+            Some(ChatCompletionGrammar::Regex(regex)) => Constraint::Regex(regex),
+            None => Constraint::None,
+        },
     }
 }
 

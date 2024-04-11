@@ -8,7 +8,9 @@ use std::{
     sync::{mpsc::channel, Arc, Mutex},
 };
 
-use ::mistralrs::{MistralRs, Request as _Request, Response, SamplingParams, StopTokens};
+use ::mistralrs::{
+    Constraint, MistralRs, Request as _Request, Response, SamplingParams, StopTokens,
+};
 use candle_core::Device;
 use loaders::{
     gemma::GemmaLoader, llama::LlamaLoader, mistral::MistralLoader, mixtral::MixtralLoader,
@@ -122,6 +124,7 @@ impl Runner {
                 response: tx,
                 return_logprobs: request.logprobs,
                 is_streaming: request.stream,
+                constraint: Constraint::None,
             };
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));

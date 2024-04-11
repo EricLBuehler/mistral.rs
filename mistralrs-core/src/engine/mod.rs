@@ -7,6 +7,7 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
+use crate::aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx};
 use candle_core::Tensor;
 use either::Either;
 use tracing::warn;
@@ -22,8 +23,8 @@ use crate::{
     },
     sampler::Sampler,
     scheduler::{Scheduler, SchedulerMethod},
-    sequence::{Sequence, SequenceGroup, SequenceState, StopReason},
-    StopTokens,
+    sequence::{Sequence, SequenceGroup, SequenceRecognizer, SequenceState, StopReason},
+    Constraint, StopTokens,
 };
 
 const SEED: u64 = 0;
@@ -143,6 +144,7 @@ impl Engine {
             let sampled = pipeline.sample(logits_per_seq, seq, return_logprobs);
             let next_token = handle_seq_error_stateaware!(sampled, seq);
             let next_token_id = next_token.token;
+
             seq.add_token(next_token.clone());
             let is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
             // Handle streaming requests
@@ -361,6 +363,17 @@ impl Engine {
         }
     }
 
+    fn build_sequence_recognizer(constraint: &Constraint) -> anyhow::Result<SequenceRecognizer> {
+        let recognizer = match constraint {
+            Constraint::Regex(rx) => {
+                SequenceRecognizer::Regex(StackRecognizer::from(RecRx::from_rx(rx)).into())
+            }
+            Constraint::Yacc(cfg) => SequenceRecognizer::Cfg(CfgParser::from_yacc(cfg)?.into()),
+            Constraint::None => SequenceRecognizer::None,
+        };
+        Ok(recognizer)
+    }
+
     fn add_request(&mut self, request: Request) {
         let formatted_prompt = match request.messages {
             Either::Left(messages) => {
@@ -458,6 +471,18 @@ impl Engine {
             topk,
             topp,
         );
+        let recognizer = match Self::build_sequence_recognizer(&request.constraint) {
+            Ok(recognizer) => recognizer,
+            Err(err) => {
+                request
+                    .response
+                    .send(Response::ValidationError(
+                        format!("Invalid grammar. {}", err).into(),
+                    ))
+                    .unwrap();
+                return;
+            }
+        };
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {
             let seq = Sequence::new_waiting(
@@ -475,6 +500,7 @@ impl Engine {
                 group.clone(),
                 response_index,
                 now.as_secs(),
+                recognizer.clone(),
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 match prefill_cache {

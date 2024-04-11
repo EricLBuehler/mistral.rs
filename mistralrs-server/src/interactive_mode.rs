@@ -5,7 +5,7 @@ use std::{
 
 use either::Either;
 use indexmap::IndexMap;
-use mistralrs_core::{MistralRs, Request, Response, SamplingParams};
+use mistralrs_core::{Constraint, MistralRs, Request, Response, SamplingParams};
 use tracing::{error, info};
 
 pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
@@ -45,6 +45,7 @@ pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
             response: tx,
             return_logprobs: false,
             is_streaming: true,
+            constraint: Constraint::None,
         };
         sender.send(req).unwrap();
 

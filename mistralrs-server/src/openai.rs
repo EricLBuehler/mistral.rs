@@ -28,6 +28,15 @@ fn default_1usize() -> usize {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "type", content = "value")]
+pub enum ChatCompletionGrammar {
+    #[serde(rename = "regex")]
+    Regex(String),
+    #[serde(rename = "yacc")]
+    Yacc(String),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ChatCompletionRequest {
     #[schema(example = json!(vec![Message{content:"Why did the crab cross the road?".to_string(), role:"user".to_string(), name: None}]))]
     #[serde(with = "either::serde_untagged")]
@@ -65,6 +74,9 @@ pub struct ChatCompletionRequest {
     // mistral.rs additional
     #[schema(example = json!(Option::None::<usize>))]
     pub top_k: Option<usize>,
+
+    #[schema(example = json!(Option::None::<ChatCompletionGrammar>))]
+    pub grammar: Option<ChatCompletionGrammar>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
