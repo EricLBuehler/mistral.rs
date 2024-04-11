@@ -258,7 +258,6 @@ impl Sequence {
         if tok == eos_tok {
             Ok(Some(StopReason::Eos))
         } else if self.stop_tokens.contains(&tok) {
-            // TODO: strip the stop token from the generated text?
             Ok(Some(StopReason::StopTok(tok)))
         } else if self.max_len.is_some()
             && self.tokens.len().saturating_sub(self.prompt_len) == self.max_len.unwrap()
