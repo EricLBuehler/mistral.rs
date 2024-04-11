@@ -1,4 +1,3 @@
-pub(crate) mod bintokens;
 pub(crate) mod tokens;
 pub(crate) mod varbuilder_utils;
 

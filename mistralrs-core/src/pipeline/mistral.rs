@@ -2,11 +2,11 @@ use super::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
 };
+use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::deserialize_chat_template;
 use crate::models::Cache;
 use crate::pipeline::ChatTemplate;
-use crate::utils::bintokens::build_tok_trie;
 use crate::xlora_models::{NonGranularState, XLoraConfig, XLoraMistral, XLoraModelWeights};
 use crate::{
     models::mistral::{Config, Model as NormalModel},

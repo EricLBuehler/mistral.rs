@@ -1,3 +1,4 @@
+pub(crate) mod bintokens;
 pub(crate) mod bytes;
 pub(crate) mod cfg;
 pub(crate) mod lex;

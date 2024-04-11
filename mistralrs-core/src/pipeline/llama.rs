@@ -2,11 +2,11 @@ use super::{
     calculate_inputs, get_model_paths, get_xlora_paths, ChatTemplate, Loader, ModelInputs,
     ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
 };
+use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::deserialize_chat_template;
 use crate::models::llama::MAX_SEQ_LEN;
 use crate::models::Cache;
-use crate::utils::bintokens::build_tok_trie;
 use crate::xlora_models::{NonGranularState, XLoraConfig, XLoraLlama, XLoraModelWeights};
 use crate::{
     models::llama::{Llama as NormalModel, LlamaConfig},
