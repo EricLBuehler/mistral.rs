@@ -3,7 +3,8 @@ mod llama;
 mod mistral;
 mod mixtral;
 mod phi2;
-use crate::sampler::Logprobs;
+use crate::aici::toktree::TokTrie;
+use crate::{get_bias_if_not_allowed, sampler::Logprobs, sequence::SequenceRecognizer};
 use core::fmt;
 use either::Either;
 pub use gemma::{GemmaLoader, GemmaSpecificConfig, GEMMA_IS_GPTX};
@@ -241,6 +242,7 @@ pub trait Pipeline: Send + Sync {
     fn num_hidden_layers(&self) -> usize;
     fn cache(&self) -> &Cache;
     fn tokenizer(&self) -> Tokenizer;
+    fn tok_trie(&self) -> &TokTrie;
     fn eos_tok(&self) -> u32;
     fn name(&self) -> String;
     fn get_max_seq_len(&self) -> usize;
@@ -301,9 +303,43 @@ pub trait Pipeline: Send + Sync {
             .saturating_sub(self.get_repeat_last_n());
         let ctxt = seq.get_toks()[start_at..].to_vec();
 
-        Ok(seq
-            .sampler()
-            .sample(&logits, Some(&ctxt), return_logprobs)?)
+        let first_lobprobs_response =
+            seq.sampler()
+                .sample(&logits, Some(&ctxt), return_logprobs)?;
+
+        let bias_if_not_allowed = match &mut seq.recognizer {
+            SequenceRecognizer::Regex(ref mut rx) => {
+                get_bias_if_not_allowed!(self, rx.as_mut(), first_lobprobs_response.token)
+            }
+            SequenceRecognizer::Cfg(ref mut cfg) => {
+                get_bias_if_not_allowed!(self, cfg.as_mut(), first_lobprobs_response.token)
+            }
+            SequenceRecognizer::None => None,
+        };
+        let second_logprobs_response = match bias_if_not_allowed {
+            Some(token_set) => {
+                let mut acc = vec![-f32::INFINITY; self.tok_trie().vocab_size()];
+                token_set.apply_to(&mut acc);
+                let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), self.device())?)?;
+
+                seq.sampler()
+                    .sample(&new_logits, Some(&ctxt), return_logprobs)?
+            }
+            None => first_lobprobs_response,
+        };
+
+        match seq.recognizer {
+            SequenceRecognizer::Regex(ref mut rx) => {
+                self.tok_trie()
+                    .append_token(rx.as_mut(), second_logprobs_response.token);
+            }
+            SequenceRecognizer::Cfg(ref mut cfg) => {
+                self.tok_trie()
+                    .append_token(cfg.as_mut(), second_logprobs_response.token);
+            }
+            SequenceRecognizer::None => {}
+        }
+        Ok(second_logprobs_response)
     }
 }
 

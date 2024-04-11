@@ -17,6 +17,7 @@ use engine::Engine;
 pub use mistralrs_lora::Ordering;
 pub use pipeline::Pipeline;
 
+mod aici;
 mod engine;
 mod models;
 mod pipeline;
@@ -33,7 +34,7 @@ pub use pipeline::{
     MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind, Phi2Loader,
     Phi2SpecificConfig, TokenSource,
 };
-pub use request::Request;
+pub use request::{Constraint, Request};
 pub use response::Response;
 pub use response::{ChatCompletionResponse, ChatCompletionUsage};
 pub use sampler::{SamplingParams, StopTokens};
