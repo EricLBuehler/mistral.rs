@@ -1,4 +1,5 @@
 import openai
+import sys
 
 openai.api_key = "EMPTY"
 
@@ -25,6 +26,7 @@ while True:
         delta = chunk.choices[0].delta.content
         if delta not in eos_toks:
             print(delta, end="")
+            sys.stdout.flush()
         resp += delta
     for eos in eos_toks:
         if resp.endswith(eos):
