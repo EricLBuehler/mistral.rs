@@ -98,6 +98,10 @@ struct Args {
     /// Enter interactive mode instead of serving a chat server.
     #[clap(long, short, action)]
     interactive_mode: bool,
+
+    /// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
+    #[arg(long, default_value_t = 16)]
+    prefix_cache_n: usize,
 }
 
 #[derive(Debug)]
@@ -1118,6 +1122,7 @@ async fn main() -> Result<()> {
         args.log,
         args.truncate_sequence,
         args.no_kv_cache,
+        args.prefix_cache_n,
     );
 
     if args.interactive_mode {

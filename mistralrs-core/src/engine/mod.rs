@@ -46,6 +46,7 @@ impl Engine {
         method: SchedulerMethod,
         truncate_sequence: bool,
         no_kv_cache: bool,
+        prefix_cache_n: usize,
     ) -> Self {
         let device = get_mut_arcmutex!(pipeline).device().clone();
         Self {
@@ -55,7 +56,7 @@ impl Engine {
             id: 0,
             truncate_sequence,
             no_kv_cache,
-            prefix_cacher: PrefixCacheManager::new(device, 1), // TODO(EricLBuehler): not have this hardcoded
+            prefix_cacher: PrefixCacheManager::new(device, prefix_cache_n), // TODO(EricLBuehler): not have this hardcoded
         }
     }
 

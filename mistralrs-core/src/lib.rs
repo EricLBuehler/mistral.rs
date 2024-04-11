@@ -57,6 +57,7 @@ impl MistralRs {
         log: Option<String>,
         truncate_sequence: bool,
         no_kv_cache: bool,
+        prefix_cache_n: usize,
     ) -> Arc<Self> {
         let (tx, rx) = channel();
 
@@ -72,7 +73,14 @@ impl MistralRs {
         });
 
         thread::spawn(move || {
-            let mut engine = Engine::new(rx, pipeline, method, truncate_sequence, no_kv_cache);
+            let mut engine = Engine::new(
+                rx,
+                pipeline,
+                method,
+                truncate_sequence,
+                no_kv_cache,
+                prefix_cache_n,
+            );
             engine.run();
         });
 

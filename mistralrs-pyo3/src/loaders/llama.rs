@@ -147,6 +147,8 @@ impl LlamaLoader {
     ///
     /// - `max_seqs=16`: Maximum running sequences at any time.
     ///
+    /// - `prefix_cache_n=16`: Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
+    ///
     /// - `truncate_sequence=False`:
     /// If a sequence is larger than the maximum model length, truncate the number
     /// of tokens such that the sequence will fit at most the maximum length.
@@ -159,12 +161,13 @@ impl LlamaLoader {
     /// - `token_source_value=None`: Value of token source value for `token_source`
     ///
     /// - `dtype=None`: Datatype to load the model into, only applicable for non-quantized models.
-    #[pyo3(signature = (token_source = "cache", max_seqs = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None, dtype = None))]
+    #[pyo3(signature = (token_source = "cache", max_seqs = 16, prefix_cache_n = 16, truncate_sequence = false, logfile = None, revision = None, token_source_value = None, dtype = None))]
     #[allow(clippy::too_many_arguments)]
     fn load(
         &mut self,
         token_source: &str,
         max_seqs: usize,
+        prefix_cache_n: usize,
         truncate_sequence: bool,
         logfile: Option<String>,
         revision: Option<String>,
@@ -217,6 +220,7 @@ impl LlamaLoader {
             logfile,
             truncate_sequence,
             self.no_kv_cache,
+            prefix_cache_n,
         );
 
         Ok(Runner { runner: mistralrs })
