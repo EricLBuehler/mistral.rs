@@ -796,7 +796,6 @@
 <a href="#794" id="794">794</a>
 <a href="#795" id="795">795</a>
 <a href="#796" id="796">796</a>
-<a href="#797" id="797">797</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -819,7 +818,6 @@
 <span class="kw">pub use </span>mixtral::{MixtralLoader, MixtralSpecificConfig, MIXTRAL_IS_GPTX};
 <span class="kw">pub use </span>phi2::{Phi2Loader, Phi2SpecificConfig, PHI2_IS_GPTX};
 <span class="kw">use </span>serde::Deserialize;
-<span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
 <span class="kw">use </span>tokenizers::Tokenizer;
 
@@ -1048,7 +1046,7 @@
     <span class="kw">fn </span>num_hidden_layers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache;
     <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Tokenizer;
-    <span class="kw">fn </span>tok_trie(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;TokTrie&gt;;
+    <span class="kw">fn </span>tok_trie(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>TokTrie;
     <span class="kw">fn </span>eos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u32;
     <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String;
     <span class="kw">fn </span>get_max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;

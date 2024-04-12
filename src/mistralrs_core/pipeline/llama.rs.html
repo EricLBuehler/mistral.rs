@@ -676,7 +676,7 @@
 <span class="kw">pub struct </span>LlamaPipeline {
     model: Model,
     tokenizer: Tokenizer,
-    tok_trie: Arc&lt;TokTrie&gt;,
+    tok_trie: TokTrie,
     config: LlamaSpecificConfig,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
@@ -1039,7 +1039,7 @@
 
         <span class="prelude-val">Ok</span>(Box::new(Mutex::new(LlamaPipeline {
             model,
-            tok_trie: build_tok_trie(tokenizer.clone()).into(),
+            tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer,
             config: <span class="self">self</span>.config,
             no_kv_cache: <span class="self">self</span>.no_kv_cache,
@@ -1176,8 +1176,8 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state
     }
 
-    <span class="kw">fn </span>tok_trie(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;TokTrie&gt; {
-        <span class="self">self</span>.tok_trie.clone()
+    <span class="kw">fn </span>tok_trie(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>TokTrie {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.tok_trie
     }
 }
 </code></pre></div></section></main></body></html>
