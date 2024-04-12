@@ -7,6 +7,7 @@ use crate::aici::toktree::TokTrie;
 use crate::deserialize_chat_template;
 use crate::models::llama::MAX_SEQ_LEN;
 use crate::models::Cache;
+use crate::pipeline::calculate_eos_tok;
 use crate::xlora_models::{NonGranularState, XLoraConfig, XLoraLlama, XLoraModelWeights};
 use crate::{
     models::llama::{Llama as NormalModel, LlamaConfig},
@@ -17,7 +18,6 @@ use crate::{
 use anyhow::Result;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Tensor};
-use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
 use serde_json::Value;
@@ -91,6 +91,7 @@ pub struct LlamaPipeline {
     non_granular_state: Option<NonGranularState>,
     model_id: String,
     is_lora: bool,
+    eos_tok: u32,
 }
 
 pub struct LlamaLoader {
@@ -447,6 +448,7 @@ impl Loader for LlamaLoader {
 
         Ok(Box::new(Mutex::new(LlamaPipeline {
             model,
+            eos_tok: calculate_eos_tok(&chat_template, &tokenizer),
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer,
             config: self.config,
@@ -548,15 +550,7 @@ impl Pipeline for LlamaPipeline {
         self.tokenizer.clone()
     }
     fn eos_tok(&self) -> u32 {
-        let eos_tok = match self.get_chat_template().eos_token {
-            Either::Left(ref lit) => lit,
-            Either::Right(ref added) => &added.content,
-        };
-        self.tokenizer
-            .get_vocab(true)
-            .get(eos_tok)
-            .copied()
-            .unwrap_or_else(|| panic!("Unable to extract `{eos_tok}` EOS token."))
+        self.eos_tok
     }
     fn name(&self) -> String {
         self.model_id.clone()

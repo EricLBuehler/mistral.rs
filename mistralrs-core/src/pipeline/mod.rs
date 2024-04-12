@@ -794,3 +794,14 @@ mod tests {
         }
     }
 }
+fn calculate_eos_tok(chat_template: &ChatTemplate, tokenizer: &Tokenizer) -> u32 {
+    let eos_tok = match chat_template.eos_token {
+        Either::Left(ref lit) => lit,
+        Either::Right(ref added) => &added.content,
+    };
+    tokenizer
+        .get_vocab(true)
+        .get(eos_tok)
+        .copied()
+        .unwrap_or_else(|| panic!("Unable to extract `{eos_tok}` EOS token."))
+}
