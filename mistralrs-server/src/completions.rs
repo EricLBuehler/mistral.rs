@@ -131,6 +131,7 @@ fn parse_request(
         return_logprobs: false,
         is_streaming: false,
         suffix: oairequest.suffix,
+        best_of: Some(oairequest.best_of),
 
         constraint: match oairequest.grammar {
             Some(Grammar::Yacc(yacc)) => Constraint::Yacc(yacc),

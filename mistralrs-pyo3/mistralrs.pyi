@@ -39,6 +39,7 @@ class CompletionRequest:
     logit_bias: dict[int, float] | None = None
     max_tokens: int | None = None
     n_choices: int = 1
+    best_of: int = 1
     presence_penalty: float | None = None
     frequency_penalty: float | None = None
     stop_token_ids: list[int] | None = None

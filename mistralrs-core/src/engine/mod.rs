@@ -510,6 +510,7 @@ impl Engine {
             request.sampling_params.n_choices,
             request.is_streaming,
             request.request_type == RequestType::Chat,
+            request.best_of,
         )));
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)

@@ -148,6 +148,7 @@ impl Runner {
                 constraint,
                 request_type: RequestType::Chat,
                 suffix: None,
+                best_of: None,
             };
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -230,6 +231,7 @@ impl Runner {
                     echo_prompt: request.echo_prompt,
                 },
                 suffix: request.suffix.clone(),
+                best_of: Some(request.best_of),
             };
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));

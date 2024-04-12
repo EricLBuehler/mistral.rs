@@ -26,6 +26,7 @@ pub struct Request {
     pub constraint: Constraint,
     pub request_type: RequestType,
     pub suffix: Option<String>,
+    pub best_of: Option<usize>,
 }
 
 impl Debug for Request {

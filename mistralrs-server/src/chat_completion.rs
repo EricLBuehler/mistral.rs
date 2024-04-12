@@ -193,6 +193,7 @@ fn parse_request(
         return_logprobs: oairequest.logprobs,
         is_streaming: oairequest.stream.unwrap_or(false),
         suffix: None,
+        best_of: None,
 
         constraint: match oairequest.grammar {
             Some(Grammar::Yacc(yacc)) => Constraint::Yacc(yacc),
