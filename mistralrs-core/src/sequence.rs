@@ -249,18 +249,6 @@ impl Sequence {
         }
         self.state.set(state);
     }
-    fn is_sub<T: PartialEq>(mut haystack: &[T], needle: &[T]) -> bool {
-        if needle.is_empty() {
-            return true;
-        }
-        while !haystack.is_empty() {
-            if haystack.starts_with(needle) {
-                return true;
-            }
-            haystack = &haystack[1..];
-        }
-        false
-    }
 
     pub fn is_done(
         &mut self,
@@ -282,7 +270,7 @@ impl Sequence {
         } else {
             if !self.stop_strings.is_empty() {
                 for (idx, s) in self.stop_strings.iter().enumerate() {
-                    if Self::is_sub(&self.completion_bytes, s.as_bytes()) {
+                    if galil_seiferas::gs_find(&self.completion_bytes, s.as_bytes()).is_some() {
                         return Ok(Some(StopReason::StopString(idx)));
                     }
                 }
