@@ -221,6 +221,12 @@ To start a server running Llama from GGML:
 
 `./mistralrs-server --port 1234 llama-ggml`
 
+- Single prompt inference
+
+To run a single prompt and then shut down:
+
+`./mistralrs-server --prompt "Hello!" mistral-gguf`
+
 ---
 
 ### Adapter model support: X-LoRA and LoRA
