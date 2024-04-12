@@ -94,18 +94,6 @@ pub struct Sequence {
 
     pub recognizer: SequenceRecognizer,
 }
-fn is_sub<T: PartialEq>(mut haystack: &[T], needle: &[T]) -> bool {
-    if needle.len() == 0 {
-        return true;
-    }
-    while !haystack.is_empty() {
-        if haystack.starts_with(needle) {
-            return true;
-        }
-        haystack = &haystack[1..];
-    }
-    false
-}
 impl Sequence {
     #[allow(clippy::too_many_arguments)]
     pub fn new_waiting(
@@ -259,7 +247,13 @@ impl Sequence {
         self.state.set(state);
     }
 
-    pub fn is_done(&self, tok: u32, eos_tok: u32, max_model_len: usize) -> Option<StopReason> {
+    pub fn is_done(
+        &mut self,
+        tok: u32,
+        eos_tok: u32,
+        max_model_len: usize,
+        tokenizer: &Tokenizer,
+    ) -> Option<StopReason> {
         if tok == eos_tok {
             Some(StopReason::Eos)
         } else if self.stop_tokens.contains(&tok) {
@@ -273,14 +267,9 @@ impl Sequence {
             Some(StopReason::ModelLength(max_model_len))
         } else {
             if !self.stop_strings.is_empty() {
-                let empty_vec = vec![];
-                let text_acc = match self.decoded_tokens {
-                    Some(ref txt) => txt,
-                    None => &empty_vec,
-                };
-
+                let text_acc = self.get_delta(tokenizer).unwrap().unwrap();
                 for (idx, s) in self.stop_strings.iter().enumerate() {
-                    if is_sub(&text_acc, s.as_bytes()) {
+                    if text_acc.contains(s) {
                         return Some(StopReason::StopString(idx));
                     }
                 }

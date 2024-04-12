@@ -151,7 +151,12 @@ impl Engine {
             let next_token_id = next_token.token;
 
             seq.add_token(next_token.clone());
-            let is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
+            let is_done = seq.is_done(
+                next_token_id,
+                eos_tok,
+                pipeline.get_max_seq_len(),
+                &pipeline.tokenizer(),
+            );
             // Handle streaming requests
             if seq.get_mut_group().is_streaming && seq.get_mut_group().is_chat {
                 let tokenizer = pipeline.tokenizer().clone();

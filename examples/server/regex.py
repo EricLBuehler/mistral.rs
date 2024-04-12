@@ -17,7 +17,8 @@ completion = openai.chat.completions.create(
     frequency_penalty=1.0,
     top_p=0.1,
     temperature=0,
-    extra_body={"grammar": {"type": "regex", "value": BULLET_LIST_REGEX}},
+    stop=["\n\n"],
+    # extra_body={"grammar": {"type": "regex", "value": BULLET_LIST_REGEX}},
 )
 
 print(completion.choices[0].message.content)
