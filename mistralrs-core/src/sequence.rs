@@ -248,13 +248,8 @@ impl Sequence {
     }
 
     pub fn generated_text(&self, tokenizer: &Tokenizer) -> anyhow::Result<String> {
-        let token_ids = self
-            .logprobs()
-            .iter()
-            .map(|lp| lp.token)
-            .collect::<Vec<_>>();
         let text = tokenizer
-            .decode(&token_ids, false)
+            .decode(&self.tokens, false)
             .map_err(|e| anyhow::Error::msg(format!("Tokenization failure - {}", e)))?;
 
         Ok(text)
