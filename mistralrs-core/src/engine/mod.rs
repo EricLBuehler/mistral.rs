@@ -216,33 +216,28 @@ impl Engine {
         };
 
         let text = match reason {
-            StopReason::Length(_) | StopReason::ModelLength(_) => handle_seq_error!(
-                pipeline
-                    .tokenizer()
-                    .decode(&seq.get_toks()[seq.prompt_tokens()..], false),
-                seq.responder()
-            ),
+            StopReason::Length(_) | StopReason::ModelLength(_) => pipeline
+                .tokenizer()
+                .decode(&seq.get_toks()[seq.prompt_tokens()..], false),
+
             StopReason::Eos | StopReason::StopTok(_) => {
                 let toks = seq.get_toks();
-                handle_seq_error!(
-                    pipeline
-                        .tokenizer()
-                        .decode(&toks[seq.prompt_tokens()..toks.len() - 1], false),
-                    seq.responder()
-                )
+                pipeline
+                    .tokenizer()
+                    .decode(&toks[seq.prompt_tokens()..toks.len() - 1], false)
             }
             StopReason::StopString(stop_str_index) => {
                 let stop_str = seq.stop_strings().get(stop_str_index).unwrap();
-                let txt = handle_seq_error!(
-                    pipeline
-                        .tokenizer()
-                        .decode(&seq.get_toks()[seq.prompt_tokens()..], false),
-                    seq.responder()
-                );
-                let stop_str_pos = txt.rfind(stop_str).unwrap();
-                txt[..stop_str_pos].to_string()
+                pipeline
+                    .tokenizer()
+                    .decode(&seq.get_toks()[seq.prompt_tokens()..], false)
+                    .map(|txt| {
+                        let stop_str_pos = txt.rfind(stop_str).unwrap();
+                        txt[..stop_str_pos].to_string()
+                    })
             }
         };
+        let text = handle_seq_error!(text, seq.responder());
 
         if seq.get_mut_group().is_chat {
             let choice = Choice {
