@@ -35,7 +35,7 @@ pub fn prompt_mode(mistralrs: Arc<MistralRs>, prompt: String) {
         sampling_params: sampling_params.clone(),
         response: tx,
         return_logprobs: false,
-        is_streaming: true,
+        is_streaming: false,
         constraint: Constraint::None,
         request_type: RequestType::Chat,
         suffix: None,
