@@ -94,7 +94,18 @@ pub struct Sequence {
 
     pub recognizer: SequenceRecognizer,
 }
-
+fn is_sub<T: PartialEq>(mut haystack: &[T], needle: &[T]) -> bool {
+    if needle.len() == 0 {
+        return true;
+    }
+    while !haystack.is_empty() {
+        if haystack.starts_with(needle) {
+            return true;
+        }
+        haystack = &haystack[1..];
+    }
+    false
+}
 impl Sequence {
     #[allow(clippy::too_many_arguments)]
     pub fn new_waiting(
@@ -248,47 +259,33 @@ impl Sequence {
         self.state.set(state);
     }
 
-    pub fn generated_text(&self, tokenizer: &Tokenizer) -> anyhow::Result<String> {
-        let token_ids = self
-            .logprobs()
-            .iter()
-            .map(|lp| lp.token)
-            .collect::<Vec<_>>();
-        let text = tokenizer
-            .decode(&token_ids, false)
-            .map_err(|e| anyhow::Error::msg(format!("Tokenization failure - {}", e)))?;
-
-        Ok(text)
-    }
-
-    pub fn is_done(
-        &self,
-        tok: u32,
-        eos_tok: u32,
-        max_model_len: usize,
-        tokenizer: &Tokenizer,
-    ) -> anyhow::Result<Option<StopReason>> {
+    pub fn is_done(&self, tok: u32, eos_tok: u32, max_model_len: usize) -> Option<StopReason> {
         if tok == eos_tok {
-            Ok(Some(StopReason::Eos))
+            Some(StopReason::Eos)
         } else if self.stop_tokens.contains(&tok) {
-            Ok(Some(StopReason::StopTok(tok)))
+            Some(StopReason::StopTok(tok))
         } else if self.max_len.is_some()
             && self.tokens.len().saturating_sub(self.prompt_len) == self.max_len.unwrap()
         {
             // add_token was already called
-            Ok(Some(StopReason::Length(self.max_len.unwrap())))
+            Some(StopReason::Length(self.max_len.unwrap()))
         } else if self.tokens.len().saturating_sub(self.prompt_len) == max_model_len {
-            Ok(Some(StopReason::ModelLength(max_model_len)))
+            Some(StopReason::ModelLength(max_model_len))
         } else {
             if !self.stop_strings.is_empty() {
-                let text_acc = self.generated_text(tokenizer)?;
+                let empty_vec = vec![];
+                let text_acc = match self.decoded_tokens {
+                    Some(ref txt) => txt,
+                    None => &empty_vec,
+                };
+
                 for (idx, s) in self.stop_strings.iter().enumerate() {
-                    if text_acc.contains(s) {
-                        return Ok(Some(StopReason::StopString(idx)));
+                    if is_sub(&text_acc, s.as_bytes()) {
+                        return Some(StopReason::StopString(idx));
                     }
                 }
             }
-            Ok(None)
+            None
         }
     }
 
