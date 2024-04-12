@@ -159,7 +159,7 @@ impl Engine {
             );
             // Handle streaming requests
             if seq.get_mut_group().is_streaming && seq.get_mut_group().is_chat {
-                let tokenizer = pipeline.tokenizer().clone();
+                let tokenizer = pipeline.tokenizer();
                 if let Some(delta) = handle_seq_error!(seq.get_delta(&tokenizer), seq.responder()) {
                     seq.add_streaming_chunk_choice_to_group(ChunkChoice {
                         delta: Delta {
