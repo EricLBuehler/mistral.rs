@@ -6,7 +6,7 @@ use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::deserialize_chat_template;
 use crate::models::Cache;
-use crate::pipeline::ChatTemplate;
+use crate::pipeline::{calculate_eos_tok, ChatTemplate};
 use crate::xlora_models::{NonGranularState, XLoraConfig};
 use crate::{
     models::phi2::{Config, Model as NormalModel},
@@ -17,7 +17,6 @@ use crate::{
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Activation;
-use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
 use serde::Deserialize;
@@ -90,6 +89,7 @@ pub struct Phi2Pipeline {
     non_granular_state: Option<NonGranularState>,
     model_id: String,
     is_lora: bool,
+    eos_tok: u32,
 }
 
 pub struct Phi2Loader {
@@ -347,6 +347,7 @@ impl Loader for Phi2Loader {
 
         Ok(Box::new(Mutex::new(Phi2Pipeline {
             model,
+            eos_tok: calculate_eos_tok(&chat_template, &tokenizer),
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer,
             config: self.config,
@@ -431,15 +432,7 @@ impl Pipeline for Phi2Pipeline {
         self.tokenizer.clone()
     }
     fn eos_tok(&self) -> u32 {
-        let eos_tok = match self.get_chat_template().eos_token {
-            Either::Left(ref lit) => lit,
-            Either::Right(ref added) => &added.content,
-        };
-        self.tokenizer
-            .get_vocab(true)
-            .get(eos_tok)
-            .copied()
-            .unwrap_or_else(|| panic!("Unable to extract `{eos_tok}` EOS token."))
+        self.eos_tok
     }
     fn name(&self) -> String {
         self.model_id.clone()
