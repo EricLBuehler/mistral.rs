@@ -22,7 +22,7 @@ impl RecRx {
             .configure(dense::Config::new().start_kind(regex_automata::dfa::StartKind::Anchored))
             .syntax(syntax::Config::new().unicode(false).utf8(false))
             .build(&rx)
-            .map_err(|_| anyhow::Error::msg(format!("Could not compile regex `{rx}`")))?;
+            .map_err(|e| anyhow::Error::msg(format!("Could not compile regex `{rx}` - {e:?}")))?;
 
         Ok(Self { dfa })
     }
