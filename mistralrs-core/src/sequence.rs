@@ -250,32 +250,27 @@ impl Sequence {
         self.state.set(state);
     }
 
-    pub fn is_done(
-        &mut self,
-        tok: u32,
-        eos_tok: u32,
-        max_model_len: usize,
-    ) -> anyhow::Result<Option<StopReason>> {
+    pub fn is_done(&mut self, tok: u32, eos_tok: u32, max_model_len: usize) -> Option<StopReason> {
         if tok == eos_tok {
-            Ok(Some(StopReason::Eos))
+            Some(StopReason::Eos)
         } else if self.stop_tokens.contains(&tok) {
-            Ok(Some(StopReason::StopTok(tok)))
+            Some(StopReason::StopTok(tok))
         } else if self.max_len.is_some()
             && self.tokens.len().saturating_sub(self.prompt_len) == self.max_len.unwrap()
         {
             // add_token was already called
-            Ok(Some(StopReason::Length(self.max_len.unwrap())))
+            Some(StopReason::Length(self.max_len.unwrap()))
         } else if self.tokens.len().saturating_sub(self.prompt_len) == max_model_len {
-            Ok(Some(StopReason::ModelLength(max_model_len)))
+            Some(StopReason::ModelLength(max_model_len))
         } else {
             if !self.stop_strings.is_empty() {
                 for (idx, s) in self.stop_strings.iter().enumerate() {
                     if galil_seiferas::gs_find(&self.completion_bytes, s.as_bytes()).is_some() {
-                        return Ok(Some(StopReason::StopString(idx)));
+                        return Some(StopReason::StopString(idx));
                     }
                 }
             }
-            Ok(None)
+            None
         }
     }
 
