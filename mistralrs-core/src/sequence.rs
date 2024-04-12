@@ -84,6 +84,7 @@ pub struct Sequence {
     decoded_tokens: Option<Vec<u8>>,
     logprobs: Vec<Logprobs>,
     cumulative_logprob: f32,
+    completion_bytes: Vec<u8>,
 
     // GPU things
     pub prompt_tok_per_sec: f32,
@@ -150,6 +151,7 @@ impl Sequence {
             suffix,
             prefix,
             cumulative_logprob: 0.,
+            completion_bytes: Vec::new(),
         }
     }
 
@@ -226,7 +228,8 @@ impl Sequence {
         &mut self.sampler
     }
 
-    pub fn add_token(&mut self, tok: Logprobs) {
+    pub fn add_token(&mut self, tok: Logprobs, completion_bytes: Vec<u8>) {
+        self.completion_bytes.extend_from_slice(&completion_bytes);
         self.cumulative_logprob += tok.logprob;
         self.tokens.push(tok.token);
         self.logprobs.push(tok);
@@ -246,20 +249,24 @@ impl Sequence {
         }
         self.state.set(state);
     }
-
-    pub fn generated_text(&self, tokenizer: &Tokenizer) -> anyhow::Result<String> {
-        let text = tokenizer
-            .decode(&self.tokens, false)
-            .map_err(|e| anyhow::Error::msg(format!("Tokenization failure - {}", e)))?;
-
-        Ok(text)
+    fn is_sub<T: PartialEq>(mut haystack: &[T], needle: &[T]) -> bool {
+        if needle.is_empty() {
+            return true;
+        }
+        while !haystack.is_empty() {
+            if haystack.starts_with(needle) {
+                return true;
+            }
+            haystack = &haystack[1..];
+        }
+        false
     }
+
     pub fn is_done(
         &mut self,
         tok: u32,
         eos_tok: u32,
         max_model_len: usize,
-        tokenizer: &Tokenizer,
     ) -> anyhow::Result<Option<StopReason>> {
         if tok == eos_tok {
             Ok(Some(StopReason::Eos))
@@ -274,9 +281,8 @@ impl Sequence {
             Ok(Some(StopReason::ModelLength(max_model_len)))
         } else {
             if !self.stop_strings.is_empty() {
-                let generated_text = self.generated_text(tokenizer)?;
                 for (idx, s) in self.stop_strings.iter().enumerate() {
-                    if generated_text.contains(s) {
+                    if Self::is_sub(&self.completion_bytes, s.as_bytes()) {
                         return Ok(Some(StopReason::StopString(idx)));
                     }
                 }
