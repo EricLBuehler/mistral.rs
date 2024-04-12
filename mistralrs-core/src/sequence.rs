@@ -5,13 +5,17 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx};
+use crate::{
+    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
+    response::CompletionChoice,
+    CompletionResponse,
+};
 use crate::{
     get_mut_group,
     models::LayerCaches,
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
-    ChatCompletionResponse, ChatCompletionUsage,
+    ChatCompletionResponse, Usage,
 };
 use candle_core::Tensor;
 use regex_automata::util::primitives::StateID;
@@ -67,6 +71,8 @@ pub struct Sequence {
     response_index: usize,
     creation_time: u64,
     prefill_prompt_toks: Option<Vec<u32>>,
+    pub suffix: Option<String>,
+    pub prefix: Option<String>,
 
     // Cache
     scaling_cache: Option<Tensor>,
@@ -77,6 +83,7 @@ pub struct Sequence {
     tokens: Vec<u32>,
     decoded_tokens: Option<Vec<u8>>,
     logprobs: Vec<Logprobs>,
+    cumulative_logprob: f32,
 
     // GPU things
     pub prompt_tok_per_sec: f32,
@@ -107,6 +114,8 @@ impl Sequence {
         response_index: usize,
         creation_time: u64,
         recognizer: SequenceRecognizer,
+        suffix: Option<String>,
+        prefix: Option<String>,
     ) -> Self {
         let prompt_len = tokens.len();
         Self {
@@ -139,6 +148,9 @@ impl Sequence {
             creation_time,
             recognizer,
             prefill_prompt_toks: None,
+            suffix,
+            prefix,
+            cumulative_logprob: 0.,
         }
     }
 
@@ -216,6 +228,7 @@ impl Sequence {
     }
 
     pub fn add_token(&mut self, tok: Logprobs) {
+        self.cumulative_logprob += tok.logprob;
         self.tokens.push(tok.token);
         self.logprobs.push(tok);
     }
@@ -334,9 +347,7 @@ impl Sequence {
         self.prompt_timestamp
     }
 
-    pub fn add_choice_to_group(&self, choice: Choice) {
-        get_mut_group!(self).choices.push(choice);
-
+    fn update_time_info(&self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time travel has occurred!")
@@ -355,6 +366,18 @@ impl Sequence {
         get_mut_group!(self).total_sampling_time += self.total_sampling_time;
     }
 
+    pub fn add_choice_to_group(&self, choice: Choice) {
+        get_mut_group!(self).choices.push(choice);
+        self.update_time_info();
+    }
+
+    pub fn add_completion_choice_to_group(&self, choice: CompletionChoice) {
+        get_mut_group!(self)
+            .completion_choices
+            .push((self.cumulative_logprob, choice));
+        self.update_time_info();
+    }
+
     pub fn get_response_index(&self) -> usize {
         self.response_index
     }
@@ -370,6 +393,7 @@ impl Sequence {
 
 pub struct SequenceGroup {
     n_choices: usize, // The target number of choices to return. Can be decreased if an error is thrown.
+    best_of: Option<usize>, // Top n seqs based on cumulative logprobs.
     pub total_prompt_toks: usize,
     pub total_toks: usize,
     pub total_prompt_time: u128,
@@ -377,14 +401,22 @@ pub struct SequenceGroup {
     pub total_completion_time: u128,
     pub total_sampling_time: u128,
     choices: Vec<Choice>,
+    completion_choices: Vec<(f32, CompletionChoice)>,
     pub streaming_chunks: Vec<ChunkChoice>,
     pub is_streaming: bool,
+    pub is_chat: bool,
 }
 
 impl SequenceGroup {
-    pub fn new(n_choices: usize, is_streaming: bool) -> Self {
+    pub fn new(
+        n_choices: usize,
+        is_streaming: bool,
+        is_chat: bool,
+        best_of: Option<usize>,
+    ) -> Self {
         Self {
             choices: Vec::new(),
+            completion_choices: Vec::new(),
             n_choices,
             total_prompt_toks: 0,
             total_toks: 0,
@@ -394,16 +426,31 @@ impl SequenceGroup {
             total_sampling_time: 0,
             streaming_chunks: Vec::new(),
             is_streaming,
+            is_chat,
+            best_of,
         }
     }
 
+    /// This does not apply best_of.
     pub fn get_choices(&self) -> &[Choice] {
         &self.choices
     }
 
-    pub fn get_usage(&self) -> ChatCompletionUsage {
+    /// This applies the best_of.
+    pub fn get_completion_choices(&self) -> Vec<CompletionChoice> {
+        let mut choices = self.completion_choices.clone();
+        // Sort by descending logprobs
+        choices.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        choices
+            .into_iter()
+            .take(self.best_of.unwrap())
+            .map(|(_, x)| x)
+            .collect::<Vec<_>>()
+    }
+
+    pub fn get_usage(&self) -> Usage {
         #[allow(clippy::cast_precision_loss)]
-        ChatCompletionUsage {
+        Usage {
             completion_tokens: self.total_toks - self.total_prompt_toks,
             prompt_tokens: self.total_prompt_toks,
             total_tokens: self.total_toks,
@@ -446,6 +493,17 @@ impl SequenceGroup {
                 }))
                 .unwrap();
             self.streaming_chunks.clear();
+        }
+    }
+
+    pub fn maybe_send_completion_done_response(
+        &self,
+        response: CompletionResponse,
+        sender: Sender<Response>,
+    ) {
+        if self.completion_choices.len() == self.n_choices {
+            // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
+            sender.send(Response::CompletionDone(response)).unwrap();
         }
     }
 }

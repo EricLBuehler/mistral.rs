@@ -5,7 +5,7 @@ use std::{
 
 use either::Either;
 use indexmap::IndexMap;
-use mistralrs_core::{Constraint, MistralRs, Request, Response, SamplingParams};
+use mistralrs_core::{Constraint, MistralRs, Request, RequestType, Response, SamplingParams};
 use tracing::{error, info};
 
 pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
@@ -46,6 +46,9 @@ pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
             return_logprobs: false,
             is_streaming: true,
             constraint: Constraint::None,
+            request_type: RequestType::Chat,
+            suffix: None,
+            best_of: None,
         };
         sender.send(req).unwrap();
 
@@ -80,6 +83,8 @@ pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
                         break 'outer;
                     }
                     Response::Done(_) => unreachable!(),
+                    Response::CompletionDone(_) => unreachable!(),
+                    Response::CompletionModelError(_, _) => unreachable!(),
                 }
             }
         }
