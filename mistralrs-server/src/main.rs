@@ -24,8 +24,10 @@ use crate::{chat_completion::chatcompletions, openai::ModelObject};
 mod interactive_mode;
 mod model_selected;
 mod openai;
+mod prompt_mode;
 
 use interactive_mode::interactive_mode;
+use prompt_mode::prompt_mode;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{info, warn};
 use utoipa::OpenApi;
@@ -82,6 +84,10 @@ struct Args {
     /// Enter interactive mode instead of serving a chat server.
     #[clap(long, short, action)]
     interactive_mode: bool,
+
+    /// Run a single prompt. This cannot be used with interactive mode.
+    #[clap(long, short)]
+    prompt: Option<String>,
 
     /// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
     #[arg(long, default_value_t = 16)]
@@ -881,6 +887,10 @@ async fn main() -> Result<()> {
         args.prefix_cache_n,
     );
 
+    if let Some(prompt) = args.prompt {
+        prompt_mode(mistralrs, prompt);
+        return Ok(());
+    }
     if args.interactive_mode {
         interactive_mode(mistralrs);
         return Ok(());
