@@ -541,6 +541,47 @@
 <a href="#539" id="539">539</a>
 <a href="#540" id="540">540</a>
 <a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
+<a href="#551" id="551">551</a>
+<a href="#552" id="552">552</a>
+<a href="#553" id="553">553</a>
+<a href="#554" id="554">554</a>
+<a href="#555" id="555">555</a>
+<a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -550,7 +591,11 @@
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-<span class="kw">use </span><span class="kw">crate</span>::aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx};
+<span class="kw">use crate</span>::{
+    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
+    response::CompletionChoice,
+    CompletionResponse, RequestType,
+};
 <span class="kw">use </span>candle_core::Tensor;
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>tracing::warn;
@@ -692,7 +737,7 @@
             seq.add_token(next_token.clone());
             <span class="kw">let </span>is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
             <span class="comment">// Handle streaming requests
-            </span><span class="kw">if </span>seq.get_mut_group().is_streaming {
+            </span><span class="kw">if </span>seq.get_mut_group().is_streaming &amp;&amp; seq.get_mut_group().is_chat {
                 <span class="kw">let </span>tokenizer = pipeline.tokenizer().clone();
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(delta) = <span class="macro">handle_seq_error!</span>(seq.get_delta(<span class="kw-2">&amp;</span>tokenizer), seq.responder()) {
                     seq.add_streaming_chunk_choice_to_group(ChunkChoice {
@@ -758,30 +803,55 @@
             seq.responder()
         );
 
-        <span class="kw">let </span>choice = Choice {
-            stopreason: reason.to_string(),
-            index: seq.get_response_index(),
-            message: ResponseMessage {
-                content: res,
-                role: <span class="string">"assistant"</span>.to_string(),
-            },
-            logprobs: logprobs.map(|l| Logprobs { content: <span class="prelude-val">Some</span>(l) }),
-        };
-        seq.add_choice_to_group(choice);
+        <span class="kw">if </span>seq.get_mut_group().is_chat {
+            <span class="kw">let </span>choice = Choice {
+                stopreason: reason.to_string(),
+                index: seq.get_response_index(),
+                message: ResponseMessage {
+                    content: res,
+                    role: <span class="string">"assistant"</span>.to_string(),
+                },
+                logprobs: logprobs.map(|l| Logprobs { content: <span class="prelude-val">Some</span>(l) }),
+            };
+            seq.add_choice_to_group(choice);
+        } <span class="kw">else </span>{
+            <span class="kw">let </span>choice = CompletionChoice {
+                stopreason: reason.to_string(),
+                index: seq.get_response_index(),
+                text: res,
+                logprobs: <span class="prelude-val">None</span>,
+            };
+            seq.add_completion_choice_to_group(choice);
+        }
 
         <span class="kw">let </span>group = seq.get_mut_group();
-        group.maybe_send_done_response(
-            ChatCompletionResponse {
-                id: seq.id().to_string(),
-                choices: group.get_choices().to_vec(),
-                created: seq.creation_time(),
-                model: pipeline.name(),
-                system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
-                object: <span class="string">"chat.completion"</span>.to_string(),
-                usage: group.get_usage(),
-            },
-            seq.responder(),
-        );
+        <span class="kw">if </span>group.is_chat {
+            group.maybe_send_done_response(
+                ChatCompletionResponse {
+                    id: seq.id().to_string(),
+                    choices: group.get_choices().to_vec(),
+                    created: seq.creation_time(),
+                    model: pipeline.name(),
+                    system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                    object: <span class="string">"chat.completion"</span>.to_string(),
+                    usage: group.get_usage(),
+                },
+                seq.responder(),
+            );
+        } <span class="kw">else </span>{
+            group.maybe_send_completion_done_response(
+                CompletionResponse {
+                    id: seq.id().to_string(),
+                    choices: group.get_completion_choices().to_vec(),
+                    created: seq.creation_time(),
+                    model: pipeline.name(),
+                    system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                    object: <span class="string">"text_completion"</span>.to_string(),
+                    usage: group.get_usage(),
+                },
+                seq.responder(),
+            );
+        }
     }
 
     <span class="doccomment">/// Clone the cache FROM the sequences' cache TO the model cache. Only used for completion seqs.
@@ -1023,6 +1093,8 @@
         <span class="kw">let </span>group = Rc::new(RefCell::new(SequenceGroup::new(
             request.sampling_params.n_choices,
             request.is_streaming,
+            request.request_type == RequestType::Chat,
+            request.best_of,
         )));
         <span class="kw">let </span>now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1068,6 +1140,16 @@
                 response_index,
                 now.as_secs(),
                 recognizer.clone(),
+                request.suffix.clone(),
+                <span class="kw">if let </span>RequestType::Completion { echo_prompt } = request.request_type.clone() {
+                    <span class="kw">if </span>echo_prompt {
+                        <span class="prelude-val">Some</span>(formatted_prompt.clone())
+                    } <span class="kw">else </span>{
+                        <span class="prelude-val">None
+                    </span>}
+                } <span class="kw">else </span>{
+                    <span class="prelude-val">None
+                </span>},
             );
             <span class="kw">let </span>seq = <span class="kw">if let </span><span class="prelude-val">Some</span>(prefill_cache) = prefill_cache.clone() {
                 <span class="kw">match </span>prefill_cache {

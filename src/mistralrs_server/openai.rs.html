@@ -94,6 +94,54 @@
 <a href="#92" id="92">92</a>
 <a href="#93" id="93">93</a>
 <a href="#94" id="94">94</a>
+<a href="#95" id="95">95</a>
+<a href="#96" id="96">96</a>
+<a href="#97" id="97">97</a>
+<a href="#98" id="98">98</a>
+<a href="#99" id="99">99</a>
+<a href="#100" id="100">100</a>
+<a href="#101" id="101">101</a>
+<a href="#102" id="102">102</a>
+<a href="#103" id="103">103</a>
+<a href="#104" id="104">104</a>
+<a href="#105" id="105">105</a>
+<a href="#106" id="106">106</a>
+<a href="#107" id="107">107</a>
+<a href="#108" id="108">108</a>
+<a href="#109" id="109">109</a>
+<a href="#110" id="110">110</a>
+<a href="#111" id="111">111</a>
+<a href="#112" id="112">112</a>
+<a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+<a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>std::collections::HashMap;
@@ -125,7 +173,7 @@
 
 <span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 #[serde(tag = <span class="string">"type"</span>, content = <span class="string">"value"</span>)]
-</span><span class="kw">pub enum </span>ChatCompletionGrammar {
+</span><span class="kw">pub enum </span>Grammar {
     <span class="attr">#[serde(rename = <span class="string">"regex"</span>)]
     </span>Regex(String),
     <span class="attr">#[serde(rename = <span class="string">"yacc"</span>)]
@@ -154,9 +202,8 @@
     </span><span class="kw">pub </span>n_choices: usize,
     <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;f32&gt;))]
     </span><span class="kw">pub </span>presence_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
-    <span class="attr">#[serde(rename = <span class="string">"frequency_penalty"</span>)]
-    #[schema(example = <span class="macro">json!</span>(Option::None::&lt;f32&gt;))]
-    </span><span class="kw">pub </span>repetition_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
+    <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;f32&gt;))]
+    </span><span class="kw">pub </span>frequency_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
     <span class="attr">#[serde(rename = <span class="string">"stop"</span>)]
     #[schema(example = <span class="macro">json!</span>(Option::None::&lt;StopTokens&gt;))]
     </span><span class="kw">pub </span>stop_seqs: <span class="prelude-ty">Option</span>&lt;StopTokens&gt;,
@@ -171,8 +218,8 @@
     </span><span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;usize&gt;))]
     </span><span class="kw">pub </span>top_k: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 
-    <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;ChatCompletionGrammar&gt;))]
-    </span><span class="kw">pub </span>grammar: <span class="prelude-ty">Option</span>&lt;ChatCompletionGrammar&gt;,
+    <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;Grammar&gt;))]
+    </span><span class="kw">pub </span>grammar: <span class="prelude-ty">Option</span>&lt;Grammar&gt;,
 }
 
 <span class="attr">#[derive(Debug, Serialize, ToSchema)]
@@ -187,5 +234,54 @@
 </span><span class="kw">pub struct </span>ModelObjects {
     <span class="kw">pub </span>object: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str,
     <span class="kw">pub </span>data: Vec&lt;ModelObject&gt;,
+}
+
+<span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+</span><span class="kw">pub struct </span>CompletionRequest {
+    <span class="attr">#[schema(example = <span class="string">"mistral"</span>)]
+    </span><span class="kw">pub </span>model: String,
+    <span class="attr">#[schema(example = <span class="string">"Say this is a test."</span>)]
+    </span><span class="kw">pub </span>prompt: String,
+    <span class="attr">#[serde(default = <span class="string">"default_1usize"</span>)]
+    #[schema(example = <span class="number">1</span>)]
+    </span><span class="kw">pub </span>best_of: usize,
+    <span class="attr">#[serde(rename = <span class="string">"echo"</span>)]
+    #[serde(default = <span class="string">"default_false"</span>)]
+    #[schema(example = <span class="bool-val">false</span>)]
+    </span><span class="kw">pub </span>echo_prompt: bool,
+    <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;f32&gt;))]
+    </span><span class="kw">pub </span>presence_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
+    <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;f32&gt;))]
+    </span><span class="kw">pub </span>frequency_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
+    <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;HashMap&lt;u32, f32&gt;&gt;))]
+    </span><span class="kw">pub </span>logit_bias: <span class="prelude-ty">Option</span>&lt;HashMap&lt;u32, f32&gt;&gt;,
+    <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;usize&gt;))]
+    </span><span class="kw">pub </span>logprobs: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    <span class="attr">#[schema(example = <span class="number">16</span>)]
+    </span><span class="kw">pub </span>max_tokens: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    <span class="attr">#[serde(rename = <span class="string">"n"</span>)]
+    #[serde(default = <span class="string">"default_1usize"</span>)]
+    #[schema(example = <span class="number">1</span>)]
+    </span><span class="kw">pub </span>n_choices: usize,
+    <span class="attr">#[serde(rename = <span class="string">"stop"</span>)]
+    #[schema(example = <span class="macro">json!</span>(Option::None::&lt;StopTokens&gt;))]
+    </span><span class="kw">pub </span>stop_seqs: <span class="prelude-ty">Option</span>&lt;StopTokens&gt;,
+    <span class="attr">#[serde(rename = <span class="string">"stream"</span>)]
+    </span><span class="kw">pub </span>_stream: <span class="prelude-ty">Option</span>&lt;bool&gt;,
+    <span class="attr">#[schema(example = <span class="number">0.7</span>)]
+    </span><span class="kw">pub </span>temperature: <span class="prelude-ty">Option</span>&lt;f64&gt;,
+    <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;f64&gt;))]
+    </span><span class="kw">pub </span>top_p: <span class="prelude-ty">Option</span>&lt;f64&gt;,
+    <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;String&gt;))]
+    </span><span class="kw">pub </span>suffix: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    <span class="attr">#[serde(rename = <span class="string">"user"</span>)]
+    </span><span class="kw">pub </span>_user: <span class="prelude-ty">Option</span>&lt;String&gt;,
+
+    <span class="comment">// mistral.rs additional
+    </span><span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;usize&gt;))]
+    </span><span class="kw">pub </span>top_k: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+
+    <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;Grammar&gt;))]
+    </span><span class="kw">pub </span>grammar: <span class="prelude-ty">Option</span>&lt;Grammar&gt;,
 }
 </code></pre></div></section></main></body></html>

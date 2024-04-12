@@ -135,6 +135,36 @@
 <a href="#133" id="133">133</a>
 <a href="#134" id="134">134</a>
 <a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a>
+<a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
 </pre></div><pre class="rust"><code><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>tokens;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>varbuilder_utils;
 
@@ -202,37 +232,67 @@
                         <span class="prelude-val">Ok</span>(v) =&gt; v,
                         <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; <span class="string">""</span>.to_string(),
                     };
-                    <span class="kw">let </span>choice = Choice {
-                        stopreason: <span class="string">"error"</span>.to_string(),
-                        index: seq.get_response_index(),
-                        message: ResponseMessage {
-                            content: res,
-                            role: <span class="string">"assistant"</span>.to_string(),
-                        },
-                        logprobs: <span class="prelude-val">None</span>,
-                    };
-                    seq.add_choice_to_group(choice);
+
+                    <span class="kw">if </span>seq.get_mut_group().is_chat {
+                        <span class="kw">let </span>choice = Choice {
+                            stopreason: <span class="string">"error"</span>.to_string(),
+                            index: seq.get_response_index(),
+                            message: ResponseMessage {
+                                content: res,
+                                role: <span class="string">"assistant"</span>.to_string(),
+                            },
+                            logprobs: <span class="prelude-val">None</span>,
+                        };
+                        seq.add_choice_to_group(choice);
+                    } <span class="kw">else </span>{
+                        <span class="kw">let </span>choice = CompletionChoice {
+                            stopreason: <span class="string">"error"</span>.to_string(),
+                            index: seq.get_response_index(),
+                            text: res,
+                            logprobs: <span class="prelude-val">None</span>,
+                        };
+                        seq.add_completion_choice_to_group(choice);
+                    }
                 }
                 <span class="kw">for </span>seq <span class="kw">in </span><span class="macro-nonterminal">$seq_slice</span>.iter_mut() {
                     <span class="comment">// Step 2: Respond with all groups
                     </span><span class="kw">let </span>group = seq.get_mut_group();
 
-                    <span class="kw">let </span>partial_completion_response = ChatCompletionResponse {
-                        id: seq.id().to_string(),
-                        choices: group.get_choices().to_vec(),
-                        created: seq.creation_time(),
-                        model: <span class="macro-nonterminal">$pipeline</span>.name(),
-                        system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
-                        object: <span class="string">"chat.completion"</span>.to_string(),
-                        usage: group.get_usage(),
-                    };
+                    <span class="kw">if </span>group.is_chat {
+                        <span class="kw">let </span>partial_completion_response = ChatCompletionResponse {
+                            id: seq.id().to_string(),
+                            choices: group.get_choices().to_vec(),
+                            created: seq.creation_time(),
+                            model: <span class="macro-nonterminal">$pipeline</span>.name(),
+                            system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                            object: <span class="string">"chat.completion"</span>.to_string(),
+                            usage: group.get_usage(),
+                        };
 
-                    seq.responder()
-                        .send(Response::ModelError(
-                            e.to_string(),
-                            partial_completion_response
-                        ))
-                        .unwrap();
+                        seq.responder()
+                            .send(Response::ModelError(
+                                e.to_string(),
+                                partial_completion_response
+                            ))
+                            .unwrap();
+                    } <span class="kw">else </span>{
+                        <span class="kw">let </span>partial_completion_response = CompletionResponse {
+                            id: seq.id().to_string(),
+                            choices: group.get_completion_choices().to_vec(),
+                            created: seq.creation_time(),
+                            model: <span class="macro-nonterminal">$pipeline</span>.name(),
+                            system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                            object: <span class="string">"text_completion"</span>.to_string(),
+                            usage: group.get_usage(),
+                        };
+
+                        seq.responder()
+                            .send(Response::CompletionModelError(
+                                e.to_string(),
+                                partial_completion_response
+                            ))
+                            .unwrap();
+                    }
                 }
                 <span class="kw">for </span>seq <span class="kw">in </span><span class="macro-nonterminal">$seq_slice</span>.iter_mut() {
                     <span class="comment">// Step 3: Set state - This cannot be done in Step 2 as `group` is locking the refcell
