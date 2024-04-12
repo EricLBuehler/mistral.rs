@@ -106,7 +106,7 @@ curl http://localhost:8080/v1/chat/completions \
 -H "Authorization: Bearer EMPTY" \
 -d '{
 "model": "",
-"prompt": "What is Rust"?
+"prompt": "What is Rust?"
 ]
 }'
 ```
