@@ -12,7 +12,7 @@ pub struct RecRx {
 }
 
 impl RecRx {
-    pub fn from_rx(rx: &str) -> Self {
+    pub fn from_rx(rx: &str) -> anyhow::Result<Self> {
         let rx = if rx.ends_with('$') {
             rx.to_string()
         } else {
@@ -22,9 +22,9 @@ impl RecRx {
             .configure(dense::Config::new().start_kind(regex_automata::dfa::StartKind::Anchored))
             .syntax(syntax::Config::new().unicode(false).utf8(false))
             .build(&rx)
-            .unwrap();
+            .map_err(|e| anyhow::Error::msg(format!("Could not compile regex `{rx}` - {e:?}")))?;
 
-        Self { dfa }
+        Ok(Self { dfa })
     }
 }
 
