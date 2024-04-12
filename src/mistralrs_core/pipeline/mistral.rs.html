@@ -636,7 +636,7 @@
 <span class="kw">pub struct </span>MistralPipeline {
     model: Model,
     tokenizer: Tokenizer,
-    tok_trie: TokTrie,
+    tok_trie: Arc&lt;TokTrie&gt;,
     config: MistralSpecificConfig,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
@@ -955,7 +955,7 @@
 
         <span class="prelude-val">Ok</span>(Box::new(Mutex::new(MistralPipeline {
             model,
-            tok_trie: build_tok_trie(tokenizer.clone()),
+            tok_trie: build_tok_trie(tokenizer.clone()).into(),
             tokenizer,
             config: <span class="self">self</span>.config,
             no_kv_cache: <span class="self">self</span>.no_kv_cache,
@@ -1092,8 +1092,8 @@
     <span class="kw">fn </span>get_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;NonGranularState&gt; {
         <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state
     }
-    <span class="kw">fn </span>tok_trie(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>TokTrie {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.tok_trie
+    <span class="kw">fn </span>tok_trie(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;TokTrie&gt; {
+        <span class="self">self</span>.tok_trie.clone()
     }
 }
 </code></pre></div></section></main></body></html>

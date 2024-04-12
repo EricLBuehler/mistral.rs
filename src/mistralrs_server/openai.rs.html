@@ -140,8 +140,6 @@
 <a href="#138" id="138">138</a>
 <a href="#139" id="139">139</a>
 <a href="#140" id="140">140</a>
-<a href="#141" id="141">141</a>
-<a href="#142" id="142">142</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>std::collections::HashMap;
@@ -159,8 +157,6 @@
 </span><span class="kw">pub enum </span>StopTokens {
     Multi(Vec&lt;String&gt;),
     Single(String),
-    MultiId(Vec&lt;u32&gt;),
-    SingleId(u32),
 }
 
 <span class="kw">fn </span>default_false() -&gt; bool {
