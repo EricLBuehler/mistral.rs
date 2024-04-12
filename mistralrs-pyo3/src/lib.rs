@@ -178,9 +178,9 @@ impl Runner {
         Python::with_gil(|py| {
             let request = request.bind(py).borrow();
             let stop_toks = request
-                .stop_token_ids
+                .stop_tokens
                 .as_ref()
-                .map(|x| StopTokens::Ids(x.to_vec()));
+                .map(|x| StopTokens::Seqs(x.to_vec()));
             let constraint = if request.grammar_type == Some("regex".to_string()) {
                 if request.grammar.is_none() {
                     return Err(PyValueError::new_err(
@@ -269,7 +269,7 @@ struct CompletionRequest {
     logit_bias: Option<HashMap<u32, f32>>,
     max_tokens: Option<usize>,
     n_choices: usize,
-    stop_token_ids: Option<Vec<u32>>,
+    stop_tokens: Option<Vec<String>>,
     temperature: Option<f64>,
     top_p: Option<f64>,
     suffix: Option<String>,
@@ -281,7 +281,7 @@ struct CompletionRequest {
 #[pymethods]
 impl CompletionRequest {
     #[new]
-    #[pyo3(signature = (prompt, model, best_of = 1, echo_prompt = false, presence_penalty=None,frequency_penalty=None,logit_bias=None,max_tokens=None,n_choices=1,stop_token_ids=None,temperature=None,top_p=None,suffix=None,top_k=None, grammar = None, grammar_type = None))]
+    #[pyo3(signature = (prompt, model, best_of = 1, echo_prompt = false, presence_penalty=None,frequency_penalty=None,logit_bias=None,max_tokens=None,n_choices=1,stop_tokens=None,temperature=None,top_p=None,suffix=None,top_k=None, grammar = None, grammar_type = None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         prompt: String,
@@ -293,7 +293,7 @@ impl CompletionRequest {
         logit_bias: Option<HashMap<u32, f32>>,
         max_tokens: Option<usize>,
         n_choices: usize,
-        stop_token_ids: Option<Vec<u32>>,
+        stop_tokens: Option<Vec<String>>,
         temperature: Option<f64>,
         top_p: Option<f64>,
         suffix: Option<String>,
@@ -312,7 +312,7 @@ impl CompletionRequest {
             n_choices,
             presence_penalty,
             frequency_penalty,
-            stop_token_ids,
+            stop_tokens,
             temperature,
             top_p,
             top_k,
