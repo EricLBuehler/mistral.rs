@@ -466,13 +466,6 @@
 <a href="#464" id="464">464</a>
 <a href="#465" id="465">465</a>
 <a href="#466" id="466">466</a>
-<a href="#467" id="467">467</a>
-<a href="#468" id="468">468</a>
-<a href="#469" id="469">469</a>
-<a href="#470" id="470">470</a>
-<a href="#471" id="471">471</a>
-<a href="#472" id="472">472</a>
-<a href="#473" id="473">473</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -481,7 +474,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
 <span class="kw">use </span><span class="kw">crate</span>::deserialize_chat_template;
 <span class="kw">use </span><span class="kw">crate</span>::models::Cache;
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::{calculate_eos_tok, ChatTemplate};
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::{NonGranularState, XLoraConfig, XLoraGemma};
 <span class="kw">use crate</span>::{
     models::gemma::{Config, Model <span class="kw">as </span>NormalModel},
@@ -490,7 +483,6 @@
 };
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
-<span class="kw">use </span>either::Either;
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
 <span class="kw">use </span>serde::Deserialize;
@@ -564,6 +556,7 @@
     non_granular_state: <span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
     model_id: String,
     is_lora: bool,
+    eos_tok: u32,
 }
 
 <span class="kw">pub struct </span>GemmaLoader {
@@ -824,6 +817,7 @@
 
         <span class="prelude-val">Ok</span>(Box::new(Mutex::new(GemmaPipeline {
             model,
+            eos_tok: calculate_eos_tok(<span class="kw-2">&amp;</span>chat_template, <span class="kw-2">&amp;</span>tokenizer),
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer,
             config: <span class="self">self</span>.config,
@@ -908,15 +902,7 @@
         <span class="self">self</span>.tokenizer.clone()
     }
     <span class="kw">fn </span>eos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u32 {
-        <span class="kw">let </span>eos_tok = <span class="kw">match </span><span class="self">self</span>.get_chat_template().eos_token {
-            Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit,
-            Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="kw-2">&amp;</span>added.content,
-        };
-        <span class="self">self</span>.tokenizer
-            .get_vocab(<span class="bool-val">true</span>)
-            .get(eos_tok)
-            .copied()
-            .unwrap_or_else(|| <span class="macro">panic!</span>(<span class="string">"Unable to extract `{eos_tok}` EOS token."</span>))
+        <span class="self">self</span>.eos_tok
     }
     <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
         <span class="self">self</span>.model_id.clone()
