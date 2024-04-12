@@ -97,9 +97,9 @@ impl Runner {
         Python::with_gil(|py| {
             let request = request.bind(py).borrow();
             let stop_toks = request
-                .stop_token_ids
+                .stop_tokens
                 .as_ref()
-                .map(|x| StopTokens::Ids(x.to_vec()));
+                .map(|x| StopTokens::Seqs(x.to_vec()));
             let constraint = if request.grammar_type == Some("regex".to_string()) {
                 if request.grammar.is_none() {
                     return Err(PyValueError::new_err(
@@ -181,7 +181,7 @@ struct ChatCompletionRequest {
     n_choices: usize,
     presence_penalty: Option<f32>,
     repetition_penalty: Option<f32>,
-    stop_token_ids: Option<Vec<u32>>,
+    stop_tokens: Option<Vec<String>>,
     temperature: Option<f64>,
     top_p: Option<f64>,
     stream: bool,
@@ -193,7 +193,7 @@ struct ChatCompletionRequest {
 #[pymethods]
 impl ChatCompletionRequest {
     #[new]
-    #[pyo3(signature = (messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, repetition_penalty = None, stop_token_ids = None, temperature = None, top_p = None, top_k = None, stream=false, grammar = None, grammar_type = None))]
+    #[pyo3(signature = (messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, repetition_penalty = None, stop_tokens = None, temperature = None, top_p = None, top_k = None, stream=false, grammar = None, grammar_type = None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         messages: Py<PyAny>,
@@ -205,7 +205,7 @@ impl ChatCompletionRequest {
         max_tokens: Option<usize>,
         presence_penalty: Option<f32>,
         repetition_penalty: Option<f32>,
-        stop_token_ids: Option<Vec<u32>>,
+        stop_tokens: Option<Vec<String>>,
         temperature: Option<f64>,
         top_p: Option<f64>,
         top_k: Option<usize>,
@@ -254,7 +254,7 @@ impl ChatCompletionRequest {
             n_choices,
             presence_penalty,
             repetition_penalty,
-            stop_token_ids,
+            stop_tokens,
             temperature,
             top_p,
             top_k,
