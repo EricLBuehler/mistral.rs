@@ -157,6 +157,7 @@ impl Engine {
                 pipeline.get_max_seq_len(),
                 &pipeline.tokenizer(),
             );
+            let is_done = handle_seq_error_stateaware!(is_done, seq);
             // Handle streaming requests
             if seq.get_mut_group().is_streaming && seq.get_mut_group().is_chat {
                 let tokenizer = pipeline.tokenizer();

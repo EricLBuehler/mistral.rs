@@ -260,28 +260,28 @@ impl Sequence {
         eos_tok: u32,
         max_model_len: usize,
         tokenizer: &Tokenizer,
-    ) -> Option<StopReason> {
+    ) -> anyhow::Result<Option<StopReason>> {
         if tok == eos_tok {
-            Some(StopReason::Eos)
+            Ok(Some(StopReason::Eos))
         } else if self.stop_tokens.contains(&tok) {
-            Some(StopReason::StopTok(tok))
+            Ok(Some(StopReason::StopTok(tok)))
         } else if self.max_len.is_some()
             && self.tokens.len().saturating_sub(self.prompt_len) == self.max_len.unwrap()
         {
             // add_token was already called
-            Some(StopReason::Length(self.max_len.unwrap()))
+            Ok(Some(StopReason::Length(self.max_len.unwrap())))
         } else if self.tokens.len().saturating_sub(self.prompt_len) == max_model_len {
-            Some(StopReason::ModelLength(max_model_len))
+            Ok(Some(StopReason::ModelLength(max_model_len)))
         } else {
             if !self.stop_strings.is_empty() {
-                let generated_text = self.generated_text(tokenizer).unwrap();
+                let generated_text = self.generated_text(tokenizer)?;
                 for (idx, s) in self.stop_strings.iter().enumerate() {
                     if generated_text.contains(s) {
-                        return Some(StopReason::StopString(idx));
+                        return Ok(Some(StopReason::StopString(idx)));
                     }
                 }
             }
-            None
+            Ok(None)
         }
     }
 
