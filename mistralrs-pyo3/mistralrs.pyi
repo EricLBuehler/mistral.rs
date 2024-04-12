@@ -17,7 +17,7 @@ class ChatCompletionRequest:
     n_choices: int = 1
     presence_penalty: float | None = None
     frequency_penalty: float | None = None
-    stop_token_ids: list[int] | None = None
+    stop_seqs: list[str] | None = None
     temperature: float | None = None
     top_p: float | None = None
     stream: bool = False
@@ -42,7 +42,7 @@ class CompletionRequest:
     best_of: int = 1
     presence_penalty: float | None = None
     frequency_penalty: float | None = None
-    stop_token_ids: list[int] | None = None
+    stop_seqs: list[str] | None = None
     temperature: float | None = None
     top_p: float | None = None
     stream: bool = False
