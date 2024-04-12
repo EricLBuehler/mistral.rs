@@ -80,7 +80,7 @@ impl ModelPaths for GemmaModelPaths<PathBuf> {
 
 pub struct GemmaPipeline {
     model: Model,
-    tokenizer: Tokenizer,
+    tokenizer: Arc<Tokenizer>,
     tok_trie: TokTrie,
     config: GemmaSpecificConfig,
     no_kv_cache: bool,
@@ -351,7 +351,7 @@ impl Loader for GemmaLoader {
             model,
             eos_tok: calculate_eos_tok(&chat_template, &tokenizer),
             tok_trie: build_tok_trie(tokenizer.clone()),
-            tokenizer,
+            tokenizer: tokenizer.into(),
             config: self.config,
             no_kv_cache: self.no_kv_cache,
             chat_template,
@@ -430,7 +430,7 @@ impl Pipeline for GemmaPipeline {
     fn get_repeat_last_n(&self) -> usize {
         self.config.repeat_last_n
     }
-    fn tokenizer(&self) -> Tokenizer {
+    fn tokenizer(&self) -> Arc<Tokenizer> {
         self.tokenizer.clone()
     }
     fn eos_tok(&self) -> u32 {

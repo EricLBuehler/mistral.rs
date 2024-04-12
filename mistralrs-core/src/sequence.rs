@@ -27,6 +27,7 @@ pub enum StopReason {
     StopTok(u32),
     Length(usize),
     ModelLength(usize),
+    StopString(/* Index in the list of stop strings */ usize),
 }
 
 impl ToString for StopReason {
@@ -34,7 +35,7 @@ impl ToString for StopReason {
         match self {
             StopReason::Eos => "stop".to_string(),
             StopReason::Length(_) | StopReason::ModelLength(_) => "length".to_string(),
-            StopReason::StopTok(_) => "stop".to_string(),
+            StopReason::StopTok(_) | StopReason::StopString(_) => "stop".to_string(),
         }
     }
 }
@@ -64,6 +65,7 @@ pub struct Sequence {
     timestamp: u128,
     sampler: Sampler,
     stop_tokens: Vec<u32>,
+    stop_strings: Vec<String>,
     return_logprobs: bool,
     responder: Sender<Response>,
     response_index: usize,
@@ -82,6 +84,7 @@ pub struct Sequence {
     decoded_tokens: Option<Vec<u8>>,
     logprobs: Vec<Logprobs>,
     cumulative_logprob: f32,
+    completion_bytes: Vec<u8>,
 
     // GPU things
     pub prompt_tok_per_sec: f32,
@@ -92,7 +95,6 @@ pub struct Sequence {
 
     pub recognizer: SequenceRecognizer,
 }
-
 impl Sequence {
     #[allow(clippy::too_many_arguments)]
     pub fn new_waiting(
@@ -104,6 +106,7 @@ impl Sequence {
         responder: Sender<Response>,
         sampler: Sampler,
         stop_tokens: Vec<u32>,
+        stop_strings: Vec<String>,
         max_len: Option<usize>,
         return_logprobs: bool,
         is_xlora: bool,
@@ -133,6 +136,7 @@ impl Sequence {
             responder,
             sampler,
             stop_tokens,
+            stop_strings,
             max_len,
             return_logprobs,
             prompt_tok_per_sec: 0.,
@@ -147,6 +151,7 @@ impl Sequence {
             suffix,
             prefix,
             cumulative_logprob: 0.,
+            completion_bytes: Vec::new(),
         }
     }
 
@@ -223,7 +228,8 @@ impl Sequence {
         &mut self.sampler
     }
 
-    pub fn add_token(&mut self, tok: Logprobs) {
+    pub fn add_token(&mut self, tok: Logprobs, completion_bytes: Vec<u8>) {
+        self.completion_bytes.extend_from_slice(&completion_bytes);
         self.cumulative_logprob += tok.logprob;
         self.tokens.push(tok.token);
         self.logprobs.push(tok);
@@ -257,6 +263,13 @@ impl Sequence {
         } else if self.tokens.len().saturating_sub(self.prompt_len) == max_model_len {
             Some(StopReason::ModelLength(max_model_len))
         } else {
+            if !self.stop_strings.is_empty() {
+                for (idx, s) in self.stop_strings.iter().enumerate() {
+                    if galil_seiferas::gs_find(&self.completion_bytes, s.as_bytes()).is_some() {
+                        return Some(StopReason::StopString(idx));
+                    }
+                }
+            }
             None
         }
     }

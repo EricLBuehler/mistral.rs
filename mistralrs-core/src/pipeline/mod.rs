@@ -20,6 +20,7 @@ use mistralrs_lora::{LoraConfig, Ordering};
 pub use mixtral::{MixtralLoader, MixtralSpecificConfig, MIXTRAL_IS_GPTX};
 pub use phi2::{Phi2Loader, Phi2SpecificConfig, PHI2_IS_GPTX};
 use serde::Deserialize;
+use std::sync::Arc;
 use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
 use tokenizers::Tokenizer;
 
@@ -247,7 +248,7 @@ pub trait Pipeline: Send + Sync {
     fn device(&self) -> &Device;
     fn num_hidden_layers(&self) -> usize;
     fn cache(&self) -> &Cache;
-    fn tokenizer(&self) -> Tokenizer;
+    fn tokenizer(&self) -> Arc<Tokenizer>;
     fn tok_trie(&self) -> &TokTrie;
     fn eos_tok(&self) -> u32;
     fn name(&self) -> String;
