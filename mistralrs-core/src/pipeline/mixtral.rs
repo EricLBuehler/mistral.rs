@@ -86,7 +86,7 @@ impl ModelPaths for MixtralModelPaths<PathBuf> {
 pub struct MixtralPipeline {
     model: Model,
     tokenizer: Tokenizer,
-    tok_trie: Arc<TokTrie>,
+    tok_trie: TokTrie,
     config: MixtralSpecificConfig,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
@@ -546,7 +546,7 @@ impl Pipeline for MixtralPipeline {
     fn get_non_granular_state(&self) -> &Option<NonGranularState> {
         &self.non_granular_state
     }
-    fn tok_trie(&self) -> Arc<TokTrie> {
-        self.tok_trie.clone()
+    fn tok_trie(&self) -> &TokTrie {
+        &self.tok_trie
     }
 }

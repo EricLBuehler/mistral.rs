@@ -486,11 +486,12 @@ impl Engine {
         let topp = request.sampling_params.top_p.unwrap_or(1.0);
         let num_hidden_layers = get_mut_arcmutex!(self.pipeline).num_hidden_layers();
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
-        let tok_trie = get_mut_arcmutex!(self.pipeline).tok_trie();
 
         let (stop_toks, stop_strings) = match request.sampling_params.stop_toks {
             None => (vec![], vec![]),
             Some(StopTokens::Ids(ref i)) => {
+                let pipeline = get_mut_arcmutex!(self.pipeline);
+                let tok_trie = pipeline.tok_trie();
                 for id in i {
                     // We can't use ` ` (space) as a stop token because other tokens like ` moon` start with a space.
                     if tok_trie.has_extensions(tok_trie.token(*id)) {
@@ -509,6 +510,9 @@ impl Engine {
             Some(StopTokens::Seqs(ref s)) => {
                 let mut stop_toks = Vec::new();
                 let mut stop_strings: Vec<String> = Vec::new();
+
+                let pipeline = get_mut_arcmutex!(self.pipeline);
+                let tok_trie = pipeline.tok_trie();
 
                 for stop_txt in s {
                     let encoded = tokenizer.encode(stop_txt.to_string(), false);
