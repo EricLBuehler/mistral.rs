@@ -40,6 +40,7 @@ rustc-hash = "1.1.0"
 vob = "3.0.3"
 cfgrammar = "0.13.3"
 lrtable = "0.13.3"
+rayon = "1.10.0"
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]

@@ -7,6 +7,7 @@ use rand::{
     distributions::{Distribution, WeightedIndex},
     SeedableRng,
 };
+use rayon::slice::ParallelSliceMut;
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 
@@ -115,7 +116,7 @@ impl Sampler {
     ) -> Result<Vec<TopLogprob>> {
         let mut argsort_indices_sorted = argsort_indices.to_vec();
         // Sort by descending prob
-        argsort_indices_sorted.sort_by(|a, b| probs[*b].partial_cmp(&probs[*a]).unwrap());
+        argsort_indices_sorted.par_sort_by(|a, b| probs[*b].partial_cmp(&probs[*a]).unwrap());
         // These are where the top n are
         let top_n_toks_range = 0..self.top_n_logprobs;
         // The top n's values
@@ -212,7 +213,7 @@ impl Sampler {
         let mut argsort_indices = (0..probs.len()).collect::<Vec<_>>();
 
         // Sort by descending probability.
-        argsort_indices.sort_by(|&i, &j| probs[j].partial_cmp(&probs[i]).unwrap());
+        argsort_indices.par_sort_by(|&i, &j| probs[j].partial_cmp(&probs[i]).unwrap());
 
         if top_k > 0 {
             // Clamp smaller probabilities to zero.
