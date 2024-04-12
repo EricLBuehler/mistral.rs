@@ -7,7 +7,11 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use crate::aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx};
+use crate::{
+    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
+    response::CompletionChoice,
+    CompletionResponse, RequestType,
+};
 use candle_core::Tensor;
 use either::Either;
 use tracing::warn;
@@ -149,7 +153,7 @@ impl Engine {
             seq.add_token(next_token.clone());
             let is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
             // Handle streaming requests
-            if seq.get_mut_group().is_streaming {
+            if seq.get_mut_group().is_streaming && seq.get_mut_group().is_chat {
                 let tokenizer = pipeline.tokenizer().clone();
                 if let Some(delta) = handle_seq_error!(seq.get_delta(&tokenizer), seq.responder()) {
                     seq.add_streaming_chunk_choice_to_group(ChunkChoice {
@@ -215,30 +219,55 @@ impl Engine {
             seq.responder()
         );
 
-        let choice = Choice {
-            stopreason: reason.to_string(),
-            index: seq.get_response_index(),
-            message: ResponseMessage {
-                content: res,
-                role: "assistant".to_string(),
-            },
-            logprobs: logprobs.map(|l| Logprobs { content: Some(l) }),
-        };
-        seq.add_choice_to_group(choice);
+        if seq.get_mut_group().is_chat {
+            let choice = Choice {
+                stopreason: reason.to_string(),
+                index: seq.get_response_index(),
+                message: ResponseMessage {
+                    content: res,
+                    role: "assistant".to_string(),
+                },
+                logprobs: logprobs.map(|l| Logprobs { content: Some(l) }),
+            };
+            seq.add_choice_to_group(choice);
+        } else {
+            let choice = CompletionChoice {
+                stopreason: reason.to_string(),
+                index: seq.get_response_index(),
+                text: res,
+                logprobs: None,
+            };
+            seq.add_completion_choice_to_group(choice);
+        }
 
         let group = seq.get_mut_group();
-        group.maybe_send_done_response(
-            ChatCompletionResponse {
-                id: seq.id().to_string(),
-                choices: group.get_choices().to_vec(),
-                created: seq.creation_time(),
-                model: pipeline.name(),
-                system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
-                object: "chat.completion".to_string(),
-                usage: group.get_usage(),
-            },
-            seq.responder(),
-        );
+        if group.is_chat {
+            group.maybe_send_done_response(
+                ChatCompletionResponse {
+                    id: seq.id().to_string(),
+                    choices: group.get_choices().to_vec(),
+                    created: seq.creation_time(),
+                    model: pipeline.name(),
+                    system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                    object: "chat.completion".to_string(),
+                    usage: group.get_usage(),
+                },
+                seq.responder(),
+            );
+        } else {
+            group.maybe_send_completion_done_response(
+                CompletionResponse {
+                    id: seq.id().to_string(),
+                    choices: group.get_completion_choices().to_vec(),
+                    created: seq.creation_time(),
+                    model: pipeline.name(),
+                    system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                    object: "text_completion".to_string(),
+                    usage: group.get_usage(),
+                },
+                seq.responder(),
+            );
+        }
     }
 
     /// Clone the cache FROM the sequences' cache TO the model cache. Only used for completion seqs.
@@ -480,6 +509,8 @@ impl Engine {
         let group = Rc::new(RefCell::new(SequenceGroup::new(
             request.sampling_params.n_choices,
             request.is_streaming,
+            request.request_type == RequestType::Chat,
+            request.best_of,
         )));
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -525,6 +556,16 @@ impl Engine {
                 response_index,
                 now.as_secs(),
                 recognizer.clone(),
+                request.suffix.clone(),
+                if let RequestType::Completion { echo_prompt } = request.request_type.clone() {
+                    if echo_prompt {
+                        Some(formatted_prompt.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                },
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 match prefill_cache {

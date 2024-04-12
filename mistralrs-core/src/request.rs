@@ -10,6 +10,12 @@ pub enum Constraint {
     None,
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub enum RequestType {
+    Chat,
+    Completion { echo_prompt: bool },
+}
+
 pub struct Request {
     pub messages: Either<Vec<IndexMap<String, String>>, String>,
     pub sampling_params: SamplingParams,
@@ -18,14 +24,17 @@ pub struct Request {
     pub is_streaming: bool,
     pub id: usize,
     pub constraint: Constraint,
+    pub request_type: RequestType,
+    pub suffix: Option<String>,
+    pub best_of: Option<usize>,
 }
 
 impl Debug for Request {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Request {} {{ messages: `{:?}`, sampling_params: {:?}}}",
-            self.id, self.messages, self.sampling_params
+            "Request {} ({:?}) {{ messages: `{:?}`, sampling_params: {:?}}}",
+            self.id, self.request_type, self.messages, self.sampling_params
         )
     }
 }

@@ -16,12 +16,38 @@ class ChatCompletionRequest:
     max_tokens: int | None = None
     n_choices: int = 1
     presence_penalty: float | None = None
-    repetition_penalty: float | None = None
+    frequency_penalty: float | None = None
     stop_token_ids: list[int] | None = None
     temperature: float | None = None
     top_p: float | None = None
     stream: bool = False
     top_k: int | None = None
+    grammar: str | None = None
+    grammar_type: str | None = None
+
+@dataclass
+class CompletionRequest:
+    """
+    A CompletionRequest represents a request sent to the mistral.rs engine. It encodes information
+    about input data, sampling, and how to return the response.
+    """
+
+    prompt: str
+    model: str
+    best_of: int
+    echo_prompt: bool
+    logit_bias: dict[int, float] | None = None
+    max_tokens: int | None = None
+    n_choices: int = 1
+    best_of: int = 1
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
+    stop_token_ids: list[int] | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    stream: bool = False
+    top_k: int | None = None
+    suffix: str | None = None
     grammar: str | None = None
     grammar_type: str | None = None
 

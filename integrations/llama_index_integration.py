@@ -365,7 +365,7 @@ class MistralRS(CustomLLM):
             top_k=self.generate_kwargs["top_k"],
             top_p=self.generate_kwargs["top_p"],
             presence_penalty=self.generate_kwargs.get("presence_penalty", None),
-            repetition_penalty=self.generate_kwargs.get("repetition_penalty", None),
+            frequency_penalty=self.generate_kwargs.get("frequency_penalty", None),
             temperature=self.generate_kwargs.get("temperature", None),
         )
         completion_response = self._runner.send_chat_completion_request(request)
@@ -399,7 +399,7 @@ class MistralRS(CustomLLM):
             top_k=self.generate_kwargs["top_k"],
             top_p=self.generate_kwargs["top_p"],
             presence_penalty=self.generate_kwargs.get("presence_penalty", None),
-            repetition_penalty=self.generate_kwargs.get("repetition_penalty", None),
+            frequency_penalty=self.generate_kwargs.get("frequency_penalty", None),
             temperature=self.generate_kwargs.get("temperature", None),
         )
         completion_response = self._runner.send_chat_completion_request(request)

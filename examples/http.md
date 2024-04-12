@@ -74,6 +74,45 @@ Example with `curl`:
 curl http://localhost:<port>/docs
 ```
 
+## `POST`: `/v1/completions`
+Process an OpenAI compatible completions request, returning an OpenAI compatible response when finished. Please find the official OpenAI API documentation [here](https://platform.openai.com/docs/api-reference/completions). 
+
+To send a request with the Python `openai` library:
+
+```python
+import openai
+
+client = openai.OpenAI(
+    base_url="http://localhost:8080/v1", # "http://<Your api-server IP>:port"
+    api_key = "EMPTY"
+)
+
+completion = client.completions.create(
+    model="mistral",
+    prompt="What is Rust?",
+    max_tokens=256,
+    frequency_penalty=1.0,
+    top_p=0.1,
+    temperature=0,
+)
+
+print(completion.choices[0].message)
+```
+
+Or with `curl`:
+```bash
+curl http://localhost:8080/v1/chat/completions \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer EMPTY" \
+-d '{
+"model": "",
+"prompt": "What is Rust?"
+]
+}'
+```
+
+Streaming requests are not supported.
+
 ## Request
 ### `ChatCompletionRequest`
 OpenAI compatible request.
@@ -134,7 +173,7 @@ pub struct ChatCompletionResponse {
     pub model: &'static str,
     pub system_fingerprint: String,
     pub object: String,
-    pub usage: ChatCompletionUsage,
+    pub usage: Usage,
 }
 ```
 
@@ -186,9 +225,9 @@ pub struct TopLogprob {
 }
 ```
 
-### `ChatCompletionUsage`
+### `Usage`
 ```rust
-pub struct ChatCompletionUsage {
+pub struct Usage {
     pub completion_tokens: usize,
     pub prompt_tokens: usize,
     pub total_tokens: usize,
