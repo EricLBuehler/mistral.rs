@@ -631,7 +631,7 @@
 
 <span class="kw">pub struct </span>MixtralPipeline {
     model: Model,
-    tokenizer: Tokenizer,
+    tokenizer: Arc&lt;Tokenizer&gt;,
     tok_trie: TokTrie,
     config: MixtralSpecificConfig,
     no_kv_cache: bool,
@@ -958,7 +958,7 @@
             model,
             eos_tok: calculate_eos_tok(<span class="kw-2">&amp;</span>chat_template, <span class="kw-2">&amp;</span>tokenizer),
             tok_trie: build_tok_trie(tokenizer.clone()),
-            tokenizer,
+            tokenizer: tokenizer.into(),
             config: <span class="self">self</span>.config,
             no_kv_cache: <span class="self">self</span>.no_kv_cache,
             chat_template,
@@ -1054,7 +1054,7 @@
     <span class="kw">fn </span>get_repeat_last_n(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="self">self</span>.config.repeat_last_n
     }
-    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Tokenizer {
+    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;Tokenizer&gt; {
         <span class="self">self</span>.tokenizer.clone()
     }
     <span class="kw">fn </span>eos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u32 {

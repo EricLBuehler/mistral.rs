@@ -264,8 +264,6 @@
 <a href="#262" id="262">262</a>
 <a href="#263" id="263">263</a>
 <a href="#264" id="264">264</a>
-<a href="#265" id="265">265</a>
-<a href="#266" id="266">266</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     env,
     error::Error,
@@ -424,8 +422,6 @@
     <span class="kw">let </span>stop_toks = <span class="kw">match </span>oairequest.stop_seqs {
         <span class="prelude-val">Some</span>(StopTokens::Multi(m)) =&gt; <span class="prelude-val">Some</span>(InternalStopTokens::Seqs(m)),
         <span class="prelude-val">Some</span>(StopTokens::Single(s)) =&gt; <span class="prelude-val">Some</span>(InternalStopTokens::Seqs(<span class="macro">vec!</span>[s])),
-        <span class="prelude-val">Some</span>(StopTokens::MultiId(m)) =&gt; <span class="prelude-val">Some</span>(InternalStopTokens::Ids(m)),
-        <span class="prelude-val">Some</span>(StopTokens::SingleId(s)) =&gt; <span class="prelude-val">Some</span>(InternalStopTokens::Ids(<span class="macro">vec!</span>[s])),
         <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
     };
     <span class="kw">let </span>messages = <span class="kw">match </span>oairequest.messages {

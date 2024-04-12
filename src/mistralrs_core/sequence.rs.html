@@ -478,6 +478,19 @@
 <a href="#476" id="476">476</a>
 <a href="#477" id="477">477</a>
 <a href="#478" id="478">478</a>
+<a href="#479" id="479">479</a>
+<a href="#480" id="480">480</a>
+<a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a>
+<a href="#491" id="491">491</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
@@ -507,6 +520,7 @@
     StopTok(u32),
     Length(usize),
     ModelLength(usize),
+    StopString(<span class="comment">/* Index in the list of stop strings */ </span>usize),
 }
 
 <span class="kw">impl </span>ToString <span class="kw">for </span>StopReason {
@@ -514,7 +528,7 @@
         <span class="kw">match </span><span class="self">self </span>{
             StopReason::Eos =&gt; <span class="string">"stop"</span>.to_string(),
             StopReason::Length(<span class="kw">_</span>) | StopReason::ModelLength(<span class="kw">_</span>) =&gt; <span class="string">"length"</span>.to_string(),
-            StopReason::StopTok(<span class="kw">_</span>) =&gt; <span class="string">"stop"</span>.to_string(),
+            StopReason::StopTok(<span class="kw">_</span>) | StopReason::StopString(<span class="kw">_</span>) =&gt; <span class="string">"stop"</span>.to_string(),
         }
     }
 }
@@ -544,6 +558,7 @@
     timestamp: u128,
     sampler: Sampler,
     stop_tokens: Vec&lt;u32&gt;,
+    stop_strings: Vec&lt;String&gt;,
     return_logprobs: bool,
     responder: Sender&lt;Response&gt;,
     response_index: usize,
@@ -562,6 +577,7 @@
     decoded_tokens: <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt;,
     logprobs: Vec&lt;Logprobs&gt;,
     cumulative_logprob: f32,
+    completion_bytes: Vec&lt;u8&gt;,
 
     <span class="comment">// GPU things
     </span><span class="kw">pub </span>prompt_tok_per_sec: f32,
@@ -572,7 +588,6 @@
 
     <span class="kw">pub </span>recognizer: SequenceRecognizer,
 }
-
 <span class="kw">impl </span>Sequence {
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>new_waiting(
@@ -584,6 +599,7 @@
         responder: Sender&lt;Response&gt;,
         sampler: Sampler,
         stop_tokens: Vec&lt;u32&gt;,
+        stop_strings: Vec&lt;String&gt;,
         max_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
         return_logprobs: bool,
         is_xlora: bool,
@@ -613,6 +629,7 @@
             responder,
             sampler,
             stop_tokens,
+            stop_strings,
             max_len,
             return_logprobs,
             prompt_tok_per_sec: <span class="number">0.</span>,
@@ -627,6 +644,7 @@
             suffix,
             prefix,
             cumulative_logprob: <span class="number">0.</span>,
+            completion_bytes: Vec::new(),
         }
     }
 
@@ -703,7 +721,8 @@
         <span class="kw-2">&amp;mut </span><span class="self">self</span>.sampler
     }
 
-    <span class="kw">pub fn </span>add_token(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tok: Logprobs) {
+    <span class="kw">pub fn </span>add_token(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tok: Logprobs, completion_bytes: Vec&lt;u8&gt;) {
+        <span class="self">self</span>.completion_bytes.extend_from_slice(<span class="kw-2">&amp;</span>completion_bytes);
         <span class="self">self</span>.cumulative_logprob += tok.logprob;
         <span class="self">self</span>.tokens.push(tok.token);
         <span class="self">self</span>.logprobs.push(tok);
@@ -737,6 +756,13 @@
         } <span class="kw">else if </span><span class="self">self</span>.tokens.len().saturating_sub(<span class="self">self</span>.prompt_len) == max_model_len {
             <span class="prelude-val">Some</span>(StopReason::ModelLength(max_model_len))
         } <span class="kw">else </span>{
+            <span class="kw">if </span>!<span class="self">self</span>.stop_strings.is_empty() {
+                <span class="kw">for </span>(idx, s) <span class="kw">in </span><span class="self">self</span>.stop_strings.iter().enumerate() {
+                    <span class="kw">if </span>galil_seiferas::gs_find(<span class="kw-2">&amp;</span><span class="self">self</span>.completion_bytes, s.as_bytes()).is_some() {
+                        <span class="kw">return </span><span class="prelude-val">Some</span>(StopReason::StopString(idx));
+                    }
+                }
+            }
             <span class="prelude-val">None
         </span>}
     }

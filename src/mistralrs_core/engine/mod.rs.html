@@ -582,6 +582,37 @@
 <a href="#580" id="580">580</a>
 <a href="#581" id="581">581</a>
 <a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a>
+<a href="#588" id="588">588</a>
+<a href="#589" id="589">589</a>
+<a href="#590" id="590">590</a>
+<a href="#591" id="591">591</a>
+<a href="#592" id="592">592</a>
+<a href="#593" id="593">593</a>
+<a href="#594" id="594">594</a>
+<a href="#595" id="595">595</a>
+<a href="#596" id="596">596</a>
+<a href="#597" id="597">597</a>
+<a href="#598" id="598">598</a>
+<a href="#599" id="599">599</a>
+<a href="#600" id="600">600</a>
+<a href="#601" id="601">601</a>
+<a href="#602" id="602">602</a>
+<a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a>
+<a href="#612" id="612">612</a>
+<a href="#613" id="613">613</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -734,11 +765,14 @@
             <span class="kw">let </span>next_token = <span class="macro">handle_seq_error_stateaware!</span>(sampled, seq);
             <span class="kw">let </span>next_token_id = next_token.token;
 
-            seq.add_token(next_token.clone());
+            seq.add_token(
+                next_token.clone(),
+                pipeline.tok_trie().decode(<span class="kw-2">&amp;</span>[next_token_id]),
+            );
             <span class="kw">let </span>is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
             <span class="comment">// Handle streaming requests
             </span><span class="kw">if </span>seq.get_mut_group().is_streaming &amp;&amp; seq.get_mut_group().is_chat {
-                <span class="kw">let </span>tokenizer = pipeline.tokenizer().clone();
+                <span class="kw">let </span>tokenizer = pipeline.tokenizer();
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(delta) = <span class="macro">handle_seq_error!</span>(seq.get_delta(<span class="kw-2">&amp;</span>tokenizer), seq.responder()) {
                     seq.add_streaming_chunk_choice_to_group(ChunkChoice {
                         delta: Delta {
@@ -1064,29 +1098,53 @@
             .unwrap_or(-<span class="number">1</span>);
         <span class="kw">let </span>topp = request.sampling_params.top_p.unwrap_or(<span class="number">1.0</span>);
         <span class="kw">let </span>num_hidden_layers = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).num_hidden_layers();
-        <span class="kw">let </span>tokenizer = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenizer();
 
-        <span class="kw">let </span>stop_toks = <span class="kw">match </span>request.sampling_params.stop_toks {
-            <span class="prelude-val">None </span>=&gt; <span class="macro">vec!</span>[],
-            <span class="prelude-val">Some</span>(StopTokens::Ids(<span class="kw-2">ref </span>i)) =&gt; i.clone(),
+        <span class="kw">let </span>(stop_toks, stop_strings) = <span class="kw">match </span>request.sampling_params.stop_toks {
+            <span class="prelude-val">None </span>=&gt; (<span class="macro">vec!</span>[], <span class="macro">vec!</span>[]),
+            <span class="prelude-val">Some</span>(StopTokens::Ids(<span class="kw-2">ref </span>i)) =&gt; {
+                <span class="kw">let </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
+                <span class="kw">let </span>tok_trie = pipeline.tok_trie();
+                <span class="kw">for </span>id <span class="kw">in </span>i {
+                    <span class="comment">// We can't use ` ` (space) as a stop token because other tokens like ` moon` start with a space.
+                    </span><span class="kw">if </span>tok_trie.has_extensions(tok_trie.token(<span class="kw-2">*</span>id)) {
+                        request
+                            .response
+                            .send(Response::ValidationError(
+                                <span class="macro">format!</span>(<span class="string">"Stop token {:?} is also a prefix of other tokens and cannot be used as a stop token."</span>, tok_trie.token_str(<span class="kw-2">*</span>id)).into(),
+                            ))
+                            .unwrap();
+                        <span class="kw">return</span>;
+                    }
+                }
+
+                (i.clone(), <span class="macro">vec!</span>[])
+            }
             <span class="prelude-val">Some</span>(StopTokens::Seqs(<span class="kw-2">ref </span>s)) =&gt; {
                 <span class="kw">let </span><span class="kw-2">mut </span>stop_toks = Vec::new();
-                <span class="kw">let </span>encoded = tokenizer.encode(s.clone(), <span class="bool-val">false</span>);
-                <span class="kw">let </span>toks = <span class="macro">handle_seq_error!</span>(encoded, request.response)
-                    .get_ids()
-                    .to_vec();
-                <span class="kw">if </span>toks.len() &gt; <span class="number">1 </span>{
-                    <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                    </span>request
-                        .response
-                        .send(Response::ValidationError(
-                            <span class="macro">format!</span>(<span class="string">"Stop sequence '{s:?}' encodes to multiple tokens when it should only encode to 1."</span>).into(),
-                        ))
-                        .unwrap();
-                    <span class="kw">return</span>;
+                <span class="kw">let </span><span class="kw-2">mut </span>stop_strings: Vec&lt;String&gt; = Vec::new();
+
+                <span class="kw">let </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
+                <span class="kw">let </span>tok_trie = pipeline.tok_trie();
+                <span class="kw">let </span>tokenizer = pipeline.tokenizer();
+
+                <span class="kw">for </span>stop_txt <span class="kw">in </span>s {
+                    <span class="kw">let </span>encoded = tokenizer.encode(stop_txt.to_string(), <span class="bool-val">false</span>);
+                    <span class="kw">let </span>toks = <span class="macro">handle_seq_error!</span>(encoded, request.response)
+                        .get_ids()
+                        .to_vec();
+
+                    <span class="kw">if </span>toks.len() == <span class="number">1 </span>{
+                        <span class="kw">if </span>tok_trie.has_extensions(tok_trie.token(toks[<span class="number">0</span>])) {
+                            stop_strings.push(stop_txt.clone());
+                        } <span class="kw">else </span>{
+                            stop_toks.push(toks[<span class="number">0</span>]);
+                        }
+                    } <span class="kw">else </span>{
+                        stop_strings.push(stop_txt.clone());
+                    }
                 }
-                stop_toks.push(toks[<span class="number">0</span>]);
-                stop_toks
+
+                (stop_toks, stop_strings)
             }
         };
 
@@ -1099,11 +1157,14 @@
         <span class="kw">let </span>now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect(<span class="string">"Time travel has occurred!"</span>);
+
+        <span class="kw">let </span>tokenizer = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenizer();
+
         <span class="kw">let </span>sampler = Sampler::new(
             SEED,
             <span class="prelude-val">Some</span>(request.sampling_params.temperature.unwrap_or(<span class="number">1.0</span>)),
             request.sampling_params.top_n_logprobs,
-            tokenizer.clone(),
+            tokenizer,
             request.sampling_params.frequency_penalty,
             request.sampling_params.presence_penalty,
             request.sampling_params.logits_bias.clone(),
@@ -1133,6 +1194,7 @@
                 request.response.clone(),
                 sampler.clone(),
                 stop_toks.clone(),
+                stop_strings.clone(),
                 request.sampling_params.max_len,
                 request.return_logprobs,
                 <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).is_xlora(),
