@@ -215,19 +215,41 @@ impl Engine {
             None
         };
 
-        let res = handle_seq_error!(
-            pipeline
-                .tokenizer()
-                .decode(&seq.get_toks()[seq.prompt_tokens()..], false),
-            seq.responder()
-        );
+        let text = match reason {
+            StopReason::Length(_) | StopReason::ModelLength(_) => handle_seq_error!(
+                pipeline
+                    .tokenizer()
+                    .decode(&seq.get_toks()[seq.prompt_tokens()..], false),
+                seq.responder()
+            ),
+            StopReason::Eos | StopReason::StopTok(_) => {
+                let toks = seq.get_toks();
+                handle_seq_error!(
+                    pipeline
+                        .tokenizer()
+                        .decode(&toks[seq.prompt_tokens()..toks.len() - 1], false),
+                    seq.responder()
+                )
+            }
+            StopReason::StopString(stop_str_index) => {
+                let stop_str = seq.stop_strings().get(stop_str_index).unwrap();
+                let txt = handle_seq_error!(
+                    pipeline
+                        .tokenizer()
+                        .decode(&seq.get_toks()[seq.prompt_tokens()..], false),
+                    seq.responder()
+                );
+                let stop_str_pos = txt.rfind(stop_str).unwrap();
+                txt[..stop_str_pos].to_string()
+            }
+        };
 
         if seq.get_mut_group().is_chat {
             let choice = Choice {
                 stopreason: reason.to_string(),
                 index: seq.get_response_index(),
                 message: ResponseMessage {
-                    content: res,
+                    content: text,
                     role: "assistant".to_string(),
                 },
                 logprobs: logprobs.map(|l| Logprobs { content: Some(l) }),
@@ -237,7 +259,7 @@ impl Engine {
             let choice = CompletionChoice {
                 stopreason: reason.to_string(),
                 index: seq.get_response_index(),
-                text: res,
+                text,
                 logprobs: None,
             };
             seq.add_completion_choice_to_group(choice);

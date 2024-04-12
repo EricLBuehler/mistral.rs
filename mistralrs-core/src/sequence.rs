@@ -286,6 +286,10 @@ impl Sequence {
         self.prompt_len
     }
 
+    pub fn stop_strings(&self) -> &[String] {
+        &self.stop_strings
+    }
+
     /// Returns the delta between the last two decoded sequences
     pub fn get_delta(
         &mut self,
