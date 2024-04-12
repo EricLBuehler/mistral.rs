@@ -152,7 +152,7 @@ impl Engine {
 
             seq.add_token(
                 next_token.clone(),
-                pipeline.tok_trie().decode(&vec![next_token_id]),
+                pipeline.tok_trie().decode(&[next_token_id]),
             );
             let is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
             let is_done = handle_seq_error_stateaware!(is_done, seq);
