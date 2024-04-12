@@ -101,13 +101,12 @@ print(completion.choices[0].message)
 
 Or with `curl`:
 ```bash
-curl http://localhost:8080/v1/chat/completions \
+curl http://localhost:8080/v1/completions \
 -H "Content-Type: application/json" \
 -H "Authorization: Bearer EMPTY" \
 -d '{
 "model": "",
 "prompt": "What is Rust?"
-]
 }'
 ```
 
