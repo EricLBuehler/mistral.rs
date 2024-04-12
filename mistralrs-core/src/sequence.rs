@@ -247,6 +247,18 @@ impl Sequence {
         self.state.set(state);
     }
 
+    pub fn generated_text(&self, tokenizer: &Tokenizer) -> anyhow::Result<String> {
+        let token_ids = self
+            .logprobs()
+            .iter()
+            .map(|lp| lp.token)
+            .collect::<Vec<_>>();
+        let text = tokenizer
+            .decode(&token_ids, false)
+            .map_err(|e| anyhow::Error::msg(format!("Tokenization failure - {}", e)))?;
+
+        Ok(text)
+    }
     pub fn is_done(
         &mut self,
         tok: u32,
@@ -267,9 +279,9 @@ impl Sequence {
             Some(StopReason::ModelLength(max_model_len))
         } else {
             if !self.stop_strings.is_empty() {
-                let text_acc = self.get_delta(tokenizer).unwrap().unwrap();
+                let generated_text = self.generated_text(tokenizer).unwrap();
                 for (idx, s) in self.stop_strings.iter().enumerate() {
-                    if text_acc.contains(s) {
+                    if generated_text.contains(s) {
                         return Some(StopReason::StopString(idx));
                     }
                 }
