@@ -156,8 +156,6 @@ fn parse_request(
     let stop_toks = match oairequest.stop_seqs {
         Some(StopTokens::Multi(m)) => Some(InternalStopTokens::Seqs(m)),
         Some(StopTokens::Single(s)) => Some(InternalStopTokens::Seqs(vec![s])),
-        Some(StopTokens::MultiId(m)) => Some(InternalStopTokens::Ids(m)),
-        Some(StopTokens::SingleId(s)) => Some(InternalStopTokens::Ids(vec![s])),
         None => None,
     };
     let messages = match oairequest.messages {
