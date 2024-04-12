@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{collections::HashMap, iter::zip};
+use std::{collections::HashMap, iter::zip, sync::Arc};
 
 use candle_core::{bail, DType, Error, Result, Tensor, D};
 use rand::{
@@ -36,7 +36,7 @@ pub struct Sampler {
     rng: rand::rngs::StdRng,
     temperature: Option<f64>,
     top_n_logprobs: usize,
-    tokenizer: Tokenizer,
+    tokenizer: Arc<Tokenizer>,
     frequency_penalty: Option<f32>,
     presence_penalty: Option<f32>,
     logits_bias: Option<HashMap<u32, f32>>,
@@ -66,7 +66,7 @@ impl Sampler {
         seed: u64,
         temperature: Option<f64>,
         top_n_logprobs: usize,
-        tokenizer: Tokenizer,
+        tokenizer: Arc<Tokenizer>,
         frequency_penalty: Option<f32>,
         presence_penalty: Option<f32>,
         logits_bias: Option<HashMap<u32, f32>>,
@@ -327,7 +327,17 @@ mod tests {
         use super::Sampler;
         use candle_core::{Device, Tensor};
 
-        let mut sampler = Sampler::new(0, None, 10, get_tokenizer(), None, None, None, 32, 0.1);
+        let mut sampler = Sampler::new(
+            0,
+            None,
+            10,
+            get_tokenizer().into(),
+            None,
+            None,
+            None,
+            32,
+            0.1,
+        );
 
         let logits = Tensor::arange(0f64, 1024f64, &Device::Cpu).unwrap();
         let res = sampler.sample(&logits, None, false).unwrap();

@@ -485,7 +485,6 @@ impl Engine {
             .unwrap_or(-1);
         let topp = request.sampling_params.top_p.unwrap_or(1.0);
         let num_hidden_layers = get_mut_arcmutex!(self.pipeline).num_hidden_layers();
-        let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
 
         let (stop_toks, stop_strings) = match request.sampling_params.stop_toks {
             None => (vec![], vec![]),
@@ -513,6 +512,7 @@ impl Engine {
 
                 let pipeline = get_mut_arcmutex!(self.pipeline);
                 let tok_trie = pipeline.tok_trie();
+                let tokenizer = pipeline.tokenizer();
 
                 for stop_txt in s {
                     let encoded = tokenizer.encode(stop_txt.to_string(), false);
@@ -544,11 +544,14 @@ impl Engine {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time travel has occurred!");
+
+        let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
+
         let sampler = Sampler::new(
             SEED,
             Some(request.sampling_params.temperature.unwrap_or(1.0)),
             request.sampling_params.top_n_logprobs,
-            tokenizer.clone(),
+            tokenizer,
             request.sampling_params.frequency_penalty,
             request.sampling_params.presence_penalty,
             request.sampling_params.logits_bias.clone(),

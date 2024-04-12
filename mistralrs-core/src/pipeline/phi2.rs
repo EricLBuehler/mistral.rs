@@ -82,7 +82,7 @@ impl ModelPaths for Phi2ModelPaths<PathBuf> {
 
 pub struct Phi2Pipeline {
     model: Model,
-    tokenizer: Tokenizer,
+    tokenizer: Arc<Tokenizer>,
     tok_trie: TokTrie,
     config: Phi2SpecificConfig,
     no_kv_cache: bool,
@@ -348,7 +348,7 @@ impl Loader for Phi2Loader {
         Ok(Box::new(Mutex::new(Phi2Pipeline {
             model,
             tok_trie: build_tok_trie(tokenizer.clone()),
-            tokenizer,
+            tokenizer: tokenizer.into(),
             config: self.config,
             no_kv_cache: self.no_kv_cache,
             chat_template,
@@ -427,7 +427,7 @@ impl Pipeline for Phi2Pipeline {
     fn get_repeat_last_n(&self) -> usize {
         self.config.repeat_last_n
     }
-    fn tokenizer(&self) -> Tokenizer {
+    fn tokenizer(&self) -> Arc<Tokenizer> {
         self.tokenizer.clone()
     }
     fn eos_tok(&self) -> u32 {
