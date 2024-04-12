@@ -903,6 +903,16 @@
 <a href="#901" id="901">901</a>
 <a href="#902" id="902">902</a>
 <a href="#903" id="903">903</a>
+<a href="#904" id="904">904</a>
+<a href="#905" id="905">905</a>
+<a href="#906" id="906">906</a>
+<a href="#907" id="907">907</a>
+<a href="#908" id="908">908</a>
+<a href="#909" id="909">909</a>
+<a href="#910" id="910">910</a>
+<a href="#911" id="911">911</a>
+<a href="#912" id="912">912</a>
+<a href="#913" id="913">913</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{fs::File, sync::Arc};
 
 <span class="kw">use </span>anyhow::Result;
@@ -929,8 +939,10 @@
 <span class="kw">mod </span>interactive_mode;
 <span class="kw">mod </span>model_selected;
 <span class="kw">mod </span>openai;
+<span class="kw">mod </span>prompt_mode;
 
 <span class="kw">use </span>interactive_mode::interactive_mode;
+<span class="kw">use </span>prompt_mode::prompt_mode;
 <span class="kw">use </span>tower_http::cors::{AllowOrigin, CorsLayer};
 <span class="kw">use </span>tracing::{info, warn};
 <span class="kw">use </span>utoipa::OpenApi;
@@ -987,6 +999,10 @@
     <span class="doccomment">/// Enter interactive mode instead of serving a chat server.
     </span><span class="attr">#[clap(long, short, action)]
     </span>interactive_mode: bool,
+
+    <span class="doccomment">/// Run a single prompt. This cannot be used with interactive mode.
+    </span><span class="attr">#[clap(long, short)]
+    </span>prompt: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
     <span class="doccomment">/// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
     </span><span class="attr">#[arg(long, default_value_t = <span class="number">16</span>)]
@@ -1786,6 +1802,10 @@
         args.prefix_cache_n,
     );
 
+    <span class="kw">if let </span><span class="prelude-val">Some</span>(prompt) = args.prompt {
+        prompt_mode(mistralrs, prompt);
+        <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+    }
     <span class="kw">if </span>args.interactive_mode {
         interactive_mode(mistralrs);
         <span class="kw">return </span><span class="prelude-val">Ok</span>(());
