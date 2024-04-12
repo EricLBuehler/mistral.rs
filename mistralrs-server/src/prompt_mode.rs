@@ -57,7 +57,7 @@ pub fn prompt_mode(mistralrs: Arc<MistralRs>, prompt: String) {
             }
             Response::Done(res) => {
                 println!("{}", res.choices[0].message.content);
-                println!(" ================= ");
+                println!("=======================");
                 println!("Completion T/s = {}", res.usage.avg_compl_tok_per_sec);
                 println!("Prompt T/s = {}", res.usage.avg_prompt_tok_per_sec);
                 println!("Sampling T/s = {}", res.usage.avg_sample_tok_per_sec);
