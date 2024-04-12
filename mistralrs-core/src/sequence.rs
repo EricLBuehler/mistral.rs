@@ -27,6 +27,7 @@ pub enum StopReason {
     StopTok(u32),
     Length(usize),
     ModelLength(usize),
+    StopString(/* Index in the list of stop strings */ usize),
 }
 
 impl ToString for StopReason {
@@ -34,7 +35,7 @@ impl ToString for StopReason {
         match self {
             StopReason::Eos => "stop".to_string(),
             StopReason::Length(_) | StopReason::ModelLength(_) => "length".to_string(),
-            StopReason::StopTok(_) => "stop".to_string(),
+            StopReason::StopTok(_) | StopReason::StopString(_) => "stop".to_string(),
         }
     }
 }
@@ -64,6 +65,7 @@ pub struct Sequence {
     timestamp: u128,
     sampler: Sampler,
     stop_tokens: Vec<u32>,
+    stop_strings: Vec<String>,
     return_logprobs: bool,
     responder: Sender<Response>,
     response_index: usize,
@@ -104,6 +106,7 @@ impl Sequence {
         responder: Sender<Response>,
         sampler: Sampler,
         stop_tokens: Vec<u32>,
+        stop_strings: Vec<String>,
         max_len: Option<usize>,
         return_logprobs: bool,
         is_xlora: bool,
@@ -133,6 +136,7 @@ impl Sequence {
             responder,
             sampler,
             stop_tokens,
+            stop_strings,
             max_len,
             return_logprobs,
             prompt_tok_per_sec: 0.,
@@ -244,20 +248,47 @@ impl Sequence {
         self.state.set(state);
     }
 
-    pub fn is_done(&self, tok: u32, eos_tok: u32, max_model_len: usize) -> Option<StopReason> {
+    pub fn generated_text(&self, tokenizer: &Tokenizer) -> anyhow::Result<String> {
+        let token_ids = self
+            .logprobs()
+            .iter()
+            .map(|lp| lp.token)
+            .collect::<Vec<_>>();
+        let text = tokenizer
+            .decode(&token_ids, false)
+            .map_err(|e| anyhow::Error::msg(format!("Tokenization failure - {}", e)))?;
+
+        Ok(text)
+    }
+
+    pub fn is_done(
+        &self,
+        tok: u32,
+        eos_tok: u32,
+        max_model_len: usize,
+        tokenizer: &Tokenizer,
+    ) -> anyhow::Result<Option<StopReason>> {
         if tok == eos_tok {
-            Some(StopReason::Eos)
+            Ok(Some(StopReason::Eos))
         } else if self.stop_tokens.contains(&tok) {
-            Some(StopReason::StopTok(tok))
+            Ok(Some(StopReason::StopTok(tok)))
         } else if self.max_len.is_some()
             && self.tokens.len().saturating_sub(self.prompt_len) == self.max_len.unwrap()
         {
             // add_token was already called
-            Some(StopReason::Length(self.max_len.unwrap()))
+            Ok(Some(StopReason::Length(self.max_len.unwrap())))
         } else if self.tokens.len().saturating_sub(self.prompt_len) == max_model_len {
-            Some(StopReason::ModelLength(max_model_len))
+            Ok(Some(StopReason::ModelLength(max_model_len)))
         } else {
-            None
+            if !self.stop_strings.is_empty() {
+                let text_acc = self.generated_text(tokenizer)?;
+                for (idx, s) in self.stop_strings.iter().enumerate() {
+                    if text_acc.contains(s) {
+                        return Ok(Some(StopReason::StopString(idx)));
+                    }
+                }
+            }
+            Ok(None)
         }
     }
 
