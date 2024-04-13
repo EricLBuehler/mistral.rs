@@ -92,7 +92,7 @@ impl PrefixCacheManager {
                 if ids.len() >= toks.len() && &ids[0..toks.len()] == toks {
                     return Ok(Some(MatchingCache::Subset(
                         cache.clone(),
-                        toks[ids.len()..].to_vec(),
+                        ids[toks.len()..].to_vec(),
                     )));
                 }
             }
@@ -100,7 +100,7 @@ impl PrefixCacheManager {
                 if ids.len() >= toks.len() && &ids[0..toks.len()] == toks {
                     return Ok(Some(MatchingCache::Subset(
                         self.promote_into_device_cache(toks.to_vec(), &cache)?,
-                        toks[ids.len()..].to_vec(),
+                        ids[toks.len()..].to_vec(),
                     )));
                 }
             }
