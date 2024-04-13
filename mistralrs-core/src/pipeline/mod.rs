@@ -569,7 +569,7 @@ fn get_xlora_paths(
                     break;
                 }
                 Err(e) => {
-                    if i == xlora_configs.len() - 1 {
+                    if i != xlora_configs.len() - 1 {
                         warn!("Config is broken with error `{e}`");
                     }
                     last_err = Some(e);
