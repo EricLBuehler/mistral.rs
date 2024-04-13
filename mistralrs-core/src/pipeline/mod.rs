@@ -504,6 +504,14 @@ fn calculate_inputs(
     }
 }
 
+pub fn extract_logits(logits: &Tensor, seq_lens: &[usize]) -> candle_core::Result<Tensor> {
+    let mut toks = Vec::new();
+    for (dim, start) in logits.chunk(logits.dims()[0], 0)?.iter().zip(seq_lens) {
+        toks.push(dim.narrow(0, *start, 1)?.unsqueeze(0)?);
+    }
+    Tensor::cat(&toks, 0)
+}
+
 struct XLoraPaths {
     adapter_configs: Option<Vec<(String, LoraConfig)>>,
     adapter_safetensors: Option<Vec<(String, PathBuf)>>,

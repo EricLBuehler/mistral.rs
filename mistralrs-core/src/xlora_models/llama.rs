@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering};
 use std::{collections::HashMap, sync::Arc};
@@ -11,7 +11,7 @@ use crate::{
         llama::{Config, MAX_SEQ_LEN},
         LayerCaches, RmsNorm,
     },
-    pipeline::LLAMA_IS_GPTX,
+    pipeline::{extract_logits, LLAMA_IS_GPTX},
 };
 
 use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -411,11 +411,7 @@ impl XLoraLlama {
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
     ) -> Result<Tensor> {
-        let (_, seq_len) = input_ids.dims2()?;
-
         if self.xlora_classifier.is_some() {
-            let (_b_size, seq_len_full) = input_ids_full.dims2()?;
-
             let scalings = self.get_scalings(
                 input_ids,
                 input_ids_full,
@@ -428,47 +424,55 @@ impl XLoraLlama {
             )?;
 
             if no_kv_cache {
-                self.inner_forward(
-                    input_ids_full,
+                extract_logits(
+                    &self
+                        .inner_forward(
+                            input_ids_full,
+                            seqlen_offsets_full,
+                            start_offsets_kernel_full,
+                            Some(scalings),
+                            true,
+                            no_kv_cache,
+                            None,
+                        )?
+                        .contiguous()?
+                        .apply(&self.lm_head)?,
                     seqlen_offsets_full,
-                    start_offsets_kernel_full,
-                    Some(scalings),
-                    true,
-                    no_kv_cache,
-                    None,
-                )?
-                .contiguous()?
-                .apply(&self.lm_head)?
-                .i((.., seq_len_full - 1, ..))
+                )
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
-                self.inner_forward(
-                    input_ids,
+                extract_logits(
+                    &self
+                        .inner_forward(
+                            input_ids,
+                            seqlen_offsets,
+                            start_offsets_kernel,
+                            Some(scalings),
+                            true,
+                            no_kv_cache,
+                            None,
+                        )?
+                        .contiguous()?
+                        .apply(&self.lm_head)?,
                     seqlen_offsets,
-                    start_offsets_kernel,
-                    Some(scalings),
-                    true,
-                    no_kv_cache,
-                    None,
-                )?
-                .contiguous()?
-                .apply(&self.lm_head)?
-                .i((.., seq_len - 1, ..))
+                )
             }
         } else {
-            let (_, seq_len) = input_ids.dims2()?;
-            self.inner_forward(
-                input_ids,
+            extract_logits(
+                &self
+                    .inner_forward(
+                        input_ids,
+                        seqlen_offsets,
+                        start_offsets_kernel,
+                        None,
+                        false,
+                        no_kv_cache,
+                        None,
+                    )?
+                    .contiguous()?
+                    .apply(&self.lm_head)?,
                 seqlen_offsets,
-                start_offsets_kernel,
-                None,
-                false,
-                no_kv_cache,
-                None,
-            )?
-            .contiguous()?
-            .apply(&self.lm_head)?
-            .i((.., seq_len - 1, ..))
+            )
         }
     }
 

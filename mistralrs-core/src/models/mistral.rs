@@ -6,7 +6,7 @@ use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 use candle_transformers::models::with_tracing::{linear_no_bias, Linear};
 use std::sync::Arc;
 
-use crate::pipeline::MISTRAL_IS_GPTX;
+use crate::pipeline::{extract_logits, MISTRAL_IS_GPTX};
 
 use super::{flash_attn, Cache, RmsNorm};
 
@@ -359,8 +359,6 @@ impl Model {
                 cache.get_mut(i).unwrap(),
             )?
         }
-        xs.apply(&self.norm)?
-            .apply(&self.lm_head)?
-            .narrow(1, seq_len - 1, 1)
+        extract_logits(&xs.apply(&self.norm)?.apply(&self.lm_head)?, seqlen_offsets)
     }
 }

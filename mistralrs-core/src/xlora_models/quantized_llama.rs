@@ -4,11 +4,12 @@ use std::collections::HashMap;
 
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::{ggml_file, gguf_file};
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear};
 
 use crate::models::{verify_sanity_gguf, Cache, QRmsNorm};
+use crate::pipeline::extract_logits;
 
 use super::classifier::XLoraClassifier;
 use super::{verify_sanity_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -766,11 +767,7 @@ impl ModelWeights {
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
     ) -> Result<Tensor> {
-        let (_, seq_len) = input_ids.dims2()?;
-
         if self.xlora_classifier.is_some() {
-            let (_b_size, seq_len_full) = input_ids_full.dims2()?;
-
             let scalings = self.get_scalings(
                 input_ids,
                 input_ids_full,
@@ -783,47 +780,55 @@ impl ModelWeights {
             )?;
 
             if no_kv_cache {
-                self.inner_forward(
-                    input_ids_full,
+                extract_logits(
+                    &self
+                        .inner_forward(
+                            input_ids_full,
+                            seqlen_offsets_full,
+                            start_offsets_kernel_full,
+                            Some(scalings),
+                            true,
+                            no_kv_cache,
+                            None,
+                        )?
+                        .contiguous()?
+                        .apply(&self.output)?,
                     seqlen_offsets_full,
-                    start_offsets_kernel_full,
-                    Some(scalings),
-                    true,
-                    no_kv_cache,
-                    None,
-                )?
-                .contiguous()?
-                .apply(&self.output)?
-                .i((.., seq_len_full - 1, ..))
+                )
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
-                self.inner_forward(
-                    input_ids,
+                extract_logits(
+                    &self
+                        .inner_forward(
+                            input_ids,
+                            seqlen_offsets,
+                            start_offsets_kernel,
+                            Some(scalings),
+                            true,
+                            no_kv_cache,
+                            None,
+                        )?
+                        .contiguous()?
+                        .apply(&self.output)?,
                     seqlen_offsets,
-                    start_offsets_kernel,
-                    Some(scalings),
-                    true,
-                    no_kv_cache,
-                    None,
-                )?
-                .contiguous()?
-                .apply(&self.output)?
-                .i((.., seq_len - 1, ..))
+                )
             }
         } else {
-            let (_, seq_len) = input_ids.dims2()?;
-            self.inner_forward(
-                input_ids,
+            extract_logits(
+                &self
+                    .inner_forward(
+                        input_ids,
+                        seqlen_offsets,
+                        start_offsets_kernel,
+                        None,
+                        false,
+                        no_kv_cache,
+                        None,
+                    )?
+                    .contiguous()?
+                    .apply(&self.output)?,
                 seqlen_offsets,
-                start_offsets_kernel,
-                None,
-                false,
-                no_kv_cache,
-                None,
-            )?
-            .contiguous()?
-            .apply(&self.output)?
-            .i((.., seq_len - 1, ..))
+            )
         }
     }
 }

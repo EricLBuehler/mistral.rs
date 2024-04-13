@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::{
     models::{flash_attn, mixtral::Config, Cache, RmsNorm},
-    pipeline::MIXTRAL_IS_GPTX,
+    pipeline::{extract_logits, MIXTRAL_IS_GPTX},
 };
 
 use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -627,45 +627,68 @@ impl XLoraModel {
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
     ) -> Result<Tensor> {
-        let (_b_size, seq_len_full) = input_ids_full.dims2()?;
-        let (_, seq_len) = input_ids.dims2()?;
-
-        let scalings = self.get_scalings(
-            input_ids,
-            input_ids_full,
-            seqlen_offsets,
-            seqlen_offsets_full,
-            &start_offsets_kernel,
-            &start_offsets_kernel_full,
-            no_kv_cache,
-            non_granular_state,
-        )?;
-
-        if no_kv_cache {
-            self.inner_forward(
-                input_ids_full,
-                seqlen_offsets_full,
-                start_offsets_kernel_full,
-                Some(scalings),
-                true,
-                no_kv_cache,
-                None,
-            )?
-            .apply(&self.lm_head)?
-            .narrow(1, seq_len_full - 1, 1)
-        } else {
-            // is_full_pass=true is ok because no_kv_cache=false
-            self.inner_forward(
+        if self.xlora_classifier.is_some() {
+            let scalings = self.get_scalings(
                 input_ids,
+                input_ids_full,
                 seqlen_offsets,
-                start_offsets_kernel,
-                Some(scalings),
-                true,
+                seqlen_offsets_full,
+                &start_offsets_kernel,
+                &start_offsets_kernel_full,
                 no_kv_cache,
-                None,
-            )?
-            .apply(&self.lm_head)?
-            .narrow(1, seq_len - 1, 1)
+                non_granular_state,
+            )?;
+
+            if no_kv_cache {
+                extract_logits(
+                    &self
+                        .inner_forward(
+                            input_ids_full,
+                            seqlen_offsets_full,
+                            start_offsets_kernel_full,
+                            Some(scalings),
+                            true,
+                            no_kv_cache,
+                            None,
+                        )?
+                        .contiguous()?
+                        .apply(&self.lm_head)?,
+                    seqlen_offsets_full,
+                )
+            } else {
+                // is_full_pass=true is ok because no_kv_cache=false
+                extract_logits(
+                    &self
+                        .inner_forward(
+                            input_ids,
+                            seqlen_offsets,
+                            start_offsets_kernel,
+                            Some(scalings),
+                            true,
+                            no_kv_cache,
+                            None,
+                        )?
+                        .contiguous()?
+                        .apply(&self.lm_head)?,
+                    seqlen_offsets,
+                )
+            }
+        } else {
+            extract_logits(
+                &self
+                    .inner_forward(
+                        input_ids,
+                        seqlen_offsets,
+                        start_offsets_kernel,
+                        None,
+                        false,
+                        no_kv_cache,
+                        None,
+                    )?
+                    .contiguous()?
+                    .apply(&self.lm_head)?,
+                seqlen_offsets,
+            )
         }
     }
 }

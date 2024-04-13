@@ -300,7 +300,7 @@ impl Loader for Phi2Loader {
                     &config,
                     vb,
                     paths.get_adapter_configs().as_ref().unwrap(),
-                    paths.get_classifier_config().as_ref().unwrap().clone(),
+                    Some(paths.get_classifier_config().as_ref().unwrap().clone()),
                     paths.get_ordering().as_ref().unwrap().clone(),
                 )?;
                 Model::XLoraNormal(model)
@@ -328,7 +328,7 @@ impl Loader for Phi2Loader {
                     &config,
                     vb,
                     paths.get_adapter_configs().as_ref().unwrap(),
-                    paths.get_classifier_config().as_ref().unwrap().clone(),
+                    None,
                     paths.get_ordering().as_ref().unwrap().clone(),
                 )?;
                 is_lora = true;

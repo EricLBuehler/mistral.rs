@@ -4,8 +4,10 @@ use std::collections::HashMap;
 
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::{ggml_file, gguf_file};
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding};
+
+use crate::pipeline::extract_logits;
 
 use super::{verify_sanity_gguf, Cache, QRmsNorm};
 
@@ -449,7 +451,6 @@ impl ModelWeights {
             layer_in = x
         }
         let x = self.norm.forward(&layer_in)?;
-        let x = x.i((.., seq_len - 1, ..))?;
-        self.output.forward(&x.contiguous()?)
+        extract_logits(&self.output.forward(&x.contiguous()?)?, start_offsets)
     }
 }

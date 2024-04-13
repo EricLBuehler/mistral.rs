@@ -15,7 +15,7 @@ use mistralrs_lora::{linear, LinearLayerLike, LoraConfig, Ordering};
 
 use crate::{
     models::{flash_attn, phi2::Config},
-    pipeline::PHI2_IS_GPTX,
+    pipeline::{extract_logits, PHI2_IS_GPTX},
 };
 
 use super::{classifier::XLoraClassifier, Cache, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -384,7 +384,7 @@ pub struct Model {
     pub cache: Cache,
     pub device: Device,
     pub max_seq_len: usize,
-    xlora_classifier: XLoraClassifier,
+    xlora_classifier: Option<XLoraClassifier>,
     dtype: DType,
 }
 
@@ -393,7 +393,7 @@ impl Model {
         cfg: &Config,
         vb: VarBuilder,
         lora_config: &Vec<(String, LoraConfig)>,
-        xlora_config: XLoraConfig,
+        xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
@@ -426,13 +426,9 @@ impl Model {
             device: vb.device().clone(),
             max_seq_len: cfg.max_position_embeddings,
             dtype: vb.dtype(),
-            xlora_classifier: XLoraClassifier::new(
-                xlora_config,
-                count,
-                lora_config.len(),
-                vb,
-                false,
-            )?,
+            xlora_classifier: xlora_config.map(|xlora_config| {
+                XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
+            }),
         })
     }
 
@@ -475,7 +471,10 @@ impl Model {
                 start_offsets_kernel.clone(),
                 cache.get_mut(i).unwrap(),
                 scalings.clone(),
-                self.xlora_classifier.get_global_scaling_weight(),
+                self.xlora_classifier
+                    .as_ref()
+                    .map(|classifier| classifier.get_global_scaling_weight())
+                    .unwrap_or(1.0),
                 is_scaling_pass,
             )?;
         }
@@ -497,45 +496,68 @@ impl Model {
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
     ) -> Result<Tensor> {
-        let (_b_size, seq_len_full) = input_ids_full.dims2()?;
-        let (_, seq_len) = input_ids.dims2()?;
-
-        let scalings = self.get_scalings(
-            input_ids,
-            input_ids_full,
-            seqlen_offsets,
-            seqlen_offsets_full,
-            &start_offsets_kernel,
-            &start_offsets_kernel_full,
-            no_kv_cache,
-            non_granular_state,
-        )?;
-
-        if no_kv_cache {
-            self.inner_forward(
-                input_ids_full,
-                seqlen_offsets_full,
-                start_offsets_kernel_full,
-                Some(scalings),
-                true,
-                no_kv_cache,
-                None,
-            )?
-            .apply(&self.lm_head)?
-            .narrow(1, seq_len_full - 1, 1)
-        } else {
-            // is_full_pass=true is ok because no_kv_cache=false
-            self.inner_forward(
+        if self.xlora_classifier.is_some() {
+            let scalings = self.get_scalings(
                 input_ids,
+                input_ids_full,
                 seqlen_offsets,
-                start_offsets_kernel,
-                Some(scalings),
-                true,
+                seqlen_offsets_full,
+                &start_offsets_kernel,
+                &start_offsets_kernel_full,
                 no_kv_cache,
-                None,
-            )?
-            .apply(&self.lm_head)?
-            .narrow(1, seq_len - 1, 1)
+                non_granular_state,
+            )?;
+
+            if no_kv_cache {
+                extract_logits(
+                    &self
+                        .inner_forward(
+                            input_ids_full,
+                            seqlen_offsets_full,
+                            start_offsets_kernel_full,
+                            Some(scalings),
+                            true,
+                            no_kv_cache,
+                            None,
+                        )?
+                        .contiguous()?
+                        .apply(&self.lm_head)?,
+                    seqlen_offsets_full,
+                )
+            } else {
+                // is_full_pass=true is ok because no_kv_cache=false
+                extract_logits(
+                    &self
+                        .inner_forward(
+                            input_ids,
+                            seqlen_offsets,
+                            start_offsets_kernel,
+                            Some(scalings),
+                            true,
+                            no_kv_cache,
+                            None,
+                        )?
+                        .contiguous()?
+                        .apply(&self.lm_head)?,
+                    seqlen_offsets,
+                )
+            }
+        } else {
+            extract_logits(
+                &self
+                    .inner_forward(
+                        input_ids,
+                        seqlen_offsets,
+                        start_offsets_kernel,
+                        None,
+                        false,
+                        no_kv_cache,
+                        None,
+                    )?
+                    .contiguous()?
+                    .apply(&self.lm_head)?,
+                seqlen_offsets,
+            )
         }
     }
 }
@@ -548,7 +570,7 @@ impl ScalingsMaker for Model {
         &self.cache
     }
     fn get_classifier(&self) -> &XLoraClassifier {
-        &self.xlora_classifier
+        self.xlora_classifier.as_ref().unwrap()
     }
     fn forward(
         &mut self,

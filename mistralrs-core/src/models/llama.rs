@@ -1,11 +1,11 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
 use candle_transformers::models::with_tracing::{linear_no_bias as linear, Linear};
 use std::{collections::HashMap, sync::Arc};
 
-use crate::pipeline::LLAMA_IS_GPTX;
+use crate::pipeline::{extract_logits, LLAMA_IS_GPTX};
 
 use super::{flash_attn, RmsNorm};
 
@@ -330,7 +330,6 @@ impl Llama {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
     ) -> Result<Tensor> {
-        let (_b_sz, seq_len) = x.dims2()?;
         let mut x = self.wte.forward(x)?;
         let mut cache = self.kv_cache.lock();
         for (block_idx, block) in self.blocks.iter().enumerate() {
@@ -344,9 +343,8 @@ impl Llama {
             )?;
         }
         let x = self.ln_f.forward(&x)?;
-        let x = x.i((.., seq_len - 1, ..))?.contiguous()?;
         let logits = self.lm_head.forward(&x)?;
-        logits.to_dtype(DType::F32)
+        extract_logits(&logits.to_dtype(DType::F32)?, seqlen_offsets)
     }
 
     pub fn load(vb: VarBuilder, cfg: &Config, device: &Device, no_kv_cache: bool) -> Result<Self> {

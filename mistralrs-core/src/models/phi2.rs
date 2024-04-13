@@ -12,7 +12,7 @@ use candle_nn::{
 };
 use serde::Deserialize;
 
-use crate::pipeline::PHI2_IS_GPTX;
+use crate::pipeline::{extract_logits, PHI2_IS_GPTX};
 
 use super::{flash_attn, Cache};
 
@@ -353,8 +353,9 @@ impl Model {
                 cache.get_mut(i).unwrap(),
             )?;
         }
-        xs.apply(&self.final_layernorm)?
-            .narrow(1, seq_len - 1, 1)?
-            .apply(&self.lm_head)
+        extract_logits(
+            &xs.apply(&self.final_layernorm)?.apply(&self.lm_head)?,
+            seqlen_offsets,
+        )
     }
 }

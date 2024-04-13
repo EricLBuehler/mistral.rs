@@ -5,7 +5,7 @@ use std::sync::Arc;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{linear_b as linear, Linear, RotaryEmbedding, VarBuilder};
 
-use crate::pipeline::GEMMA_IS_GPTX;
+use crate::pipeline::{extract_logits, GEMMA_IS_GPTX};
 
 use super::{Cache, RmsNorm};
 
@@ -344,8 +344,6 @@ impl Model {
                 cache.get_mut(i).unwrap(),
             )?
         }
-        xs.narrow(1, seq_len - 1, 1)?
-            .apply(&self.norm)?
-            .apply(&self.lm_head)
+        extract_logits(&xs.apply(&self.norm)?.apply(&self.lm_head)?, seqlen_offsets)
     }
 }
