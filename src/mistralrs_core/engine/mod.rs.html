@@ -629,6 +629,11 @@
 <a href="#627" id="627">627</a>
 <a href="#628" id="628">628</a>
 <a href="#629" id="629">629</a>
+<a href="#630" id="630">630</a>
+<a href="#631" id="631">631</a>
+<a href="#632" id="632">632</a>
+<a href="#633" id="633">633</a>
+<a href="#634" id="634">634</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -789,32 +794,37 @@
             );
             <span class="comment">// Handle streaming requests
             </span><span class="kw">if </span>seq.get_mut_group().is_streaming &amp;&amp; seq.get_mut_group().is_chat {
-                <span class="kw">if let </span><span class="prelude-val">Some</span>(delta) = <span class="macro">handle_seq_error!</span>(seq.get_delta(), seq.responder()) {
-                    seq.add_streaming_chunk_choice_to_group(ChunkChoice {
-                        delta: Delta {
-                            content: delta.clone(),
-                            role: <span class="string">"assistant"</span>.to_string(),
-                        },
-                        index: seq.get_response_index(),
-                        stopreason: is_done.map(|x| x.to_string()),
-                        logprobs: <span class="kw">if </span>seq.return_logprobs() {
-                            <span class="prelude-val">Some</span>(ResponseLogprob {
-                                token: delta,
-                                bytes: next_token.bytes.clone().into_bytes(),
-                                logprob: next_token.logprob,
-                                top_logprobs: next_token.top_logprobs.unwrap().clone(),
-                            })
-                        } <span class="kw">else </span>{
-                            <span class="prelude-val">None
-                        </span>},
-                    });
+                <span class="kw">let </span>token_index = seq.get_toks().len();
+                <span class="kw">let </span>rate_limit_allowed = is_done.is_some() || token_index % <span class="number">3 </span>== <span class="number">0</span>;
 
-                    <span class="kw">if let </span><span class="prelude-val">Some</span>(reason) = is_done {
-                        seq.set_state(SequenceState::Done(reason));
+                <span class="kw">if </span>rate_limit_allowed {
+                    <span class="kw">if let </span><span class="prelude-val">Some</span>(delta) = <span class="macro">handle_seq_error!</span>(seq.get_delta(), seq.responder()) {
+                        seq.add_streaming_chunk_choice_to_group(ChunkChoice {
+                            delta: Delta {
+                                content: delta.clone(),
+                                role: <span class="string">"assistant"</span>.to_string(),
+                            },
+                            index: seq.get_response_index(),
+                            stopreason: is_done.map(|x| x.to_string()),
+                            logprobs: <span class="kw">if </span>seq.return_logprobs() {
+                                <span class="prelude-val">Some</span>(ResponseLogprob {
+                                    token: delta,
+                                    bytes: next_token.bytes.clone().into_bytes(),
+                                    logprob: next_token.logprob,
+                                    top_logprobs: next_token.top_logprobs.unwrap().clone(),
+                                })
+                            } <span class="kw">else </span>{
+                                <span class="prelude-val">None
+                            </span>},
+                        });
+
+                        <span class="kw">if let </span><span class="prelude-val">Some</span>(reason) = is_done {
+                            seq.set_state(SequenceState::Done(reason));
+                        }
+
+                        seq.get_mut_group()
+                            .maybe_send_streaming_response(seq, pipeline.name());
                     }
-
-                    seq.get_mut_group()
-                        .maybe_send_streaming_response(seq, pipeline.name());
                 }
             } <span class="kw">else if let </span><span class="prelude-val">Some</span>(reason) = is_done {
                 <span class="self">Self</span>::finish_seq(pipeline, seq, reason);
