@@ -131,12 +131,8 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
 
         // Now, get the sequences with the smallest sequence lengths, and allow them to catch up.
         let mut seq_buckets: HashMap<usize, Vec<Sequence>> = HashMap::new();
-        let mut min_len = usize::MAX;
         for seq in running {
             let len = seq.len();
-            if len < min_len {
-                min_len = len;
-            }
             match seq_buckets.get_mut(&len) {
                 Some(bucket) => bucket.push(seq),
                 None => {
@@ -156,7 +152,8 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
         } else {
             // Set the min seqs to be the running ones, and the rest to be waiting (but their states are not changed!)
             // Allow the min seqs to catch up.
-            let min_seqs = seq_buckets.remove(&min_len).unwrap();
+            let min = *seq_buckets.keys().min().unwrap();
+            let min_seqs = seq_buckets.remove(&min).unwrap();
             for (_, seqs) in seq_buckets {
                 for seq in seqs {
                     new_waiting.add(seq);

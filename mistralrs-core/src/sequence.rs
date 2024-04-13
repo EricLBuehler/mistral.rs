@@ -170,6 +170,9 @@ impl Sequence {
     }
 
     pub fn len(&self) -> usize {
+        if let Some(toks) = &self.prefill_prompt_toks {
+            return toks.len();
+        }
         self.tokens.len()
     }
 
