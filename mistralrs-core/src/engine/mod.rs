@@ -150,15 +150,15 @@ impl Engine {
             let next_token = handle_seq_error_stateaware!(sampled, seq);
             let next_token_id = next_token.token;
 
+            let is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
             seq.add_token(
                 next_token.clone(),
                 pipeline.tok_trie().decode(&[next_token_id]),
+                &is_done,
             );
-            let is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
             // Handle streaming requests
             if seq.get_mut_group().is_streaming && seq.get_mut_group().is_chat {
-                let tokenizer = pipeline.tokenizer();
-                if let Some(delta) = handle_seq_error!(seq.get_delta(&tokenizer), seq.responder()) {
+                if let Some(delta) = handle_seq_error!(seq.get_delta(), seq.responder()) {
                     seq.add_streaming_chunk_choice_to_group(ChunkChoice {
                         delta: Delta {
                             content: delta.clone(),
@@ -589,7 +589,6 @@ impl Engine {
         for response_index in 0..request.sampling_params.n_choices {
             let seq = Sequence::new_waiting(
                 prompt.clone(),
-                formatted_prompt.clone(),
                 self.id,
                 now.as_millis(),
                 num_hidden_layers,

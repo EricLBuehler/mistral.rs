@@ -19,7 +19,6 @@ use crate::{
 };
 use candle_core::Tensor;
 use regex_automata::util::primitives::StateID;
-use tokenizers::Tokenizer;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum StopReason {
@@ -59,7 +58,6 @@ pub enum SequenceRecognizer {
 pub struct Sequence {
     // Metadata, const
     id: usize,
-    original_prompt: String,
     prompt_len: usize,
     max_len: Option<usize>,
     timestamp: u128,
@@ -81,10 +79,11 @@ pub struct Sequence {
 
     // Mutables
     tokens: Vec<u32>,
-    decoded_tokens: Option<Vec<u8>>,
     logprobs: Vec<Logprobs>,
     cumulative_logprob: f32,
     completion_bytes: Vec<u8>,
+    stream_idx: usize,
+    pub recognizer: SequenceRecognizer,
 
     // GPU things
     pub prompt_tok_per_sec: f32,
@@ -92,14 +91,11 @@ pub struct Sequence {
     group: Rc<RefCell<SequenceGroup>>,
     pub total_sampling_time: u128,
     state: Cell<SequenceState>,
-
-    pub recognizer: SequenceRecognizer,
 }
 impl Sequence {
     #[allow(clippy::too_many_arguments)]
     pub fn new_waiting(
         tokens: Vec<u32>,
-        original_prompt: String,
         id: usize,
         timestamp: u128,
         layers: usize,
@@ -120,8 +116,6 @@ impl Sequence {
         let prompt_len = tokens.len();
         Self {
             tokens,
-            original_prompt,
-            decoded_tokens: None,
             logprobs: Vec::new(),
             prompt_len,
             id,
@@ -152,6 +146,7 @@ impl Sequence {
             prefix,
             cumulative_logprob: 0.,
             completion_bytes: Vec::new(),
+            stream_idx: 0,
         }
     }
 
@@ -228,8 +223,22 @@ impl Sequence {
         &mut self.sampler
     }
 
-    pub fn add_token(&mut self, tok: Logprobs, completion_bytes: Vec<u8>) {
-        self.completion_bytes.extend_from_slice(&completion_bytes);
+    pub fn add_token(
+        &mut self,
+        tok: Logprobs,
+        completion_bytes: Vec<u8>,
+        is_done: &Option<StopReason>,
+    ) {
+        let stopped_by_token = matches!(
+            is_done,
+            Some(StopReason::Eos) | Some(StopReason::StopTok(_))
+        );
+        if !stopped_by_token {
+            // Completion bytes is used to check for stop strings, and as the streaming buffer.
+            // We don't need to add stop tokens to the completion bytes to check for stop strings.
+            // And by not adding it here, we can avoid having to delete these tokens from the streaming output.
+            self.completion_bytes.extend_from_slice(&completion_bytes);
+        }
         self.cumulative_logprob += tok.logprob;
         self.tokens.push(tok.token);
         self.logprobs.push(tok);
@@ -294,36 +303,23 @@ impl Sequence {
     /// Returns the delta between the last two decoded sequences
     pub fn get_delta(
         &mut self,
-        tokenizer: &Tokenizer,
     ) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
-        if self.decoded_tokens.is_none() {
-            //Initial decoding of the prompt
-            let cleaned_prompt = tokenizer.decode(
-                tokenizer
-                    .encode(self.original_prompt.clone(), false)?
-                    .get_ids(),
-                false,
-            )?;
-            let decoded_bytes = cleaned_prompt.as_bytes().to_vec();
-            self.decoded_tokens = Some(decoded_bytes);
-        }
-
-        //We need to decode incrementally to handle streaming requests, see: https://github.com/huggingface/tokenizers/issues/1141
-        let new_decoded_bytes = tokenizer.decode(&self.tokens, false)?;
-        let new_decoded_bytes = new_decoded_bytes.as_bytes();
-
-        // check if the sequence decodes to a valid utf8 string, if not skip it as it probably is a multi token sequence
-        let new_decoded = unsafe { String::from_utf8_unchecked(new_decoded_bytes.to_vec()) };
+        let is_first = self.stream_idx == 0;
+        let slice = self.completion_bytes[self.stream_idx..].to_vec();
+        let new_decoded = unsafe { String::from_utf8_unchecked(slice) };
+        // Check if the sequence ends with valid utf8, if not skip it as it probably is a multi token sequence
         if new_decoded.ends_with('�') {
             return Ok(None);
         }
+        self.stream_idx = self.completion_bytes.len();
 
-        let delta = String::from_utf8_lossy(
-            &new_decoded_bytes[self.decoded_tokens.as_ref().unwrap().len()..],
-        )
-        .into_owned();
-        self.decoded_tokens = Some(new_decoded_bytes.to_vec());
-        Ok(Some(delta))
+        // The first token usually starts with a space. We don't want to add that to the delta.
+        // Since we're using the completion_bytes, we need to take care of that ourselves.
+        // Had we used HF's Tokenizer, it would have taken care of that for us.
+        if is_first {
+            return Ok(Some(new_decoded.trim_start().to_string()));
+        }
+        Ok(Some(new_decoded))
     }
 
     pub fn timestamp(&self) -> u128 {
