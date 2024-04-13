@@ -12,17 +12,16 @@ Mistral.rs is a fast LLM inference platform written in pure, safe Rust. We suppo
 - Phi2 Python support
 
 ## Description
-- Fast performance with per-sequence and catch-up KV cache management technique.
-- 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit quantization for faster inference and optimized memory usage.
-- First X-LoRA inference platform with first class support.
-- Continuous batching.
-- Lightweight OpenAI API compatible HTTP server.
-- Python API.
+- Quantized model support: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit for faster inference and optimized memory usage.
 - Apple silicon support with the Metal framework.
 - CPU inference with `mkl`, `accelerate` support and optimized backend.
+- First X-LoRA inference platform with first class support.
+- Continuous batching.
+- Prefix caching.
 - Fast LoRA support with weight merging.
 - Grammar support with Regex and Yacc.
-- Prefix caching.
+- Lightweight OpenAI API compatible HTTP server.
+- Python API.
 
 
 This is a demo of interactive mode with streaming running Mistral GGUF:
