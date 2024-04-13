@@ -86,7 +86,7 @@ struct Args {
     interactive_mode: bool,
 
     /// Run a single prompt. This cannot be used with interactive mode.
-    #[clap(long, short)]
+    #[clap(long)]
     prompt: Option<String>,
 
     /// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
