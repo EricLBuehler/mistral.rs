@@ -233,6 +233,7 @@ impl Sequence {
         self.cumulative_logprob += tok.logprob;
         self.tokens.push(tok.token);
         self.logprobs.push(tok);
+        self.prefill_prompt_toks = None;
     }
 
     pub fn responder(&self) -> Sender<Response> {
