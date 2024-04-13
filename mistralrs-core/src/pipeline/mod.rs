@@ -578,13 +578,19 @@ fn get_xlora_paths(
                     "Must specify adapters in ordering.".to_string(),
                 ));
             }
-            xlora_order
-                .as_ref()
-                .unwrap()
-                .adapters
-                .as_ref()
-                .unwrap()
-                .clone()
+            Either::Left(
+                xlora_order
+                    .as_ref()
+                    .unwrap()
+                    .adapters
+                    .as_ref()
+                    .unwrap()
+                    .clone(),
+            )
+        };
+        let adapter_order = match adapter_order {
+            Either::Left(l) => l,
+            Either::Right(r) => r.keys().cloned().collect::<Vec<_>>(),
         };
         for name in &adapter_order {
             let paths = adapters_paths.get(name).unwrap();

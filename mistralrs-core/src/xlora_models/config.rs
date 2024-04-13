@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+
+use either::Either;
 use serde::Deserialize;
 
 fn true_default() -> bool {
@@ -29,7 +32,7 @@ pub struct XLoraConfig {
     pub hidden_size: usize,
     #[serde(rename = "base_model_id")]
     pub _base_model_id: Option<String>,
-    pub adapters: Option<Vec<String>>,
+    pub adapters: Option<Either<Vec<String>, HashMap<String, String>>>,
     #[serde(default = "false_default")]
     pub layerwise_scalings: bool,
     #[serde(default = "false_default")]
