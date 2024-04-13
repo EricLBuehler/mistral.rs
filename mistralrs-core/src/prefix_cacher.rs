@@ -89,18 +89,18 @@ impl PrefixCacheManager {
         } else {
             // Look for token ids such that they begins with `toks`
             for (ids, cache) in &self.caches {
-                if ids.len() >= toks.len() && &ids[0..toks.len()] == toks {
+                if ids.len() <= toks.len() && &ids[0..toks.len()] == toks {
                     return Ok(Some(MatchingCache::Subset(
                         cache.clone(),
-                        ids[toks.len()..].to_vec(),
+                        toks[ids.len()..].to_vec(),
                     )));
                 }
             }
             for (ids, cache) in self.cpu_caches.clone() {
-                if ids.len() >= toks.len() && &ids[0..toks.len()] == toks {
+                if ids.len() <= toks.len() && &ids[0..toks.len()] == toks {
                     return Ok(Some(MatchingCache::Subset(
                         self.promote_into_device_cache(toks.to_vec(), &cache)?,
-                        ids[toks.len()..].to_vec(),
+                        toks[ids.len()..].to_vec(),
                     )));
                 }
             }
