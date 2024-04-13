@@ -498,6 +498,16 @@
 <a href="#496" id="496">496</a>
 <a href="#497" id="497">497</a>
 <a href="#498" id="498">498</a>
+<a href="#499" id="499">499</a>
+<a href="#500" id="500">500</a>
+<a href="#501" id="501">501</a>
+<a href="#502" id="502">502</a>
+<a href="#503" id="503">503</a>
+<a href="#504" id="504">504</a>
+<a href="#505" id="505">505</a>
+<a href="#506" id="506">506</a>
+<a href="#507" id="507">507</a>
+<a href="#508" id="508">508</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
@@ -526,7 +536,10 @@
     StopTok(u32),
     Length(usize),
     ModelLength(usize),
-    StopString(<span class="comment">/* Index in the list of stop strings */ </span>usize),
+    StopString {
+        stop_string_idx: usize,
+        completion_bytes_pos: usize,
+    },
 }
 
 <span class="kw">impl </span>ToString <span class="kw">for </span>StopReason {
@@ -534,7 +547,7 @@
         <span class="kw">match </span><span class="self">self </span>{
             StopReason::Eos =&gt; <span class="string">"stop"</span>.to_string(),
             StopReason::Length(<span class="kw">_</span>) | StopReason::ModelLength(<span class="kw">_</span>) =&gt; <span class="string">"length"</span>.to_string(),
-            StopReason::StopTok(<span class="kw">_</span>) | StopReason::StopString(<span class="kw">_</span>) =&gt; <span class="string">"stop"</span>.to_string(),
+            StopReason::StopTok(<span class="kw">_</span>) | StopReason::StopString { .. } =&gt; <span class="string">"stop"</span>.to_string(),
         }
     }
 }
@@ -706,6 +719,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>.tokens
     }
 
+    <span class="kw">pub fn </span>completion_bytes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[u8] {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.completion_bytes
+    }
+
     <span class="kw">pub fn </span>cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt; {
         <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache
     }
@@ -737,9 +754,9 @@
             <span class="prelude-val">Some</span>(StopReason::Eos) | <span class="prelude-val">Some</span>(StopReason::StopTok(<span class="kw">_</span>))
         );
         <span class="kw">if </span>!stopped_by_token {
-            <span class="comment">// Completion bytes is used to check for stop strings, and as the streaming buffer.
+            <span class="comment">// Completion bytes is used to check for stop strings, and as the response buffer.
             // We don't need to add stop tokens to the completion bytes to check for stop strings.
-            // And by not adding it here, we can avoid having to delete these tokens from the streaming output.
+            // And by not adding it here, we can avoid having to delete these tokens from the output.
             </span><span class="self">self</span>.completion_bytes.extend_from_slice(<span class="kw-2">&amp;</span>completion_bytes);
         }
         <span class="self">self</span>.cumulative_logprob += tok.logprob;
@@ -778,8 +795,12 @@
         } <span class="kw">else </span>{
             <span class="kw">if </span>!<span class="self">self</span>.stop_strings.is_empty() {
                 <span class="kw">for </span>(idx, s) <span class="kw">in </span><span class="self">self</span>.stop_strings.iter().enumerate() {
-                    <span class="kw">if </span>galil_seiferas::gs_find(<span class="kw-2">&amp;</span><span class="self">self</span>.completion_bytes, s.as_bytes()).is_some() {
-                        <span class="kw">return </span><span class="prelude-val">Some</span>(StopReason::StopString(idx));
+                    <span class="kw">if let </span><span class="prelude-val">Some</span>(pos) = galil_seiferas::gs_find(<span class="kw-2">&amp;</span><span class="self">self</span>.completion_bytes, s.as_bytes())
+                    {
+                        <span class="kw">return </span><span class="prelude-val">Some</span>(StopReason::StopString {
+                            stop_string_idx: idx,
+                            completion_bytes_pos: pos,
+                        });
                     }
                 }
             }
@@ -808,8 +829,7 @@
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;String&gt;, Box&lt;<span class="kw">dyn </span>std::error::Error + Send + Sync&gt;&gt; {
         <span class="kw">let </span>is_first = <span class="self">self</span>.stream_idx == <span class="number">0</span>;
-        <span class="kw">let </span>slice = <span class="self">self</span>.completion_bytes[<span class="self">self</span>.stream_idx..].to_vec();
-        <span class="kw">let </span>new_decoded = <span class="kw">unsafe </span>{ String::from_utf8_unchecked(slice) };
+        <span class="kw">let </span>new_decoded = String::from_utf8_lossy(<span class="kw-2">&amp;</span><span class="self">self</span>.completion_bytes[<span class="self">self</span>.stream_idx..]);
         <span class="comment">// Check if the sequence ends with valid utf8, if not skip it as it probably is a multi token sequence
         </span><span class="kw">if </span>new_decoded.ends_with(<span class="string">'�'</span>) {
             <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
@@ -822,7 +842,7 @@
         </span><span class="kw">if </span>is_first {
             <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(new_decoded.trim_start().to_string()));
         }
-        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(new_decoded))
+        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(new_decoded.to_string()))
     }
 
     <span class="kw">pub fn </span>timestamp(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u128 {
