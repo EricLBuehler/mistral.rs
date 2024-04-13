@@ -227,11 +227,12 @@ impl Engine {
             | StopReason::StopTok(_) => String::from_utf8_lossy(seq.completion_bytes())
                 .trim_start()
                 .to_string(),
-            StopReason::StopString(stop_str_index) => {
+            StopReason::StopString {
+                completion_bytes_pos,
+                ..
+            } => {
                 let txt = String::from_utf8_lossy(seq.completion_bytes());
-                let stop_str = seq.stop_strings().get(stop_str_index).unwrap();
-                let stop_str_pos = txt.rfind(stop_str).unwrap();
-                txt[..stop_str_pos].trim_start().to_string()
+                txt[..completion_bytes_pos].trim_start().to_string()
             }
         };
 

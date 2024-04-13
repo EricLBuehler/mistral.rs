@@ -26,7 +26,10 @@ pub enum StopReason {
     StopTok(u32),
     Length(usize),
     ModelLength(usize),
-    StopString(/* Index in the list of stop strings */ usize),
+    StopString {
+        stop_string_idx: usize,
+        completion_bytes_pos: usize,
+    },
 }
 
 impl ToString for StopReason {
@@ -34,7 +37,7 @@ impl ToString for StopReason {
         match self {
             StopReason::Eos => "stop".to_string(),
             StopReason::Length(_) | StopReason::ModelLength(_) => "length".to_string(),
-            StopReason::StopTok(_) | StopReason::StopString(_) => "stop".to_string(),
+            StopReason::StopTok(_) | StopReason::StopString { .. } => "stop".to_string(),
         }
     }
 }
@@ -282,8 +285,12 @@ impl Sequence {
         } else {
             if !self.stop_strings.is_empty() {
                 for (idx, s) in self.stop_strings.iter().enumerate() {
-                    if galil_seiferas::gs_find(&self.completion_bytes, s.as_bytes()).is_some() {
-                        return Some(StopReason::StopString(idx));
+                    if let Some(pos) = galil_seiferas::gs_find(&self.completion_bytes, s.as_bytes())
+                    {
+                        return Some(StopReason::StopString {
+                            stop_string_idx: idx,
+                            completion_bytes_pos: pos,
+                        });
                     }
                 }
             }
