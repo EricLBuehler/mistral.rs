@@ -190,9 +190,6 @@
 <a href="#188" id="188">188</a>
 <a href="#189" id="189">189</a>
 <a href="#190" id="190">190</a>
-<a href="#191" id="191">191</a>
-<a href="#192" id="192">192</a>
-<a href="#193" id="193">193</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::{
     vec_deque::{Iter, IterMut},
     HashMap, VecDeque,
@@ -326,12 +323,8 @@
 
         <span class="comment">// Now, get the sequences with the smallest sequence lengths, and allow them to catch up.
         </span><span class="kw">let </span><span class="kw-2">mut </span>seq_buckets: HashMap&lt;usize, Vec&lt;Sequence&gt;&gt; = HashMap::new();
-        <span class="kw">let </span><span class="kw-2">mut </span>min_len = usize::MAX;
         <span class="kw">for </span>seq <span class="kw">in </span>running {
             <span class="kw">let </span>len = seq.len();
-            <span class="kw">if </span>len &lt; min_len {
-                min_len = len;
-            }
             <span class="kw">match </span>seq_buckets.get_mut(<span class="kw-2">&amp;</span>len) {
                 <span class="prelude-val">Some</span>(bucket) =&gt; bucket.push(seq),
                 <span class="prelude-val">None </span>=&gt; {
@@ -351,7 +344,8 @@
         } <span class="kw">else </span>{
             <span class="comment">// Set the min seqs to be the running ones, and the rest to be waiting (but their states are not changed!)
             // Allow the min seqs to catch up.
-            </span><span class="kw">let </span>min_seqs = seq_buckets.remove(<span class="kw-2">&amp;</span>min_len).unwrap();
+            </span><span class="kw">let </span>min = <span class="kw-2">*</span>seq_buckets.keys().min().unwrap();
+            <span class="kw">let </span>min_seqs = seq_buckets.remove(<span class="kw-2">&amp;</span>min).unwrap();
             <span class="kw">for </span>(<span class="kw">_</span>, seqs) <span class="kw">in </span>seq_buckets {
                 <span class="kw">for </span>seq <span class="kw">in </span>seqs {
                     new_waiting.add(seq);

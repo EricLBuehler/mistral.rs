@@ -492,6 +492,9 @@
 <a href="#490" id="490">490</a>
 <a href="#491" id="491">491</a>
 <a href="#492" id="492">492</a>
+<a href="#493" id="493">493</a>
+<a href="#494" id="494">494</a>
+<a href="#495" id="495">495</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
@@ -664,6 +667,9 @@
     </span>}
 
     <span class="kw">pub fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(toks) = <span class="kw-2">&amp;</span><span class="self">self</span>.prefill_prompt_toks {
+            <span class="kw">return </span>toks.len();
+        }
         <span class="self">self</span>.tokens.len()
     }
 
