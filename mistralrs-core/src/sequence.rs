@@ -26,7 +26,10 @@ pub enum StopReason {
     StopTok(u32),
     Length(usize),
     ModelLength(usize),
-    StopString(/* Index in the list of stop strings */ usize),
+    StopString {
+        stop_string_idx: usize,
+        completion_bytes_pos: usize,
+    },
 }
 
 impl ToString for StopReason {
@@ -34,7 +37,7 @@ impl ToString for StopReason {
         match self {
             StopReason::Eos => "stop".to_string(),
             StopReason::Length(_) | StopReason::ModelLength(_) => "length".to_string(),
-            StopReason::StopTok(_) | StopReason::StopString(_) => "stop".to_string(),
+            StopReason::StopTok(_) | StopReason::StopString { .. } => "stop".to_string(),
         }
     }
 }
@@ -206,6 +209,10 @@ impl Sequence {
         &self.tokens
     }
 
+    pub fn completion_bytes(&self) -> &[u8] {
+        &self.completion_bytes
+    }
+
     pub fn cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
         &mut self.cache
     }
@@ -237,9 +244,9 @@ impl Sequence {
             Some(StopReason::Eos) | Some(StopReason::StopTok(_))
         );
         if !stopped_by_token {
-            // Completion bytes is used to check for stop strings, and as the streaming buffer.
+            // Completion bytes is used to check for stop strings, and as the response buffer.
             // We don't need to add stop tokens to the completion bytes to check for stop strings.
-            // And by not adding it here, we can avoid having to delete these tokens from the streaming output.
+            // And by not adding it here, we can avoid having to delete these tokens from the output.
             self.completion_bytes.extend_from_slice(&completion_bytes);
         }
         self.cumulative_logprob += tok.logprob;
@@ -278,8 +285,12 @@ impl Sequence {
         } else {
             if !self.stop_strings.is_empty() {
                 for (idx, s) in self.stop_strings.iter().enumerate() {
-                    if galil_seiferas::gs_find(&self.completion_bytes, s.as_bytes()).is_some() {
-                        return Some(StopReason::StopString(idx));
+                    if let Some(pos) = galil_seiferas::gs_find(&self.completion_bytes, s.as_bytes())
+                    {
+                        return Some(StopReason::StopString {
+                            stop_string_idx: idx,
+                            completion_bytes_pos: pos,
+                        });
                     }
                 }
             }
@@ -308,8 +319,7 @@ impl Sequence {
         &mut self,
     ) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
         let is_first = self.stream_idx == 0;
-        let slice = self.completion_bytes[self.stream_idx..].to_vec();
-        let new_decoded = unsafe { String::from_utf8_unchecked(slice) };
+        let new_decoded = String::from_utf8_lossy(&self.completion_bytes[self.stream_idx..]);
         // Check if the sequence ends with valid utf8, if not skip it as it probably is a multi token sequence
         if new_decoded.ends_with('�') {
             return Ok(None);
@@ -322,7 +332,7 @@ impl Sequence {
         if is_first {
             return Ok(Some(new_decoded.trim_start().to_string()));
         }
-        Ok(Some(new_decoded))
+        Ok(Some(new_decoded.to_string()))
     }
 
     pub fn timestamp(&self) -> u128 {
