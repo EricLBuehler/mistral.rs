@@ -123,10 +123,8 @@ trait ScalingsMaker {
 
 fn verify_sanity_adapters(ordering: &Ordering, supported_layers: &[&str]) -> Result<()> {
     for path in ordering.layers.keys() {
-        for layer in supported_layers {
-            if !path.ends_with(layer) {
-                candle_core::bail!("Got a layer name `{path}` in the ordering, expected it to end with one of {supported_layers:?}");
-            }
+        if !supported_layers.iter().all(|layer| path.ends_with(layer)) {
+            candle_core::bail!("Got a layer name `{path}` in the ordering, expected it to end with one of {supported_layers:?}");
         }
     }
     Ok(())
