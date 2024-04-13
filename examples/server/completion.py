@@ -35,8 +35,6 @@ openai.base_url = "http://localhost:1234/v1/"
 #     event_hooks={"request": [print], "response": [log_response]}
 # )
 
-eos_toks = ["</s>", "<eos>", "<|endoftext|>"]
-
 while True:
     prompt = input(">>> ")
     completion = openai.completions.create(
