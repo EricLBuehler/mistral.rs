@@ -40,7 +40,6 @@ prompt = input("Enter system prompt >>> ")
 if len(prompt) > 0:
     messages.append({"role": "system", "content": prompt})
 
-eos_toks = ["</s>", "<eos>", "<|endoftext|>"]
 
 while True:
     prompt = input(">>> ")
@@ -54,11 +53,5 @@ while True:
         temperature=0,
     )
     resp = completion.choices[0].message.content
-    for eos in eos_toks:
-        if resp.endswith(eos):
-            out = resp[: -len(eos)]
-            print(out)
-            break
-    else:
-        print(resp + "...")
+    print(resp)
     messages.append({"role": "assistant", "content": resp})
