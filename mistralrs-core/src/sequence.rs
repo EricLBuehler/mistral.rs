@@ -319,7 +319,7 @@ impl Sequence {
         if is_first {
             return Ok(Some(new_decoded.trim_start().to_string()));
         }
-        return Ok(Some(new_decoded));
+        Ok(Some(new_decoded))
     }
 
     pub fn timestamp(&self) -> u128 {
