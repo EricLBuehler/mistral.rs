@@ -110,6 +110,14 @@
 <a href="#108" id="108">108</a>
 <a href="#109" id="109">109</a>
 <a href="#110" id="110">110</a>
+<a href="#111" id="111">111</a>
+<a href="#112" id="112">112</a>
+<a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+<a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>indexmap::IndexMap;
 
@@ -201,18 +209,26 @@
         } <span class="kw">else </span>{
             <span class="comment">// Look for token ids such that they begins with `toks`
             </span><span class="kw">for </span>(ids, cache) <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.caches {
-                <span class="kw">if </span>ids.len() &gt;= toks.len() &amp;&amp; <span class="kw-2">&amp;</span>ids[<span class="number">0</span>..toks.len()] == toks {
+                <span class="kw">if </span>ids.len() &lt;= toks.len() &amp;&amp; <span class="kw-2">&amp;</span>toks[<span class="number">0</span>..ids.len()] == ids {
                     <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(MatchingCache::Subset(
                         cache.clone(),
                         toks[ids.len()..].to_vec(),
                     )));
                 }
+                <span class="kw">if </span>ids.len() &gt;= toks.len() &amp;&amp; <span class="kw-2">&amp;</span>ids[<span class="number">0</span>..toks.len()] == toks {
+                    <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(MatchingCache::Verbatim(cache.clone())));
+                }
             }
             <span class="kw">for </span>(ids, cache) <span class="kw">in </span><span class="self">self</span>.cpu_caches.clone() {
-                <span class="kw">if </span>ids.len() &gt;= toks.len() &amp;&amp; <span class="kw-2">&amp;</span>ids[<span class="number">0</span>..toks.len()] == toks {
+                <span class="kw">if </span>ids.len() &lt;= toks.len() &amp;&amp; toks[<span class="number">0</span>..ids.len()] == ids {
                     <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(MatchingCache::Subset(
                         <span class="self">self</span>.promote_into_device_cache(toks.to_vec(), <span class="kw-2">&amp;</span>cache)<span class="question-mark">?</span>,
                         toks[ids.len()..].to_vec(),
+                    )));
+                }
+                <span class="kw">if </span>ids.len() &gt;= toks.len() &amp;&amp; <span class="kw-2">&amp;</span>ids[<span class="number">0</span>..toks.len()] == toks {
+                    <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(MatchingCache::Verbatim(
+                        <span class="self">self</span>.promote_into_device_cache(toks.to_vec(), <span class="kw-2">&amp;</span>cache)<span class="question-mark">?</span>,
                     )));
                 }
             }
