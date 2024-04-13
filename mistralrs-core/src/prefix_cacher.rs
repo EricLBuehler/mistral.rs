@@ -96,23 +96,19 @@ impl PrefixCacheManager {
                     )));
                 }
                 if ids.len() >= toks.len() && &ids[0..toks.len()] == toks {
-                    return Ok(Some(MatchingCache::Subset(
-                        cache.clone(),
-                        ids[toks.len()..].to_vec(),
-                    )));
+                    return Ok(Some(MatchingCache::Verbatim(cache.clone())));
                 }
             }
             for (ids, cache) in self.cpu_caches.clone() {
                 if ids.len() <= toks.len() && &toks[0..ids.len()] == ids {
                     return Ok(Some(MatchingCache::Subset(
-                        cache.clone(),
+                        self.promote_into_device_cache(toks.to_vec(), &cache)?,
                         toks[ids.len()..].to_vec(),
                     )));
                 }
                 if ids.len() >= toks.len() && &ids[0..toks.len()] == toks {
-                    return Ok(Some(MatchingCache::Subset(
-                        cache.clone(),
-                        ids[toks.len()..].to_vec(),
+                    return Ok(Some(MatchingCache::Verbatim(
+                        self.promote_into_device_cache(toks.to_vec(), &cache)?,
                     )));
                 }
             }
