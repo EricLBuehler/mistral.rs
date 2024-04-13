@@ -468,17 +468,20 @@ impl SequenceGroup {
 
     pub fn maybe_send_streaming_response(&mut self, seq: &Sequence, model: String) {
         if self.streaming_chunks.len() == self.n_choices && self.is_streaming {
+            let mut swap_streaming_chunks = vec![];
+
+            std::mem::swap(&mut swap_streaming_chunks, &mut self.streaming_chunks);
+
             seq.responder()
                 .send(Response::Chunk(ChatCompletionChunkResponse {
                     id: seq.id.to_string(),
-                    choices: self.streaming_chunks.clone(),
+                    choices: swap_streaming_chunks,
                     created: seq.timestamp,
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "chat.completion.chunk".to_string(),
                 }))
                 .unwrap();
-            self.streaming_chunks.clear();
         }
     }
 

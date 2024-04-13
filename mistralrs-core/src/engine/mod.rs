@@ -158,32 +158,37 @@ impl Engine {
             );
             // Handle streaming requests
             if seq.get_mut_group().is_streaming && seq.get_mut_group().is_chat {
-                if let Some(delta) = handle_seq_error!(seq.get_delta(), seq.responder()) {
-                    seq.add_streaming_chunk_choice_to_group(ChunkChoice {
-                        delta: Delta {
-                            content: delta.clone(),
-                            role: "assistant".to_string(),
-                        },
-                        index: seq.get_response_index(),
-                        stopreason: is_done.map(|x| x.to_string()),
-                        logprobs: if seq.return_logprobs() {
-                            Some(ResponseLogprob {
-                                token: delta,
-                                bytes: next_token.bytes.clone().into_bytes(),
-                                logprob: next_token.logprob,
-                                top_logprobs: next_token.top_logprobs.unwrap().clone(),
-                            })
-                        } else {
-                            None
-                        },
-                    });
+                let token_index = seq.get_toks().len();
+                let rate_limit_allowed = is_done.is_some() || token_index % 3 == 0;
 
-                    if let Some(reason) = is_done {
-                        seq.set_state(SequenceState::Done(reason));
+                if rate_limit_allowed {
+                    if let Some(delta) = handle_seq_error!(seq.get_delta(), seq.responder()) {
+                        seq.add_streaming_chunk_choice_to_group(ChunkChoice {
+                            delta: Delta {
+                                content: delta.clone(),
+                                role: "assistant".to_string(),
+                            },
+                            index: seq.get_response_index(),
+                            stopreason: is_done.map(|x| x.to_string()),
+                            logprobs: if seq.return_logprobs() {
+                                Some(ResponseLogprob {
+                                    token: delta,
+                                    bytes: next_token.bytes.clone().into_bytes(),
+                                    logprob: next_token.logprob,
+                                    top_logprobs: next_token.top_logprobs.unwrap().clone(),
+                                })
+                            } else {
+                                None
+                            },
+                        });
+
+                        if let Some(reason) = is_done {
+                            seq.set_state(SequenceState::Done(reason));
+                        }
+
+                        seq.get_mut_group()
+                            .maybe_send_streaming_response(seq, pipeline.name());
                     }
-
-                    seq.get_mut_group()
-                        .maybe_send_streaming_response(seq, pipeline.name());
                 }
             } else if let Some(reason) = is_done {
                 Self::finish_seq(pipeline, seq, reason);
