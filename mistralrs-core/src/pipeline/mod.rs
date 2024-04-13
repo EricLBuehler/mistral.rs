@@ -538,25 +538,50 @@ fn get_xlora_paths(
             .collect::<Vec<_>>();
         if xlora_classifier.len() != 1 {
             warn!("Detected multiple X-LoRA classifiers: {xlora_classifier:?}");
-            warn!("Selected classifier: `{}`", &xlora_classifier[0])
+            warn!("Selected classifier: `{}`", &xlora_classifier[0]);
         }
         let xlora_classifier = &xlora_classifier[0];
-        let xlora_config = &api
+        let xlora_configs = &api
             .info()?
             .siblings
             .iter()
             .map(|x| x.rfilename.clone())
             .filter(|x| x.contains("xlora_config.json"))
             .collect::<Vec<_>>();
-        if xlora_config.len() != 1 {
-            warn!("Detected multiple X-LoRA configs: {xlora_config:?}");
-            warn!("Selected config: `{}`", &xlora_config[0])
+        if xlora_configs.len() != 1 {
+            warn!("Detected multiple X-LoRA configs: {xlora_configs:?}");
         }
-        let xlora_config = &xlora_config[0];
+
         let classifier_path = api.get(xlora_classifier)?;
-        let config_path = api.get(xlora_config)?;
-        let conf = fs::read_to_string(config_path)?;
-        let xlora_config: XLoraConfig = serde_json::from_str(&conf)?;
+
+        let mut xlora_config: Option<XLoraConfig> = None;
+        let mut last_err: Option<serde_json::Error> = None;
+        for (i, config_path) in xlora_configs.iter().enumerate() {
+            if xlora_configs.len() != 1 {
+                warn!("Selecting config: `{}`", config_path);
+            }
+            let config_path = api.get(config_path)?;
+            let conf = fs::read_to_string(config_path)?;
+            let deser: Result<XLoraConfig, serde_json::Error> = serde_json::from_str(&conf);
+            match deser {
+                Ok(conf) => {
+                    xlora_config = Some(conf);
+                    break;
+                }
+                Err(e) => {
+                    if i == xlora_configs.len() - 1 {
+                        warn!("Config is broken with error `{e}`");
+                    }
+                    last_err = Some(e);
+                }
+            }
+        }
+        let xlora_config = xlora_config.unwrap_or_else(|| {
+            panic!(
+                "Unable to derserialize any configs. Last error: {}",
+                last_err.unwrap()
+            )
+        });
 
         let adapter_files = api
             .info()?
