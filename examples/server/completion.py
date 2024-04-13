@@ -48,10 +48,4 @@ while True:
         temperature=0,
     )
     resp = completion.choices[0].text
-    for eos in eos_toks:
-        if resp.endswith(eos):
-            out = resp[: -len(eos)]
-            print(out)
-            break
-    else:
-        print(resp + "...")
+    print(resp)
