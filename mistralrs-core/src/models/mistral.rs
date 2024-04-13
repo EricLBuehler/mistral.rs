@@ -100,15 +100,13 @@ impl Attention {
         })
     }
 
-    fn repeat_kv(&self, xs: Tensor) -> Result<Tensor> {
+    fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
         let n_rep = self.num_kv_groups;
         if n_rep == 1 {
-            Ok(xs)
+            Ok(x)
         } else {
-            let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
-            xs.unsqueeze(2)?
-                .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
+            let (b_sz, n_kv_head, seq_len, head_dim) = x.dims4()?;
+            Tensor::cat(&vec![&x; n_rep], 2)?.reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))
         }
     }
 
