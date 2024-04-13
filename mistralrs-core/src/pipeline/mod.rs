@@ -23,6 +23,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
 use tokenizers::Tokenizer;
+use tracing::warn;
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -534,14 +535,22 @@ fn get_xlora_paths(
             .iter()
             .map(|x| x.rfilename.clone())
             .filter(|x| x.contains("xlora_classifier.safetensors"))
-            .collect::<Vec<_>>()[0];
+            .collect::<Vec<_>>();
+        if xlora_classifier.len() != 1 {
+            warn!("Detected multiple X-LoRA classifiers: {xlora_classifier:?}");
+        }
+        let xlora_classifier = &xlora_classifier[0];
         let xlora_config = &api
             .info()?
             .siblings
             .iter()
             .map(|x| x.rfilename.clone())
             .filter(|x| x.contains("xlora_config.json"))
-            .collect::<Vec<_>>()[0];
+            .collect::<Vec<_>>();
+        if xlora_config.len() != 1 {
+            warn!("Detected multiple X-LoRA configs: {xlora_config:?}");
+        }
+        let xlora_config = &xlora_config[0];
         let classifier_path = api.get(xlora_classifier)?;
         let config_path = api.get(xlora_config)?;
         let conf = fs::read_to_string(config_path)?;
