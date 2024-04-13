@@ -100,7 +100,7 @@ impl PrefixCacheManager {
                 }
             }
             for (ids, cache) in self.cpu_caches.clone() {
-                if ids.len() <= toks.len() && &toks[0..ids.len()] == ids {
+                if ids.len() <= toks.len() && toks[0..ids.len()] == ids {
                     return Ok(Some(MatchingCache::Subset(
                         self.promote_into_device_cache(toks.to_vec(), &cache)?,
                         toks[ids.len()..].to_vec(),
