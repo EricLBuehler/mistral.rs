@@ -613,6 +613,23 @@
 <a href="#611" id="611">611</a>
 <a href="#612" id="612">612</a>
 <a href="#613" id="613">613</a>
+<a href="#614" id="614">614</a>
+<a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
+<a href="#617" id="617">617</a>
+<a href="#618" id="618">618</a>
+<a href="#619" id="619">619</a>
+<a href="#620" id="620">620</a>
+<a href="#621" id="621">621</a>
+<a href="#622" id="622">622</a>
+<a href="#623" id="623">623</a>
+<a href="#624" id="624">624</a>
+<a href="#625" id="625">625</a>
+<a href="#626" id="626">626</a>
+<a href="#627" id="627">627</a>
+<a href="#628" id="628">628</a>
+<a href="#629" id="629">629</a>
+<a href="#630" id="630">630</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -830,19 +847,36 @@
             <span class="prelude-val">None
         </span>};
 
-        <span class="kw">let </span>res = <span class="macro">handle_seq_error!</span>(
-            pipeline
+        <span class="kw">let </span>text = <span class="kw">match </span>reason {
+            StopReason::Length(<span class="kw">_</span>) | StopReason::ModelLength(<span class="kw">_</span>) =&gt; pipeline
                 .tokenizer()
                 .decode(<span class="kw-2">&amp;</span>seq.get_toks()[seq.prompt_tokens()..], <span class="bool-val">false</span>),
-            seq.responder()
-        );
+
+            StopReason::Eos | StopReason::StopTok(<span class="kw">_</span>) =&gt; {
+                <span class="kw">let </span>toks = seq.get_toks();
+                pipeline
+                    .tokenizer()
+                    .decode(<span class="kw-2">&amp;</span>toks[seq.prompt_tokens()..toks.len() - <span class="number">1</span>], <span class="bool-val">false</span>)
+            }
+            StopReason::StopString(stop_str_index) =&gt; {
+                <span class="kw">let </span>stop_str = seq.stop_strings().get(stop_str_index).unwrap();
+                pipeline
+                    .tokenizer()
+                    .decode(<span class="kw-2">&amp;</span>seq.get_toks()[seq.prompt_tokens()..], <span class="bool-val">false</span>)
+                    .map(|txt| {
+                        <span class="kw">let </span>stop_str_pos = txt.rfind(stop_str).unwrap();
+                        txt[..stop_str_pos].to_string()
+                    })
+            }
+        };
+        <span class="kw">let </span>text = <span class="macro">handle_seq_error!</span>(text, seq.responder());
 
         <span class="kw">if </span>seq.get_mut_group().is_chat {
             <span class="kw">let </span>choice = Choice {
                 stopreason: reason.to_string(),
                 index: seq.get_response_index(),
                 message: ResponseMessage {
-                    content: res,
+                    content: text,
                     role: <span class="string">"assistant"</span>.to_string(),
                 },
                 logprobs: logprobs.map(|l| Logprobs { content: <span class="prelude-val">Some</span>(l) }),
@@ -852,7 +886,7 @@
             <span class="kw">let </span>choice = CompletionChoice {
                 stopreason: reason.to_string(),
                 index: seq.get_response_index(),
-                text: res,
+                text,
                 logprobs: <span class="prelude-val">None</span>,
             };
             seq.add_completion_choice_to_group(choice);
