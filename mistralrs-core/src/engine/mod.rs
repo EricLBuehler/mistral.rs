@@ -221,28 +221,19 @@ impl Engine {
         };
 
         let text = match reason {
-            StopReason::Length(_) | StopReason::ModelLength(_) => pipeline
-                .tokenizer()
-                .decode(&seq.get_toks()[seq.prompt_tokens()..], false),
-
-            StopReason::Eos | StopReason::StopTok(_) => {
-                let toks = seq.get_toks();
-                pipeline
-                    .tokenizer()
-                    .decode(&toks[seq.prompt_tokens()..toks.len() - 1], false)
-            }
+            StopReason::Length(_)
+            | StopReason::ModelLength(_)
+            | StopReason::Eos
+            | StopReason::StopTok(_) => String::from_utf8_lossy(seq.completion_bytes())
+                .trim_start()
+                .to_string(),
             StopReason::StopString(stop_str_index) => {
+                let txt = String::from_utf8_lossy(seq.completion_bytes());
                 let stop_str = seq.stop_strings().get(stop_str_index).unwrap();
-                pipeline
-                    .tokenizer()
-                    .decode(&seq.get_toks()[seq.prompt_tokens()..], false)
-                    .map(|txt| {
-                        let stop_str_pos = txt.rfind(stop_str).unwrap();
-                        txt[..stop_str_pos].to_string()
-                    })
+                let stop_str_pos = txt.rfind(stop_str).unwrap();
+                txt[..stop_str_pos].trim_start().to_string()
             }
         };
-        let text = handle_seq_error!(text, seq.responder());
 
         if seq.get_mut_group().is_chat {
             let choice = Choice {
