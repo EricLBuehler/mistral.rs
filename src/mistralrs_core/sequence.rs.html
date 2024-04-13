@@ -492,10 +492,6 @@
 <a href="#490" id="490">490</a>
 <a href="#491" id="491">491</a>
 <a href="#492" id="492">492</a>
-<a href="#493" id="493">493</a>
-<a href="#494" id="494">494</a>
-<a href="#495" id="495">495</a>
-<a href="#496" id="496">496</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
@@ -517,7 +513,6 @@
 };
 <span class="kw">use </span>candle_core::Tensor;
 <span class="kw">use </span>regex_automata::util::primitives::StateID;
-<span class="kw">use </span>tokenizers::Tokenizer;
 
 <span class="attr">#[derive(Clone, Copy, PartialEq, Debug)]
 </span><span class="kw">pub enum </span>StopReason {
@@ -557,7 +552,6 @@
 <span class="kw">pub struct </span>Sequence {
     <span class="comment">// Metadata, const
     </span>id: usize,
-    original_prompt: String,
     prompt_len: usize,
     max_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     timestamp: u128,
@@ -579,10 +573,11 @@
 
     <span class="comment">// Mutables
     </span>tokens: Vec&lt;u32&gt;,
-    decoded_tokens: <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt;,
     logprobs: Vec&lt;Logprobs&gt;,
     cumulative_logprob: f32,
     completion_bytes: Vec&lt;u8&gt;,
+    stream_idx: usize,
+    <span class="kw">pub </span>recognizer: SequenceRecognizer,
 
     <span class="comment">// GPU things
     </span><span class="kw">pub </span>prompt_tok_per_sec: f32,
@@ -590,14 +585,11 @@
     group: Rc&lt;RefCell&lt;SequenceGroup&gt;&gt;,
     <span class="kw">pub </span>total_sampling_time: u128,
     state: Cell&lt;SequenceState&gt;,
-
-    <span class="kw">pub </span>recognizer: SequenceRecognizer,
 }
 <span class="kw">impl </span>Sequence {
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>new_waiting(
         tokens: Vec&lt;u32&gt;,
-        original_prompt: String,
         id: usize,
         timestamp: u128,
         layers: usize,
@@ -618,8 +610,6 @@
         <span class="kw">let </span>prompt_len = tokens.len();
         <span class="self">Self </span>{
             tokens,
-            original_prompt,
-            decoded_tokens: <span class="prelude-val">None</span>,
             logprobs: Vec::new(),
             prompt_len,
             id,
@@ -650,6 +640,7 @@
             prefix,
             cumulative_logprob: <span class="number">0.</span>,
             completion_bytes: Vec::new(),
+            stream_idx: <span class="number">0</span>,
         }
     }
 
@@ -726,8 +717,22 @@
         <span class="kw-2">&amp;mut </span><span class="self">self</span>.sampler
     }
 
-    <span class="kw">pub fn </span>add_token(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tok: Logprobs, completion_bytes: Vec&lt;u8&gt;) {
-        <span class="self">self</span>.completion_bytes.extend_from_slice(<span class="kw-2">&amp;</span>completion_bytes);
+    <span class="kw">pub fn </span>add_token(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        tok: Logprobs,
+        completion_bytes: Vec&lt;u8&gt;,
+        is_done: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;StopReason&gt;,
+    ) {
+        <span class="kw">let </span>stopped_by_token = <span class="macro">matches!</span>(
+            is_done,
+            <span class="prelude-val">Some</span>(StopReason::Eos) | <span class="prelude-val">Some</span>(StopReason::StopTok(<span class="kw">_</span>))
+        );
+        <span class="kw">if </span>!stopped_by_token {
+            <span class="comment">// Completion bytes is used to check for stop strings, and as the streaming buffer.
+            // We don't need to add stop tokens to the completion bytes to check for stop strings.
+            // And by not adding it here, we can avoid having to delete these tokens from the streaming output.
+            </span><span class="self">self</span>.completion_bytes.extend_from_slice(<span class="kw-2">&amp;</span>completion_bytes);
+        }
         <span class="self">self</span>.cumulative_logprob += tok.logprob;
         <span class="self">self</span>.tokens.push(tok.token);
         <span class="self">self</span>.logprobs.push(tok);
@@ -792,36 +797,23 @@
     <span class="doccomment">/// Returns the delta between the last two decoded sequences
     </span><span class="kw">pub fn </span>get_delta(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-        tokenizer: <span class="kw-2">&amp;</span>Tokenizer,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;String&gt;, Box&lt;<span class="kw">dyn </span>std::error::Error + Send + Sync&gt;&gt; {
-        <span class="kw">if </span><span class="self">self</span>.decoded_tokens.is_none() {
-            <span class="comment">//Initial decoding of the prompt
-            </span><span class="kw">let </span>cleaned_prompt = tokenizer.decode(
-                tokenizer
-                    .encode(<span class="self">self</span>.original_prompt.clone(), <span class="bool-val">false</span>)<span class="question-mark">?
-                    </span>.get_ids(),
-                <span class="bool-val">false</span>,
-            )<span class="question-mark">?</span>;
-            <span class="kw">let </span>decoded_bytes = cleaned_prompt.as_bytes().to_vec();
-            <span class="self">self</span>.decoded_tokens = <span class="prelude-val">Some</span>(decoded_bytes);
-        }
-
-        <span class="comment">//We need to decode incrementally to handle streaming requests, see: https://github.com/huggingface/tokenizers/issues/1141
-        </span><span class="kw">let </span>new_decoded_bytes = tokenizer.decode(<span class="kw-2">&amp;</span><span class="self">self</span>.tokens, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
-        <span class="kw">let </span>new_decoded_bytes = new_decoded_bytes.as_bytes();
-
-        <span class="comment">// check if the sequence decodes to a valid utf8 string, if not skip it as it probably is a multi token sequence
-        </span><span class="kw">let </span>new_decoded = <span class="kw">unsafe </span>{ String::from_utf8_unchecked(new_decoded_bytes.to_vec()) };
-        <span class="kw">if </span>new_decoded.ends_with(<span class="string">'�'</span>) {
+        <span class="kw">let </span>is_first = <span class="self">self</span>.stream_idx == <span class="number">0</span>;
+        <span class="kw">let </span>slice = <span class="self">self</span>.completion_bytes[<span class="self">self</span>.stream_idx..].to_vec();
+        <span class="kw">let </span>new_decoded = <span class="kw">unsafe </span>{ String::from_utf8_unchecked(slice) };
+        <span class="comment">// Check if the sequence ends with valid utf8, if not skip it as it probably is a multi token sequence
+        </span><span class="kw">if </span>new_decoded.ends_with(<span class="string">'�'</span>) {
             <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
         }
+        <span class="self">self</span>.stream_idx = <span class="self">self</span>.completion_bytes.len();
 
-        <span class="kw">let </span>delta = String::from_utf8_lossy(
-            <span class="kw-2">&amp;</span>new_decoded_bytes[<span class="self">self</span>.decoded_tokens.as_ref().unwrap().len()..],
-        )
-        .into_owned();
-        <span class="self">self</span>.decoded_tokens = <span class="prelude-val">Some</span>(new_decoded_bytes.to_vec());
-        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(delta))
+        <span class="comment">// The first token usually starts with a space. We don't want to add that to the delta.
+        // Since we're using the completion_bytes, we need to take care of that ourselves.
+        // Had we used HF's Tokenizer, it would have taken care of that for us.
+        </span><span class="kw">if </span>is_first {
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(new_decoded.trim_start().to_string()));
+        }
+        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(new_decoded))
     }
 
     <span class="kw">pub fn </span>timestamp(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u128 {

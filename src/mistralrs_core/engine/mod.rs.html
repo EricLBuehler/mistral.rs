@@ -629,7 +629,6 @@
 <a href="#627" id="627">627</a>
 <a href="#628" id="628">628</a>
 <a href="#629" id="629">629</a>
-<a href="#630" id="630">630</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -782,15 +781,15 @@
             <span class="kw">let </span>next_token = <span class="macro">handle_seq_error_stateaware!</span>(sampled, seq);
             <span class="kw">let </span>next_token_id = next_token.token;
 
+            <span class="kw">let </span>is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
             seq.add_token(
                 next_token.clone(),
                 pipeline.tok_trie().decode(<span class="kw-2">&amp;</span>[next_token_id]),
+                <span class="kw-2">&amp;</span>is_done,
             );
-            <span class="kw">let </span>is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
             <span class="comment">// Handle streaming requests
             </span><span class="kw">if </span>seq.get_mut_group().is_streaming &amp;&amp; seq.get_mut_group().is_chat {
-                <span class="kw">let </span>tokenizer = pipeline.tokenizer();
-                <span class="kw">if let </span><span class="prelude-val">Some</span>(delta) = <span class="macro">handle_seq_error!</span>(seq.get_delta(<span class="kw-2">&amp;</span>tokenizer), seq.responder()) {
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(delta) = <span class="macro">handle_seq_error!</span>(seq.get_delta(), seq.responder()) {
                     seq.add_streaming_chunk_choice_to_group(ChunkChoice {
                         delta: Delta {
                             content: delta.clone(),
@@ -1221,7 +1220,6 @@
         </span><span class="kw">for </span>response_index <span class="kw">in </span><span class="number">0</span>..request.sampling_params.n_choices {
             <span class="kw">let </span>seq = Sequence::new_waiting(
                 prompt.clone(),
-                formatted_prompt.clone(),
                 <span class="self">self</span>.id,
                 now.as_millis(),
                 num_hidden_layers,
