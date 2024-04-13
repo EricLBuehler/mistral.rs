@@ -491,6 +491,7 @@
 <a href="#489" id="489">489</a>
 <a href="#490" id="490">490</a>
 <a href="#491" id="491">491</a>
+<a href="#492" id="492">492</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
@@ -726,6 +727,7 @@
         <span class="self">self</span>.cumulative_logprob += tok.logprob;
         <span class="self">self</span>.tokens.push(tok.token);
         <span class="self">self</span>.logprobs.push(tok);
+        <span class="self">self</span>.prefill_prompt_toks = <span class="prelude-val">None</span>;
     }
 
     <span class="kw">pub fn </span>responder(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Sender&lt;Response&gt; {
