@@ -538,6 +538,7 @@ fn get_xlora_paths(
             .collect::<Vec<_>>();
         if xlora_classifier.len() != 1 {
             warn!("Detected multiple X-LoRA classifiers: {xlora_classifier:?}");
+            warn!("Selected classifier: `{}`", &xlora_classifier[0])
         }
         let xlora_classifier = &xlora_classifier[0];
         let xlora_config = &api
@@ -549,6 +550,7 @@ fn get_xlora_paths(
             .collect::<Vec<_>>();
         if xlora_config.len() != 1 {
             warn!("Detected multiple X-LoRA configs: {xlora_config:?}");
+            warn!("Selected config: `{}`", &xlora_config[0])
         }
         let xlora_config = &xlora_config[0];
         let classifier_path = api.get(xlora_classifier)?;
