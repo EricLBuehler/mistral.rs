@@ -508,6 +508,13 @@
 <a href="#506" id="506">506</a>
 <a href="#507" id="507">507</a>
 <a href="#508" id="508">508</a>
+<a href="#509" id="509">509</a>
+<a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a>
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
@@ -663,7 +670,7 @@
         }
     }
 
-    <span class="kw">pub fn </span>prefill(<span class="kw-2">mut </span><span class="self">self</span>, cache: LayerCaches) -&gt; <span class="self">Self </span>{
+    <span class="kw">pub fn </span>prefill(<span class="kw-2">mut </span><span class="self">self</span>, cache: LayerCaches, xlora_cache: <span class="prelude-ty">Option</span>&lt;LayerCaches&gt;) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect(<span class="string">"Time travel has occurred!"</span>)
@@ -671,12 +678,19 @@
         <span class="self">self</span>.prompt_timestamp = <span class="prelude-val">Some</span>(now);
 
         <span class="self">self</span>.cache = cache;
+        <span class="self">self</span>.xlora_cache = xlora_cache;
         <span class="self">self</span>.set_state(SequenceState::RunningCompletion);
         <span class="self">self
     </span>}
 
-    <span class="kw">pub fn </span>prefill_subset(<span class="kw-2">mut </span><span class="self">self</span>, cache: LayerCaches, toks: Vec&lt;u32&gt;) -&gt; <span class="self">Self </span>{
+    <span class="kw">pub fn </span>prefill_subset(
+        <span class="kw-2">mut </span><span class="self">self</span>,
+        cache: LayerCaches,
+        xlora_cache: <span class="prelude-ty">Option</span>&lt;LayerCaches&gt;,
+        toks: Vec&lt;u32&gt;,
+    ) -&gt; <span class="self">Self </span>{
         <span class="self">self</span>.cache = cache;
+        <span class="self">self</span>.xlora_cache = xlora_cache;
         <span class="self">self</span>.prefill_prompt_toks = <span class="prelude-val">Some</span>(toks);
         <span class="self">self</span>.set_state(SequenceState::RunningPrefillPrompt);
         <span class="self">self
