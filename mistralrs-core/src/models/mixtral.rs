@@ -9,7 +9,7 @@ use candle_transformers::models::with_tracing::{linear_no_bias, Linear};
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::pipeline::MIXTRAL_IS_GPTX;
+use crate::pipeline::{extract_logits, MIXTRAL_IS_GPTX};
 
 use super::{flash_attn, Cache, RmsNorm};
 
@@ -423,6 +423,7 @@ impl Model {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
+        context_lens: Vec<usize>,
     ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
         let past_key_values_length = self.calculate_past_kv_len(seq_len)?;
@@ -444,8 +445,6 @@ impl Model {
                 cache.get_mut(i).unwrap(),
             )?
         }
-        xs.narrow(1, seq_len - 1, 1)?
-            .apply(&self.norm)?
-            .apply(&self.lm_head)
+        extract_logits(&xs.apply(&self.norm)?.apply(&self.lm_head)?, context_lens)
     }
 }

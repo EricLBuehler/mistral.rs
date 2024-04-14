@@ -1,6 +1,6 @@
 use std::collections::{
     vec_deque::{Iter, IterMut},
-    HashMap, VecDeque,
+    VecDeque,
 };
 
 use crate::sequence::{Sequence, SequenceState};
@@ -128,40 +128,6 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
                 new_waiting.add(seq);
             }
         }
-
-        // Now, get the sequences with the smallest sequence lengths, and allow them to catch up.
-        let mut seq_buckets: HashMap<usize, Vec<Sequence>> = HashMap::new();
-        for seq in running {
-            let len = seq.len();
-            match seq_buckets.get_mut(&len) {
-                Some(bucket) => bucket.push(seq),
-                None => {
-                    seq_buckets.insert(len, vec![seq]);
-                }
-            }
-        }
-        let (running, new_waiting) = if seq_buckets.len() <= 1 {
-            // Full steam ahead or have everything
-            (
-                seq_buckets
-                    .into_iter()
-                    .flat_map(|(_, x)| x)
-                    .collect::<Vec<_>>(),
-                new_waiting,
-            )
-        } else {
-            // Set the min seqs to be the running ones, and the rest to be waiting (but their states are not changed!)
-            // Allow the min seqs to catch up.
-            let min = *seq_buckets.keys().min().unwrap();
-            let min_seqs = seq_buckets.remove(&min).unwrap();
-            for (_, seqs) in seq_buckets {
-                for seq in seqs {
-                    new_waiting.add(seq);
-                }
-            }
-            // Know min_seqs.len < running.len() <= max
-            (min_seqs, new_waiting)
-        };
 
         self.waiting = new_waiting;
         self.running = running;
