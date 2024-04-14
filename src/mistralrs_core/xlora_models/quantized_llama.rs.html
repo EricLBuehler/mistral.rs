@@ -861,17 +861,24 @@
 <a href="#859" id="859">859</a>
 <a href="#860" id="860">860</a>
 <a href="#861" id="861">861</a>
+<a href="#862" id="862">862</a>
+<a href="#863" id="863">863</a>
+<a href="#864" id="864">864</a>
+<a href="#865" id="865">865</a>
+<a href="#866" id="866">866</a>
+<a href="#867" id="867">867</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>candle_core::quantized::QMatMul;
 <span class="kw">use </span>candle_core::quantized::{ggml_file, gguf_file};
-<span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor};
+<span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear};
 
 <span class="kw">use </span><span class="kw">crate</span>::models::{verify_sanity_gguf, Cache, QRmsNorm};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::extract_logits;
 
 <span class="kw">use </span><span class="kw">super</span>::classifier::XLoraClassifier;
 <span class="kw">use super</span>::{verify_sanity_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -1628,12 +1635,9 @@
         start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
+        context_lens: Vec&lt;usize&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>(<span class="kw">_</span>, seq_len) = input_ids.dims2()<span class="question-mark">?</span>;
-
         <span class="kw">if </span><span class="self">self</span>.xlora_classifier.is_some() {
-            <span class="kw">let </span>(_b_size, seq_len_full) = input_ids_full.dims2()<span class="question-mark">?</span>;
-
             <span class="kw">let </span>scalings = <span class="self">self</span>.get_scalings(
                 input_ids,
                 input_ids_full,
@@ -1646,47 +1650,55 @@
             )<span class="question-mark">?</span>;
 
             <span class="kw">if </span>no_kv_cache {
-                <span class="self">self</span>.inner_forward(
-                    input_ids_full,
-                    seqlen_offsets_full,
-                    start_offsets_kernel_full,
-                    <span class="prelude-val">Some</span>(scalings),
-                    <span class="bool-val">true</span>,
-                    no_kv_cache,
-                    <span class="prelude-val">None</span>,
-                )<span class="question-mark">?
-                </span>.contiguous()<span class="question-mark">?
-                </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.output)<span class="question-mark">?
-                </span>.i((.., seq_len_full - <span class="number">1</span>, ..))
+                extract_logits(
+                    <span class="kw-2">&amp;</span><span class="self">self
+                        </span>.inner_forward(
+                            input_ids_full,
+                            seqlen_offsets_full,
+                            start_offsets_kernel_full,
+                            <span class="prelude-val">Some</span>(scalings),
+                            <span class="bool-val">true</span>,
+                            no_kv_cache,
+                            <span class="prelude-val">None</span>,
+                        )<span class="question-mark">?
+                        </span>.contiguous()<span class="question-mark">?
+                        </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.output)<span class="question-mark">?</span>,
+                    context_lens,
+                )
             } <span class="kw">else </span>{
                 <span class="comment">// is_full_pass=true is ok because no_kv_cache=false
-                </span><span class="self">self</span>.inner_forward(
-                    input_ids,
-                    seqlen_offsets,
-                    start_offsets_kernel,
-                    <span class="prelude-val">Some</span>(scalings),
-                    <span class="bool-val">true</span>,
-                    no_kv_cache,
-                    <span class="prelude-val">None</span>,
-                )<span class="question-mark">?
-                </span>.contiguous()<span class="question-mark">?
-                </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.output)<span class="question-mark">?
-                </span>.i((.., seq_len - <span class="number">1</span>, ..))
+                </span>extract_logits(
+                    <span class="kw-2">&amp;</span><span class="self">self
+                        </span>.inner_forward(
+                            input_ids,
+                            seqlen_offsets,
+                            start_offsets_kernel,
+                            <span class="prelude-val">Some</span>(scalings),
+                            <span class="bool-val">true</span>,
+                            no_kv_cache,
+                            <span class="prelude-val">None</span>,
+                        )<span class="question-mark">?
+                        </span>.contiguous()<span class="question-mark">?
+                        </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.output)<span class="question-mark">?</span>,
+                    context_lens,
+                )
             }
         } <span class="kw">else </span>{
-            <span class="kw">let </span>(<span class="kw">_</span>, seq_len) = input_ids.dims2()<span class="question-mark">?</span>;
-            <span class="self">self</span>.inner_forward(
-                input_ids,
-                seqlen_offsets,
-                start_offsets_kernel,
-                <span class="prelude-val">None</span>,
-                <span class="bool-val">false</span>,
-                no_kv_cache,
-                <span class="prelude-val">None</span>,
-            )<span class="question-mark">?
-            </span>.contiguous()<span class="question-mark">?
-            </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.output)<span class="question-mark">?
-            </span>.i((.., seq_len - <span class="number">1</span>, ..))
+            extract_logits(
+                <span class="kw-2">&amp;</span><span class="self">self
+                    </span>.inner_forward(
+                        input_ids,
+                        seqlen_offsets,
+                        start_offsets_kernel,
+                        <span class="prelude-val">None</span>,
+                        <span class="bool-val">false</span>,
+                        no_kv_cache,
+                        <span class="prelude-val">None</span>,
+                    )<span class="question-mark">?
+                    </span>.contiguous()<span class="question-mark">?
+                    </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.output)<span class="question-mark">?</span>,
+                context_lens,
+            )
         }
     }
 }

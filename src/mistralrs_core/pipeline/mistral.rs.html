@@ -541,6 +541,15 @@
 <a href="#539" id="539">539</a>
 <a href="#540" id="540">540</a>
 <a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -987,6 +996,7 @@
             seqlen_offsets_full,
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full,
+            context_lens,
         } = calculate_inputs(
             input_toks,
             is_prompt,
@@ -996,12 +1006,18 @@
         )
         .unwrap();
         <span class="kw">match </span><span class="self">self</span>.model {
-            Model::Normal(<span class="kw-2">ref mut </span>model) =&gt; {
-                model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets, seqlen_offsets_kernel)
-            }
-            Model::Quantized(<span class="kw-2">ref mut </span>model) =&gt; {
-                model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets, seqlen_offsets_kernel)
-            }
+            Model::Normal(<span class="kw-2">ref mut </span>model) =&gt; model.forward(
+                <span class="kw-2">&amp;</span>input_ids,
+                <span class="kw-2">&amp;</span>seqlen_offsets,
+                seqlen_offsets_kernel,
+                context_lens,
+            ),
+            Model::Quantized(<span class="kw-2">ref mut </span>model) =&gt; model.forward(
+                <span class="kw-2">&amp;</span>input_ids,
+                <span class="kw-2">&amp;</span>seqlen_offsets,
+                seqlen_offsets_kernel,
+                context_lens,
+            ),
             Model::XLoraNormal(<span class="kw-2">ref mut </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
                 input_ids_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>input_ids),
@@ -1011,6 +1027,7 @@
                 seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
                 <span class="self">self</span>.no_kv_cache,
                 <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state,
+                context_lens,
             ),
             Model::XLoraQuantized(<span class="kw-2">ref mut </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
@@ -1021,6 +1038,7 @@
                 seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
                 <span class="self">self</span>.no_kv_cache,
                 <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state,
+                context_lens,
             ),
         }
     }

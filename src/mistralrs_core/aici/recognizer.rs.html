@@ -87,7 +87,6 @@
 <a href="#85" id="85">85</a>
 <a href="#86" id="86">86</a>
 <a href="#87" id="87">87</a>
-<a href="#88" id="88">88</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">crate</span>::aici::toktree::{Recognizer, SpecialToken};
 <span class="kw">use </span>std::fmt::Debug;
 
@@ -153,8 +152,7 @@
     }
 
     <span class="kw">fn </span>trie_finished(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-        <span class="comment">// println!("{:?}", &amp;self.stack[0..=self.stack_ptr]);
-        </span><span class="macro">assert!</span>(<span class="self">self</span>.stack_ptr == <span class="number">0</span>);
+        <span class="macro">assert!</span>(<span class="self">self</span>.stack_ptr == <span class="number">0</span>);
     }
 
     <span class="kw">fn </span>collapse(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {

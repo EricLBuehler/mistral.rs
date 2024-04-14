@@ -579,8 +579,6 @@
 <a href="#577" id="577">577</a>
 <a href="#578" id="578">578</a>
 <a href="#579" id="579">579</a>
-<a href="#580" id="580">580</a>
-<a href="#581" id="581">581</a>
 </pre></div><pre class="rust"><code><span class="comment">// use 8:24 encoding - num_ch:tok_id (ch_byte:ch_off)* - 8 bytes per tree node
 // special case num_ch=0xff -&gt; num_ch=0x100
 
@@ -901,8 +899,7 @@
 
     <span class="kw">pub fn </span>token_id(<span class="kw-2">&amp;</span><span class="self">self</span>, bytes: <span class="kw-2">&amp;</span>[u8]) -&gt; <span class="prelude-ty">Option</span>&lt;TokenId&gt; {
         <span class="kw">let </span>(tok, len) = <span class="self">self</span>.prefix_token_id(bytes);
-        <span class="comment">// println!("tok_id {:?} {:?} {:?} ", bytes, tok, len);
-        </span><span class="kw">if </span>len == bytes.len() {
+        <span class="kw">if </span>len == bytes.len() {
             <span class="prelude-val">Some</span>(tok)
         } <span class="kw">else </span>{
             <span class="prelude-val">None
@@ -1021,8 +1018,7 @@
     }
 
     <span class="kw">pub fn </span>append_token(<span class="kw-2">&amp;</span><span class="self">self</span>, r: <span class="kw-2">&amp;mut </span><span class="kw">impl </span>Recognizer, t: TokenId) {
-        <span class="comment">// println!("append_token: {}", self.token_dbg(t));
-        </span><span class="kw">let </span>bytes = <span class="self">self</span>.token(t);
+        <span class="kw">let </span>bytes = <span class="self">self</span>.token(t);
         <span class="kw">for </span><span class="kw-2">&amp;</span>byte <span class="kw">in </span>bytes {
             r.push_byte(byte)
         }

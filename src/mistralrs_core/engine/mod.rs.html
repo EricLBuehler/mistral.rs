@@ -631,6 +631,32 @@
 <a href="#629" id="629">629</a>
 <a href="#630" id="630">630</a>
 <a href="#631" id="631">631</a>
+<a href="#632" id="632">632</a>
+<a href="#633" id="633">633</a>
+<a href="#634" id="634">634</a>
+<a href="#635" id="635">635</a>
+<a href="#636" id="636">636</a>
+<a href="#637" id="637">637</a>
+<a href="#638" id="638">638</a>
+<a href="#639" id="639">639</a>
+<a href="#640" id="640">640</a>
+<a href="#641" id="641">641</a>
+<a href="#642" id="642">642</a>
+<a href="#643" id="643">643</a>
+<a href="#644" id="644">644</a>
+<a href="#645" id="645">645</a>
+<a href="#646" id="646">646</a>
+<a href="#647" id="647">647</a>
+<a href="#648" id="648">648</a>
+<a href="#649" id="649">649</a>
+<a href="#650" id="650">650</a>
+<a href="#651" id="651">651</a>
+<a href="#652" id="652">652</a>
+<a href="#653" id="653">653</a>
+<a href="#654" id="654">654</a>
+<a href="#655" id="655">655</a>
+<a href="#656" id="656">656</a>
+<a href="#657" id="657">657</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -924,6 +950,7 @@
     <span class="doccomment">/// Clone the cache FROM the sequences' cache TO the model cache. Only used for completion seqs.
     </span><span class="kw">fn </span>clone_in_cache(pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
         <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
+        <span class="kw">let </span>max_seq_len = seqs.iter().map(|seq| seq.len()).max().unwrap();
         <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..pipeline.num_hidden_layers() {
             <span class="kw">let </span><span class="kw-2">mut </span>k_vec = Vec::new();
             <span class="kw">let </span><span class="kw-2">mut </span>v_vec = Vec::new();
@@ -932,8 +959,24 @@
                 <span class="kw">let </span>cache = seq_cache.get(layer).unwrap();
                 <span class="comment">// Note(EricLBuehler): Unwrap reasoning: We are handling completions seqs so unwrap is OK.
                 </span><span class="kw">let </span>cache = cache.as_ref().unwrap();
-                k_vec.push(cache.<span class="number">0</span>.clone());
-                v_vec.push(cache.<span class="number">1</span>.clone());
+                <span class="kw">if </span>cache.<span class="number">0</span>.dims()[<span class="number">2</span>] &lt; max_seq_len {
+                    <span class="kw">let </span>offset = Tensor::zeros(
+                        (
+                            cache.<span class="number">0</span>.dims()[<span class="number">0</span>],
+                            cache.<span class="number">0</span>.dims()[<span class="number">1</span>],
+                            max_seq_len - cache.<span class="number">0</span>.dims()[<span class="number">2</span>],
+                            cache.<span class="number">0</span>.dims()[<span class="number">3</span>],
+                        ),
+                        cache.<span class="number">0</span>.dtype(),
+                        cache.<span class="number">0</span>.device(),
+                    )
+                    .unwrap();
+                    k_vec.push(Tensor::cat(<span class="kw-2">&amp;</span>[cache.<span class="number">0</span>.clone(), offset.clone()], <span class="number">2</span>).unwrap());
+                    v_vec.push(Tensor::cat(<span class="kw-2">&amp;</span>[cache.<span class="number">1</span>.clone(), offset], <span class="number">2</span>).unwrap());
+                } <span class="kw">else </span>{
+                    k_vec.push(cache.<span class="number">0</span>.clone());
+                    v_vec.push(cache.<span class="number">1</span>.clone());
+                }
             }
             <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: We have the correct dims
             </span>new_cache.push(<span class="prelude-val">Some</span>((
@@ -999,6 +1042,7 @@
     <span class="doccomment">/// Clone the cache FROM the model cache TO the sequences. Used for prompt, completion seqs.
     </span><span class="kw">fn </span>clone_out_cache(pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
         <span class="kw">let </span>num_hidden_layers = pipeline.num_hidden_layers();
+        <span class="kw">let </span>max_seq_len = seqs.iter().map(|seq| seq.len()).max().unwrap();
         <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..num_hidden_layers {
             <span class="kw">let </span>cache = pipeline.cache().lock();
             <span class="kw">let </span>cache = cache.get(layer).unwrap();
@@ -1011,12 +1055,16 @@
             <span class="macro">debug_assert_eq!</span>(v_caches.len(), seqs.len());
 
             <span class="kw">for </span>(seq_i, seq) <span class="kw">in </span>seqs.iter_mut().enumerate() {
+                <span class="kw">let </span>len = seq.len();
                 <span class="kw">let </span>seq_cache = seq.cache();
                 <span class="kw">let </span>seq_cache = seq_cache.get_mut(layer).unwrap();
-                <span class="kw-2">*</span>seq_cache = <span class="prelude-val">Some</span>((
-                    k_caches.get(seq_i).unwrap().clone(),
-                    v_caches.get(seq_i).unwrap().clone(),
-                ));
+                <span class="kw">let </span><span class="kw-2">mut </span>k = k_caches.get(seq_i).unwrap().clone();
+                <span class="kw">let </span><span class="kw-2">mut </span>v = v_caches.get(seq_i).unwrap().clone();
+                <span class="kw">if </span>len &lt; max_seq_len {
+                    k = k.narrow(<span class="number">2</span>, <span class="number">0</span>, len).unwrap();
+                    v = v.narrow(<span class="number">2</span>, <span class="number">0</span>, len).unwrap();
+                }
+                <span class="kw-2">*</span>seq_cache = <span class="prelude-val">Some</span>((k, v));
             }
             <span class="kw">if </span>pipeline.is_xlora() &amp;&amp; !pipeline.has_no_kv_cache() {
                 <span class="kw">let </span>cache = pipeline.cache().xlora_lock();
@@ -1030,12 +1078,16 @@
                 <span class="macro">debug_assert_eq!</span>(v_caches.len(), seqs.len());
 
                 <span class="kw">for </span>(seq_i, seq) <span class="kw">in </span>seqs.iter_mut().enumerate() {
+                    <span class="kw">let </span>len = seq.len();
                     <span class="kw">let </span>seq_cache = seq.xlora_cache();
                     <span class="kw">let </span>seq_cache = seq_cache.get_mut(layer).unwrap();
-                    <span class="kw-2">*</span>seq_cache = <span class="prelude-val">Some</span>((
-                        k_caches.get(seq_i).unwrap().clone(),
-                        v_caches.get(seq_i).unwrap().clone(),
-                    ));
+                    <span class="kw">let </span><span class="kw-2">mut </span>k = k_caches.get(seq_i).unwrap().clone();
+                    <span class="kw">let </span><span class="kw-2">mut </span>v = v_caches.get(seq_i).unwrap().clone();
+                    <span class="kw">if </span>len &lt; max_seq_len {
+                        k = k.narrow(<span class="number">2</span>, <span class="number">0</span>, len).unwrap();
+                        v = v.narrow(<span class="number">2</span>, <span class="number">0</span>, len).unwrap();
+                    }
+                    <span class="kw-2">*</span>seq_cache = <span class="prelude-val">Some</span>((k, v));
                 }
             }
             <span class="kw">if </span>pipeline.is_xlora() {

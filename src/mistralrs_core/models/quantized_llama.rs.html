@@ -455,14 +455,18 @@
 <a href="#453" id="453">453</a>
 <a href="#454" id="454">454</a>
 <a href="#455" id="455">455</a>
+<a href="#456" id="456">456</a>
+<a href="#457" id="457">457</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>candle_core::quantized::QMatMul;
 <span class="kw">use </span>candle_core::quantized::{ggml_file, gguf_file};
-<span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor};
+<span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{Embedding, Module, RotaryEmbedding};
+
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::extract_logits;
 
 <span class="kw">use super</span>::{verify_sanity_gguf, Cache, QRmsNorm};
 
@@ -876,6 +880,7 @@
         x: <span class="kw-2">&amp;</span>Tensor,
         start_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
+        context_lens: Vec&lt;usize&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(_b_sz, seq_len) = x.dims2()<span class="question-mark">?</span>;
         <span class="kw">let </span>mask = <span class="kw">if </span>seq_len == <span class="number">1 </span>{
@@ -906,8 +911,7 @@
             layer_in = x
         }
         <span class="kw">let </span>x = <span class="self">self</span>.norm.forward(<span class="kw-2">&amp;</span>layer_in)<span class="question-mark">?</span>;
-        <span class="kw">let </span>x = x.i((.., seq_len - <span class="number">1</span>, ..))<span class="question-mark">?</span>;
-        <span class="self">self</span>.output.forward(<span class="kw-2">&amp;</span>x.contiguous()<span class="question-mark">?</span>)
+        extract_logits(<span class="kw-2">&amp;</span><span class="self">self</span>.output.forward(<span class="kw-2">&amp;</span>x.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?</span>, context_lens)
     }
 }
 </code></pre></div></section></main></body></html>

@@ -850,6 +850,31 @@
 <a href="#848" id="848">848</a>
 <a href="#849" id="849">849</a>
 <a href="#850" id="850">850</a>
+<a href="#851" id="851">851</a>
+<a href="#852" id="852">852</a>
+<a href="#853" id="853">853</a>
+<a href="#854" id="854">854</a>
+<a href="#855" id="855">855</a>
+<a href="#856" id="856">856</a>
+<a href="#857" id="857">857</a>
+<a href="#858" id="858">858</a>
+<a href="#859" id="859">859</a>
+<a href="#860" id="860">860</a>
+<a href="#861" id="861">861</a>
+<a href="#862" id="862">862</a>
+<a href="#863" id="863">863</a>
+<a href="#864" id="864">864</a>
+<a href="#865" id="865">865</a>
+<a href="#866" id="866">866</a>
+<a href="#867" id="867">867</a>
+<a href="#868" id="868">868</a>
+<a href="#869" id="869">869</a>
+<a href="#870" id="870">870</a>
+<a href="#871" id="871">871</a>
+<a href="#872" id="872">872</a>
+<a href="#873" id="873">873</a>
+<a href="#874" id="874">874</a>
+<a href="#875" id="875">875</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -1207,7 +1232,8 @@
     input: Tensor,
     positions: Vec&lt;usize&gt;,
     positions_kernel: Tensor, <span class="comment">// [bs, seq len]
-</span>}
+    </span>context_lens: Vec&lt;usize&gt;,
+}
 
 <span class="kw">fn </span>get_prompt_input(input_toks: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence], device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
     <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
@@ -1216,11 +1242,13 @@
     <span class="comment">// Pad each sequence by the padding token to the max len.
     </span><span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
     <span class="kw">let </span><span class="kw-2">mut </span>seqlen_offsets = Vec::new();
+    <span class="kw">let </span><span class="kw-2">mut </span>context_lens = Vec::new();
     <span class="kw">for </span>seq <span class="kw">in </span>input_toks.iter() {
         <span class="kw">let </span><span class="kw-2">mut </span>ctxt = seq.get_toks().to_vec();
         seqlen_offsets.push(<span class="number">0</span>);
 
         ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
+        context_lens.push(seq.len() - <span class="number">1</span>);
 
         <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
         </span>seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
@@ -1239,6 +1267,7 @@
         input: Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap(),
         positions: seqlen_offsets,
         positions_kernel,
+        context_lens,
     })
 }
 
@@ -1253,10 +1282,12 @@
     <span class="comment">// Pad each sequence by the padding token to the max len.
     </span><span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
     <span class="kw">let </span><span class="kw-2">mut </span>seqlen_offsets = Vec::new();
+    <span class="kw">let </span><span class="kw-2">mut </span>context_lens = Vec::new();
     <span class="kw">for </span>seq <span class="kw">in </span>input_toks.iter() {
         <span class="kw">let </span>start_pos = seq.get_toks().len().saturating_sub(<span class="number">1</span>);
         <span class="kw">let </span>ctxt = seq.get_toks()[start_pos..].to_vec();
         seqlen_offsets.push(start_pos);
+        context_lens.push(<span class="number">0</span>);
 
         <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
         </span>seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
@@ -1274,6 +1305,7 @@
         input: Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap(),
         positions: seqlen_offsets,
         positions_kernel,
+        context_lens,
     })
 }
 
@@ -1284,6 +1316,7 @@
     seqlen_offsets_full: <span class="prelude-ty">Option</span>&lt;Vec&lt;usize&gt;&gt;,
     seqlen_offsets_kernel: Tensor,
     seqlen_offsets_kernel_full: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+    context_lens: Vec&lt;usize&gt;,
 }
 
 <span class="kw">fn </span>calculate_inputs(
@@ -1298,11 +1331,13 @@
             input: input_ids_full,
             positions: seqlen_offsets_full,
             positions_kernel: seqlen_offsets_kernel_full,
+            context_lens,
         } = get_prompt_input(input_toks, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
+            context_lens: <span class="kw">_</span>,
         } = get_completion_input(input_toks, device, no_kv_cache)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(ModelInputs {
             input_ids,
@@ -1311,12 +1346,14 @@
             seqlen_offsets_full: <span class="prelude-val">Some</span>(seqlen_offsets_full),
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full: <span class="prelude-val">Some</span>(seqlen_offsets_kernel_full),
+            context_lens,
         })
     } <span class="kw">else if </span>is_xlora &amp;&amp; is_prompt {
         <span class="kw">let </span>InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
+            context_lens,
         } = get_prompt_input(input_toks, device)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(ModelInputs {
             input_ids: input_ids.clone(),
@@ -1325,12 +1362,14 @@
             seqlen_offsets_full: <span class="prelude-val">Some</span>(seqlen_offsets),
             seqlen_offsets_kernel: seqlen_offsets_kernel.clone(),
             seqlen_offsets_kernel_full: <span class="prelude-val">Some</span>(seqlen_offsets_kernel),
+            context_lens,
         })
     } <span class="kw">else if </span>is_prompt {
         <span class="kw">let </span>InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
+            context_lens,
         } = get_prompt_input(input_toks, device)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(ModelInputs {
             input_ids,
@@ -1339,12 +1378,14 @@
             seqlen_offsets_full: <span class="prelude-val">None</span>,
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full: <span class="prelude-val">None</span>,
+            context_lens,
         })
     } <span class="kw">else </span>{
         <span class="kw">let </span>InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
+            context_lens,
         } = get_completion_input(input_toks, device, no_kv_cache)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(ModelInputs {
             input_ids,
@@ -1353,8 +1394,17 @@
             seqlen_offsets_full: <span class="prelude-val">None</span>,
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full: <span class="prelude-val">None</span>,
+            context_lens,
         })
     }
+}
+
+<span class="kw">pub fn </span>extract_logits(logits: <span class="kw-2">&amp;</span>Tensor, context_lens: Vec&lt;usize&gt;) -&gt; candle_core::Result&lt;Tensor&gt; {
+    <span class="kw">let </span><span class="kw-2">mut </span>toks = Vec::new();
+    <span class="kw">for </span>(dim, start) <span class="kw">in </span>logits.chunk(logits.dims()[<span class="number">0</span>], <span class="number">0</span>)<span class="question-mark">?</span>.iter().zip(context_lens) {
+        toks.push(dim.narrow(<span class="number">1</span>, start, <span class="number">1</span>)<span class="question-mark">?</span>);
+    }
+    Tensor::cat(<span class="kw-2">&amp;</span>toks, <span class="number">0</span>)
 }
 
 <span class="kw">struct </span>XLoraPaths {

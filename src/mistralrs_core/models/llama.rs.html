@@ -369,15 +369,14 @@
 <a href="#367" id="367">367</a>
 <a href="#368" id="368">368</a>
 <a href="#369" id="369">369</a>
-<a href="#370" id="370">370</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-</span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
+</span><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>candle_transformers::models::with_tracing::{linear_no_bias <span class="kw">as </span>linear, Linear};
 <span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::LLAMA_IS_GPTX;
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, LLAMA_IS_GPTX};
 
 <span class="kw">use super</span>::{flash_attn, RmsNorm};
 
@@ -701,8 +700,8 @@
         x: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
+        context_lens: Vec&lt;usize&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>(_b_sz, seq_len) = x.dims2()<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>x = <span class="self">self</span>.wte.forward(x)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.kv_cache.lock();
         <span class="kw">for </span>(block_idx, block) <span class="kw">in </span><span class="self">self</span>.blocks.iter().enumerate() {
@@ -716,9 +715,8 @@
             )<span class="question-mark">?</span>;
         }
         <span class="kw">let </span>x = <span class="self">self</span>.ln_f.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>;
-        <span class="kw">let </span>x = x.i((.., seq_len - <span class="number">1</span>, ..))<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
         <span class="kw">let </span>logits = <span class="self">self</span>.lm_head.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>;
-        logits.to_dtype(DType::F32)
+        extract_logits(<span class="kw-2">&amp;</span>logits.to_dtype(DType::F32)<span class="question-mark">?</span>, context_lens)
     }
 
     <span class="kw">pub fn </span>load(vb: VarBuilder, cfg: <span class="kw-2">&amp;</span>Config, device: <span class="kw-2">&amp;</span>Device, no_kv_cache: bool) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
