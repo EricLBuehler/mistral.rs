@@ -70,6 +70,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             // prefill case
             self.running.push(seq);
         } else {
+            println!("Adding a seq");
             self.waiting.add(seq);
         }
     }
