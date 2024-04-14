@@ -67,12 +67,40 @@ impl Engine {
     }
 
     pub fn run(&mut self) {
+        let mut last_run = Instant::now();
         'lp: loop {
+            let ms_from_last_run = last_run.elapsed().as_millis();
+            last_run = Instant::now();
+
             if let Ok(request) = self.rx.try_recv() {
                 self.add_request(request);
             }
             let mut scheduled = self.scheduler.schedule();
             let mut pipeline = get_mut_arcmutex!(self.pipeline);
+
+            let total_len = scheduled.prompt.len() + scheduled.completion.len();
+            if total_len > 0 {
+                let prompt_lengths = scheduled
+                    .prompt
+                    .iter()
+                    .map(|seq| seq.len().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                let completion_lengths = scheduled
+                    .completion
+                    .iter()
+                    .map(|seq| seq.len().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                tracing::info!(
+                    "Prompt[{}] Completion[{}] - {}ms",
+                    prompt_lengths,
+                    completion_lengths,
+                    ms_from_last_run
+                );
+            }
 
             if scheduled.completion.len() > 0 {
                 // Run the completion seqs
