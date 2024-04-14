@@ -308,7 +308,7 @@ impl Engine {
                 let cache = seq_cache.get(layer).unwrap();
                 // Note(EricLBuehler): Unwrap reasoning: We are handling completions seqs so unwrap is OK.
                 let cache = cache.as_ref().unwrap();
-                if cache.0.dims()[2] > max_seq_len {
+                if cache.0.dims()[2] < max_seq_len {
                     let offset = Tensor::zeros(
                         (
                             cache.0.dims()[0],
