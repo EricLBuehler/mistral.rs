@@ -23,6 +23,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
 use tokenizers::Tokenizer;
+use tracing::warn;
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -534,18 +535,53 @@ fn get_xlora_paths(
             .iter()
             .map(|x| x.rfilename.clone())
             .filter(|x| x.contains("xlora_classifier.safetensors"))
-            .collect::<Vec<_>>()[0];
-        let xlora_config = &api
+            .collect::<Vec<_>>();
+        if xlora_classifier.len() != 1 {
+            warn!("Detected multiple X-LoRA classifiers: {xlora_classifier:?}");
+            warn!("Selected classifier: `{}`", &xlora_classifier[0]);
+        }
+        let xlora_classifier = &xlora_classifier[0];
+        let xlora_configs = &api
             .info()?
             .siblings
             .iter()
             .map(|x| x.rfilename.clone())
             .filter(|x| x.contains("xlora_config.json"))
-            .collect::<Vec<_>>()[0];
+            .collect::<Vec<_>>();
+        if xlora_configs.len() != 1 {
+            warn!("Detected multiple X-LoRA configs: {xlora_configs:?}");
+        }
+
         let classifier_path = api.get(xlora_classifier)?;
-        let config_path = api.get(xlora_config)?;
-        let conf = fs::read_to_string(config_path)?;
-        let xlora_config: XLoraConfig = serde_json::from_str(&conf)?;
+
+        let mut xlora_config: Option<XLoraConfig> = None;
+        let mut last_err: Option<serde_json::Error> = None;
+        for (i, config_path) in xlora_configs.iter().enumerate() {
+            if xlora_configs.len() != 1 {
+                warn!("Selecting config: `{}`", config_path);
+            }
+            let config_path = api.get(config_path)?;
+            let conf = fs::read_to_string(config_path)?;
+            let deser: Result<XLoraConfig, serde_json::Error> = serde_json::from_str(&conf);
+            match deser {
+                Ok(conf) => {
+                    xlora_config = Some(conf);
+                    break;
+                }
+                Err(e) => {
+                    if i != xlora_configs.len() - 1 {
+                        warn!("Config is broken with error `{e}`");
+                    }
+                    last_err = Some(e);
+                }
+            }
+        }
+        let xlora_config = xlora_config.unwrap_or_else(|| {
+            panic!(
+                "Unable to derserialize any configs. Last error: {}",
+                last_err.unwrap()
+            )
+        });
 
         let adapter_files = api
             .info()?
@@ -578,13 +614,19 @@ fn get_xlora_paths(
                     "Must specify adapters in ordering.".to_string(),
                 ));
             }
-            xlora_order
-                .as_ref()
-                .unwrap()
-                .adapters
-                .as_ref()
-                .unwrap()
-                .clone()
+            Either::Left(
+                xlora_order
+                    .as_ref()
+                    .unwrap()
+                    .adapters
+                    .as_ref()
+                    .unwrap()
+                    .clone(),
+            )
+        };
+        let adapter_order = match adapter_order {
+            Either::Left(l) => l,
+            Either::Right(r) => r.keys().cloned().collect::<Vec<_>>(),
         };
         for name in &adapter_order {
             let paths = adapters_paths.get(name).unwrap();

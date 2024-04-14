@@ -153,7 +153,7 @@ impl Sequence {
         }
     }
 
-    pub fn prefill(mut self, cache: LayerCaches) -> Self {
+    pub fn prefill(mut self, cache: LayerCaches, xlora_cache: Option<LayerCaches>) -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time travel has occurred!")
@@ -161,12 +161,19 @@ impl Sequence {
         self.prompt_timestamp = Some(now);
 
         self.cache = cache;
+        self.xlora_cache = xlora_cache;
         self.set_state(SequenceState::RunningCompletion);
         self
     }
 
-    pub fn prefill_subset(mut self, cache: LayerCaches, toks: Vec<u32>) -> Self {
+    pub fn prefill_subset(
+        mut self,
+        cache: LayerCaches,
+        xlora_cache: Option<LayerCaches>,
+        toks: Vec<u32>,
+    ) -> Self {
         self.cache = cache;
+        self.xlora_cache = xlora_cache;
         self.prefill_prompt_toks = Some(toks);
         self.set_state(SequenceState::RunningPrefillPrompt);
         self

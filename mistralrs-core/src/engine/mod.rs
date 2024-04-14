@@ -53,6 +53,7 @@ impl Engine {
         prefix_cache_n: usize,
     ) -> Self {
         let device = get_mut_arcmutex!(pipeline).device().clone();
+        let is_xlora = get_mut_arcmutex!(pipeline).is_xlora();
         Self {
             rx,
             pipeline,
@@ -60,7 +61,7 @@ impl Engine {
             id: 0,
             truncate_sequence,
             no_kv_cache,
-            prefix_cacher: PrefixCacheManager::new(device, prefix_cache_n), // TODO(EricLBuehler): not have this hardcoded
+            prefix_cacher: PrefixCacheManager::new(device, prefix_cache_n, is_xlora),
         }
     }
 
@@ -613,8 +614,12 @@ impl Engine {
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 match prefill_cache {
-                    MatchingCache::Verbatim(cache) => seq.prefill(cache),
-                    MatchingCache::Subset(cache, toks) => seq.prefill_subset(cache, toks),
+                    MatchingCache::Verbatim { normal, xlora } => seq.prefill(normal, xlora),
+                    MatchingCache::Subset {
+                        normal,
+                        xlora,
+                        toks,
+                    } => seq.prefill_subset(normal, xlora, toks),
                 }
             } else {
                 seq
