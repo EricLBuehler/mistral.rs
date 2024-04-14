@@ -74,6 +74,57 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
         }
     }
 
+    /// Move the seuqences into buckets, and run the ones with the shortest lengths.
+    /// The others are moved to the waiting list (retaining high priority due to start time),
+    /// without a state modification.
+    fn bucket_and_waitlist_seqs(&mut self, running: Vec<Sequence>) -> Vec<Sequence> {
+        let mut waiting = std::mem::take(&mut self.waiting);
+        let running = self.bucket_and_waitlist_seqs_waiting(running, &mut waiting);
+        self.waiting = waiting;
+        running
+    }
+
+    /// Move the seuqences into buckets, and run the ones with the shortest lengths.
+    /// The others are moved to the waiting list (retaining high priority due to start time),
+    /// without a state modification.
+    fn bucket_and_waitlist_seqs_waiting(
+        &mut self,
+        running: Vec<Sequence>,
+        waiting: &mut Backer,
+    ) -> Vec<Sequence> {
+        // Now, get the sequences with the smallest sequence lengths, and allow them to catch up.
+        let mut seq_buckets: HashMap<usize, Vec<Sequence>> = HashMap::new();
+        for seq in running {
+            let len = seq.len();
+            match seq_buckets.get_mut(&len) {
+                Some(bucket) => bucket.push(seq),
+                None => {
+                    seq_buckets.insert(len, vec![seq]);
+                }
+            }
+        }
+        let running = if seq_buckets.len() <= 1 {
+            // Full steam ahead or have everything
+            seq_buckets
+                .into_iter()
+                .flat_map(|(_, x)| x)
+                .collect::<Vec<_>>()
+        } else {
+            // Set the min seqs to be the running ones, and the rest to be waiting (but their states are not changed!)
+            // Allow the min seqs to catch up.
+            let min = *seq_buckets.keys().min().unwrap();
+            let min_seqs = seq_buckets.remove(&min).unwrap();
+            for (_, seqs) in seq_buckets {
+                for seq in seqs {
+                    waiting.add(seq);
+                }
+            }
+            // Know min_seqs.len < running.len() <= max
+            min_seqs
+        };
+        running
+    }
+
     /// Schedule all sequences based on their state and the available space.
     pub fn schedule(&mut self) -> SchedulerOutput {
         // Filter out all done sequences
@@ -98,6 +149,8 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
                     self.running.push(seq);
                 }
                 self.waiting = Backer::new();
+                let running = std::mem::take(&mut self.running);
+                self.running = self.bucket_and_waitlist_seqs(running);
                 return SchedulerOutput {
                     prompt: self.running.iter_mut().collect::<Vec<_>>().into(),
                     completion: vec![].into(),
@@ -105,6 +158,8 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             }
             (0, _) => {
                 self.running = running;
+                let running = std::mem::take(&mut self.running);
+                self.running = self.bucket_and_waitlist_seqs(running);
                 return SchedulerOutput {
                     prompt: vec![].into(),
                     completion: self.running.iter_mut().collect::<Vec<_>>().into(),
@@ -129,42 +184,10 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             }
         }
 
-        // Now, get the sequences with the smallest sequence lengths, and allow them to catch up.
-        let mut seq_buckets: HashMap<usize, Vec<Sequence>> = HashMap::new();
-        for seq in running {
-            let len = seq.len();
-            match seq_buckets.get_mut(&len) {
-                Some(bucket) => bucket.push(seq),
-                None => {
-                    seq_buckets.insert(len, vec![seq]);
-                }
-            }
-        }
-        let (running, new_waiting) = if seq_buckets.len() <= 1 {
-            // Full steam ahead or have everything
-            (
-                seq_buckets
-                    .into_iter()
-                    .flat_map(|(_, x)| x)
-                    .collect::<Vec<_>>(),
-                new_waiting,
-            )
-        } else {
-            // Set the min seqs to be the running ones, and the rest to be waiting (but their states are not changed!)
-            // Allow the min seqs to catch up.
-            let min = *seq_buckets.keys().min().unwrap();
-            let min_seqs = seq_buckets.remove(&min).unwrap();
-            for (_, seqs) in seq_buckets {
-                for seq in seqs {
-                    new_waiting.add(seq);
-                }
-            }
-            // Know min_seqs.len < running.len() <= max
-            (min_seqs, new_waiting)
-        };
+        let running = std::mem::take(&mut self.running);
+        self.running = self.bucket_and_waitlist_seqs_waiting(running, &mut new_waiting);
 
         self.waiting = new_waiting;
-        self.running = running;
 
         let mut completion = Vec::new();
         let mut prompt = Vec::new();
