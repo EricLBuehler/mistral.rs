@@ -59,15 +59,14 @@ pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
                 match resp {
                     Response::Chunk(chunk) => {
                         let choice = &chunk.choices[0];
+                        assistant_output.push_str(&choice.delta.content);
+                        print!("{}", choice.delta.content);
+                        io::stdout().flush().unwrap();
                         if choice.stopreason.is_some() {
                             if matches!(choice.stopreason.as_ref().unwrap().as_str(), "length") {
                                 print!("...");
                             }
                             break;
-                        } else {
-                            assistant_output.push_str(&choice.delta.content);
-                            print!("{}", choice.delta.content);
-                            io::stdout().flush().unwrap();
                         }
                     }
                     Response::InternalError(e) => {
