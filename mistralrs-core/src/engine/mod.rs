@@ -291,7 +291,6 @@ impl Engine {
     /// Clone the cache FROM the sequences' cache TO the model cache. Only used for completion seqs.
     fn clone_in_cache(pipeline: &mut dyn Pipeline, seqs: &mut [&mut Sequence]) {
         let mut new_cache = Vec::new();
-        let max_seq_len = seqs.iter().map(|seq| seq.len()).max().unwrap();
         for layer in 0..pipeline.num_hidden_layers() {
             let mut k_vec = Vec::new();
             let mut v_vec = Vec::new();
@@ -300,24 +299,8 @@ impl Engine {
                 let cache = seq_cache.get(layer).unwrap();
                 // Note(EricLBuehler): Unwrap reasoning: We are handling completions seqs so unwrap is OK.
                 let cache = cache.as_ref().unwrap();
-                if cache.0.dims()[2] < max_seq_len {
-                    let offset = Tensor::zeros(
-                        (
-                            cache.0.dims()[0],
-                            cache.0.dims()[1],
-                            max_seq_len - cache.0.dims()[2],
-                            cache.0.dims()[3],
-                        ),
-                        cache.0.dtype(),
-                        cache.0.device(),
-                    )
-                    .unwrap();
-                    k_vec.push(Tensor::cat(&[cache.0.clone(), offset.clone()], 2).unwrap());
-                    v_vec.push(Tensor::cat(&[cache.1.clone(), offset], 2).unwrap());
-                } else {
-                    k_vec.push(cache.0.clone());
-                    v_vec.push(cache.1.clone());
-                }
+                k_vec.push(cache.0.clone());
+                v_vec.push(cache.1.clone());
             }
             // NOTE(EricLBuehler): Unwrap reasoning: We have the correct dims
             new_cache.push(Some((
@@ -383,7 +366,6 @@ impl Engine {
     /// Clone the cache FROM the model cache TO the sequences. Used for prompt, completion seqs.
     fn clone_out_cache(pipeline: &mut dyn Pipeline, seqs: &mut [&mut Sequence]) {
         let num_hidden_layers = pipeline.num_hidden_layers();
-        let max_seq_len = seqs.iter().map(|seq| seq.len()).max().unwrap();
         for layer in 0..num_hidden_layers {
             let cache = pipeline.cache().lock();
             let cache = cache.get(layer).unwrap();
@@ -396,15 +378,10 @@ impl Engine {
             debug_assert_eq!(v_caches.len(), seqs.len());
 
             for (seq_i, seq) in seqs.iter_mut().enumerate() {
-                let len = seq.len();
                 let seq_cache = seq.cache();
                 let seq_cache = seq_cache.get_mut(layer).unwrap();
-                let mut k = k_caches.get(seq_i).unwrap().clone();
-                let mut v = v_caches.get(seq_i).unwrap().clone();
-                if len < max_seq_len {
-                    k = k.narrow(2, 0, len).unwrap();
-                    v = v.narrow(2, 0, len).unwrap();
-                }
+                let k = k_caches.get(seq_i).unwrap().clone();
+                let v = v_caches.get(seq_i).unwrap().clone();
                 *seq_cache = Some((k, v));
             }
             if pipeline.is_xlora() && !pipeline.has_no_kv_cache() {
@@ -419,15 +396,10 @@ impl Engine {
                 debug_assert_eq!(v_caches.len(), seqs.len());
 
                 for (seq_i, seq) in seqs.iter_mut().enumerate() {
-                    let len = seq.len();
                     let seq_cache = seq.xlora_cache();
                     let seq_cache = seq_cache.get_mut(layer).unwrap();
-                    let mut k = k_caches.get(seq_i).unwrap().clone();
-                    let mut v = v_caches.get(seq_i).unwrap().clone();
-                    if len < max_seq_len {
-                        k = k.narrow(2, 0, len).unwrap();
-                        v = v.narrow(2, 0, len).unwrap();
-                    }
+                    let k = k_caches.get(seq_i).unwrap().clone();
+                    let v = v_caches.get(seq_i).unwrap().clone();
                     *seq_cache = Some((k, v));
                 }
             }
