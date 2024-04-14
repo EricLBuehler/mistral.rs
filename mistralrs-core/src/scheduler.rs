@@ -157,8 +157,6 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
                 };
             }
             (0, _) => {
-                self.running = running;
-                let running = std::mem::take(&mut self.running);
                 self.running = self.bucket_and_waitlist_seqs(running);
                 return SchedulerOutput {
                     prompt: vec![].into(),
