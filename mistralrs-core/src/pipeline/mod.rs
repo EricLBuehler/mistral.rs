@@ -370,7 +370,7 @@ fn get_prompt_input(input_toks: &[&mut Sequence], device: &Device) -> Result<Inp
         seqlen_offsets.push(0);
 
         ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
-        context_lens.push(seq.len());
+        context_lens.push(seq.len() - 1);
 
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
