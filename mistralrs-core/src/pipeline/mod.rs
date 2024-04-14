@@ -404,10 +404,12 @@ fn get_completion_input(
     // Pad each sequence by the padding token to the max len.
     let mut seqs_tensors = Vec::new();
     let mut seqlen_offsets = Vec::new();
+    let mut context_lens = Vec::new();
     for seq in input_toks.iter() {
         let start_pos = seq.get_toks().len().saturating_sub(1);
         let ctxt = seq.get_toks()[start_pos..].to_vec();
         seqlen_offsets.push(start_pos);
+        context_lens.push(0);
 
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
@@ -421,7 +423,6 @@ fn get_completion_input(
         tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
     }
     let positions_kernel = Tensor::cat(&tmp, 0)?;
-    let context_lens = vec![0, input_toks.len()];
     Ok(InputMetadata {
         input: Tensor::cat(&seqs_tensors, 0).unwrap(),
         positions: seqlen_offsets,
