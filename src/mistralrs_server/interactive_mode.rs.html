@@ -96,7 +96,6 @@
 <a href="#94" id="94">94</a>
 <a href="#95" id="95">95</a>
 <a href="#96" id="96">96</a>
-<a href="#97" id="97">97</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     io::{<span class="self">self</span>, Write},
     sync::{mpsc::channel, Arc},
@@ -158,15 +157,14 @@
                 <span class="kw">match </span>resp {
                     Response::Chunk(chunk) =&gt; {
                         <span class="kw">let </span>choice = <span class="kw-2">&amp;</span>chunk.choices[<span class="number">0</span>];
+                        assistant_output.push_str(<span class="kw-2">&amp;</span>choice.delta.content);
+                        <span class="macro">print!</span>(<span class="string">"{}"</span>, choice.delta.content);
+                        io::stdout().flush().unwrap();
                         <span class="kw">if </span>choice.stopreason.is_some() {
                             <span class="kw">if </span><span class="macro">matches!</span>(choice.stopreason.as_ref().unwrap().as_str(), <span class="string">"length"</span>) {
                                 <span class="macro">print!</span>(<span class="string">"..."</span>);
                             }
                             <span class="kw">break</span>;
-                        } <span class="kw">else </span>{
-                            assistant_output.push_str(<span class="kw-2">&amp;</span>choice.delta.content);
-                            <span class="macro">print!</span>(<span class="string">"{}"</span>, choice.delta.content);
-                            io::stdout().flush().unwrap();
                         }
                     }
                     Response::InternalError(e) =&gt; {
