@@ -73,11 +73,6 @@ impl Engine {
             let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
             if scheduled.completion.len() > 0 {
-                dbg!(scheduled
-                    .completion
-                    .iter()
-                    .map(|x| x.id())
-                    .collect::<Vec<_>>());
                 // Run the completion seqs
                 if !self.no_kv_cache {
                     Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
@@ -100,7 +95,6 @@ impl Engine {
             }
 
             if scheduled.prompt.len() > 0 {
-                dbg!(scheduled.prompt.iter().map(|x| x.id()).collect::<Vec<_>>());
                 // Run the prompt seqs
                 Self::set_none_cache(&mut *pipeline);
                 let logits = pipeline.forward(&scheduled.prompt, true);
