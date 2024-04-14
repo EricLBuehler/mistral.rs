@@ -421,11 +421,12 @@ fn get_completion_input(
         tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
     }
     let positions_kernel = Tensor::cat(&tmp, 0)?;
+    let context_lens = vec![0, input_toks.len()];
     Ok(InputMetadata {
         input: Tensor::cat(&seqs_tensors, 0).unwrap(),
         positions: seqlen_offsets,
         positions_kernel,
-        context_lens: vec![0, input_toks.len()],
+        context_lens,
     })
 }
 
@@ -519,9 +520,9 @@ fn calculate_inputs(
     }
 }
 
-pub fn extract_logits(logits: &Tensor, seq_lens: Vec<usize>) -> candle_core::Result<Tensor> {
+pub fn extract_logits(logits: &Tensor, context_lens: Vec<usize>) -> candle_core::Result<Tensor> {
     let mut toks = Vec::new();
-    for (dim, start) in logits.chunk(logits.dims()[0], 0)?.iter().zip(seq_lens) {
+    for (dim, start) in logits.chunk(logits.dims()[0], 0)?.iter().zip(context_lens) {
         toks.push(dim.narrow(1, start, 1)?);
     }
     Tensor::cat(&toks, 0)
