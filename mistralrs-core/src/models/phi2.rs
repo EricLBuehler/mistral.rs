@@ -335,6 +335,7 @@ impl Model {
         xs: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
+        context_lens: Vec<usize>,
     ) -> Result<Tensor> {
         let (_b_size, seq_len) = xs.dims2()?;
         let mut xs = xs.apply(&self.embed_tokens)?;
@@ -355,7 +356,7 @@ impl Model {
         }
         extract_logits(
             &xs.apply(&self.final_layernorm)?.apply(&self.lm_head)?,
-            seqlen_offsets,
+            context_lens,
         )
     }
 }

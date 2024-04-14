@@ -423,6 +423,7 @@ impl Model {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
+        context_lens: Vec<usize>,
     ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
         let past_key_values_length = self.calculate_past_kv_len(seq_len)?;
@@ -444,6 +445,6 @@ impl Model {
                 cache.get_mut(i).unwrap(),
             )?
         }
-        extract_logits(&xs.apply(&self.norm)?.apply(&self.lm_head)?, seqlen_offsets)
+        extract_logits(&xs.apply(&self.norm)?.apply(&self.lm_head)?, context_lens)
     }
 }

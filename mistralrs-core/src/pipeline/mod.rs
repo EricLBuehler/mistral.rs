@@ -354,6 +354,7 @@ struct InputMetadata {
     input: Tensor,
     positions: Vec<usize>,
     positions_kernel: Tensor, // [bs, seq len]
+    context_lens: Vec<usize>,
 }
 
 fn get_prompt_input(input_toks: &[&mut Sequence], device: &Device) -> Result<InputMetadata> {
@@ -363,11 +364,13 @@ fn get_prompt_input(input_toks: &[&mut Sequence], device: &Device) -> Result<Inp
     // Pad each sequence by the padding token to the max len.
     let mut seqs_tensors = Vec::new();
     let mut seqlen_offsets = Vec::new();
+    let mut context_lens = Vec::new();
     for seq in input_toks.iter() {
         let mut ctxt = seq.get_toks().to_vec();
         seqlen_offsets.push(0);
 
         ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
+        context_lens.push(seq.len());
 
         // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
@@ -386,6 +389,7 @@ fn get_prompt_input(input_toks: &[&mut Sequence], device: &Device) -> Result<Inp
         input: Tensor::cat(&seqs_tensors, 0).unwrap(),
         positions: seqlen_offsets,
         positions_kernel,
+        context_lens,
     })
 }
 
@@ -421,6 +425,7 @@ fn get_completion_input(
         input: Tensor::cat(&seqs_tensors, 0).unwrap(),
         positions: seqlen_offsets,
         positions_kernel,
+        context_lens: vec![0, input_toks.len()],
     })
 }
 
@@ -431,6 +436,7 @@ struct ModelInputs {
     seqlen_offsets_full: Option<Vec<usize>>,
     seqlen_offsets_kernel: Tensor,
     seqlen_offsets_kernel_full: Option<Tensor>,
+    context_lens: Vec<usize>,
 }
 
 fn calculate_inputs(
@@ -445,11 +451,13 @@ fn calculate_inputs(
             input: input_ids_full,
             positions: seqlen_offsets_full,
             positions_kernel: seqlen_offsets_kernel_full,
+            context_lens,
         } = get_prompt_input(input_toks, device)?;
         let InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
+            context_lens: _,
         } = get_completion_input(input_toks, device, no_kv_cache)?;
         Ok(ModelInputs {
             input_ids,
@@ -458,12 +466,14 @@ fn calculate_inputs(
             seqlen_offsets_full: Some(seqlen_offsets_full),
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel_full),
+            context_lens,
         })
     } else if is_xlora && is_prompt {
         let InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
+            context_lens,
         } = get_prompt_input(input_toks, device)?;
         Ok(ModelInputs {
             input_ids: input_ids.clone(),
@@ -472,12 +482,14 @@ fn calculate_inputs(
             seqlen_offsets_full: Some(seqlen_offsets),
             seqlen_offsets_kernel: seqlen_offsets_kernel.clone(),
             seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel),
+            context_lens,
         })
     } else if is_prompt {
         let InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
+            context_lens,
         } = get_prompt_input(input_toks, device)?;
         Ok(ModelInputs {
             input_ids,
@@ -486,12 +498,14 @@ fn calculate_inputs(
             seqlen_offsets_full: None,
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full: None,
+            context_lens,
         })
     } else {
         let InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
+            context_lens,
         } = get_completion_input(input_toks, device, no_kv_cache)?;
         Ok(ModelInputs {
             input_ids,
@@ -500,14 +514,15 @@ fn calculate_inputs(
             seqlen_offsets_full: None,
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full: None,
+            context_lens,
         })
     }
 }
 
-pub fn extract_logits(logits: &Tensor, seq_lens: &[usize]) -> candle_core::Result<Tensor> {
+pub fn extract_logits(logits: &Tensor, seq_lens: Vec<usize>) -> candle_core::Result<Tensor> {
     let mut toks = Vec::new();
     for (dim, start) in logits.chunk(logits.dims()[0], 0)?.iter().zip(seq_lens) {
-        toks.push(dim.narrow(0, *start, 1)?.unsqueeze(0)?);
+        toks.push(dim.narrow(0, start, 1)?.unsqueeze(0)?);
     }
     Tensor::cat(&toks, 0)
 }

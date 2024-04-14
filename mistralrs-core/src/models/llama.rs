@@ -329,6 +329,7 @@ impl Llama {
         x: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
+        context_lens: Vec<usize>,
     ) -> Result<Tensor> {
         let mut x = self.wte.forward(x)?;
         let mut cache = self.kv_cache.lock();
@@ -344,7 +345,7 @@ impl Llama {
         }
         let x = self.ln_f.forward(&x)?;
         let logits = self.lm_head.forward(&x)?;
-        extract_logits(&logits.to_dtype(DType::F32)?, seqlen_offsets)
+        extract_logits(&logits.to_dtype(DType::F32)?, context_lens)
     }
 
     pub fn load(vb: VarBuilder, cfg: &Config, device: &Device, no_kv_cache: bool) -> Result<Self> {

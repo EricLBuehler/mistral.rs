@@ -766,6 +766,7 @@ impl ModelWeights {
         start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
+        context_lens: Vec<usize>,
     ) -> Result<Tensor> {
         if self.xlora_classifier.is_some() {
             let scalings = self.get_scalings(
@@ -793,7 +794,7 @@ impl ModelWeights {
                         )?
                         .contiguous()?
                         .apply(&self.output)?,
-                    seqlen_offsets_full,
+                    context_lens,
                 )
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
@@ -810,7 +811,7 @@ impl ModelWeights {
                         )?
                         .contiguous()?
                         .apply(&self.output)?,
-                    seqlen_offsets,
+                    context_lens,
                 )
             }
         } else {
@@ -827,7 +828,7 @@ impl ModelWeights {
                     )?
                     .contiguous()?
                     .apply(&self.output)?,
-                seqlen_offsets,
+                context_lens,
             )
         }
     }
