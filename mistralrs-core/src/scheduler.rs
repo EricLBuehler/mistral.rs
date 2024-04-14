@@ -67,11 +67,9 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
 
     pub fn add_seq(&mut self, seq: Sequence) {
         if seq.is_running() {
-            println!("Adding a prefill seq {}", seq.id());
             // prefill case
             self.running.push(seq);
         } else {
-            println!("Adding a seq {}", seq.id());
             self.waiting.add(seq);
         }
     }
