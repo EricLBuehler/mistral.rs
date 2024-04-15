@@ -1502,7 +1502,7 @@
                 } <span class="kw">else </span>{
                     <span class="kw">let </span>conf = fs::read_to_string(path)<span class="question-mark">?</span>;
                     <span class="kw">let </span>lora_config: LoraConfig = serde_json::from_str(<span class="kw-2">&amp;</span>conf)<span class="question-mark">?</span>;
-                    adapters_configs.push(((i+<span class="number">1</span>).to_string(), lora_config));
+                    adapters_configs.push(((i + <span class="number">1</span>).to_string(), lora_config));
                 }
             }
         }
