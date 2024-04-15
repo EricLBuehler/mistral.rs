@@ -86,6 +86,9 @@ pub(crate) fn from_mmaped_safetensors<'a>(
 
                     if silent {
                         for (name, _) in tensors.tensors() {
+                            if name.contains("internal_xlora_classifier") {
+                                continue;
+                            }
                             let mut new_name = if name.contains("base_model.model.model") {
                                 name.replace("base_model.model.model", "model")
                             } else {
@@ -101,6 +104,9 @@ pub(crate) fn from_mmaped_safetensors<'a>(
                         }
                     } else {
                         for (name, _) in tensors.tensors().into_iter().tqdm() {
+                            if name.contains("internal_xlora_classifier") {
+                                continue;
+                            }
                             let mut new_name = if name.contains("base_model.model.model") {
                                 name.replace("base_model.model.model", "model")
                             } else {
