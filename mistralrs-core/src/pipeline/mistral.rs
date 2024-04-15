@@ -444,6 +444,7 @@ impl Pipeline for MistralPipeline {
             seqlen_offsets_full,
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full,
+            context_lens,
         } = calculate_inputs(
             input_toks,
             is_prompt,
@@ -453,12 +454,18 @@ impl Pipeline for MistralPipeline {
         )
         .unwrap();
         match self.model {
-            Model::Normal(ref mut model) => {
-                model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)
-            }
-            Model::Quantized(ref mut model) => {
-                model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)
-            }
+            Model::Normal(ref mut model) => model.forward(
+                &input_ids,
+                &seqlen_offsets,
+                seqlen_offsets_kernel,
+                context_lens,
+            ),
+            Model::Quantized(ref mut model) => model.forward(
+                &input_ids,
+                &seqlen_offsets,
+                seqlen_offsets_kernel,
+                context_lens,
+            ),
             Model::XLoraNormal(ref mut model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
@@ -468,6 +475,7 @@ impl Pipeline for MistralPipeline {
                 seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
                 self.no_kv_cache,
                 &self.non_granular_state,
+                context_lens,
             ),
             Model::XLoraQuantized(ref mut model) => model.forward(
                 &input_ids,
@@ -478,6 +486,7 @@ impl Pipeline for MistralPipeline {
                 seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
                 self.no_kv_cache,
                 &self.non_granular_state,
+                context_lens,
             ),
         }
     }

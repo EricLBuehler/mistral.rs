@@ -380,10 +380,9 @@ impl Engine {
             for (seq_i, seq) in seqs.iter_mut().enumerate() {
                 let seq_cache = seq.cache();
                 let seq_cache = seq_cache.get_mut(layer).unwrap();
-                *seq_cache = Some((
-                    k_caches.get(seq_i).unwrap().clone(),
-                    v_caches.get(seq_i).unwrap().clone(),
-                ));
+                let k = k_caches.get(seq_i).unwrap().clone();
+                let v = v_caches.get(seq_i).unwrap().clone();
+                *seq_cache = Some((k, v));
             }
             if pipeline.is_xlora() && !pipeline.has_no_kv_cache() {
                 let cache = pipeline.cache().xlora_lock();
@@ -399,10 +398,9 @@ impl Engine {
                 for (seq_i, seq) in seqs.iter_mut().enumerate() {
                     let seq_cache = seq.xlora_cache();
                     let seq_cache = seq_cache.get_mut(layer).unwrap();
-                    *seq_cache = Some((
-                        k_caches.get(seq_i).unwrap().clone(),
-                        v_caches.get(seq_i).unwrap().clone(),
-                    ));
+                    let k = k_caches.get(seq_i).unwrap().clone();
+                    let v = v_caches.get(seq_i).unwrap().clone();
+                    *seq_cache = Some((k, v));
                 }
             }
             if pipeline.is_xlora() {
