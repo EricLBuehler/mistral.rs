@@ -9,17 +9,18 @@ use std::{
 
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
+    handle_seq_error_ok, handle_seq_error_stateaware_ok,
     response::CompletionChoice,
     CompletionResponse, RequestType,
 };
-use candle_core::Tensor;
+use candle_core::{Result, Tensor};
 use either::Either;
 use tracing::warn;
 
 use crate::{
-    get_mut_arcmutex, handle_pipeline_forward_error, handle_seq_error, handle_seq_error_stateaware,
+    get_mut_arcmutex, handle_pipeline_forward_error, handle_seq_error,
     pipeline::Pipeline,
-    prefix_cacher::{MatchingCache, PrefixCacheManager},
+    prefix_cacher::PrefixCacheManager,
     request::Request,
     response::{
         ChatCompletionResponse, Choice, ChunkChoice, Delta, Logprobs, Response, ResponseLogprob,
@@ -88,7 +89,7 @@ impl Engine {
                 }
 
                 let before_sample = Instant::now();
-                Self::sample_seqs(&mut *pipeline, &mut scheduled.completion, logits);
+                handle_pipeline_forward_error!("sampling", Self::sample_seqs(&mut *pipeline, &mut scheduled.completion, logits, &mut self.prefix_cacher), &mut scheduled.completion, pipeline, 'lp);
                 let sampling_time = before_sample.elapsed().as_millis();
                 for seq in scheduled.completion.iter_mut() {
                     seq.total_sampling_time += sampling_time;
@@ -119,18 +120,8 @@ impl Engine {
                     seq.prompt_timestamp = Some(now);
                 }
 
-                for seq in scheduled
-                    .prompt
-                    .iter_mut()
-                    .take(self.prefix_cacher.n_on_device)
-                {
-                    self.prefix_cacher.add_sequence(seq);
-                }
-                // Evict all the other seqs
-                handle_pipeline_forward_error!("evict", self.prefix_cacher.evict_to_cpu(), &mut scheduled.prompt, pipeline, 'lp);
-
                 let before_sample = Instant::now();
-                Self::sample_seqs(&mut *pipeline, &mut scheduled.prompt, logits);
+                handle_pipeline_forward_error!("sampling", Self::sample_seqs(&mut *pipeline, &mut scheduled.prompt, logits, &mut self.prefix_cacher), &mut scheduled.prompt, pipeline, 'lp);
                 let sampling_time = before_sample.elapsed().as_millis();
                 for seq in scheduled.prompt.iter_mut() {
                     seq.total_sampling_time += sampling_time;
@@ -139,7 +130,12 @@ impl Engine {
         }
     }
 
-    fn sample_seqs(pipeline: &mut dyn Pipeline, seqs: &mut [&mut Sequence], logits: Tensor) {
+    fn sample_seqs(
+        pipeline: &mut dyn Pipeline,
+        seqs: &mut [&mut Sequence],
+        logits: Tensor,
+        prefix_cacher: &mut PrefixCacheManager,
+    ) -> Result<()> {
         let seqs_len = seqs.len();
         let logits_seq = logits.chunk(seqs_len, 0).unwrap();
         debug_assert_eq!(logits_seq.len(), seqs_len);
@@ -148,7 +144,7 @@ impl Engine {
             // Sample and extract next token
             let return_logprobs = seq.return_logprobs();
             let sampled = pipeline.sample(logits_per_seq, seq, return_logprobs);
-            let next_token = handle_seq_error_stateaware!(sampled, seq);
+            let next_token = handle_seq_error_stateaware_ok!(sampled, seq);
             let next_token_id = next_token.token;
 
             let is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
@@ -163,7 +159,7 @@ impl Engine {
                 let rate_limit_allowed = is_done.is_some() || token_index % 3 == 0;
 
                 if rate_limit_allowed {
-                    if let Some(delta) = handle_seq_error!(seq.get_delta(), seq.responder()) {
+                    if let Some(delta) = handle_seq_error_ok!(seq.get_delta(), seq.responder()) {
                         seq.add_streaming_chunk_choice_to_group(ChunkChoice {
                             delta: Delta {
                                 content: delta.clone(),
@@ -184,6 +180,8 @@ impl Engine {
                         });
 
                         if let Some(reason) = is_done {
+                            prefix_cacher.add_sequence(seq);
+                            prefix_cacher.evict_to_cpu()?;
                             seq.set_state(SequenceState::Done(reason));
                         }
 
@@ -192,13 +190,20 @@ impl Engine {
                     }
                 }
             } else if let Some(reason) = is_done {
-                Self::finish_seq(pipeline, seq, reason);
+                Self::finish_seq(pipeline, seq, reason, prefix_cacher)?;
                 pipeline.reset_non_granular_state();
             }
         }
+
+        Ok(())
     }
 
-    fn finish_seq(pipeline: &mut dyn Pipeline, seq: &Sequence, reason: StopReason) {
+    fn finish_seq(
+        pipeline: &mut dyn Pipeline,
+        seq: &mut Sequence,
+        reason: StopReason,
+        prefix_cacher: &mut PrefixCacheManager,
+    ) -> Result<()> {
         seq.set_state(SequenceState::Done(reason));
 
         let logprobs = if seq.return_logprobs() {
@@ -206,7 +211,7 @@ impl Engine {
             let mut logprobs = Vec::new();
             for logprob in seq.logprobs() {
                 let resp_logprob = ResponseLogprob {
-                    token: handle_seq_error!(
+                    token: handle_seq_error_ok!(
                         tokenizer.decode(&[logprob.token], false),
                         seq.responder()
                     ),
@@ -258,6 +263,9 @@ impl Engine {
             seq.add_completion_choice_to_group(choice);
         }
 
+        prefix_cacher.add_sequence(seq);
+        prefix_cacher.evict_to_cpu()?;
+
         let group = seq.get_mut_group();
         if group.is_chat {
             group.maybe_send_done_response(
@@ -286,6 +294,8 @@ impl Engine {
                 seq.responder(),
             );
         }
+
+        Ok(())
     }
 
     /// Clone the cache FROM the sequences' cache TO the model cache. Only used for completion seqs.
@@ -611,14 +621,11 @@ impl Engine {
                 },
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
-                match prefill_cache {
-                    MatchingCache::Verbatim { normal, xlora } => seq.prefill(normal, xlora),
-                    MatchingCache::Subset {
-                        normal,
-                        xlora,
-                        toks,
-                    } => seq.prefill_subset(normal, xlora, toks),
-                }
+                seq.prefill(
+                    prefill_cache.normal,
+                    prefill_cache.xlora,
+                    prefill_cache.toks,
+                )
             } else {
                 seq
             };

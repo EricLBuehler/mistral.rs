@@ -13,16 +13,10 @@ pub struct PrefixCacheManager {
 }
 
 #[derive(Clone)]
-pub enum MatchingCache {
-    Verbatim {
-        normal: LayerCaches,
-        xlora: Option<LayerCaches>,
-    },
-    Subset {
-        normal: LayerCaches,
-        xlora: Option<LayerCaches>,
-        toks: Vec<u32>,
-    },
+pub struct MatchingCache {
+    pub normal: LayerCaches,
+    pub xlora: Option<LayerCaches>,
+    pub toks: Vec<u32>,
 }
 
 impl PrefixCacheManager {
@@ -97,6 +91,7 @@ impl PrefixCacheManager {
             }
         }
         // Load it into the cache
+        self.cpu_caches.swap_remove(&toks);
         self.caches.insert(toks, new_cache.clone());
         Ok(new_cache)
     }
@@ -118,6 +113,7 @@ impl PrefixCacheManager {
             }
         }
         // Load it into the cache
+        self.xlora_cpu_caches.as_mut().unwrap().swap_remove(&toks);
         self.xlora_caches
             .as_mut()
             .unwrap()
@@ -127,127 +123,70 @@ impl PrefixCacheManager {
 
     /// Search for a matching cache given some toks
     pub fn search_for_matching_cache(&mut self, toks: &[u32]) -> Result<Option<MatchingCache>> {
-        if let Some(cache) = self.caches.get(toks) {
-            if let Some(xlora_cache) = &self.xlora_caches {
-                Ok(Some(MatchingCache::Verbatim {
-                    normal: cache.clone(),
-                    xlora: Some(xlora_cache.get(toks).unwrap().clone()),
-                }))
-            } else {
-                Ok(Some(MatchingCache::Verbatim {
-                    normal: cache.clone(),
-                    xlora: None,
-                }))
-            }
-        } else if let Some(cache) = self.cpu_caches.get(toks).cloned() {
-            let cache = self.promote_into_device_cache(toks.to_vec(), &cache)?;
-            if self.xlora_caches.is_some() {
-                Ok(Some(MatchingCache::Verbatim {
-                    normal: cache,
-                    xlora: Some(
-                        self.promote_into_device_xlora_cache(
-                            toks.to_vec(),
-                            &self
-                                .xlora_caches
-                                .as_ref()
-                                .unwrap()
-                                .get(toks)
-                                .unwrap()
-                                .clone(),
-                        )?,
-                    ),
-                }))
-            } else {
-                Ok(Some(MatchingCache::Verbatim {
-                    normal: cache,
-                    xlora: None,
-                }))
-            }
-        } else {
-            // Look for token ids such that they begins with `toks`
-            for (ids, cache) in &self.caches {
-                if ids.len() <= toks.len() && &toks[0..ids.len()] == ids {
-                    if let Some(xlora_cache) = &self.xlora_caches {
-                        return Ok(Some(MatchingCache::Subset {
-                            normal: cache.clone(),
-                            xlora: Some(xlora_cache.get(ids).unwrap().clone()),
-                            toks: toks[ids.len()..].to_vec(),
-                        }));
-                    } else {
-                        return Ok(Some(MatchingCache::Subset {
-                            normal: cache.clone(),
-                            xlora: None,
-                            toks: toks[ids.len()..].to_vec(),
-                        }));
-                    }
-                }
-                if ids.len() >= toks.len() && &ids[0..toks.len()] == toks {
-                    if let Some(xlora_cache) = &self.xlora_caches {
-                        return Ok(Some(MatchingCache::Verbatim {
-                            normal: cache.clone(),
-                            xlora: Some(xlora_cache.get(ids).unwrap().clone()),
-                        }));
-                    } else {
-                        return Ok(Some(MatchingCache::Verbatim {
-                            normal: cache.clone(),
-                            xlora: None,
-                        }));
-                    }
+        // Look for token ids such that they begins with `toks`
+        let mut candidates = Vec::new();
+        // Search the device cache
+        for (ids, cache) in &self.caches {
+            if ids.len() <= toks.len() && &toks[0..ids.len()] == ids {
+                if let Some(xlora_cache) = &self.xlora_caches {
+                    candidates.push(MatchingCache {
+                        normal: cache.clone(),
+                        xlora: Some(xlora_cache.get(ids).unwrap().clone()),
+                        toks: toks[ids.len()..].to_vec(),
+                    });
+                } else {
+                    candidates.push(MatchingCache {
+                        normal: cache.clone(),
+                        xlora: None,
+                        toks: toks[ids.len()..].to_vec(),
+                    });
                 }
             }
-            for (ids, cache) in self.cpu_caches.clone() {
-                if ids.len() <= toks.len() && toks[0..ids.len()] == ids {
-                    if self.xlora_cpu_caches.is_some() {
-                        return Ok(Some(MatchingCache::Subset {
-                            normal: self.promote_into_device_cache(toks.to_vec(), &cache)?,
-                            xlora: Some(
-                                self.promote_into_device_xlora_cache(
-                                    toks.to_vec(),
-                                    &self
-                                        .xlora_cpu_caches
-                                        .as_ref()
-                                        .unwrap()
-                                        .get(toks)
-                                        .unwrap()
-                                        .clone(),
-                                )?,
-                            ),
-                            toks: toks[ids.len()..].to_vec(),
-                        }));
-                    } else {
-                        return Ok(Some(MatchingCache::Subset {
-                            normal: self.promote_into_device_cache(toks.to_vec(), &cache)?,
-                            xlora: None,
-                            toks: toks[ids.len()..].to_vec(),
-                        }));
-                    }
-                }
-                if ids.len() >= toks.len() && &ids[0..toks.len()] == toks {
-                    if self.xlora_cpu_caches.is_some() {
-                        return Ok(Some(MatchingCache::Verbatim {
-                            normal: self.promote_into_device_cache(toks.to_vec(), &cache)?,
-                            xlora: Some(
-                                self.promote_into_device_xlora_cache(
-                                    toks.to_vec(),
-                                    &self
-                                        .xlora_cpu_caches
-                                        .as_ref()
-                                        .unwrap()
-                                        .get(toks)
-                                        .unwrap()
-                                        .clone(),
-                                )?,
-                            ),
-                        }));
-                    } else {
-                        return Ok(Some(MatchingCache::Verbatim {
-                            normal: self.promote_into_device_cache(toks.to_vec(), &cache)?,
-                            xlora: None,
-                        }));
-                    }
-                }
-            }
-            Ok(None)
         }
+        // Sort the candidates by ascending `toks` length
+        candidates.sort_by_key(|x| x.toks.len());
+        if !candidates.is_empty() {
+            // The first one has the shortest `toks` length and therefore maximizes cache usage
+            return Ok(Some(candidates.swap_remove(0)));
+        }
+
+        let mut candidates = Vec::new();
+        // Search the CPU cache and promote if needed
+        for (ids, cache) in self.cpu_caches.clone() {
+            if ids.len() <= toks.len() && toks[0..ids.len()] == ids {
+                if self.xlora_cpu_caches.is_some() {
+                    candidates.push(MatchingCache {
+                        normal: self.promote_into_device_cache(toks.to_vec(), &cache)?,
+                        xlora: Some(
+                            self.promote_into_device_xlora_cache(
+                                toks.to_vec(),
+                                &self
+                                    .xlora_cpu_caches
+                                    .as_ref()
+                                    .unwrap()
+                                    .get(toks)
+                                    .unwrap()
+                                    .clone(),
+                            )?,
+                        ),
+                        toks: toks[ids.len()..].to_vec(),
+                    });
+                } else {
+                    candidates.push(MatchingCache {
+                        normal: self.promote_into_device_cache(toks.to_vec(), &cache)?,
+                        xlora: None,
+                        toks: toks[ids.len()..].to_vec(),
+                    });
+                }
+            }
+        }
+        // Sort the candidates by ascending `toks` length
+        candidates.sort_by_key(|x| x.toks.len());
+        if !candidates.is_empty() {
+            // The first one has the shortest `toks` length and therefore maximizes cache usage
+            return Ok(Some(candidates.swap_remove(0)));
+        }
+
+        Ok(None)
     }
 }
