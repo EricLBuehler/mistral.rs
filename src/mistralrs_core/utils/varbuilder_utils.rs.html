@@ -142,6 +142,12 @@
 <a href="#140" id="140">140</a>
 <a href="#141" id="141">141</a>
 <a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! Utilities for creating a VarBuilder from a VarMap loaded from tensor storage formats.
 
 </span><span class="kw">use </span>std::{collections::HashMap, path::PathBuf, thread};
@@ -230,6 +236,9 @@
 
                     <span class="kw">if </span>silent {
                         <span class="kw">for </span>(name, <span class="kw">_</span>) <span class="kw">in </span>tensors.tensors() {
+                            <span class="kw">if </span>name.contains(<span class="string">"internal_xlora_classifier"</span>) {
+                                <span class="kw">continue</span>;
+                            }
                             <span class="kw">let </span><span class="kw-2">mut </span>new_name = <span class="kw">if </span>name.contains(<span class="string">"base_model.model.model"</span>) {
                                 name.replace(<span class="string">"base_model.model.model"</span>, <span class="string">"model"</span>)
                             } <span class="kw">else </span>{
@@ -245,6 +254,9 @@
                         }
                     } <span class="kw">else </span>{
                         <span class="kw">for </span>(name, <span class="kw">_</span>) <span class="kw">in </span>tensors.tensors().into_iter().tqdm() {
+                            <span class="kw">if </span>name.contains(<span class="string">"internal_xlora_classifier"</span>) {
+                                <span class="kw">continue</span>;
+                            }
                             <span class="kw">let </span><span class="kw-2">mut </span>new_name = <span class="kw">if </span>name.contains(<span class="string">"base_model.model.model"</span>) {
                                 name.replace(<span class="string">"base_model.model.model"</span>, <span class="string">"model"</span>)
                             } <span class="kw">else </span>{
