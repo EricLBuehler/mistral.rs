@@ -61,6 +61,7 @@
 <a href="#59" id="59">59</a>
 <a href="#60" id="60">60</a>
 <a href="#61" id="61">61</a>
+<a href="#62" id="62">62</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>either::Either;
@@ -95,7 +96,8 @@
     <span class="kw">pub </span>hidden_size: usize,
     <span class="attr">#[serde(rename = <span class="string">"base_model_id"</span>)]
     </span><span class="kw">pub </span>_base_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    <span class="kw">pub </span>adapters: <span class="prelude-ty">Option</span>&lt;Either&lt;Vec&lt;String&gt;, HashMap&lt;String, String&gt;&gt;&gt;,
+    <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)]
+    </span><span class="kw">pub </span>adapters: Either&lt;Vec&lt;String&gt;, HashMap&lt;String, String&gt;&gt;,
     <span class="attr">#[serde(default = <span class="string">"false_default"</span>)]
     </span><span class="kw">pub </span>layerwise_scalings: bool,
     <span class="attr">#[serde(default = <span class="string">"false_default"</span>)]
