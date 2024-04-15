@@ -28,6 +28,21 @@ macro_rules! handle_seq_error {
 }
 
 #[macro_export]
+macro_rules! handle_seq_error_ok {
+    ($fallible:expr, $response:expr) => {
+        match $fallible {
+            Ok(v) => v,
+            Err(e) => {
+                use $crate::response::Response;
+                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
+                $response.send(Response::InternalError(e.into())).unwrap();
+                return Ok(());
+            }
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! handle_seq_error_stateaware {
     ($fallible:expr, $seq:expr) => {
         match $fallible {
@@ -39,6 +54,23 @@ macro_rules! handle_seq_error_stateaware {
                 $seq.responder().send(Response::InternalError(e.into())).unwrap();
                 $seq.set_state(SequenceState::Error);
                 return;
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! handle_seq_error_stateaware_ok {
+    ($fallible:expr, $seq:expr) => {
+        match $fallible {
+            Ok(v) => v,
+            Err(e) => {
+                use $crate::response::Response;
+                use $crate::sequence::SequenceState;
+                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
+                $seq.responder().send(Response::InternalError(e.into())).unwrap();
+                $seq.set_state(SequenceState::Error);
+                return Ok(());
             }
         }
     };
