@@ -678,8 +678,8 @@
     <span class="doccomment">/// This is the number of tokens. If the KV cache is Some, then it will use that.
     </span><span class="kw">pub fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="kw">if let </span><span class="prelude-val">Some</span>((<span class="kw">_</span>, x)) = <span class="kw-2">&amp;</span><span class="self">self</span>.cache[<span class="number">0</span>] {
-            x.dims()[<span class="number">2</span>]
-        } <span class="kw">else </span>{
+            x.dims()[<span class="number">2</span>] + <span class="number">1
+        </span>} <span class="kw">else </span>{
             <span class="kw">if let </span><span class="prelude-val">Some</span>(toks) = <span class="kw-2">&amp;</span><span class="self">self</span>.prefill_prompt_toks {
                 <span class="kw">return </span>toks.len();
             }
