@@ -91,6 +91,7 @@ impl PrefixCacheManager {
             }
         }
         // Load it into the cache
+        self.cpu_caches.swap_remove(&toks);
         self.caches.insert(toks, new_cache.clone());
         Ok(new_cache)
     }
@@ -112,6 +113,7 @@ impl PrefixCacheManager {
             }
         }
         // Load it into the cache
+        self.xlora_cpu_caches.as_mut().unwrap().swap_remove(&toks);
         self.xlora_caches
             .as_mut()
             .unwrap()
