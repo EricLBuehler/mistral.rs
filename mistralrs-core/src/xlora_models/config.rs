@@ -32,7 +32,8 @@ pub struct XLoraConfig {
     pub hidden_size: usize,
     #[serde(rename = "base_model_id")]
     pub _base_model_id: Option<String>,
-    pub adapters: Option<Either<Vec<String>, HashMap<String, String>>>,
+    #[serde(with = "either::serde_untagged")]
+    pub adapters: Either<Vec<String>, HashMap<String, String>>,
     #[serde(default = "false_default")]
     pub layerwise_scalings: bool,
     #[serde(default = "false_default")]

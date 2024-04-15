@@ -631,25 +631,7 @@ fn get_xlora_paths(
         }
         let mut adapters_configs = Vec::new();
         let mut adapters_safetensors = Vec::new();
-        let adapter_order = if let Some(ref a) = xlora_config.adapters {
-            a.clone()
-        } else {
-            if xlora_order.as_ref().unwrap().adapters.is_none() {
-                return Err(anyhow::Error::msg(
-                    "Must specify adapters in ordering.".to_string(),
-                ));
-            }
-            Either::Left(
-                xlora_order
-                    .as_ref()
-                    .unwrap()
-                    .adapters
-                    .as_ref()
-                    .unwrap()
-                    .clone(),
-            )
-        };
-        let adapter_order = match adapter_order {
+        let adapter_order = match xlora_config.adapters.clone() {
             Either::Left(l) => l,
             Either::Right(r) => r.keys().cloned().collect::<Vec<_>>(),
         };
