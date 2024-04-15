@@ -635,7 +635,7 @@ fn get_xlora_paths(
             Either::Left(l) => l,
             Either::Right(r) => r.keys().cloned().collect::<Vec<_>>(),
         };
-        for name in &adapter_order {
+        for (i, name) in adapter_order.iter().enumerate() {
             let paths = adapters_paths.get(name).unwrap();
             for path in paths {
                 if path.extension().unwrap() == "safetensors" {
@@ -643,7 +643,7 @@ fn get_xlora_paths(
                 } else {
                     let conf = fs::read_to_string(path)?;
                     let lora_config: LoraConfig = serde_json::from_str(&conf)?;
-                    adapters_configs.push((name.clone(), lora_config));
+                    adapters_configs.push((i.to_string(), lora_config));
                 }
             }
         }
