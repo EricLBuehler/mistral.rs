@@ -182,7 +182,6 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             }
         }
 
-        let running = std::mem::take(&mut self.running);
         self.running = self.bucket_and_waitlist_seqs_waiting(running, &mut new_waiting);
 
         self.waiting = new_waiting;
