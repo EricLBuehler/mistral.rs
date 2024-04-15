@@ -124,30 +124,38 @@ impl PrefixCacheManager {
     /// Search for a matching cache given some toks
     pub fn search_for_matching_cache(&mut self, toks: &[u32]) -> Result<Option<MatchingCache>> {
         // Look for token ids such that they begins with `toks`
-
+        let mut candidates = Vec::new();
         // Search the device cache
         for (ids, cache) in &self.caches {
             if ids.len() <= toks.len() && &toks[0..ids.len()] == ids {
                 if let Some(xlora_cache) = &self.xlora_caches {
-                    return Ok(Some(MatchingCache {
+                    candidates.push(MatchingCache {
                         normal: cache.clone(),
                         xlora: Some(xlora_cache.get(ids).unwrap().clone()),
                         toks: toks[ids.len()..].to_vec(),
-                    }));
+                    });
                 } else {
-                    return Ok(Some(MatchingCache {
+                    candidates.push(MatchingCache {
                         normal: cache.clone(),
                         xlora: None,
                         toks: toks[ids.len()..].to_vec(),
-                    }));
+                    });
                 }
             }
         }
+        // Sort the candidates by ascending `toks` length
+        candidates.sort_by_key(|x| x.toks.len());
+        if !candidates.is_empty() {
+            // The first one has the shortest `toks` length and therefore maximizes cache usage
+            return Ok(Some(candidates.swap_remove(0)));
+        }
+
+        let mut candidates = Vec::new();
         // Search the CPU cache and promote if needed
         for (ids, cache) in self.cpu_caches.clone() {
             if ids.len() <= toks.len() && toks[0..ids.len()] == ids {
                 if self.xlora_cpu_caches.is_some() {
-                    return Ok(Some(MatchingCache {
+                    candidates.push(MatchingCache {
                         normal: self.promote_into_device_cache(toks.to_vec(), &cache)?,
                         xlora: Some(
                             self.promote_into_device_xlora_cache(
@@ -162,16 +170,23 @@ impl PrefixCacheManager {
                             )?,
                         ),
                         toks: toks[ids.len()..].to_vec(),
-                    }));
+                    });
                 } else {
-                    return Ok(Some(MatchingCache {
+                    candidates.push(MatchingCache {
                         normal: self.promote_into_device_cache(toks.to_vec(), &cache)?,
                         xlora: None,
                         toks: toks[ids.len()..].to_vec(),
-                    }));
+                    });
                 }
             }
         }
+        // Sort the candidates by ascending `toks` length
+        candidates.sort_by_key(|x| x.toks.len());
+        if !candidates.is_empty() {
+            // The first one has the shortest `toks` length and therefore maximizes cache usage
+            return Ok(Some(candidates.swap_remove(0)));
+        }
+
         Ok(None)
     }
 }
