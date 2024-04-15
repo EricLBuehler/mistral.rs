@@ -1,5 +1,6 @@
 use std::collections::{
-    vec_deque::{Iter, IterMut}, HashMap, VecDeque
+    vec_deque::{Iter, IterMut},
+    HashMap, VecDeque,
 };
 
 use crate::sequence::{Sequence, SequenceState};
