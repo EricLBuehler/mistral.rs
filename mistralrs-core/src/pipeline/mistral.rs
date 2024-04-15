@@ -17,7 +17,7 @@ use crate::{
 use anyhow::Result;
 use candle_core::quantized::gguf_file;
 use candle_core::{DType, Device, Tensor};
-use candle_nn::Activation;
+use candle_nn::{Activation, VarBuilder};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
 use serde::Deserialize;
@@ -270,13 +270,13 @@ impl Loader for MistralLoader {
             }
             ModelKind::QuantizedGGML => unreachable!(),
             ModelKind::Normal => {
-                let vb = from_mmaped_safetensors(
-                    paths.get_weight_filenames().to_vec(),
-                    Vec::new(),
-                    dtype.unwrap_or(default_dtype),
-                    device,
-                    false,
-                )?;
+                let vb = unsafe {
+                    VarBuilder::from_mmaped_safetensors(
+                        &paths.get_weight_filenames(),
+                        dtype.unwrap_or(default_dtype),
+                        &device,
+                    )?
+                };
 
                 let model = NormalModel::new(&config, vb)?;
                 Model::Normal(model)
