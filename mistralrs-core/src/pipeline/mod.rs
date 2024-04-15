@@ -643,7 +643,7 @@ fn get_xlora_paths(
                 } else {
                     let conf = fs::read_to_string(path)?;
                     let lora_config: LoraConfig = serde_json::from_str(&conf)?;
-                    adapters_configs.push((i.to_string(), lora_config));
+                    adapters_configs.push(((i+1).to_string(), lora_config));
                 }
             }
         }
