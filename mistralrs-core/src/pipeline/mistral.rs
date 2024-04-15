@@ -272,9 +272,9 @@ impl Loader for MistralLoader {
             ModelKind::Normal => {
                 let vb = unsafe {
                     VarBuilder::from_mmaped_safetensors(
-                        &paths.get_weight_filenames(),
+                        paths.get_weight_filenames(),
                         dtype.unwrap_or(default_dtype),
-                        &device,
+                        device,
                     )?
                 };
 
