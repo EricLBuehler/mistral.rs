@@ -1494,7 +1494,7 @@
             Either::Left(l) =&gt; l,
             Either::Right(r) =&gt; r.keys().cloned().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
         };
-        <span class="kw">for </span>name <span class="kw">in </span><span class="kw-2">&amp;</span>adapter_order {
+        <span class="kw">for </span>(i, name) <span class="kw">in </span>adapter_order.iter().enumerate() {
             <span class="kw">let </span>paths = adapters_paths.get(name).unwrap();
             <span class="kw">for </span>path <span class="kw">in </span>paths {
                 <span class="kw">if </span>path.extension().unwrap() == <span class="string">"safetensors" </span>{
@@ -1502,7 +1502,7 @@
                 } <span class="kw">else </span>{
                     <span class="kw">let </span>conf = fs::read_to_string(path)<span class="question-mark">?</span>;
                     <span class="kw">let </span>lora_config: LoraConfig = serde_json::from_str(<span class="kw-2">&amp;</span>conf)<span class="question-mark">?</span>;
-                    adapters_configs.push((name.clone(), lora_config));
+                    adapters_configs.push(((i+<span class="number">1</span>).to_string(), lora_config));
                 }
             }
         }
