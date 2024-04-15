@@ -180,6 +180,8 @@ impl Engine {
                         });
 
                         if let Some(reason) = is_done {
+                            prefix_cacher.add_sequence(seq);
+                            prefix_cacher.evict_to_cpu()?;
                             seq.set_state(SequenceState::Done(reason));
                         }
 
