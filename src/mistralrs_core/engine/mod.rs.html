@@ -629,6 +629,13 @@
 <a href="#627" id="627">627</a>
 <a href="#628" id="628">628</a>
 <a href="#629" id="629">629</a>
+<a href="#630" id="630">630</a>
+<a href="#631" id="631">631</a>
+<a href="#632" id="632">632</a>
+<a href="#633" id="633">633</a>
+<a href="#634" id="634">634</a>
+<a href="#635" id="635">635</a>
+<a href="#636" id="636">636</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::VecDeque,
@@ -640,17 +647,18 @@
 
 <span class="kw">use crate</span>::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
+    handle_seq_error_ok, handle_seq_error_stateaware_ok,
     response::CompletionChoice,
     CompletionResponse, RequestType,
 };
-<span class="kw">use </span>candle_core::Tensor;
+<span class="kw">use </span>candle_core::{<span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>tracing::warn;
 
 <span class="kw">use crate</span>::{
-    get_mut_arcmutex, handle_pipeline_forward_error, handle_seq_error, handle_seq_error_stateaware,
+    get_mut_arcmutex, handle_pipeline_forward_error, handle_seq_error,
     pipeline::Pipeline,
-    prefix_cacher::{MatchingCache, PrefixCacheManager},
+    prefix_cacher::PrefixCacheManager,
     request::Request,
     response::{
         ChatCompletionResponse, Choice, ChunkChoice, Delta, Logprobs, Response, ResponseLogprob,
@@ -719,7 +727,7 @@
                 }
 
                 <span class="kw">let </span>before_sample = Instant::now();
-                <span class="self">Self</span>::sample_seqs(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.completion, logits);
+                <span class="macro">handle_pipeline_forward_error!</span>(<span class="string">"sampling"</span>, <span class="self">Self</span>::sample_seqs(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.completion, logits, <span class="kw-2">&amp;mut </span><span class="self">self</span>.prefix_cacher), <span class="kw-2">&amp;mut </span>scheduled.completion, pipeline, <span class="lifetime">'lp</span>);
                 <span class="kw">let </span>sampling_time = before_sample.elapsed().as_millis();
                 <span class="kw">for </span>seq <span class="kw">in </span>scheduled.completion.iter_mut() {
                     seq.total_sampling_time += sampling_time;
@@ -750,18 +758,8 @@
                     seq.prompt_timestamp = <span class="prelude-val">Some</span>(now);
                 }
 
-                <span class="kw">for </span>seq <span class="kw">in </span>scheduled
-                    .prompt
-                    .iter_mut()
-                    .take(<span class="self">self</span>.prefix_cacher.n_on_device)
-                {
-                    <span class="self">self</span>.prefix_cacher.add_sequence(seq);
-                }
-                <span class="comment">// Evict all the other seqs
-                </span><span class="macro">handle_pipeline_forward_error!</span>(<span class="string">"evict"</span>, <span class="self">self</span>.prefix_cacher.evict_to_cpu(), <span class="kw-2">&amp;mut </span>scheduled.prompt, pipeline, <span class="lifetime">'lp</span>);
-
                 <span class="kw">let </span>before_sample = Instant::now();
-                <span class="self">Self</span>::sample_seqs(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.prompt, logits);
+                <span class="macro">handle_pipeline_forward_error!</span>(<span class="string">"sampling"</span>, <span class="self">Self</span>::sample_seqs(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.prompt, logits, <span class="kw-2">&amp;mut </span><span class="self">self</span>.prefix_cacher), <span class="kw-2">&amp;mut </span>scheduled.prompt, pipeline, <span class="lifetime">'lp</span>);
                 <span class="kw">let </span>sampling_time = before_sample.elapsed().as_millis();
                 <span class="kw">for </span>seq <span class="kw">in </span>scheduled.prompt.iter_mut() {
                     seq.total_sampling_time += sampling_time;
@@ -770,7 +768,12 @@
         }
     }
 
-    <span class="kw">fn </span>sample_seqs(pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], logits: Tensor) {
+    <span class="kw">fn </span>sample_seqs(
+        pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline,
+        seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
+        logits: Tensor,
+        prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span>seqs_len = seqs.len();
         <span class="kw">let </span>logits_seq = logits.chunk(seqs_len, <span class="number">0</span>).unwrap();
         <span class="macro">debug_assert_eq!</span>(logits_seq.len(), seqs_len);
@@ -779,7 +782,7 @@
             <span class="comment">// Sample and extract next token
             </span><span class="kw">let </span>return_logprobs = seq.return_logprobs();
             <span class="kw">let </span>sampled = pipeline.sample(logits_per_seq, seq, return_logprobs);
-            <span class="kw">let </span>next_token = <span class="macro">handle_seq_error_stateaware!</span>(sampled, seq);
+            <span class="kw">let </span>next_token = <span class="macro">handle_seq_error_stateaware_ok!</span>(sampled, seq);
             <span class="kw">let </span>next_token_id = next_token.token;
 
             <span class="kw">let </span>is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
@@ -794,7 +797,7 @@
                 <span class="kw">let </span>rate_limit_allowed = is_done.is_some() || token_index % <span class="number">3 </span>== <span class="number">0</span>;
 
                 <span class="kw">if </span>rate_limit_allowed {
-                    <span class="kw">if let </span><span class="prelude-val">Some</span>(delta) = <span class="macro">handle_seq_error!</span>(seq.get_delta(), seq.responder()) {
+                    <span class="kw">if let </span><span class="prelude-val">Some</span>(delta) = <span class="macro">handle_seq_error_ok!</span>(seq.get_delta(), seq.responder()) {
                         seq.add_streaming_chunk_choice_to_group(ChunkChoice {
                             delta: Delta {
                                 content: delta.clone(),
@@ -815,6 +818,8 @@
                         });
 
                         <span class="kw">if let </span><span class="prelude-val">Some</span>(reason) = is_done {
+                            prefix_cacher.add_sequence(seq);
+                            prefix_cacher.evict_to_cpu()<span class="question-mark">?</span>;
                             seq.set_state(SequenceState::Done(reason));
                         }
 
@@ -823,13 +828,20 @@
                     }
                 }
             } <span class="kw">else if let </span><span class="prelude-val">Some</span>(reason) = is_done {
-                <span class="self">Self</span>::finish_seq(pipeline, seq, reason);
+                <span class="self">Self</span>::finish_seq(pipeline, seq, reason, prefix_cacher)<span class="question-mark">?</span>;
                 pipeline.reset_non_granular_state();
             }
         }
+
+        <span class="prelude-val">Ok</span>(())
     }
 
-    <span class="kw">fn </span>finish_seq(pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline, seq: <span class="kw-2">&amp;</span>Sequence, reason: StopReason) {
+    <span class="kw">fn </span>finish_seq(
+        pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline,
+        seq: <span class="kw-2">&amp;mut </span>Sequence,
+        reason: StopReason,
+        prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         seq.set_state(SequenceState::Done(reason));
 
         <span class="kw">let </span>logprobs = <span class="kw">if </span>seq.return_logprobs() {
@@ -837,7 +849,7 @@
             <span class="kw">let </span><span class="kw-2">mut </span>logprobs = Vec::new();
             <span class="kw">for </span>logprob <span class="kw">in </span>seq.logprobs() {
                 <span class="kw">let </span>resp_logprob = ResponseLogprob {
-                    token: <span class="macro">handle_seq_error!</span>(
+                    token: <span class="macro">handle_seq_error_ok!</span>(
                         tokenizer.decode(<span class="kw-2">&amp;</span>[logprob.token], <span class="bool-val">false</span>),
                         seq.responder()
                     ),
@@ -889,6 +901,9 @@
             seq.add_completion_choice_to_group(choice);
         }
 
+        prefix_cacher.add_sequence(seq);
+        prefix_cacher.evict_to_cpu()<span class="question-mark">?</span>;
+
         <span class="kw">let </span>group = seq.get_mut_group();
         <span class="kw">if </span>group.is_chat {
             group.maybe_send_done_response(
@@ -917,6 +932,8 @@
                 seq.responder(),
             );
         }
+
+        <span class="prelude-val">Ok</span>(())
     }
 
     <span class="doccomment">/// Clone the cache FROM the sequences' cache TO the model cache. Only used for completion seqs.
@@ -1242,14 +1259,11 @@
                 </span>},
             );
             <span class="kw">let </span>seq = <span class="kw">if let </span><span class="prelude-val">Some</span>(prefill_cache) = prefill_cache.clone() {
-                <span class="kw">match </span>prefill_cache {
-                    MatchingCache::Verbatim { normal, xlora } =&gt; seq.prefill(normal, xlora),
-                    MatchingCache::Subset {
-                        normal,
-                        xlora,
-                        toks,
-                    } =&gt; seq.prefill_subset(normal, xlora, toks),
-                }
+                seq.prefill(
+                    prefill_cache.normal,
+                    prefill_cache.xlora,
+                    prefill_cache.toks,
+                )
             } <span class="kw">else </span>{
                 seq
             };
