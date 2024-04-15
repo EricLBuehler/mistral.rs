@@ -103,6 +103,11 @@ OpenAI API compatible API server
 - [Running](README.md#run)
 - [Example](examples/server/chat.py)
 
+**Llama Index integration**
+
+- [Source](integrations/llama_index_integration.py).
+- [Example](examples/llama_index/xlora_gguf.py)
+
 ## Supported accelerators
 - CUDA:
   - Enable with `cuda` feature.
