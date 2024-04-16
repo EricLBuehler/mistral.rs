@@ -165,6 +165,7 @@ impl Engine {
                 && scheduled.completion.len() == 0
                 && self.scheduler.waiting_len() == 0
             {
+                // If there is nothing to do, sleep until a request comes in
                 if let Ok(request) = self.rx.recv() {
                     self.add_request(request);
                 }
