@@ -611,19 +611,6 @@ fn get_xlora_paths(
             Either::Left(l) => l,
             Either::Right(r) => r.keys().cloned().collect::<Vec<_>>(),
         };
-        if xlora_order
-            .as_ref()
-            .unwrap()
-            .adapters
-            .as_ref()
-            .is_some_and(|x| *x != adapter_order)
-        {
-            let message = format!("Ordering file adapter order ({:?}) and the config adapters' order ({:?}) do not match.",
-                xlora_order.as_ref().unwrap().adapters.as_ref().unwrap(),
-                adapter_order);
-            tracing::error!("{message}");
-            anyhow::bail!("{message}");
-        }
 
         let adapter_files = api
             .info()?
@@ -631,7 +618,7 @@ fn get_xlora_paths(
             .iter()
             .map(|x| x.rfilename.clone())
             .filter_map(|name| {
-                for adapter_name in &adapter_order {
+                for adapter_name in xlora_order.as_ref().unwrap().adapters.as_ref().unwrap() {
                     if name.contains(adapter_name) {
                         return Some((name, adapter_name.clone()));
                     }
@@ -639,6 +626,9 @@ fn get_xlora_paths(
                 return None;
             })
             .collect::<Vec<_>>();
+        if adapter_files.is_empty() {
+            anyhow::bail!("Adapter files are empty. Perhaps the ordering file adapters does not match the acutal adapters?")
+        }
         let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
         for (file, name) in adapter_files {
             if let Some(paths) = adapters_paths.get_mut(&name) {
