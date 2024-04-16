@@ -101,56 +101,9 @@
 <a href="#99" id="99">99</a>
 <a href="#100" id="100">100</a>
 <a href="#101" id="101">101</a>
-<a href="#102" id="102">102</a>
-<a href="#103" id="103">103</a>
-<a href="#104" id="104">104</a>
-<a href="#105" id="105">105</a>
-<a href="#106" id="106">106</a>
-<a href="#107" id="107">107</a>
-<a href="#108" id="108">108</a>
-<a href="#109" id="109">109</a>
-<a href="#110" id="110">110</a>
-<a href="#111" id="111">111</a>
-<a href="#112" id="112">112</a>
-<a href="#113" id="113">113</a>
-<a href="#114" id="114">114</a>
-<a href="#115" id="115">115</a>
-<a href="#116" id="116">116</a>
-<a href="#117" id="117">117</a>
-<a href="#118" id="118">118</a>
-<a href="#119" id="119">119</a>
-<a href="#120" id="120">120</a>
-<a href="#121" id="121">121</a>
-<a href="#122" id="122">122</a>
-<a href="#123" id="123">123</a>
-<a href="#124" id="124">124</a>
-<a href="#125" id="125">125</a>
-<a href="#126" id="126">126</a>
-<a href="#127" id="127">127</a>
-<a href="#128" id="128">128</a>
-<a href="#129" id="129">129</a>
-<a href="#130" id="130">130</a>
-<a href="#131" id="131">131</a>
-<a href="#132" id="132">132</a>
-<a href="#133" id="133">133</a>
-<a href="#134" id="134">134</a>
-<a href="#135" id="135">135</a>
-<a href="#136" id="136">136</a>
-<a href="#137" id="137">137</a>
-<a href="#138" id="138">138</a>
-<a href="#139" id="139">139</a>
-<a href="#140" id="140">140</a>
-<a href="#141" id="141">141</a>
-<a href="#142" id="142">142</a>
-<a href="#143" id="143">143</a>
-<a href="#144" id="144">144</a>
-<a href="#145" id="145">145</a>
-<a href="#146" id="146">146</a>
-<a href="#147" id="147">147</a>
-<a href="#148" id="148">148</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! Utilities for creating a VarBuilder from a VarMap loaded from tensor storage formats.
 
-</span><span class="kw">use </span>std::{collections::HashMap, path::PathBuf, thread};
+</span><span class="kw">use </span>std::path::PathBuf;
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Var};
 <span class="kw">use </span>candle_nn::{
@@ -173,124 +126,77 @@
     {
         <span class="kw">let </span><span class="kw-2">mut </span>ws = map.data().lock().unwrap();
 
-        <span class="kw">let </span><span class="kw-2">mut </span>handles = Vec::new();
         <span class="kw">for </span>path <span class="kw">in </span>paths {
-            <span class="kw">let </span>dev = device.clone();
-            <span class="kw">let </span>handle = thread::spawn(<span class="kw">move </span>|| {
-                <span class="kw">fn </span>inner(
-                    path: PathBuf,
-                    device: Device,
-                    silent: bool,
-                    dtype: DType,
-                ) -&gt; <span class="prelude-ty">Result</span>&lt;HashMap&lt;String, Var&gt;&gt; {
-                    <span class="kw">let </span><span class="kw-2">mut </span>threadmap = HashMap::new();
-                    <span class="kw">let </span>tensors =
-                        <span class="kw">unsafe </span>{ candle_core::safetensors::MmapedSafetensors::new(path)<span class="question-mark">? </span>};
+            <span class="kw">let </span>tensors = <span class="kw">unsafe </span>{ candle_core::safetensors::MmapedSafetensors::new(path)<span class="question-mark">? </span>};
 
-                    <span class="kw">if </span>silent {
-                        <span class="kw">for </span>(name, <span class="kw">_</span>) <span class="kw">in </span>tensors.tensors() {
-                            <span class="kw">let </span>new_name = <span class="kw">if </span>name.contains(<span class="string">"base_model.model.model"</span>) {
-                                name.replace(<span class="string">"base_model.model.model"</span>, <span class="string">"model"</span>)
-                            } <span class="kw">else </span>{
-                                name.clone()
-                            };
-                            <span class="kw">let </span>tensor = tensors
-                                .load(<span class="kw-2">&amp;</span>name, <span class="kw-2">&amp;</span>device)<span class="question-mark">?
-                                </span>.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?
-                                </span>.to_dtype(dtype)<span class="question-mark">?</span>;
-                            threadmap.insert(new_name, Var::from_tensor(<span class="kw-2">&amp;</span>tensor)<span class="question-mark">?</span>);
-                        }
+            <span class="kw">if </span>silent {
+                <span class="kw">for </span>(name, <span class="kw">_</span>) <span class="kw">in </span>tensors.tensors() {
+                    <span class="kw">let </span>new_name = <span class="kw">if </span>name.contains(<span class="string">"base_model.model.model"</span>) {
+                        name.replace(<span class="string">"base_model.model.model"</span>, <span class="string">"model"</span>)
                     } <span class="kw">else </span>{
-                        <span class="kw">for </span>(name, <span class="kw">_</span>) <span class="kw">in </span>tensors.tensors().into_iter().tqdm() {
-                            <span class="kw">let </span>new_name = <span class="kw">if </span>name.contains(<span class="string">"base_model.model.model"</span>) {
-                                name.replace(<span class="string">"base_model.model.model"</span>, <span class="string">"model"</span>)
-                            } <span class="kw">else </span>{
-                                name.clone()
-                            };
-                            <span class="kw">let </span>tensor = tensors
-                                .load(<span class="kw-2">&amp;</span>name, <span class="kw-2">&amp;</span>device)<span class="question-mark">?
-                                </span>.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?
-                                </span>.to_dtype(dtype)<span class="question-mark">?</span>;
-                            threadmap.insert(new_name, Var::from_tensor(<span class="kw-2">&amp;</span>tensor)<span class="question-mark">?</span>);
-                        }
+                        name.clone()
                     };
-                    <span class="prelude-val">Ok</span>(threadmap)
+                    <span class="kw">let </span>tensor = tensors
+                        .load(<span class="kw-2">&amp;</span>name, device)<span class="question-mark">?
+                        </span>.to_device(device)<span class="question-mark">?
+                        </span>.to_dtype(dtype)<span class="question-mark">?</span>;
+                    ws.insert(new_name, Var::from_tensor(<span class="kw-2">&amp;</span>tensor)<span class="question-mark">?</span>);
                 }
-                inner(path, dev, silent, dtype)
-            });
-            handles.push(handle)
-        }
-        <span class="kw">for </span>(i, path) <span class="kw">in </span>xlora_paths.into_iter().enumerate() {
-            <span class="kw">let </span>dev = device.clone();
-            <span class="kw">let </span>handle = thread::spawn(<span class="kw">move </span>|| {
-                <span class="kw">fn </span>inner(
-                    path: PathBuf,
-                    device: Device,
-                    silent: bool,
-                    dtype: DType,
-                    i: usize,
-                ) -&gt; <span class="prelude-ty">Result</span>&lt;HashMap&lt;String, Var&gt;&gt; {
-                    <span class="kw">let </span><span class="kw-2">mut </span>threadmap = HashMap::new();
-                    <span class="kw">let </span>tensors =
-                        <span class="kw">unsafe </span>{ candle_core::safetensors::MmapedSafetensors::new(path)<span class="question-mark">? </span>};
-
-                    <span class="kw">if </span>silent {
-                        <span class="kw">for </span>(name, <span class="kw">_</span>) <span class="kw">in </span>tensors.tensors() {
-                            <span class="kw">if </span>name.contains(<span class="string">"internal_xlora_classifier"</span>) {
-                                <span class="kw">continue</span>;
-                            }
-                            <span class="kw">let </span><span class="kw-2">mut </span>new_name = <span class="kw">if </span>name.contains(<span class="string">"base_model.model.model"</span>) {
-                                name.replace(<span class="string">"base_model.model.model"</span>, <span class="string">"model"</span>)
-                            } <span class="kw">else </span>{
-                                name.clone()
-                            };
-                            <span class="kw">let </span>pos = new_name.find(<span class="string">".lora"</span>).unwrap();
-                            new_name.insert_str(pos + <span class="number">7</span>, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">".{}"</span>, i + <span class="number">1</span>));
-                            <span class="kw">let </span>tensor = tensors
-                                .load(<span class="kw-2">&amp;</span>name, <span class="kw-2">&amp;</span>device)<span class="question-mark">?
-                                </span>.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?
-                                </span>.to_dtype(dtype)<span class="question-mark">?</span>;
-                            threadmap.insert(new_name, Var::from_tensor(<span class="kw-2">&amp;</span>tensor)<span class="question-mark">?</span>);
-                        }
+            } <span class="kw">else </span>{
+                <span class="kw">for </span>(name, <span class="kw">_</span>) <span class="kw">in </span>tensors.tensors().into_iter().tqdm() {
+                    <span class="kw">let </span>new_name = <span class="kw">if </span>name.contains(<span class="string">"base_model.model.model"</span>) {
+                        name.replace(<span class="string">"base_model.model.model"</span>, <span class="string">"model"</span>)
                     } <span class="kw">else </span>{
-                        <span class="kw">for </span>(name, <span class="kw">_</span>) <span class="kw">in </span>tensors.tensors().into_iter().tqdm() {
-                            <span class="kw">if </span>name.contains(<span class="string">"internal_xlora_classifier"</span>) {
-                                <span class="kw">continue</span>;
-                            }
-                            <span class="kw">let </span><span class="kw-2">mut </span>new_name = <span class="kw">if </span>name.contains(<span class="string">"base_model.model.model"</span>) {
-                                name.replace(<span class="string">"base_model.model.model"</span>, <span class="string">"model"</span>)
-                            } <span class="kw">else </span>{
-                                name.clone()
-                            };
-                            <span class="kw">let </span>pos = new_name.find(<span class="string">".lora"</span>).unwrap();
-                            new_name.insert_str(pos + <span class="number">7</span>, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">".{}"</span>, i + <span class="number">1</span>));
-                            <span class="kw">let </span>tensor = tensors
-                                .load(<span class="kw-2">&amp;</span>name, <span class="kw-2">&amp;</span>device)<span class="question-mark">?
-                                </span>.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?
-                                </span>.to_dtype(dtype)<span class="question-mark">?</span>;
-                            threadmap.insert(new_name, Var::from_tensor(<span class="kw-2">&amp;</span>tensor)<span class="question-mark">?</span>);
-                        }
+                        name.clone()
                     };
-                    <span class="prelude-val">Ok</span>(threadmap)
+                    <span class="kw">let </span>tensor = tensors
+                        .load(<span class="kw-2">&amp;</span>name, device)<span class="question-mark">?
+                        </span>.to_device(device)<span class="question-mark">?
+                        </span>.to_dtype(dtype)<span class="question-mark">?</span>;
+                    ws.insert(new_name, Var::from_tensor(<span class="kw-2">&amp;</span>tensor)<span class="question-mark">?</span>);
                 }
-                inner(path, dev, silent, dtype, i)
-            });
-            handles.push(handle)
-        }
-
-        <span class="kw">let </span><span class="kw-2">mut </span>all_finished = <span class="bool-val">true</span>;
-        <span class="kw">while </span>!all_finished {
-            all_finished = <span class="bool-val">true</span>;
-            <span class="kw">for </span>handle <span class="kw">in </span>handles.iter() {
-                <span class="kw">if </span>!handle.is_finished() {
-                    all_finished = <span class="bool-val">false
-                </span>}
             }
         }
+        <span class="kw">for </span>(i, path) <span class="kw">in </span>xlora_paths.into_iter().enumerate() {
+            <span class="kw">let </span>tensors = <span class="kw">unsafe </span>{ candle_core::safetensors::MmapedSafetensors::new(path)<span class="question-mark">? </span>};
 
-        <span class="kw">for </span>handle <span class="kw">in </span>handles {
-            <span class="kw">let </span>res = handle.join().unwrap()<span class="question-mark">?</span>;
-            ws.extend(res);
+            <span class="kw">if </span>silent {
+                <span class="kw">for </span>(name, <span class="kw">_</span>) <span class="kw">in </span>tensors.tensors() {
+                    <span class="kw">if </span>name.contains(<span class="string">"internal_xlora_classifier"</span>) {
+                        <span class="kw">continue</span>;
+                    }
+                    <span class="kw">let </span><span class="kw-2">mut </span>new_name = <span class="kw">if </span>name.contains(<span class="string">"base_model.model.model"</span>) {
+                        name.replace(<span class="string">"base_model.model.model"</span>, <span class="string">"model"</span>)
+                    } <span class="kw">else </span>{
+                        name.clone()
+                    };
+                    <span class="kw">let </span>pos = new_name.find(<span class="string">".lora"</span>).unwrap();
+                    new_name.insert_str(pos + <span class="number">7</span>, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">".{}"</span>, i + <span class="number">1</span>));
+                    <span class="kw">let </span>tensor = tensors
+                        .load(<span class="kw-2">&amp;</span>name, device)<span class="question-mark">?
+                        </span>.to_device(device)<span class="question-mark">?
+                        </span>.to_dtype(dtype)<span class="question-mark">?</span>;
+                    ws.insert(new_name, Var::from_tensor(<span class="kw-2">&amp;</span>tensor)<span class="question-mark">?</span>);
+                }
+            } <span class="kw">else </span>{
+                <span class="kw">for </span>(name, <span class="kw">_</span>) <span class="kw">in </span>tensors.tensors().into_iter().tqdm() {
+                    <span class="kw">if </span>name.contains(<span class="string">"internal_xlora_classifier"</span>) {
+                        <span class="kw">continue</span>;
+                    }
+                    <span class="kw">let </span><span class="kw-2">mut </span>new_name = <span class="kw">if </span>name.contains(<span class="string">"base_model.model.model"</span>) {
+                        name.replace(<span class="string">"base_model.model.model"</span>, <span class="string">"model"</span>)
+                    } <span class="kw">else </span>{
+                        name.clone()
+                    };
+                    <span class="kw">let </span>pos = new_name.find(<span class="string">".lora"</span>).unwrap();
+                    new_name.insert_str(pos + <span class="number">7</span>, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">".{}"</span>, i + <span class="number">1</span>));
+                    <span class="kw">let </span>tensor = tensors
+                        .load(<span class="kw-2">&amp;</span>name, device)<span class="question-mark">?
+                        </span>.to_device(device)<span class="question-mark">?
+                        </span>.to_dtype(dtype)<span class="question-mark">?</span>;
+                    ws.insert(new_name, Var::from_tensor(<span class="kw-2">&amp;</span>tensor)<span class="question-mark">?</span>);
+                }
+            }
         }
     }
 
