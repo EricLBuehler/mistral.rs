@@ -851,6 +851,14 @@
 <a href="#849" id="849">849</a>
 <a href="#850" id="850">850</a>
 <a href="#851" id="851">851</a>
+<a href="#852" id="852">852</a>
+<a href="#853" id="853">853</a>
+<a href="#854" id="854">854</a>
+<a href="#855" id="855">855</a>
+<a href="#856" id="856">856</a>
+<a href="#857" id="857">857</a>
+<a href="#858" id="858">858</a>
+<a href="#859" id="859">859</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -1460,14 +1468,18 @@
             </span>.siblings
             .iter()
             .map(|x| x.rfilename.clone())
-            .filter(|x| x.contains(<span class="string">"/adapter_"</span>))
-            .map(|x| {
-                <span class="kw">let </span><span class="kw-2">mut </span>split = x.split(<span class="string">'/'</span>);
-                <span class="kw">let </span>pos = split.clone().count() - <span class="number">2</span>;
-                <span class="kw">let </span>name = split.nth(pos).unwrap().to_string();
-                (x, name)
-            })
+            .filter_map(|name| {
+                <span class="kw">for </span>adapter_name <span class="kw">in </span>xlora_order.as_ref().unwrap().adapters.as_ref().unwrap() {
+                    <span class="kw">if </span>name.contains(adapter_name) {
+                        <span class="kw">return </span><span class="prelude-val">Some</span>((name, adapter_name.clone()));
+                    }
+                }
+                <span class="prelude-val">None
+            </span>})
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+        <span class="kw">if </span>adapter_files.is_empty() {
+            <span class="macro">anyhow::bail!</span>(<span class="string">"Adapter files are empty. Perhaps the ordering file adapters does not match the actual adapters?"</span>)
+        }
         <span class="kw">let </span><span class="kw-2">mut </span>adapters_paths: HashMap&lt;String, Vec&lt;PathBuf&gt;&gt; = HashMap::new();
         <span class="kw">for </span>(file, name) <span class="kw">in </span>adapter_files {
             <span class="kw">if let </span><span class="prelude-val">Some</span>(paths) = adapters_paths.get_mut(<span class="kw-2">&amp;</span>name) {
@@ -1478,11 +1490,15 @@
         }
         <span class="kw">let </span><span class="kw-2">mut </span>adapters_configs = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>adapters_safetensors = Vec::new();
-        <span class="kw">let </span>adapter_order = <span class="kw">match </span>xlora_config.adapters.clone() {
-            Either::Left(l) =&gt; l,
-            Either::Right(r) =&gt; r.keys().cloned().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-        };
-        <span class="kw">for </span>(i, name) <span class="kw">in </span>adapter_order.iter().enumerate() {
+        <span class="kw">for </span>(i, name) <span class="kw">in </span>xlora_order
+            .as_ref()
+            .unwrap()
+            .adapters
+            .as_ref()
+            .unwrap()
+            .iter()
+            .enumerate()
+        {
             <span class="kw">let </span>paths = adapters_paths.get(name).unwrap();
             <span class="kw">for </span>path <span class="kw">in </span>paths {
                 <span class="kw">if </span>path.extension().unwrap() == <span class="string">"safetensors" </span>{
