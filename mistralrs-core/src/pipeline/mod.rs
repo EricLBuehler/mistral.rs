@@ -607,18 +607,36 @@ fn get_xlora_paths(
                 last_err.unwrap()
             )
         });
+        let adapter_order = match xlora_config.adapters.clone() {
+            Either::Left(l) => l,
+            Either::Right(r) => r.keys().cloned().collect::<Vec<_>>(),
+        };
+        if xlora_order
+            .as_ref()
+            .unwrap()
+            .adapters
+            .as_ref()
+            .is_some_and(|x| *x != adapter_order)
+        {
+            let message = format!("Ordering file adapter order ({:?}) and the config adapters' order ({:?}) do not match.",
+                xlora_order.as_ref().unwrap().adapters.as_ref().unwrap(),
+                adapter_order);
+            tracing::error!("{message}");
+            anyhow::bail!("{message}");
+        }
 
         let adapter_files = api
             .info()?
             .siblings
             .iter()
             .map(|x| x.rfilename.clone())
-            .filter(|x| x.contains("/adapter_"))
-            .map(|x| {
-                let mut split = x.split('/');
-                let pos = split.clone().count() - 2;
-                let name = split.nth(pos).unwrap().to_string();
-                (x, name)
+            .filter_map(|name| {
+                for adapter_name in &adapter_order {
+                    if name.contains(adapter_name) {
+                        return Some((name, adapter_name.clone()));
+                    }
+                }
+                return None;
             })
             .collect::<Vec<_>>();
         let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
@@ -631,10 +649,6 @@ fn get_xlora_paths(
         }
         let mut adapters_configs = Vec::new();
         let mut adapters_safetensors = Vec::new();
-        let adapter_order = match xlora_config.adapters.clone() {
-            Either::Left(l) => l,
-            Either::Right(r) => r.keys().cloned().collect::<Vec<_>>(),
-        };
         for (i, name) in adapter_order.iter().enumerate() {
             let paths = adapters_paths.get(name).unwrap();
             for path in paths {
