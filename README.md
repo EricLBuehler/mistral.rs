@@ -1,27 +1,34 @@
 # mistral.rs
 [![Documentation](https://github.com/EricLBuehler/mistral.rs/actions/workflows/docs.yml/badge.svg)](https://ericlbuehler.github.io/mistral.rs/mistralrs/)
 
-Mistral.rs is a fast LLM inference platform written in pure, safe Rust. We support inference on a variety of devices, quantization, and easy-to-use application with an Open-AI API compatible HTTP server and Python bindings.
+Mistral.rs is a fast LLM inference platform written. We support inference on a variety of devices, quantization, and easy-to-use application with an Open-AI API compatible HTTP server and Python bindings. 
 
 ## Current work
 - More models: please submit requests [here](https://github.com/EricLBuehler/mistral.rs/issues/49).
-- X-LoRA: Scalings `topk` ([#48](https://github.com/EricLBuehler/mistral.rs/issues/48)).
-- X-LoRA: Softmax `topk` ([#48](https://github.com/EricLBuehler/mistral.rs/issues/48)).
-- PagedAttention ([#47](https://github.com/EricLBuehler/mistral.rs/pull/47)) ⭐ Active work.
+- X-LoRA: Scalings `topk` and softmax `topk` ([#48](https://github.com/EricLBuehler/mistral.rs/issues/48)).
 - Parallel linear layers (sharding) ([#50](https://github.com/EricLBuehler/mistral.rs/issues/50)).
 - Phi2 Python support
+- Device offloading
 
 ## Description
+**Fast**:
 - Quantized model support: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit for faster inference and optimized memory usage.
-- Apple silicon support with the Metal framework.
-- CPU inference with `mkl`, `accelerate` support and optimized backend.
-- First X-LoRA inference platform with first class support.
 - Continuous batching.
 - Prefix caching.
-- Fast LoRA support with weight merging.
-- Grammar support with Regex and Yacc.
+
+**Accelerator support**:
+- Apple silicon support with the Metal framework.
+- CPU inference with `mkl`, `accelerate` support and optimized backend.
+- CUDA support with flash attention and CUDNN.
+
+**Easy**:
 - Lightweight OpenAI API compatible HTTP server.
 - Python API.
+- Grammar support with Regex and Yacc.
+
+**Powerful**:
+- Fast LoRA support with weight merging.
+- First X-LoRA inference platform with first class support.
 
 
 This is a demo of interactive mode with streaming running Mistral GGUF:
@@ -45,7 +52,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95
 |Mixtral 8x7B|✅| |
 |Phi 2| | |
 
-**X-LoRA support**
+**X-LoRA and LoRA support**
 |Model|X-LoRA|X-LoRA+GGUF|X-LoRA+GGML|
 |--|--|--|--|
 |Mistral 7B |✅|✅| |
@@ -54,16 +61,8 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95
 |Mixtral 8x7B|✅|✅| |
 |Phi 2|✅| | |
 
-**LoRA support**
-|Model|LoRA|LoRA+GGUF|LoRA+GGML|
-|--|--|--|--|
-|Mistral 7B |✅|✅| |
-|Gemma|✅| | |
-|Llama|✅|✅|✅|
-|Mixtral 8x7B|✅|✅| |
-|Phi 2|✅| | |
-
 **Using derivative models**
+
 To use a derivative model, select the model architecture using the correct subcommand. To see what can be passed for the architecture, pass `--help` after the subcommand. For example, when using a different model than the default, specify the following for the following types of models:
 
 - **Normal**: Model id
@@ -94,6 +93,7 @@ Python API for mistral.rs.
 
 - [Docs](mistralrs-pyo3/README.md)
 - [Example](examples/python/python_api.py)
+- [Cookbook](examples/python/cookbook.ipynb)
 
 **HTTP Server**
 
@@ -119,7 +119,7 @@ OpenAI API compatible API server
   - Intel MKL with `mkl` feature.
   - Apple Accelerate with `accelerate` feature.
 
-Enabling features is done by passing `--features ...` to the build system. When using `cargo run`, pass the `--features` flag before the `--` seperating build flags from runtime flags.
+Enabling features is done by passing `--features ...` to the build system. When using `cargo run`, pass the `--features` flag before the `--` separating build flags from runtime flags.
 
 - To enable a single feature like `metal`: `cargo build --release --features metal`.
 - To enable multiple features, specify them in quotes: `cargo build --release --features "cuda flash-attn cudnn"`.
@@ -213,15 +213,15 @@ You can launch interactive mode, a simple chat application running in the termin
 
 - X-LoRA with no quantization
 
-To start an X-LoRA server with the default weights and ordering (exactly as presented in [the paper](https://arxiv.org/abs/2402.07148)):
+To start an X-LoRA server with the exactly as presented in [the paper](https://arxiv.org/abs/2402.07148):
 
-`./mistralrs-server --port 1234 x-lora-mistral -o orderings/xlora-paper-ordering.json`
+`./mistralrs-server --port 1234 x-lora-mistral -o orderings/xlora-paper-ordering.json -m HuggingFaceH4/zephyr-7b-beta -x lamm-mit/x-lora`
 
 - LoRA with a model from GGUF
 
 To start an LoRA server with adapters from the X-LoRA paper (you should modify the ordering file to use only one adapter, as the adapter static scalings are all 1 and so the signal will become distorted):
 
-`./mistralrs-server --port 1234 lora-mistral-gguf -o orderings/xlora-paper-ordering.json`
+`./mistralrs-server --port 1234 lora-mistral-gguf -o orderings/xlora-paper-ordering.json -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q8_0.gguf -a lamm-mit/x-lora`
 
 Normally with a LoRA model you would use a custom ordering file. However, for this example we use the ordering from the X-LoRA paper because we are using the adapters from the X-LoRA paper.
 
@@ -229,19 +229,138 @@ Normally with a LoRA model you would use a custom ordering file. However, for th
 
 To start a server running Llama from GGUF:
 
-`./mistralrs-server --port 1234 llama-gguf`
+`./mistralrs-server --port 1234 llama-gguf -t meta-llama/Llama-2-13b-chat-hf -m TheBloke/Llama-2-13B-chat-GGUF -f llama-2-13b-chat.Q4_K_M.gguf`
 
 - With a model from GGML
 
 To start a server running Llama from GGML:
 
-`./mistralrs-server --port 1234 llama-ggml`
+`./mistralrs-server --port 1234 llama-ggml -t meta-llama/Llama-2-13b-chat-hf -m TheBloke/Llama-2-13B-chat-GGML -f llama-2-13b-chat.ggmlv3.q4_K_M.bin`
 
 - Single prompt inference
 
 To run a single prompt and then shut down:
 
-`./mistralrs-server --prompt "Hello!" mistral-gguf`
+`./mistralrs-server --prompt "Hello!" mistral-gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf`
+
+**Command line docs**
+`./mistralrs-server --help`
+
+```bash
+Fast and easy LLM serving.
+
+Usage: mistralrs-server [OPTIONS] <COMMAND>
+
+Commands:
+  mistral              Select the mistral model
+  mistral-gguf         Select the quantized mistral model with gguf
+  x-lora-mistral       Select the mistral model, with X-LoRA
+  gemma                Select the gemma model
+  x-lora-gemma         Select the gemma model, with X-LoRA
+  llama                Select the llama model
+  llama-gguf           Select the quantized llama model with gguf
+  llama-ggml           Select the quantized llama model with gguf
+  x-lora-llama         Select the llama model, with X-LoRA
+  mixtral              Select the mixtral model
+  mixtral-gguf         Select the quantized mixtral model with gguf
+  x-lora-mixtral       Select the mixtral model, with X-LoRA
+  x-lora-mistral-gguf  Select the quantized mistral model with gguf and X-LoRA
+  x-lora-llama-gguf    Select the quantized mistral model with gguf and X-LoRA
+  x-lora-llama-ggml    Select the quantized mistral model with gguf and X-LoRA
+  x-lora-mixtral-gguf  Select the quantized mistral model with gguf and X-LoRA
+  phi2                 Select the phi2 model
+  x-lora-phi2          Select the phi2 model, with X-LoRA
+  lora-mistral-gguf    Select the mistral model, with LoRA and gguf
+  lora-mistral         Select the mistral model, with LoRA
+  lora-mixtral         Select the mixtral model, with LoRA
+  lora-llama           Select the llama model, with LoRA
+  lora-llama-gguf      Select the quantized mistral model with gguf and LoRA
+  lora-llama-ggml      Select the quantized mistral model with gguf and LoRA
+  lora-mixtral-gguf    Select the quantized mistral model with gguf and LoRA
+  help                 Print this message or the help of the given subcommand(s)
+
+Options:
+      --serve-ip <SERVE_IP>
+          IP to serve on. Defaults to "0.0.0.0"
+  -p, --port <PORT>
+          Port to serve on
+  -l, --log <LOG>
+          Log all responses and requests to this file
+  -t, --truncate-sequence
+          If a sequence is larger than the maximum model length, truncate the number of tokens such that the sequence will fit at most the maximum length. If `max_tokens` is not specified in the request, space for 10 tokens will be reserved instead
+      --max-seqs <MAX_SEQS>
+          Maximum running sequences at any time. If the `tgt_non_granular_index` flag is set for X-LoRA models, this will be set to 1 [default: 16]
+      --no-kv-cache
+          Use no KV cache
+  -c, --chat-template <CHAT_TEMPLATE>
+          JINJA chat template with `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs. Used if the automatic deserialization fails. If this ends with `.json` (ie., it is a file) then that template is loaded
+      --token-source <TOKEN_SOURCE>
+          Source of the token for authentication. Can be in the formats: "literal:<value>", "env:<value>", "path:<value>", "cache" to use a cached token or "none" to use no token. Defaults to using a cached token [default: cache]
+  -i, --interactive-mode
+          Enter interactive mode instead of serving a chat server
+      --prefix-cache-n <PREFIX_CACHE_N>
+          Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy [default: 16]
+      --prompt <PROMPT>
+          Run a single prompt. This cannot be used with interactive mode
+      --prompt-concurrency <PROMPT_CONCURRENCY>
+          Requires --prompt. Number of prompt completions to run concurrently in prompt mode [default: 1]
+      --prompt-max-tokens <PROMPT_MAX_TOKENS>
+          Requires --prompt. Number of prompt tokens to generate [default: 128]
+  -h, --help
+          Print help
+  -V, --version
+          Print version
+```
+
+Docs for quantized models, specifically for: `./mistralrs mistral-gguf --help`
+
+```bash
+Select the quantized mistral model with gguf
+
+Usage: mistralrs-server mistral-gguf [OPTIONS]
+
+Options:
+  -t, --tok-model-id <TOK_MODEL_ID>
+          Model ID to load the tokenizer from [default: mistralai/Mistral-7B-Instruct-v0.1]
+      --tokenizer-json <TOKENIZER_JSON>
+          Path to local tokenizer.json file. If this is specified it is used over any remote file
+  -m, --quantized-model-id <QUANTIZED_MODEL_ID>
+          Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set. If it is set to an empty string then the quantized filename will be used as a path to the GGUF file [default: TheBloke/Mistral-7B-Instruct-v0.1-GGUF]
+  -f, --quantized-filename <QUANTIZED_FILENAME>
+          Quantized filename, only applicable if `quantized` is set [default: mistral-7b-instruct-v0.1.Q4_K_M.gguf]
+      --repeat-last-n <REPEAT_LAST_N>
+          Control the application of repeat penalty for the last n tokens [default: 64]
+  -h, --help
+          Print help
+```
+
+Docs for X-LoRA and quantized models, specifically for: `./mistralrs-server x-lora-mistral-gguf --help`
+
+```bash
+Select the quantized mistral model with gguf and X-LoRA
+
+Usage: mistralrs-server x-lora-mistral-gguf [OPTIONS] --order <ORDER>
+
+Options:
+  -t, --tok-model-id <TOK_MODEL_ID>
+          Model ID to load the tokenizer from [default: HuggingFaceH4/zephyr-7b-beta]
+      --tokenizer-json <TOKENIZER_JSON>
+          Path to local tokenizer.json file. If this is specified it is used over any remote file
+  -m, --quantized-model-id <QUANTIZED_MODEL_ID>
+          Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set. If it is set to an empty string then the quantized filename will be used as a path to the GGUF file [default: TheBloke/zephyr-7B-beta-GGUF]
+  -f, --quantized-filename <QUANTIZED_FILENAME>
+          Quantized filename, only applicable if `quantized` is set [default: zephyr-7b-beta.Q8_0.gguf]
+      --repeat-last-n <REPEAT_LAST_N>
+          Control the application of repeat penalty for the last n tokens [default: 64]
+  -x, --xlora-model-id <XLORA_MODEL_ID>
+          Model ID to load Xlora from [default: lamm-mit/x-lora]
+  -o, --order <ORDER>
+          Ordering JSON file
+      --tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>
+          Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached. This makes the maximum running sequences 1
+  -h, --help
+          Print help
+```
 
 ---
 
@@ -288,7 +407,7 @@ There are 2 scripts to prepare the ordering file. The ordering file is specific 
 
     A script [`modify_names.py`](scripts/modify_names.py) is provided which prompts the user for the adapter names and the old ordering file. The user is prompted for an output file location, relative to the working directory.
 
-A provide a [default ordering file](scripts/xlora-paper-ordering.json) which contains the ordering for the X-LoRA model associated with [the paper](https://arxiv.org/abs/2402.07148) and the Huggingface repository: https://huggingface.co/lamm-mit/x-lora.
+A provide a [ordering file](scripts/xlora-paper-ordering.json) which contains the ordering for the X-LoRA model associated with [the paper](https://arxiv.org/abs/2402.07148) and the Huggingface repository: https://huggingface.co/lamm-mit/x-lora.
 
 **Quantized X-LoRA or LoRA models**
 
@@ -311,8 +430,6 @@ For example, to use the `chatml` template, `--chat-template` is specified *befor
 ```bash
 ./mitralrs-server --port 1234 --log output.log --chat-template ./chat_templates/chatml.json llama
 ```
-
-If no JINJA chat template is provided, then the default chat template located [here](default.json) will be loaded. It is recommended to copy this file to the working directory where `./mistralrs-server` will be run.
 
 **Tokenizer**
 
