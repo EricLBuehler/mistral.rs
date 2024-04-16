@@ -93,12 +93,7 @@ impl Engine {
                     Self::set_none_cache(&mut *pipeline);
                 }
 
-                let before_sample = Instant::now();
                 handle_pipeline_forward_error!("sampling", Self::sample_seqs(&mut *pipeline, &mut scheduled.completion, logits, &mut self.prefix_cacher), &mut scheduled.completion, pipeline, 'lp);
-                let sampling_time = before_sample.elapsed().as_millis();
-                for seq in scheduled.completion.iter_mut() {
-                    seq.total_sampling_time += sampling_time;
-                }
             }
 
             if scheduled.prompt.len() > 0 {
@@ -125,12 +120,7 @@ impl Engine {
                     seq.prompt_timestamp = Some(now);
                 }
 
-                let before_sample = Instant::now();
                 handle_pipeline_forward_error!("sampling", Self::sample_seqs(&mut *pipeline, &mut scheduled.prompt, logits, &mut self.prefix_cacher), &mut scheduled.prompt, pipeline, 'lp);
-                let sampling_time = before_sample.elapsed().as_millis();
-                for seq in scheduled.prompt.iter_mut() {
-                    seq.total_sampling_time += sampling_time;
-                }
             }
 
             if self.is_debug {

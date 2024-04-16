@@ -57,11 +57,9 @@ pub struct Usage {
     pub avg_tok_per_sec: f32,
     pub avg_prompt_tok_per_sec: f32,
     pub avg_compl_tok_per_sec: f32,
-    pub avg_sample_tok_per_sec: f32,
     pub total_time_sec: f32,
     pub total_prompt_time_sec: f32,
     pub total_completion_time_sec: f32,
-    pub total_sampling_time_sec: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]
