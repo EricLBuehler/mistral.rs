@@ -253,8 +253,6 @@ impl Sampler {
         context: &[u32],
     ) -> Result<Vec<f32>> {
         //mu[j] -> mu[j] - c[j] * alpha_frequency - float(c[j] > 0) * alpha_presence
-        // let device = logits.device();
-        // let mut logits = logits.to_vec1::<f32>()?;
         let mut logits = vec![0.0; vocab_size];
         for (token_id, logit) in logits.iter_mut().enumerate() {
             let count = context.iter().filter(|x| **x as usize == token_id).count();
