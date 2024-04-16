@@ -85,20 +85,20 @@ struct Args {
     #[clap(long, short, action)]
     interactive_mode: bool,
 
-    /// Run a single prompt. This cannot be used with interactive mode.
-    #[clap(long)]
-    prompt: Option<String>,
-
     /// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
     #[arg(long, default_value_t = 16)]
     prefix_cache_n: usize,
 
-    /// Number of prompt completions to run concurrently in prompt mode.
-    #[clap(long, default_value_t = 1)]
+    /// Run a single prompt. This cannot be used with interactive mode.
+    #[clap(long)]
+    prompt: Option<String>,
+
+    /// Requires --prompt. Number of prompt completions to run concurrently in prompt mode.
+    #[clap(long, default_value_t = 1, requires = "prompt")]
     prompt_concurrency: usize,
 
-    /// Number of prompt tokens to generate.
-    #[clap(long, default_value_t = 128)]
+    /// Requires --prompt. Number of prompt tokens to generate.
+    #[clap(long, default_value_t = 128, requires = "prompt")]
     prompt_max_tokens: usize,
 }
 

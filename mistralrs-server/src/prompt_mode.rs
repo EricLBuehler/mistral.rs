@@ -26,7 +26,7 @@ pub fn prompt_mode(
         logits_bias: None,
         n_choices: 1,
     };
-    info!("Running the prompt `{prompt}` with sampling params: {sampling_params:?}");
+    info!("Running the prompt `{prompt}`, concurrency of {prompt_concurrency} and with sampling params: {sampling_params:?}");
 
     let mut user_message = IndexMap::new();
     user_message.insert("role".to_string(), "user".to_string());
