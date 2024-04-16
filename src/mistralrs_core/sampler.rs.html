@@ -348,11 +348,16 @@
 <a href="#346" id="346">346</a>
 <a href="#347" id="347">347</a>
 <a href="#348" id="348">348</a>
+<a href="#349" id="349">349</a>
+<a href="#350" id="350">350</a>
+<a href="#351" id="351">351</a>
+<a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, iter::zip, sync::Arc};
 
-<span class="kw">use </span>candle_core::{bail, DType, Error, <span class="prelude-ty">Result</span>, Tensor, D};
+<span class="kw">use </span>candle_core::{bail, Error, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>rand::{
     distributions::{Distribution, WeightedIndex},
     SeedableRng,
@@ -389,9 +394,10 @@
     tokenizer: Arc&lt;Tokenizer&gt;,
     frequency_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
     presence_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
-    logits_bias: <span class="prelude-ty">Option</span>&lt;HashMap&lt;u32, f32&gt;&gt;,
+    logits_bias: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
     topk: i64,
     topp: f64,
+    vocab_size: usize,
 }
 
 <span class="attr">#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -419,7 +425,7 @@
         tokenizer: Arc&lt;Tokenizer&gt;,
         frequency_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
         presence_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
-        logits_bias: <span class="prelude-ty">Option</span>&lt;HashMap&lt;u32, f32&gt;&gt;,
+        logits_bias: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         topk: i64,
         topp: f64,
     ) -&gt; <span class="self">Self </span>{
@@ -428,6 +434,7 @@
         </span>} <span class="kw">else </span>{
             temperature
         };
+        <span class="kw">let </span>vocab_size = tokenizer.get_vocab_size(<span class="bool-val">true</span>);
         <span class="self">Self </span>{
             rng: rand::rngs::StdRng::seed_from_u64(seed),
             temperature,
@@ -438,24 +445,8 @@
             logits_bias,
             topk,
             topp,
+            vocab_size,
         }
-    }
-
-    <span class="kw">fn </span>apply_logit_bias(<span class="kw-2">&amp;</span><span class="self">self</span>, probs: <span class="kw-2">&amp;mut </span>[f32]) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>bias) = <span class="self">self</span>.logits_bias {
-            <span class="kw">for </span>(id, bias_v) <span class="kw">in </span>bias {
-                <span class="kw">let </span>idx = probs.get_mut(<span class="kw-2">*</span>id <span class="kw">as </span>usize);
-                <span class="kw">if let </span><span class="prelude-val">Some</span>(idx) = idx {
-                    <span class="kw-2">*</span>idx += bias_v;
-                } <span class="kw">else </span>{
-                    <span class="macro">candle_core::bail!</span>(
-                        <span class="string">"Token ID `{id}` out of range for probs of length `{}`."</span>,
-                        probs.len()
-                    );
-                }
-            }
-        }
-        <span class="prelude-val">Ok</span>(())
     }
 
     <span class="kw">fn </span>get_top_logprobs(
@@ -496,14 +487,23 @@
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
     }
 
-    <span class="kw">fn </span>sample_argmax(<span class="kw-2">&amp;mut </span><span class="self">self</span>, logits: Tensor, return_logprobs: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>probs: Vec&lt;f32&gt; = logits.to_vec1()<span class="question-mark">?</span>;
-        <span class="kw">let </span>argsort_indices = (<span class="number">0</span>..probs.len()).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-
-        <span class="self">self</span>.apply_logit_bias(<span class="kw-2">&amp;mut </span>probs)<span class="question-mark">?</span>;
-
+    <span class="kw">fn </span>sample_argmax(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        logits: Tensor,
+        return_logprobs: bool,
+        penalty: <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
         <span class="kw">let </span>next_token = logits.argmax(D::Minus1)<span class="question-mark">?</span>.to_scalar::&lt;u32&gt;()<span class="question-mark">?</span>;
 
+        <span class="kw">let </span><span class="kw-2">mut </span>probs: Vec&lt;f32&gt; = logits.to_vec1()<span class="question-mark">?</span>;
+
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(penalty) = penalty {
+            <span class="kw">for </span>(token_id, logit) <span class="kw">in </span>probs.iter_mut().enumerate() {
+                <span class="kw-2">*</span>logit += penalty[token_id];
+            }
+        }
+
+        <span class="kw">let </span>argsort_indices = (<span class="number">0</span>..probs.len()).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
         <span class="kw">let </span>logprob = probs[next_token <span class="kw">as </span>usize].log(<span class="number">10.0</span>);
 
         <span class="kw">let </span>top_logprobs = <span class="kw">if </span>return_logprobs {
@@ -529,8 +529,6 @@
         argsort_indices: Vec&lt;usize&gt;,
         return_logprobs: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
-        <span class="self">self</span>.apply_logit_bias(probs)<span class="question-mark">?</span>;
-
         <span class="kw">let </span>distr = WeightedIndex::new(<span class="kw-2">&amp;*</span>probs).map_err(Error::wrap)<span class="question-mark">?</span>;
         <span class="kw">let </span>next_token = distr.sample(<span class="kw-2">&amp;mut </span><span class="self">self</span>.rng); <span class="comment">// "Find the first item which has a weight *higher* than the chosen weight."
         </span><span class="kw">let </span>logprob = probs[next_token].log(<span class="number">10.0</span>);
@@ -558,11 +556,18 @@
         top_k: i64,
         top_p: f32,
         return_logprobs: bool,
+        penalty: <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>argsort_indices = (<span class="number">0</span>..probs.len()).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(penalty) = penalty {
+            <span class="kw">for </span>(token_id, logit) <span class="kw">in </span>probs.iter_mut().enumerate() {
+                <span class="kw-2">*</span>logit += penalty[token_id];
+            }
+        }
+
         <span class="comment">// Sort by descending probability.
-        </span>argsort_indices.sort_by(|<span class="kw-2">&amp;</span>i, <span class="kw-2">&amp;</span>j| probs[j].partial_cmp(<span class="kw-2">&amp;</span>probs[i]).unwrap());
+        </span>argsort_indices.sort_unstable_by(|<span class="kw-2">&amp;</span>i, <span class="kw-2">&amp;</span>j| probs[j].partial_cmp(<span class="kw-2">&amp;</span>probs[i]).unwrap());
 
         <span class="kw">if </span>top_k &gt; <span class="number">0 </span>{
             <span class="comment">// Clamp smaller probabilities to zero.
@@ -597,22 +602,20 @@
     }
 
     <span class="kw">fn </span>apply_repeat_presence_penalty(
-        logits: <span class="kw-2">&amp;</span>Tensor,
+        vocab_size: usize,
         presence_penalty: f32,
         frequency_penalty: f32,
         context: <span class="kw-2">&amp;</span>[u32],
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;f32&gt;&gt; {
         <span class="comment">//mu[j] -&gt; mu[j] - c[j] * alpha_frequency - float(c[j] &gt; 0) * alpha_presence
-        </span><span class="kw">let </span>device = logits.device();
-        <span class="kw">let </span><span class="kw-2">mut </span>logits = logits.to_vec1::&lt;f32&gt;()<span class="question-mark">?</span>;
+        </span><span class="kw">let </span><span class="kw-2">mut </span>logits = <span class="macro">vec!</span>[<span class="number">0.0</span>; vocab_size];
         <span class="kw">for </span>(token_id, logit) <span class="kw">in </span>logits.iter_mut().enumerate() {
             <span class="kw">let </span>count = context.iter().filter(|x| <span class="kw-2">**</span>x <span class="kw">as </span>usize == token_id).count();
             <span class="kw-2">*</span>logit = <span class="kw-2">*</span>logit
                 - count <span class="kw">as </span>f32 * frequency_penalty
                 - <span class="kw">if </span>count &gt; <span class="number">0 </span>{ <span class="number">1. </span>} <span class="kw">else </span>{ <span class="number">0. </span>} * presence_penalty;
         }
-        <span class="kw">let </span>logits_len = logits.len();
-        Tensor::from_vec(logits, logits_len, device)
+        <span class="prelude-val">Ok</span>(logits)
     }
 
     <span class="doccomment">/// Sample the provided tokens.
@@ -622,33 +625,40 @@
     /// If `frequency_penalty.is_some()` or `presence_penalty.is_some()`, then `penalty_ctxt` must be provided.
     </span><span class="kw">pub fn </span>sample(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-        logits: <span class="kw-2">&amp;</span>Tensor,
+        logits: Tensor,
         penalty_ctxt: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[u32]&gt;,
         return_logprobs: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
-        <span class="kw">let </span>logits = logits.to_dtype(DType::F32)<span class="question-mark">?</span>;
-
-        <span class="kw">let </span>logits = <span class="kw">if </span><span class="self">self</span>.frequency_penalty.is_none() &amp;&amp; <span class="self">self</span>.presence_penalty.is_none() {
-            logits
-        } <span class="kw">else </span>{
+        <span class="kw">let </span>penalty = <span class="kw">if </span><span class="self">self</span>.frequency_penalty.is_none() &amp;&amp; <span class="self">self</span>.presence_penalty.is_none() {
+            <span class="prelude-val">None
+        </span>} <span class="kw">else </span>{
             <span class="kw">if </span>penalty_ctxt.is_none() {
                 <span class="macro">bail!</span>(<span class="string">"Must specify penalty context."</span>);
             }
-            <span class="self">Self</span>::apply_repeat_presence_penalty(
-                <span class="kw-2">&amp;</span>logits,
+            <span class="prelude-val">Some</span>(<span class="self">Self</span>::apply_repeat_presence_penalty(
+                <span class="self">self</span>.vocab_size,
                 <span class="self">self</span>.presence_penalty.unwrap_or(<span class="number">0.</span>),
                 <span class="self">self</span>.frequency_penalty.unwrap_or(<span class="number">0.</span>),
                 penalty_ctxt.unwrap(),
-            )<span class="question-mark">?
-        </span>};
-
+            )<span class="question-mark">?</span>)
+        };
+        <span class="kw">let </span>logits = <span class="kw">match </span><span class="self">self</span>.logits_bias {
+            <span class="prelude-val">Some</span>(<span class="kw-2">ref </span>bias) =&gt; (logits + bias)<span class="question-mark">?</span>,
+            <span class="prelude-val">None </span>=&gt; logits,
+        };
         <span class="kw">let </span>next_token = <span class="kw">match </span><span class="self">self</span>.temperature {
-            <span class="prelude-val">None </span>=&gt; <span class="self">self</span>.sample_argmax(logits, return_logprobs)<span class="question-mark">?</span>,
+            <span class="prelude-val">None </span>=&gt; <span class="self">self</span>.sample_argmax(logits, return_logprobs, penalty)<span class="question-mark">?</span>,
             <span class="prelude-val">Some</span>(temperature) =&gt; {
                 <span class="kw">let </span>logits = (<span class="kw-2">&amp;</span>logits / temperature)<span class="question-mark">?</span>;
                 <span class="kw">let </span>probs = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>logits)<span class="question-mark">?</span>;
                 <span class="kw">let </span><span class="kw-2">mut </span>probs: Vec&lt;f32&gt; = probs.to_vec1()<span class="question-mark">?</span>;
-                <span class="self">self</span>.sample_topkp(<span class="kw-2">&amp;mut </span>probs, <span class="self">self</span>.topk, <span class="self">self</span>.topp <span class="kw">as </span>f32, return_logprobs)<span class="question-mark">?
+                <span class="self">self</span>.sample_topkp(
+                    <span class="kw-2">&amp;mut </span>probs,
+                    <span class="self">self</span>.topk,
+                    <span class="self">self</span>.topp <span class="kw">as </span>f32,
+                    return_logprobs,
+                    penalty,
+                )<span class="question-mark">?
             </span>}
         };
         <span class="prelude-val">Ok</span>(next_token)
@@ -689,8 +699,8 @@
             <span class="number">0.1</span>,
         );
 
-        <span class="kw">let </span>logits = Tensor::arange(<span class="number">0f64</span>, <span class="number">1024f64</span>, <span class="kw-2">&amp;</span>Device::Cpu).unwrap();
-        <span class="kw">let </span>res = sampler.sample(<span class="kw-2">&amp;</span>logits, <span class="prelude-val">None</span>, <span class="bool-val">false</span>).unwrap();
+        <span class="kw">let </span>logits = Tensor::arange(<span class="number">0f32</span>, <span class="number">1024f32</span>, <span class="kw-2">&amp;</span>Device::Cpu).unwrap();
+        <span class="kw">let </span>res = sampler.sample(logits, <span class="prelude-val">None</span>, <span class="bool-val">false</span>).unwrap();
         <span class="macro">assert_eq!</span>(res.token, <span class="number">1023</span>);
         <span class="macro">assert_eq!</span>(res.top_logprobs, <span class="prelude-val">None</span>);
         <span class="macro">assert_eq!</span>(res.logprob, <span class="number">1023f64</span>.log(<span class="number">10.</span>) <span class="kw">as </span>f32)

@@ -851,12 +851,6 @@
 <a href="#849" id="849">849</a>
 <a href="#850" id="850">850</a>
 <a href="#851" id="851">851</a>
-<a href="#852" id="852">852</a>
-<a href="#853" id="853">853</a>
-<a href="#854" id="854">854</a>
-<a href="#855" id="855">855</a>
-<a href="#856" id="856">856</a>
-<a href="#857" id="857">857</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -1157,13 +1151,7 @@
         seq: <span class="kw-2">&amp;mut </span>Sequence,
         return_logprobs: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
-        <span class="kw">let </span>logits = logits
-            .squeeze(<span class="number">0</span>)
-            .unwrap()
-            .squeeze(<span class="number">0</span>)
-            .unwrap()
-            .to_dtype(DType::F32)
-            .unwrap();
+        <span class="kw">let </span>logits = logits.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
         <span class="kw">let </span>start_at = seq
             .get_toks()
             .len()
@@ -1172,7 +1160,7 @@
 
         <span class="kw">let </span>first_lobprobs_response =
             seq.sampler()
-                .sample(<span class="kw-2">&amp;</span>logits, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>ctxt), return_logprobs)<span class="question-mark">?</span>;
+                .sample(logits.clone(), <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>ctxt), return_logprobs)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>bias_if_not_allowed = <span class="kw">match </span><span class="kw-2">&amp;mut </span>seq.recognizer {
             SequenceRecognizer::Regex(<span class="kw-2">ref mut </span>rx) =&gt; {
@@ -1190,7 +1178,7 @@
                 <span class="kw">let </span>new_logits = (logits + Tensor::from_slice(<span class="kw-2">&amp;</span>acc, acc.len(), <span class="self">self</span>.device())<span class="question-mark">?</span>)<span class="question-mark">?</span>;
 
                 seq.sampler()
-                    .sample(<span class="kw-2">&amp;</span>new_logits, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>ctxt), return_logprobs)<span class="question-mark">?
+                    .sample(new_logits, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>ctxt), return_logprobs)<span class="question-mark">?
             </span>}
             <span class="prelude-val">None </span>=&gt; first_lobprobs_response,
         };

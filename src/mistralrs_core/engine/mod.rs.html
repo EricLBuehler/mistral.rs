@@ -669,9 +669,38 @@
 <a href="#667" id="667">667</a>
 <a href="#668" id="668">668</a>
 <a href="#669" id="669">669</a>
+<a href="#670" id="670">670</a>
+<a href="#671" id="671">671</a>
+<a href="#672" id="672">672</a>
+<a href="#673" id="673">673</a>
+<a href="#674" id="674">674</a>
+<a href="#675" id="675">675</a>
+<a href="#676" id="676">676</a>
+<a href="#677" id="677">677</a>
+<a href="#678" id="678">678</a>
+<a href="#679" id="679">679</a>
+<a href="#680" id="680">680</a>
+<a href="#681" id="681">681</a>
+<a href="#682" id="682">682</a>
+<a href="#683" id="683">683</a>
+<a href="#684" id="684">684</a>
+<a href="#685" id="685">685</a>
+<a href="#686" id="686">686</a>
+<a href="#687" id="687">687</a>
+<a href="#688" id="688">688</a>
+<a href="#689" id="689">689</a>
+<a href="#690" id="690">690</a>
+<a href="#691" id="691">691</a>
+<a href="#692" id="692">692</a>
+<a href="#693" id="693">693</a>
+<a href="#694" id="694">694</a>
+<a href="#695" id="695">695</a>
+<a href="#696" id="696">696</a>
+<a href="#697" id="697">697</a>
+<a href="#698" id="698">698</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     iter::zip,
     rc::Rc,
     sync::{mpsc::Receiver, Mutex},
@@ -1134,6 +1163,23 @@
         <span class="prelude-val">Ok</span>(recognizer)
     }
 
+    <span class="kw">fn </span>alloc_logits_bias(<span class="kw-2">&amp;</span><span class="self">self</span>, logits_bias: <span class="prelude-ty">Option</span>&lt;HashMap&lt;u32, f32&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
+        <span class="kw">let </span>device = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).device().clone();
+        <span class="kw">let </span>tokenizer = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenizer();
+        <span class="kw">let </span>vocab_size = tokenizer.get_vocab_size(<span class="bool-val">true</span>);
+
+        <span class="kw">match </span>logits_bias {
+            <span class="prelude-val">Some</span>(bias) =&gt; {
+                <span class="kw">let </span><span class="kw-2">mut </span>logits_bias = <span class="macro">vec!</span>[<span class="number">0.0</span>; vocab_size];
+                <span class="kw">for </span>(k, v) <span class="kw">in </span>bias {
+                    logits_bias[k <span class="kw">as </span>usize] = v;
+                }
+                <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Tensor::from_vec(logits_bias, vocab_size, <span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>))
+            }
+            <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>),
+        }
+    }
+
     <span class="kw">fn </span>add_request(<span class="kw-2">&amp;mut </span><span class="self">self</span>, request: Request) {
         <span class="kw">if </span>request.messages.is_left()
             &amp;&amp; !<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
@@ -1270,6 +1316,18 @@
             .duration_since(UNIX_EPOCH)
             .expect(<span class="string">"Time travel has occurred!"</span>);
 
+        <span class="kw">let </span>logits_bias = <span class="kw">match </span><span class="self">self</span>.alloc_logits_bias(request.sampling_params.logits_bias) {
+            <span class="prelude-val">Ok</span>(logits_bias) =&gt; logits_bias,
+            <span class="prelude-val">Err</span>(err) =&gt; {
+                request
+                    .response
+                    .send(Response::ValidationError(
+                        <span class="macro">format!</span>(<span class="string">"Failed creation of logits bias. {}"</span>, err).into(),
+                    ))
+                    .unwrap();
+                <span class="kw">return</span>;
+            }
+        };
         <span class="kw">let </span>tokenizer = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenizer();
 
         <span class="kw">let </span>sampler = Sampler::new(
@@ -1279,7 +1337,7 @@
             tokenizer,
             request.sampling_params.frequency_penalty,
             request.sampling_params.presence_penalty,
-            request.sampling_params.logits_bias.clone(),
+            logits_bias,
             topk,
             topp,
         );
