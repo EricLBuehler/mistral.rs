@@ -4,6 +4,7 @@ use indexmap::IndexMap;
 use crate::{response::Response, sampler::SamplingParams};
 use std::{fmt::Debug, sync::mpsc::Sender};
 
+#[derive(Clone)]
 pub enum Constraint {
     Regex(String),
     Yacc(String),
@@ -16,6 +17,7 @@ pub enum RequestType {
     Completion { echo_prompt: bool },
 }
 
+#[derive(Clone)]
 pub struct Request {
     pub messages: Either<Vec<IndexMap<String, String>>, String>,
     pub sampling_params: SamplingParams,

@@ -5,7 +5,12 @@ use indexmap::IndexMap;
 use mistralrs_core::{Constraint, MistralRs, Request, RequestType, Response, SamplingParams};
 use tracing::{error, info};
 
-pub fn prompt_mode(mistralrs: Arc<MistralRs>, prompt: String) {
+pub fn prompt_mode(
+    mistralrs: Arc<MistralRs>,
+    prompt: String,
+    prompt_concurrency: usize,
+    prompt_max_tokens: usize,
+) {
     let sender = mistralrs.get_sender();
     let mut messages = Vec::new();
 
@@ -16,12 +21,12 @@ pub fn prompt_mode(mistralrs: Arc<MistralRs>, prompt: String) {
         top_n_logprobs: 0,
         frequency_penalty: Some(0.1),
         presence_penalty: Some(0.1),
-        max_len: Some(4096),
+        max_len: Some(prompt_max_tokens),
         stop_toks: None,
         logits_bias: None,
         n_choices: 1,
     };
-    info!("Running the prompt `{prompt}` with sampling params: {sampling_params:?}");
+    info!("Running the prompt `{prompt}`, concurrency of {prompt_concurrency} and with sampling params: {sampling_params:?}");
 
     let mut user_message = IndexMap::new();
     user_message.insert("role".to_string(), "user".to_string());
@@ -41,30 +46,34 @@ pub fn prompt_mode(mistralrs: Arc<MistralRs>, prompt: String) {
         suffix: None,
         best_of: None,
     };
-    sender.send(req).unwrap();
+    for _ in 0..prompt_concurrency {
+        sender.send(req.clone()).unwrap();
+    }
 
-    let resp = rx.recv();
-    if let Ok(resp) = resp {
-        match resp {
-            Response::InternalError(e) => {
-                error!("Got an internal error: {e:?}");
+    for _ in 0..prompt_concurrency {
+        let resp = rx.recv();
+        if let Ok(resp) = resp {
+            match resp {
+                Response::InternalError(e) => {
+                    error!("Got an internal error: {e:?}");
+                }
+                Response::ModelError(e, resp) => {
+                    error!("Got a model error: {e:?}, response: {resp:?}");
+                }
+                Response::ValidationError(e) => {
+                    error!("Got a validation error: {e:?}");
+                }
+                Response::Done(res) => {
+                    println!("{}", res.choices[0].message.content);
+                    println!("=======================");
+                    println!("Completion T/s = {}", res.usage.avg_compl_tok_per_sec);
+                    println!("Prompt T/s = {}", res.usage.avg_prompt_tok_per_sec);
+                    println!("Sampling T/s = {}", res.usage.avg_sample_tok_per_sec);
+                }
+                Response::Chunk(_) => unreachable!(),
+                Response::CompletionDone(_) => unreachable!(),
+                Response::CompletionModelError(_, _) => unreachable!(),
             }
-            Response::ModelError(e, resp) => {
-                error!("Got a model error: {e:?}, response: {resp:?}");
-            }
-            Response::ValidationError(e) => {
-                error!("Got a validation error: {e:?}");
-            }
-            Response::Done(res) => {
-                println!("{}", res.choices[0].message.content);
-                println!("=======================");
-                println!("Completion T/s = {}", res.usage.avg_compl_tok_per_sec);
-                println!("Prompt T/s = {}", res.usage.avg_prompt_tok_per_sec);
-                println!("Sampling T/s = {}", res.usage.avg_sample_tok_per_sec);
-            }
-            Response::Chunk(_) => unreachable!(),
-            Response::CompletionDone(_) => unreachable!(),
-            Response::CompletionModelError(_, _) => unreachable!(),
         }
     }
 }
