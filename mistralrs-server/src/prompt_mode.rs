@@ -53,7 +53,7 @@ pub fn prompt_mode(
     let mut completion_tokens = 0;
     let mut prompt_tokens = 0;
 
-    let mut total_time_sec = 0.0;
+    let mut total_completion_time_sec = 0.0;
     let mut total_prompt_time_sec = 0.0;
 
     for _ in 0..prompt_concurrency {
@@ -75,7 +75,7 @@ pub fn prompt_mode(
 
                     completion_tokens += res.usage.completion_tokens;
                     prompt_tokens += res.usage.prompt_tokens;
-                    total_time_sec += res.usage.total_time_sec;
+                    total_completion_time_sec += res.usage.total_completion_time_sec;
                     total_prompt_time_sec += res.usage.total_prompt_time_sec;
                 }
                 Response::Chunk(_) => unreachable!(),
@@ -84,8 +84,6 @@ pub fn prompt_mode(
             }
         }
     }
-
-    let total_completion_time_sec = total_time_sec - total_prompt_time_sec;
 
     let avg_compl_tok_per_sec =
         completion_tokens as f32 / (total_completion_time_sec / prompt_concurrency as f32);
