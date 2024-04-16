@@ -212,7 +212,7 @@ impl Sampler {
         }
 
         // Sort by descending probability.
-        argsort_indices.sort_by(|&i, &j| probs[j].partial_cmp(&probs[i]).unwrap());
+        argsort_indices.sort_unstable_by(|&i, &j| probs[j].partial_cmp(&probs[i]).unwrap());
 
         if top_k > 0 {
             // Clamp smaller probabilities to zero.
