@@ -92,6 +92,14 @@ struct Args {
     /// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
     #[arg(long, default_value_t = 16)]
     prefix_cache_n: usize,
+
+    /// Number of prompt completions to run concurrently in prompt mode.
+    #[clap(long, default_value_t = 1)]
+    prompt_concurrency: usize,
+
+    /// Number of prompt tokens to generate.
+    #[clap(long, default_value_t = 128)]
+    prompt_max_tokens: usize,
 }
 
 #[utoipa::path(
@@ -888,7 +896,12 @@ async fn main() -> Result<()> {
     );
 
     if let Some(prompt) = args.prompt {
-        prompt_mode(mistralrs, prompt);
+        prompt_mode(
+            mistralrs,
+            prompt,
+            args.prompt_concurrency,
+            args.prompt_max_tokens,
+        );
         return Ok(());
     }
     if args.interactive_mode {
