@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     iter::zip,
     rc::Rc,
     sync::{mpsc::Receiver, Mutex},
@@ -463,6 +463,23 @@ impl Engine {
         Ok(recognizer)
     }
 
+    fn alloc_logits_bias(&self, logits_bias: Option<HashMap<u32, f32>>) -> Result<Option<Tensor>> {
+        let device = get_mut_arcmutex!(self.pipeline).device().clone();
+        let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
+        let vocab_size = tokenizer.get_vocab_size(true);
+
+        match logits_bias {
+            Some(bias) => {
+                let mut logits_bias = vec![0.0; vocab_size];
+                for (k, v) in bias {
+                    logits_bias[k as usize] = v;
+                }
+                Ok(Some(Tensor::from_vec(logits_bias, vocab_size, &device)?))
+            }
+            None => Ok(None),
+        }
+    }
+
     fn add_request(&mut self, request: Request) {
         if request.messages.is_left()
             && !get_mut_arcmutex!(self.pipeline)
@@ -599,6 +616,18 @@ impl Engine {
             .duration_since(UNIX_EPOCH)
             .expect("Time travel has occurred!");
 
+        let logits_bias = match self.alloc_logits_bias(request.sampling_params.logits_bias) {
+            Ok(logits_bias) => logits_bias,
+            Err(err) => {
+                request
+                    .response
+                    .send(Response::ValidationError(
+                        format!("Failed creation of logits bias. {}", err).into(),
+                    ))
+                    .unwrap();
+                return;
+            }
+        };
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
 
         let sampler = Sampler::new(
@@ -608,7 +637,7 @@ impl Engine {
             tokenizer,
             request.sampling_params.frequency_penalty,
             request.sampling_params.presence_penalty,
-            request.sampling_params.logits_bias.clone(),
+            logits_bias,
             topk,
             topp,
         );

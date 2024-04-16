@@ -39,7 +39,7 @@ pub struct Sampler {
     tokenizer: Arc<Tokenizer>,
     frequency_penalty: Option<f32>,
     presence_penalty: Option<f32>,
-    logits_bias: Option<HashMap<u32, f32>>,
+    logits_bias: Option<Tensor>,
     topk: i64,
     topp: f64,
 }
@@ -69,7 +69,7 @@ impl Sampler {
         tokenizer: Arc<Tokenizer>,
         frequency_penalty: Option<f32>,
         presence_penalty: Option<f32>,
-        logits_bias: Option<HashMap<u32, f32>>,
+        logits_bias: Option<Tensor>,
         topk: i64,
         topp: f64,
     ) -> Self {
@@ -89,23 +89,6 @@ impl Sampler {
             topk,
             topp,
         }
-    }
-
-    fn apply_logit_bias(&self, probs: &mut [f32]) -> Result<()> {
-        if let Some(ref bias) = self.logits_bias {
-            for (id, bias_v) in bias {
-                let idx = probs.get_mut(*id as usize);
-                if let Some(idx) = idx {
-                    *idx += bias_v;
-                } else {
-                    candle_core::bail!(
-                        "Token ID `{id}` out of range for probs of length `{}`.",
-                        probs.len()
-                    );
-                }
-            }
-        }
-        Ok(())
     }
 
     fn get_top_logprobs(
@@ -147,13 +130,10 @@ impl Sampler {
     }
 
     fn sample_argmax(&mut self, logits: Tensor, return_logprobs: bool) -> Result<Logprobs> {
-        let mut probs: Vec<f32> = logits.to_vec1()?;
-        let argsort_indices = (0..probs.len()).collect::<Vec<_>>();
-
-        self.apply_logit_bias(&mut probs)?;
-
         let next_token = logits.argmax(D::Minus1)?.to_scalar::<u32>()?;
 
+        let probs: Vec<f32> = logits.to_vec1()?;
+        let argsort_indices = (0..probs.len()).collect::<Vec<_>>();
         let logprob = probs[next_token as usize].log(10.0);
 
         let top_logprobs = if return_logprobs {
@@ -179,8 +159,6 @@ impl Sampler {
         argsort_indices: Vec<usize>,
         return_logprobs: bool,
     ) -> Result<Logprobs> {
-        self.apply_logit_bias(probs)?;
-
         let distr = WeightedIndex::new(&*probs).map_err(Error::wrap)?;
         let next_token = distr.sample(&mut self.rng); // "Find the first item which has a weight *higher* than the chosen weight."
         let logprob = probs[next_token].log(10.0);
@@ -291,7 +269,10 @@ impl Sampler {
                 penalty_ctxt.unwrap(),
             )?
         };
-
+        let logits = match self.logits_bias {
+            Some(ref bias) => (logits + bias)?,
+            None => logits,
+        };
         let next_token = match self.temperature {
             None => self.sample_argmax(logits, return_logprobs)?,
             Some(temperature) => {
