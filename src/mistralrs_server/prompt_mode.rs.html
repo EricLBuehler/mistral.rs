@@ -78,7 +78,6 @@
 <a href="#76" id="76">76</a>
 <a href="#77" id="77">77</a>
 <a href="#78" id="78">78</a>
-<a href="#79" id="79">79</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{mpsc::channel, Arc};
 
 <span class="kw">use </span>either::Either;
@@ -149,7 +148,6 @@
                     <span class="macro">println!</span>(<span class="string">"======================="</span>);
                     <span class="macro">println!</span>(<span class="string">"Completion T/s = {}"</span>, res.usage.avg_compl_tok_per_sec);
                     <span class="macro">println!</span>(<span class="string">"Prompt T/s = {}"</span>, res.usage.avg_prompt_tok_per_sec);
-                    <span class="macro">println!</span>(<span class="string">"Sampling T/s = {}"</span>, res.usage.avg_sample_tok_per_sec);
                 }
                 Response::Chunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 Response::CompletionDone(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
