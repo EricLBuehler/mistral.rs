@@ -144,7 +144,7 @@ impl Sampler {
 
         if let Some(penalty) = penalty {
             for (token_id, logit) in probs.iter_mut().enumerate() {
-                *logit = *logit + penalty[token_id];
+                *logit += penalty[token_id];
             }
         }
 
@@ -207,7 +207,7 @@ impl Sampler {
 
         if let Some(penalty) = penalty {
             for (token_id, logit) in probs.iter_mut().enumerate() {
-                *logit = *logit + penalty[token_id];
+                *logit += penalty[token_id];
             }
         }
 
@@ -346,7 +346,7 @@ mod tests {
             0.1,
         );
 
-        let logits = Tensor::arange(0f64, 1024f64, &Device::Cpu).unwrap();
+        let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
         let res = sampler.sample(logits, None, false).unwrap();
         assert_eq!(res.token, 1023);
         assert_eq!(res.top_logprobs, None);
