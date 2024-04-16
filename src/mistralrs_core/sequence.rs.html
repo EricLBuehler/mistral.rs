@@ -507,6 +507,12 @@
 <a href="#505" id="505">505</a>
 <a href="#506" id="506">506</a>
 <a href="#507" id="507">507</a>
+<a href="#508" id="508">508</a>
+<a href="#509" id="509">509</a>
+<a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
@@ -581,8 +587,8 @@
     response_index: usize,
     creation_time: u64,
     prefill_prompt_toks: <span class="prelude-ty">Option</span>&lt;Vec&lt;u32&gt;&gt;,
-    <span class="kw">pub </span>suffix: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    <span class="kw">pub </span>prefix: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    suffix: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    prefix: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
     <span class="comment">// Cache
     </span>scaling_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
@@ -875,7 +881,13 @@
         <span class="self">self</span>.update_time_info();
     }
 
-    <span class="kw">pub fn </span>add_completion_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, choice: CompletionChoice) {
+    <span class="kw">pub fn </span>add_completion_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw-2">mut </span>choice: CompletionChoice) {
+        choice.text = <span class="macro">format!</span>(
+            <span class="string">"{}{}{}"</span>,
+            <span class="self">self</span>.prefix.as_deref().unwrap_or(<span class="string">""</span>),
+            choice.text,
+            <span class="self">self</span>.suffix.as_deref().unwrap_or(<span class="string">""</span>)
+        );
         <span class="macro">get_mut_group!</span>(<span class="self">self</span>)
             .completion_choices
             .push((<span class="self">self</span>.cumulative_logprob, choice));
