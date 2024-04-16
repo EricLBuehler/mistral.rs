@@ -26,7 +26,7 @@ Mistral.rs is a fast LLM inference platform written in pure, safe Rust. We suppo
 
 This is a demo of interactive mode with streaming running Mistral GGUF:
 
-https://github.com/EricLBuehler/mistral.rs/assets/65165915/bb0eac2e-d386-4499-96f6-6a5daa898924
+https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95e6-aa532db09415
 
 
 **Supported models:**
