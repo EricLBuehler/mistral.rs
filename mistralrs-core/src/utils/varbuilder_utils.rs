@@ -34,8 +34,8 @@ pub(crate) fn from_mmaped_safetensors<'a>(
                         name.clone()
                     };
                     let tensor = tensors
-                        .load(&name, &device)?
-                        .to_device(&device)?
+                        .load(&name, device)?
+                        .to_device(device)?
                         .to_dtype(dtype)?;
                     ws.insert(new_name, Var::from_tensor(&tensor)?);
                 }
@@ -47,8 +47,8 @@ pub(crate) fn from_mmaped_safetensors<'a>(
                         name.clone()
                     };
                     let tensor = tensors
-                        .load(&name, &device)?
-                        .to_device(&device)?
+                        .load(&name, device)?
+                        .to_device(device)?
                         .to_dtype(dtype)?;
                     ws.insert(new_name, Var::from_tensor(&tensor)?);
                 }
@@ -70,8 +70,8 @@ pub(crate) fn from_mmaped_safetensors<'a>(
                     let pos = new_name.find(".lora").unwrap();
                     new_name.insert_str(pos + 7, &format!(".{}", i + 1));
                     let tensor = tensors
-                        .load(&name, &device)?
-                        .to_device(&device)?
+                        .load(&name, device)?
+                        .to_device(device)?
                         .to_dtype(dtype)?;
                     ws.insert(new_name, Var::from_tensor(&tensor)?);
                 }
@@ -88,8 +88,8 @@ pub(crate) fn from_mmaped_safetensors<'a>(
                     let pos = new_name.find(".lora").unwrap();
                     new_name.insert_str(pos + 7, &format!(".{}", i + 1));
                     let tensor = tensors
-                        .load(&name, &device)?
-                        .to_device(&device)?
+                        .load(&name, device)?
+                        .to_device(device)?
                         .to_dtype(dtype)?;
                     ws.insert(new_name, Var::from_tensor(&tensor)?);
                 }
