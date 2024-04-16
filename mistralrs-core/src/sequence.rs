@@ -72,8 +72,8 @@ pub struct Sequence {
     response_index: usize,
     creation_time: u64,
     prefill_prompt_toks: Option<Vec<u32>>,
-    pub suffix: Option<String>,
-    pub prefix: Option<String>,
+    suffix: Option<String>,
+    prefix: Option<String>,
 
     // Cache
     scaling_cache: Option<Tensor>,
@@ -366,7 +366,13 @@ impl Sequence {
         self.update_time_info();
     }
 
-    pub fn add_completion_choice_to_group(&self, choice: CompletionChoice) {
+    pub fn add_completion_choice_to_group(&self, mut choice: CompletionChoice) {
+        choice.text = format!(
+            "{}{}{}",
+            self.prefix.as_deref().unwrap_or(""),
+            choice.text,
+            self.suffix.as_deref().unwrap_or("")
+        );
         get_mut_group!(self)
             .completion_choices
             .push((self.cumulative_logprob, choice));
