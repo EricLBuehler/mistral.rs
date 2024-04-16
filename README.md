@@ -210,13 +210,15 @@ You can launch interactive mode, a simple chat application running in the termin
 
 To start an X-LoRA server with the default weights and ordering (exactly as presented in [the paper](https://arxiv.org/abs/2402.07148)):
 
-`./mistralrs-server --port 1234 x-lora-mistral -o orderings/default-ordering.json`
+`./mistralrs-server --port 1234 x-lora-mistral -o orderings/xlora-paper-ordering.json`
 
 - LoRA with a model from GGUF
 
 To start an LoRA server with adapters from the X-LoRA paper (you should modify the ordering file to use only one adapter, as the adapter static scalings are all 1 and so the signal will become distorted):
 
-`./mistralrs-server --port 1234 lora-mistral-gguf -o orderings/default-ordering.json`
+`./mistralrs-server --port 1234 lora-mistral-gguf -o orderings/xlora-paper-ordering.json`
+
+Normally with a LoRA model you would use a custom ordering file. However, for this example we use the ordering from the X-LoRA paper because we are using the adapters from the X-LoRA paper.
 
 - With a model from GGUF
 
@@ -281,7 +283,7 @@ There are 2 scripts to prepare the ordering file. The ordering file is specific 
 
     A script [`modify_names.py`](scripts/modify_names.py) is provided which prompts the user for the adapter names and the old ordering file. The user is prompted for an output file location, relative to the working directory.
 
-A provide a [default ordering file](scripts/default-ordering.json) which contains the ordering for the X-LoRA model associated with [the paper](https://arxiv.org/abs/2402.07148) and the Huggingface repository: https://huggingface.co/lamm-mit/x-lora.
+A provide a [default ordering file](scripts/xlora-paper-ordering.json) which contains the ordering for the X-LoRA model associated with [the paper](https://arxiv.org/abs/2402.07148) and the Huggingface repository: https://huggingface.co/lamm-mit/x-lora.
 
 **Quantized X-LoRA or LoRA models**
 

@@ -6,7 +6,7 @@ loader = XLoraLoader(
     no_kv_cache=False,
     repeat_last_n=64,
     xlora_model_id="lamm-mit/x-lora",
-    order_file="default-ordering.json",
+    order_file="xlora-paper-ordering.json",
 )
 runner = loader.load()
 res = runner.send_chat_completion_request(
