@@ -457,6 +457,7 @@
 <a href="#455" id="455">455</a>
 <a href="#456" id="456">456</a>
 <a href="#457" id="457">457</a>
+<a href="#458" id="458">458</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -581,15 +582,14 @@
     n_kv_head: usize,
     head_dim: usize,
     rotary: RotaryEmbedding,
+    neg_inf: Tensor,
 }
 
-<span class="kw">fn </span>masked_fill(on_false: <span class="kw-2">&amp;</span>Tensor, mask: <span class="kw-2">&amp;</span>Tensor, on_true: f32) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<span class="kw">fn </span>masked_fill(on_false: <span class="kw-2">&amp;</span>Tensor, mask: <span class="kw-2">&amp;</span>Tensor, on_true: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
     <span class="kw">let </span>shape = mask.shape();
-    <span class="kw">let </span>on_true = Tensor::new(on_true, on_false.device())<span class="question-mark">?</span>.broadcast_as(shape.dims())<span class="question-mark">?</span>;
-    <span class="kw">let </span>m = mask.where_cond(<span class="kw-2">&amp;</span>on_true, on_false)<span class="question-mark">?</span>;
+    <span class="kw">let </span>m = mask.where_cond(<span class="kw-2">&amp;</span>on_true.broadcast_as(shape.dims())<span class="question-mark">?</span>, on_false)<span class="question-mark">?</span>;
     <span class="prelude-val">Ok</span>(m)
 }
-
 <span class="kw">impl </span>LayerWeights {
     <span class="kw">fn </span>forward_attn(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
@@ -642,7 +642,7 @@
             <span class="prelude-val">None </span>=&gt; att,
             <span class="prelude-val">Some</span>(mask) =&gt; {
                 <span class="kw">let </span>mask = mask.broadcast_as(att.shape())<span class="question-mark">?</span>;
-                masked_fill(<span class="kw-2">&amp;</span>att, <span class="kw-2">&amp;</span>mask, f32::NEG_INFINITY)<span class="question-mark">?
+                masked_fill(<span class="kw-2">&amp;</span>att, <span class="kw-2">&amp;</span>mask, <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf)<span class="question-mark">?
             </span>}
         };
         <span class="kw">let </span>att = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>att)<span class="question-mark">?</span>;
@@ -688,7 +688,7 @@
             <span class="bool-val">false</span>,
             DType::F32,
         )<span class="question-mark">?</span>;
-
+        <span class="kw">let </span>neg_inf = Tensor::new(f32::NEG_INFINITY, <span class="kw-2">&amp;</span>ct.device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = ct.remove(<span class="string">"tok_embeddings.weight"</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(<span class="kw-2">&amp;</span>ct.device)<span class="question-mark">?</span>;
         <span class="kw">let </span>norm = QRmsNorm::new(ct.remove(<span class="string">"norm.weight"</span>)<span class="question-mark">?</span>, <span class="number">1e-5</span>)<span class="question-mark">?</span>;
@@ -724,6 +724,7 @@
                 n_kv_head: ct.hparams.n_head <span class="kw">as </span>usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) <span class="kw">as </span>usize,
                 rotary: rotary.clone(),
+                neg_inf: neg_inf.clone(),
             })
         }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
@@ -780,7 +781,7 @@
             <span class="bool-val">false</span>,
             DType::F32,
         )<span class="question-mark">?</span>;
-
+        <span class="kw">let </span>neg_inf = Tensor::new(f32::NEG_INFINITY, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = ct.tensor(reader, <span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(device)<span class="question-mark">?</span>;
         <span class="kw">let </span>norm = QRmsNorm::new(
@@ -846,6 +847,7 @@
                 n_kv_head: head_count_kv,
                 head_dim,
                 rotary: rotary.clone(),
+                neg_inf: neg_inf.clone(),
             })
         }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
