@@ -120,7 +120,12 @@ OpenAI API compatible API server
   - Apple Accelerate with `accelerate` feature.
 
 ## Benchmarks
-Coming soon!
+|Device|Mistral.rs Completion T/s|Llama.cpp Completion T/s|
+|-|-|-|
+|A10 GPU, CUDA|76.11|79.24|
+|Intel Xeon 8358 CPU|6.22|18.14|
+
+More benchmarks coming!
 
 ## Usage
 ### Installation and Build
