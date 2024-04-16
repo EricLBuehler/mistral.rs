@@ -298,13 +298,7 @@ pub trait Pipeline: Send + Sync {
         seq: &mut Sequence,
         return_logprobs: bool,
     ) -> Result<Logprobs> {
-        let logits = logits
-            .squeeze(0)
-            .unwrap()
-            .squeeze(0)
-            .unwrap()
-            .to_dtype(DType::F32)
-            .unwrap();
+        let logits = logits.squeeze(0)?.squeeze(0)?;
         let start_at = seq
             .get_toks()
             .len()
@@ -313,7 +307,7 @@ pub trait Pipeline: Send + Sync {
 
         let first_lobprobs_response =
             seq.sampler()
-                .sample(&logits, Some(&ctxt), return_logprobs)?;
+                .sample(logits.clone(), Some(&ctxt), return_logprobs)?;
 
         let bias_if_not_allowed = match &mut seq.recognizer {
             SequenceRecognizer::Regex(ref mut rx) => {
@@ -331,7 +325,7 @@ pub trait Pipeline: Send + Sync {
                 let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), self.device())?)?;
 
                 seq.sampler()
-                    .sample(&new_logits, Some(&ctxt), return_logprobs)?
+                    .sample(new_logits, Some(&ctxt), return_logprobs)?
             }
             None => first_lobprobs_response,
         };

@@ -629,6 +629,7 @@ impl Engine {
             }
         };
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
+        let device = get_mut_arcmutex!(self.pipeline).device().clone();
 
         let sampler = Sampler::new(
             SEED,
@@ -640,6 +641,7 @@ impl Engine {
             logits_bias,
             topk,
             topp,
+            device,
         );
         let recognizer = match Self::build_sequence_recognizer(&request.constraint) {
             Ok(recognizer) => recognizer,

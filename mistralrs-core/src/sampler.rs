@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, iter::zip, sync::Arc};
 
-use candle_core::{bail, DType, Error, Result, Tensor, D};
+use candle_core::{bail, Device, Error, Result, Tensor, D};
 use rand::{
     distributions::{Distribution, WeightedIndex},
     SeedableRng,
@@ -42,6 +42,8 @@ pub struct Sampler {
     logits_bias: Option<Tensor>,
     topk: i64,
     topp: f64,
+    vocab_size: usize,
+    device: Device,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -72,12 +74,14 @@ impl Sampler {
         logits_bias: Option<Tensor>,
         topk: i64,
         topp: f64,
+        device: Device,
     ) -> Self {
         let temperature = if temperature.map_or(true, |v| v < 1e-7) {
             None
         } else {
             temperature
         };
+        let vocab_size = tokenizer.get_vocab_size(true);
         Self {
             rng: rand::rngs::StdRng::seed_from_u64(seed),
             temperature,
@@ -88,6 +92,8 @@ impl Sampler {
             logits_bias,
             topk,
             topp,
+            vocab_size,
+            device,
         }
     }
 
@@ -225,14 +231,16 @@ impl Sampler {
     }
 
     fn apply_repeat_presence_penalty(
-        logits: &Tensor,
+        vocab_size: usize,
         presence_penalty: f32,
         frequency_penalty: f32,
         context: &[u32],
+        device: &Device,
     ) -> Result<Tensor> {
         //mu[j] -> mu[j] - c[j] * alpha_frequency - float(c[j] > 0) * alpha_presence
-        let device = logits.device();
-        let mut logits = logits.to_vec1::<f32>()?;
+        // let device = logits.device();
+        // let mut logits = logits.to_vec1::<f32>()?;
+        let mut logits = vec![0.0; vocab_size];
         for (token_id, logit) in logits.iter_mut().enumerate() {
             let count = context.iter().filter(|x| **x as usize == token_id).count();
             *logit = *logit
@@ -240,7 +248,7 @@ impl Sampler {
                 - if count > 0 { 1. } else { 0. } * presence_penalty;
         }
         let logits_len = logits.len();
-        Tensor::from_vec(logits, logits_len, device)
+        Tensor::from_vec(logits, logits_len, &device)
     }
 
     /// Sample the provided tokens.
@@ -250,24 +258,24 @@ impl Sampler {
     /// If `frequency_penalty.is_some()` or `presence_penalty.is_some()`, then `penalty_ctxt` must be provided.
     pub fn sample(
         &mut self,
-        logits: &Tensor,
+        logits: Tensor,
         penalty_ctxt: Option<&[u32]>,
         return_logprobs: bool,
     ) -> Result<Logprobs> {
-        let logits = logits.to_dtype(DType::F32)?;
-
         let logits = if self.frequency_penalty.is_none() && self.presence_penalty.is_none() {
             logits
         } else {
             if penalty_ctxt.is_none() {
                 bail!("Must specify penalty context.");
             }
-            Self::apply_repeat_presence_penalty(
-                &logits,
+            let penalty = Self::apply_repeat_presence_penalty(
+                self.vocab_size,
                 self.presence_penalty.unwrap_or(0.),
                 self.frequency_penalty.unwrap_or(0.),
                 penalty_ctxt.unwrap(),
-            )?
+                &self.device,
+            )?;
+            (logits + penalty)?
         };
         let logits = match self.logits_bias {
             Some(ref bias) => (logits + bias)?,
@@ -318,10 +326,11 @@ mod tests {
             None,
             32,
             0.1,
+            Device::Cpu,
         );
 
         let logits = Tensor::arange(0f64, 1024f64, &Device::Cpu).unwrap();
-        let res = sampler.sample(&logits, None, false).unwrap();
+        let res = sampler.sample(logits, None, false).unwrap();
         assert_eq!(res.token, 1023);
         assert_eq!(res.top_logprobs, None);
         assert_eq!(res.logprob, 1023f64.log(10.) as f32)
