@@ -623,7 +623,7 @@ fn get_xlora_paths(
                         return Some((name, adapter_name.clone()));
                     }
                 }
-                return None;
+                None
             })
             .collect::<Vec<_>>();
         if adapter_files.is_empty() {
