@@ -11,16 +11,24 @@ Mistral.rs is a fast LLM inference platform written. We support inference on a v
 - Device offloading
 
 ## Description
+**Fast**:
 - Quantized model support: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit for faster inference and optimized memory usage.
-- Apple silicon support with the Metal framework.
-- CPU inference with `mkl`, `accelerate` support and optimized backend.
-- First X-LoRA inference platform with first class support.
 - Continuous batching.
 - Prefix caching.
-- Fast LoRA support with weight merging.
-- Grammar support with Regex and Yacc.
+
+**Accelerator support**:
+- Apple silicon support with the Metal framework.
+- CPU inference with `mkl`, `accelerate` support and optimized backend.
+- CUDA support with flash attention and CUDNN.
+
+**Easy**:
 - Lightweight OpenAI API compatible HTTP server.
 - Python API.
+- Grammar support with Regex and Yacc.
+
+**Powerful**:
+- Fast LoRA support with weight merging.
+- First X-LoRA inference platform with first class support.
 
 
 This is a demo of interactive mode with streaming running Mistral GGUF:
@@ -44,7 +52,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95
 |Mixtral 8x7B|✅| |
 |Phi 2| | |
 
-**X-LoRA support**
+**X-LoRA and LoRA support**
 |Model|X-LoRA|X-LoRA+GGUF|X-LoRA+GGML|
 |--|--|--|--|
 |Mistral 7B |✅|✅| |
@@ -53,16 +61,8 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95
 |Mixtral 8x7B|✅|✅| |
 |Phi 2|✅| | |
 
-**LoRA support**
-|Model|LoRA|LoRA+GGUF|LoRA+GGML|
-|--|--|--|--|
-|Mistral 7B |✅|✅| |
-|Gemma|✅| | |
-|Llama|✅|✅|✅|
-|Mixtral 8x7B|✅|✅| |
-|Phi 2|✅| | |
-
 **Using derivative models**
+
 To use a derivative model, select the model architecture using the correct subcommand. To see what can be passed for the architecture, pass `--help` after the subcommand. For example, when using a different model than the default, specify the following for the following types of models:
 
 - **Normal**: Model id
@@ -93,6 +93,7 @@ Python API for mistral.rs.
 
 - [Docs](mistralrs-pyo3/README.md)
 - [Example](examples/python/python_api.py)
+- [Cookbook](examples/python/cookbook.ipynb)
 
 **HTTP Server**
 
