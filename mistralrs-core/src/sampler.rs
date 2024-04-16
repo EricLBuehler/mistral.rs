@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, iter::zip, sync::Arc};
 
-use candle_core::{bail, Device, Error, Result, Tensor, D};
+use candle_core::{bail, Error, Result, Tensor, D};
 use rand::{
     distributions::{Distribution, WeightedIndex},
     SeedableRng,
@@ -43,7 +43,6 @@ pub struct Sampler {
     topk: i64,
     topp: f64,
     vocab_size: usize,
-    device: Device,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -74,7 +73,6 @@ impl Sampler {
         logits_bias: Option<Tensor>,
         topk: i64,
         topp: f64,
-        device: Device,
     ) -> Self {
         let temperature = if temperature.map_or(true, |v| v < 1e-7) {
             None
@@ -93,7 +91,6 @@ impl Sampler {
             topk,
             topp,
             vocab_size,
-            device,
         }
     }
 
@@ -135,10 +132,22 @@ impl Sampler {
             .collect::<Vec<_>>())
     }
 
-    fn sample_argmax(&mut self, logits: Tensor, return_logprobs: bool) -> Result<Logprobs> {
+    fn sample_argmax(
+        &mut self,
+        logits: Tensor,
+        return_logprobs: bool,
+        penalty: Option<Vec<f32>>,
+    ) -> Result<Logprobs> {
         let next_token = logits.argmax(D::Minus1)?.to_scalar::<u32>()?;
 
-        let probs: Vec<f32> = logits.to_vec1()?;
+        let mut probs: Vec<f32> = logits.to_vec1()?;
+
+        if let Some(penalty) = penalty {
+            for (token_id, logit) in probs.iter_mut().enumerate() {
+                *logit = *logit + penalty[token_id];
+            }
+        }
+
         let argsort_indices = (0..probs.len()).collect::<Vec<_>>();
         let logprob = probs[next_token as usize].log(10.0);
 
@@ -192,8 +201,15 @@ impl Sampler {
         top_k: i64,
         top_p: f32,
         return_logprobs: bool,
+        penalty: Option<Vec<f32>>,
     ) -> Result<Logprobs> {
         let mut argsort_indices = (0..probs.len()).collect::<Vec<_>>();
+
+        if let Some(penalty) = penalty {
+            for (token_id, logit) in probs.iter_mut().enumerate() {
+                *logit = *logit + penalty[token_id];
+            }
+        }
 
         // Sort by descending probability.
         argsort_indices.sort_by(|&i, &j| probs[j].partial_cmp(&probs[i]).unwrap());
@@ -235,8 +251,7 @@ impl Sampler {
         presence_penalty: f32,
         frequency_penalty: f32,
         context: &[u32],
-        device: &Device,
-    ) -> Result<Tensor> {
+    ) -> Result<Vec<f32>> {
         //mu[j] -> mu[j] - c[j] * alpha_frequency - float(c[j] > 0) * alpha_presence
         // let device = logits.device();
         // let mut logits = logits.to_vec1::<f32>()?;
@@ -247,8 +262,7 @@ impl Sampler {
                 - count as f32 * frequency_penalty
                 - if count > 0 { 1. } else { 0. } * presence_penalty;
         }
-        let logits_len = logits.len();
-        Tensor::from_vec(logits, logits_len, &device)
+        Ok(logits)
     }
 
     /// Sample the provided tokens.
@@ -262,32 +276,36 @@ impl Sampler {
         penalty_ctxt: Option<&[u32]>,
         return_logprobs: bool,
     ) -> Result<Logprobs> {
-        let logits = if self.frequency_penalty.is_none() && self.presence_penalty.is_none() {
-            logits
+        let penalty = if self.frequency_penalty.is_none() && self.presence_penalty.is_none() {
+            None
         } else {
             if penalty_ctxt.is_none() {
                 bail!("Must specify penalty context.");
             }
-            let penalty = Self::apply_repeat_presence_penalty(
+            Some(Self::apply_repeat_presence_penalty(
                 self.vocab_size,
                 self.presence_penalty.unwrap_or(0.),
                 self.frequency_penalty.unwrap_or(0.),
                 penalty_ctxt.unwrap(),
-                &self.device,
-            )?;
-            (logits + penalty)?
+            )?)
         };
         let logits = match self.logits_bias {
             Some(ref bias) => (logits + bias)?,
             None => logits,
         };
         let next_token = match self.temperature {
-            None => self.sample_argmax(logits, return_logprobs)?,
+            None => self.sample_argmax(logits, return_logprobs, penalty)?,
             Some(temperature) => {
                 let logits = (&logits / temperature)?;
                 let probs = candle_nn::ops::softmax_last_dim(&logits)?;
                 let mut probs: Vec<f32> = probs.to_vec1()?;
-                self.sample_topkp(&mut probs, self.topk, self.topp as f32, return_logprobs)?
+                self.sample_topkp(
+                    &mut probs,
+                    self.topk,
+                    self.topp as f32,
+                    return_logprobs,
+                    penalty,
+                )?
             }
         };
         Ok(next_token)
@@ -326,7 +344,6 @@ mod tests {
             None,
             32,
             0.1,
-            Device::Cpu,
         );
 
         let logits = Tensor::arange(0f64, 1024f64, &Device::Cpu).unwrap();

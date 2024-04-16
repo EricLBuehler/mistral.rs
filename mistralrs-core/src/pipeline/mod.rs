@@ -298,7 +298,7 @@ pub trait Pipeline: Send + Sync {
         seq: &mut Sequence,
         return_logprobs: bool,
     ) -> Result<Logprobs> {
-        let logits = logits.squeeze(0)?.squeeze(0)?;
+        let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
         let start_at = seq
             .get_toks()
             .len()
