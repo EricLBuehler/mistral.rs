@@ -607,14 +607,18 @@ fn get_xlora_paths(
             .siblings
             .iter()
             .map(|x| x.rfilename.clone())
-            .filter(|x| x.contains("/adapter_"))
-            .map(|x| {
-                let mut split = x.split('/');
-                let pos = split.clone().count() - 2;
-                let name = split.nth(pos).unwrap().to_string();
-                (x, name)
+            .filter_map(|name| {
+                for adapter_name in xlora_order.as_ref().unwrap().adapters.as_ref().unwrap() {
+                    if name.contains(adapter_name) {
+                        return Some((name, adapter_name.clone()));
+                    }
+                }
+                None
             })
             .collect::<Vec<_>>();
+        if adapter_files.is_empty() {
+            anyhow::bail!("Adapter files are empty. Perhaps the ordering file adapters does not match the actual adapters?")
+        }
         let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
         for (file, name) in adapter_files {
             if let Some(paths) = adapters_paths.get_mut(&name) {
@@ -625,11 +629,15 @@ fn get_xlora_paths(
         }
         let mut adapters_configs = Vec::new();
         let mut adapters_safetensors = Vec::new();
-        let adapter_order = match xlora_config.adapters.clone() {
-            Either::Left(l) => l,
-            Either::Right(r) => r.keys().cloned().collect::<Vec<_>>(),
-        };
-        for (i, name) in adapter_order.iter().enumerate() {
+        for (i, name) in xlora_order
+            .as_ref()
+            .unwrap()
+            .adapters
+            .as_ref()
+            .unwrap()
+            .iter()
+            .enumerate()
+        {
             let paths = adapters_paths.get(name).unwrap();
             for path in paths {
                 if path.extension().unwrap() == "safetensors" {
