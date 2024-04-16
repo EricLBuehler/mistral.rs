@@ -42,7 +42,6 @@ pub struct Sampler {
     logits_bias: Option<Tensor>,
     topk: i64,
     topp: f64,
-    vocab_size: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -79,7 +78,6 @@ impl Sampler {
         } else {
             temperature
         };
-        let vocab_size = tokenizer.get_vocab_size(true);
         Self {
             rng: rand::rngs::StdRng::seed_from_u64(seed),
             temperature,
@@ -90,7 +88,6 @@ impl Sampler {
             logits_bias,
             topk,
             topp,
-            vocab_size,
         }
     }
 
@@ -136,17 +133,13 @@ impl Sampler {
         &mut self,
         logits: Tensor,
         return_logprobs: bool,
-        penalty: Option<Vec<f32>>,
+        context: Option<&[u32]>,
     ) -> Result<Logprobs> {
         let next_token = logits.argmax(D::Minus1)?.to_scalar::<u32>()?;
 
         let mut probs: Vec<f32> = logits.to_vec1()?;
 
-        if let Some(penalty) = penalty {
-            for (token_id, logit) in probs.iter_mut().enumerate() {
-                *logit += penalty[token_id];
-            }
-        }
+        self.apply_penalties(&mut probs, context)?;
 
         let argsort_indices = (0..probs.len()).collect::<Vec<_>>();
         let logprob = probs[next_token as usize].log(10.0);
@@ -201,15 +194,11 @@ impl Sampler {
         top_k: i64,
         top_p: f32,
         return_logprobs: bool,
-        penalty: Option<Vec<f32>>,
+        context: Option<&[u32]>,
     ) -> Result<Logprobs> {
         let mut argsort_indices = (0..probs.len()).collect::<Vec<_>>();
 
-        if let Some(penalty) = penalty {
-            for (token_id, logit) in probs.iter_mut().enumerate() {
-                *logit += penalty[token_id];
-            }
-        }
+        self.apply_penalties(probs, context)?;
 
         // Sort by descending probability.
         argsort_indices.sort_unstable_by(|&i, &j| probs[j].partial_cmp(&probs[i]).unwrap());
@@ -246,21 +235,24 @@ impl Sampler {
         self.sample_multinomial(probs, argsort_indices, return_logprobs)
     }
 
-    fn apply_repeat_presence_penalty(
-        vocab_size: usize,
-        presence_penalty: f32,
-        frequency_penalty: f32,
-        context: &[u32],
-    ) -> Result<Vec<f32>> {
-        //mu[j] -> mu[j] - c[j] * alpha_frequency - float(c[j] > 0) * alpha_presence
-        let mut logits = vec![0.0; vocab_size];
-        for (token_id, logit) in logits.iter_mut().enumerate() {
-            let count = context.iter().filter(|x| **x as usize == token_id).count();
-            *logit = *logit
-                - count as f32 * frequency_penalty
-                - if count > 0 { 1. } else { 0. } * presence_penalty;
+    fn apply_penalties(&self, logits: &mut [f32], context: Option<&[u32]>) -> Result<()> {
+        if self.frequency_penalty.is_some() || self.presence_penalty.is_some() {
+            if context.is_none() {
+                bail!("Must specify penalty context.");
+            }
+            let context = context.as_ref().unwrap();
+            let frequency_penalty = self.frequency_penalty.unwrap_or(0.);
+            let presence_penalty = self.presence_penalty.unwrap_or(0.);
+
+            //mu[j] -> mu[j] - c[j] * alpha_frequency - float(c[j] > 0) * alpha_presence
+            for (token_id, logit) in logits.iter_mut().enumerate() {
+                let count = context.iter().filter(|x| **x as usize == token_id).count();
+                *logit = *logit
+                    - count as f32 * frequency_penalty
+                    - if count > 0 { 1. } else { 0. } * presence_penalty;
+            }
         }
-        Ok(logits)
+        Ok(())
     }
 
     /// Sample the provided tokens.
@@ -274,25 +266,12 @@ impl Sampler {
         penalty_ctxt: Option<&[u32]>,
         return_logprobs: bool,
     ) -> Result<Logprobs> {
-        let penalty = if self.frequency_penalty.is_none() && self.presence_penalty.is_none() {
-            None
-        } else {
-            if penalty_ctxt.is_none() {
-                bail!("Must specify penalty context.");
-            }
-            Some(Self::apply_repeat_presence_penalty(
-                self.vocab_size,
-                self.presence_penalty.unwrap_or(0.),
-                self.frequency_penalty.unwrap_or(0.),
-                penalty_ctxt.unwrap(),
-            )?)
-        };
         let logits = match self.logits_bias {
             Some(ref bias) => (logits + bias)?,
             None => logits,
         };
         let next_token = match self.temperature {
-            None => self.sample_argmax(logits, return_logprobs, penalty)?,
+            None => self.sample_argmax(logits, return_logprobs, penalty_ctxt)?,
             Some(temperature) => {
                 let logits = (&logits / temperature)?;
                 let probs = candle_nn::ops::softmax_last_dim(&logits)?;
@@ -302,7 +281,7 @@ impl Sampler {
                     self.topk,
                     self.topp as f32,
                     return_logprobs,
-                    penalty,
+                    penalty_ctxt,
                 )?
             }
         };
