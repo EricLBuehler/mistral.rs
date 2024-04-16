@@ -454,13 +454,13 @@ fn calculate_inputs(
             input: input_ids_full,
             positions: seqlen_offsets_full,
             positions_kernel: seqlen_offsets_kernel_full,
-            context_lens,
+            context_lens: _,
         } = get_prompt_input(input_toks, device)?;
         let InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
-            context_lens: _,
+            context_lens,
         } = get_completion_input(input_toks, device, no_kv_cache)?;
         Ok(ModelInputs {
             input_ids,
