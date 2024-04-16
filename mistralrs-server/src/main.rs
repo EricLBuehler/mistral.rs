@@ -30,7 +30,6 @@ use interactive_mode::interactive_mode;
 use prompt_mode::prompt_mode;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{info, warn};
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
@@ -858,10 +857,7 @@ async fn main() -> Result<()> {
     #[cfg(not(feature = "metal"))]
     let device = Device::cuda_if_available(0)?;
 
-    tracing_subscriber::registry()
-        .with(fmt::layer())
-        .with(EnvFilter::from_default_env())
-        .init();
+    tracing_subscriber::fmt().init();
 
     info!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",

@@ -1,6 +1,6 @@
 //! Utilities for creating a VarBuilder from a VarMap loaded from tensor storage formats.
 
-use std::{collections::HashMap, path::PathBuf, thread};
+use std::path::PathBuf;
 
 use candle_core::{DType, Device, Result, Var};
 use candle_nn::{
@@ -23,124 +23,77 @@ pub(crate) fn from_mmaped_safetensors<'a>(
     {
         let mut ws = map.data().lock().unwrap();
 
-        let mut handles = Vec::new();
         for path in paths {
-            let dev = device.clone();
-            let handle = thread::spawn(move || {
-                fn inner(
-                    path: PathBuf,
-                    device: Device,
-                    silent: bool,
-                    dtype: DType,
-                ) -> Result<HashMap<String, Var>> {
-                    let mut threadmap = HashMap::new();
-                    let tensors =
-                        unsafe { candle_core::safetensors::MmapedSafetensors::new(path)? };
+            let tensors = unsafe { candle_core::safetensors::MmapedSafetensors::new(path)? };
 
-                    if silent {
-                        for (name, _) in tensors.tensors() {
-                            let new_name = if name.contains("base_model.model.model") {
-                                name.replace("base_model.model.model", "model")
-                            } else {
-                                name.clone()
-                            };
-                            let tensor = tensors
-                                .load(&name, &device)?
-                                .to_device(&device)?
-                                .to_dtype(dtype)?;
-                            threadmap.insert(new_name, Var::from_tensor(&tensor)?);
-                        }
+            if silent {
+                for (name, _) in tensors.tensors() {
+                    let new_name = if name.contains("base_model.model.model") {
+                        name.replace("base_model.model.model", "model")
                     } else {
-                        for (name, _) in tensors.tensors().into_iter().tqdm() {
-                            let new_name = if name.contains("base_model.model.model") {
-                                name.replace("base_model.model.model", "model")
-                            } else {
-                                name.clone()
-                            };
-                            let tensor = tensors
-                                .load(&name, &device)?
-                                .to_device(&device)?
-                                .to_dtype(dtype)?;
-                            threadmap.insert(new_name, Var::from_tensor(&tensor)?);
-                        }
+                        name.clone()
                     };
-                    Ok(threadmap)
+                    let tensor = tensors
+                        .load(&name, device)?
+                        .to_device(device)?
+                        .to_dtype(dtype)?;
+                    ws.insert(new_name, Var::from_tensor(&tensor)?);
                 }
-                inner(path, dev, silent, dtype)
-            });
-            handles.push(handle)
-        }
-        for (i, path) in xlora_paths.into_iter().enumerate() {
-            let dev = device.clone();
-            let handle = thread::spawn(move || {
-                fn inner(
-                    path: PathBuf,
-                    device: Device,
-                    silent: bool,
-                    dtype: DType,
-                    i: usize,
-                ) -> Result<HashMap<String, Var>> {
-                    let mut threadmap = HashMap::new();
-                    let tensors =
-                        unsafe { candle_core::safetensors::MmapedSafetensors::new(path)? };
-
-                    if silent {
-                        for (name, _) in tensors.tensors() {
-                            if name.contains("internal_xlora_classifier") {
-                                continue;
-                            }
-                            let mut new_name = if name.contains("base_model.model.model") {
-                                name.replace("base_model.model.model", "model")
-                            } else {
-                                name.clone()
-                            };
-                            let pos = new_name.find(".lora").unwrap();
-                            new_name.insert_str(pos + 7, &format!(".{}", i + 1));
-                            let tensor = tensors
-                                .load(&name, &device)?
-                                .to_device(&device)?
-                                .to_dtype(dtype)?;
-                            threadmap.insert(new_name, Var::from_tensor(&tensor)?);
-                        }
+            } else {
+                for (name, _) in tensors.tensors().into_iter().tqdm() {
+                    let new_name = if name.contains("base_model.model.model") {
+                        name.replace("base_model.model.model", "model")
                     } else {
-                        for (name, _) in tensors.tensors().into_iter().tqdm() {
-                            if name.contains("internal_xlora_classifier") {
-                                continue;
-                            }
-                            let mut new_name = if name.contains("base_model.model.model") {
-                                name.replace("base_model.model.model", "model")
-                            } else {
-                                name.clone()
-                            };
-                            let pos = new_name.find(".lora").unwrap();
-                            new_name.insert_str(pos + 7, &format!(".{}", i + 1));
-                            let tensor = tensors
-                                .load(&name, &device)?
-                                .to_device(&device)?
-                                .to_dtype(dtype)?;
-                            threadmap.insert(new_name, Var::from_tensor(&tensor)?);
-                        }
+                        name.clone()
                     };
-                    Ok(threadmap)
-                }
-                inner(path, dev, silent, dtype, i)
-            });
-            handles.push(handle)
-        }
-
-        let mut all_finished = true;
-        while !all_finished {
-            all_finished = true;
-            for handle in handles.iter() {
-                if !handle.is_finished() {
-                    all_finished = false
+                    let tensor = tensors
+                        .load(&name, device)?
+                        .to_device(device)?
+                        .to_dtype(dtype)?;
+                    ws.insert(new_name, Var::from_tensor(&tensor)?);
                 }
             }
         }
+        for (i, path) in xlora_paths.into_iter().enumerate() {
+            let tensors = unsafe { candle_core::safetensors::MmapedSafetensors::new(path)? };
 
-        for handle in handles {
-            let res = handle.join().unwrap()?;
-            ws.extend(res);
+            if silent {
+                for (name, _) in tensors.tensors() {
+                    if name.contains("internal_xlora_classifier") {
+                        continue;
+                    }
+                    let mut new_name = if name.contains("base_model.model.model") {
+                        name.replace("base_model.model.model", "model")
+                    } else {
+                        name.clone()
+                    };
+                    let pos = new_name.find(".lora").unwrap();
+                    new_name.insert_str(pos + 7, &format!(".{}", i + 1));
+                    let tensor = tensors
+                        .load(&name, device)?
+                        .to_device(device)?
+                        .to_dtype(dtype)?;
+                    ws.insert(new_name, Var::from_tensor(&tensor)?);
+                }
+            } else {
+                for (name, _) in tensors.tensors().into_iter().tqdm() {
+                    if name.contains("internal_xlora_classifier") {
+                        continue;
+                    }
+                    let mut new_name = if name.contains("base_model.model.model") {
+                        name.replace("base_model.model.model", "model")
+                    } else {
+                        name.clone()
+                    };
+                    let pos = new_name.find(".lora").unwrap();
+                    new_name.insert_str(pos + 7, &format!(".{}", i + 1));
+                    let tensor = tensors
+                        .load(&name, device)?
+                        .to_device(device)?
+                        .to_dtype(dtype)?;
+                    ws.insert(new_name, Var::from_tensor(&tensor)?);
+                }
+            }
         }
     }
 

@@ -72,7 +72,6 @@ pub fn prompt_mode(
                 Response::Done(res) => {
                     println!("{}", res.choices[0].message.content);
                     println!("=======================");
-
                     completion_tokens += res.usage.completion_tokens;
                     prompt_tokens += res.usage.prompt_tokens;
                     total_completion_time_sec += res.usage.total_completion_time_sec;

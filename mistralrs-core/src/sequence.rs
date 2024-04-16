@@ -92,7 +92,6 @@ pub struct Sequence {
     pub prompt_tok_per_sec: f32,
     pub prompt_timestamp: Option<u128>,
     group: Rc<RefCell<SequenceGroup>>,
-    pub total_sampling_time: u128,
     state: Cell<SequenceState>,
 }
 impl Sequence {
@@ -140,7 +139,6 @@ impl Sequence {
             prompt_timestamp: None,
             group,
             scaling_cache: None,
-            total_sampling_time: 0,
             response_index,
             creation_time,
             recognizer,
@@ -357,8 +355,6 @@ impl Sequence {
 
         get_mut_group!(self).total_prompt_toks += self.prompt_len;
         get_mut_group!(self).total_toks += self.len();
-
-        get_mut_group!(self).total_sampling_time += self.total_sampling_time;
     }
 
     pub fn add_choice_to_group(&self, choice: Choice) {
@@ -400,7 +396,6 @@ pub struct SequenceGroup {
     pub total_prompt_time: u128,
     pub total_time: u128,
     pub total_completion_time: u128,
-    pub total_sampling_time: u128,
     choices: Vec<Choice>,
     completion_choices: Vec<(f32, CompletionChoice)>,
     pub streaming_chunks: Vec<ChunkChoice>,
@@ -424,7 +419,6 @@ impl SequenceGroup {
             total_prompt_time: 0,
             total_time: 0,
             total_completion_time: 0,
-            total_sampling_time: 0,
             streaming_chunks: Vec::new(),
             is_streaming,
             is_chat,
@@ -461,12 +455,9 @@ impl SequenceGroup {
             avg_compl_tok_per_sec: ((self.total_toks - self.total_prompt_toks) as f32
                 / self.total_completion_time as f32)
                 * 1000.,
-            avg_sample_tok_per_sec: (self.total_toks as f32 / self.total_sampling_time as f32)
-                * 1000.,
             total_time_sec: self.total_time as f32 / 1000.,
             total_completion_time_sec: self.total_completion_time as f32 / 1000.,
             total_prompt_time_sec: self.total_prompt_time as f32 / 1000.,
-            total_sampling_time_sec: self.total_sampling_time as f32 / 1000.,
         }
     }
 
