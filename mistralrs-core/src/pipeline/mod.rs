@@ -623,7 +623,7 @@ fn get_xlora_paths(
             })
             .collect::<Vec<_>>();
         if adapter_files.is_empty() {
-            anyhow::bail!("Adapter files are empty. Perhaps the ordering file adapters does not match the acutal adapters?")
+            anyhow::bail!("Adapter files are empty. Perhaps the ordering file adapters does not match the actual adapters?")
         }
         let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
         for (file, name) in adapter_files {
