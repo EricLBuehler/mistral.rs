@@ -42,6 +42,7 @@ pub struct Engine {
     truncate_sequence: bool,
     no_kv_cache: bool,
     prefix_cacher: PrefixCacheManager,
+    is_debug: bool,
 }
 
 impl Engine {
@@ -63,10 +64,14 @@ impl Engine {
             truncate_sequence,
             no_kv_cache,
             prefix_cacher: PrefixCacheManager::new(device, prefix_cache_n, is_xlora),
+            is_debug: std::env::var("RUST_LOG")
+                .unwrap_or_default()
+                .contains("debug"),
         }
     }
 
     pub fn run(&mut self) {
+        let mut last_run = Instant::now();
         'lp: loop {
             if let Ok(request) = self.rx.try_recv() {
                 self.add_request(request);
@@ -125,6 +130,34 @@ impl Engine {
                 let sampling_time = before_sample.elapsed().as_millis();
                 for seq in scheduled.prompt.iter_mut() {
                     seq.total_sampling_time += sampling_time;
+                }
+            }
+
+            if self.is_debug {
+                let ms_from_last_run = last_run.elapsed().as_millis();
+                last_run = Instant::now();
+                let total_len = scheduled.prompt.len() + scheduled.completion.len();
+                if total_len > 0 {
+                    let prompt_lengths = scheduled
+                        .prompt
+                        .iter()
+                        .map(|seq| seq.len().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+
+                    let completion_lengths = scheduled
+                        .completion
+                        .iter()
+                        .map(|seq| seq.len().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+
+                    tracing::debug!(
+                        "Prompt[{}] Completion[{}] - {}ms",
+                        prompt_lengths,
+                        completion_lengths,
+                        ms_from_last_run
+                    );
                 }
             }
         }
