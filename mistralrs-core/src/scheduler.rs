@@ -74,6 +74,10 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
         }
     }
 
+    pub fn waiting_len(&self) -> usize {
+        self.waiting.iter().count()
+    }
+
     /// Move the seuqences into buckets, and run the ones with the shortest lengths.
     /// The others are moved to the waiting list (retaining high priority due to start time),
     /// without a state modification.

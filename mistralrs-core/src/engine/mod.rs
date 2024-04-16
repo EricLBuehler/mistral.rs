@@ -73,7 +73,7 @@ impl Engine {
     pub fn run(&mut self) {
         let mut last_run = Instant::now();
         'lp: loop {
-            if let Ok(request) = self.rx.try_recv() {
+            while let Ok(request) = self.rx.try_recv() {
                 self.add_request(request);
             }
             let mut scheduled = self.scheduler.schedule();
@@ -158,6 +158,15 @@ impl Engine {
                         completion_lengths,
                         ms_from_last_run
                     );
+                }
+            }
+            drop(pipeline);
+            if scheduled.prompt.len() == 0
+                && scheduled.completion.len() == 0
+                && self.scheduler.waiting_len() == 0
+            {
+                if let Ok(request) = self.rx.recv() {
+                    self.add_request(request);
                 }
             }
         }
