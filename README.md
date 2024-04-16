@@ -119,6 +119,11 @@ OpenAI API compatible API server
   - Intel MKL with `mkl` feature.
   - Apple Accelerate with `accelerate` feature.
 
+Enabling features is done by passing `--features ...` to the build system. When using `cargo run`, pass the `--features` flag before the `--` seperating build flags from runtime flags.
+
+- To enable a single feature like `metal`: `cargo build --release --features metal`.
+- To enable multiple features, specify them in quotes: `cargo build --release --features "cuda flash-attn cudnn"`.
+
 ## Benchmarks
 |Device|Mistral.rs Completion T/s|Llama.cpp Completion T/s|
 |-|-|-|
