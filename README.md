@@ -91,7 +91,7 @@ Rust multithreaded API for easy integration into any application.
 
 Python API for mistral.rs.
 
-- [Docs](mistralrs-pyo3/README.md)
+- [Docs and installation](mistralrs-pyo3/README.md)
 - [Example](examples/python/python_api.py)
 - [Cookbook](examples/python/cookbook.ipynb)
 
@@ -99,7 +99,7 @@ Python API for mistral.rs.
 
 OpenAI API compatible API server
 
-- [Docs](examples/http.md).
+- [API Docs](examples/http.md).
 - [Running](README.md#run)
 - [Example](examples/server/chat.py)
 
