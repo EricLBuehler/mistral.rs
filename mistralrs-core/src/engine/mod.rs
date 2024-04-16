@@ -142,7 +142,7 @@ impl Engine {
                         .collect::<Vec<_>>()
                         .join(", ");
 
-                    tracing::debug!(
+                    tracing::info!(
                         "Prompt[{}] Completion[{}] - {}ms",
                         prompt_lengths,
                         completion_lengths,
