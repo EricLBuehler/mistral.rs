@@ -18,6 +18,7 @@ pub use mistralrs_lora::Ordering;
 pub use pipeline::Pipeline;
 
 mod aici;
+mod device_map;
 mod engine;
 mod models;
 mod pipeline;
