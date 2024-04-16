@@ -607,10 +607,6 @@ fn get_xlora_paths(
                 last_err.unwrap()
             )
         });
-        let adapter_order = match xlora_config.adapters.clone() {
-            Either::Left(l) => l,
-            Either::Right(r) => r.keys().cloned().collect::<Vec<_>>(),
-        };
 
         let adapter_files = api
             .info()?
@@ -639,7 +635,15 @@ fn get_xlora_paths(
         }
         let mut adapters_configs = Vec::new();
         let mut adapters_safetensors = Vec::new();
-        for (i, name) in adapter_order.iter().enumerate() {
+        for (i, name) in xlora_order
+            .as_ref()
+            .unwrap()
+            .adapters
+            .as_ref()
+            .unwrap()
+            .iter()
+            .enumerate()
+        {
             let paths = adapters_paths.get(name).unwrap();
             for path in paths {
                 if path.extension().unwrap() == "safetensors" {
