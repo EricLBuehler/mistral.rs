@@ -50,6 +50,12 @@ pub fn prompt_mode(
         sender.send(req.clone()).unwrap();
     }
 
+    let mut completion_tokens = 0;
+    let mut prompt_tokens = 0;
+
+    let mut total_completion_time_sec = 0.0;
+    let mut total_prompt_time_sec = 0.0;
+
     for _ in 0..prompt_concurrency {
         let resp = rx.recv();
         if let Ok(resp) = resp {
@@ -66,8 +72,10 @@ pub fn prompt_mode(
                 Response::Done(res) => {
                     println!("{}", res.choices[0].message.content);
                     println!("=======================");
-                    println!("Completion T/s = {}", res.usage.avg_compl_tok_per_sec);
-                    println!("Prompt T/s = {}", res.usage.avg_prompt_tok_per_sec);
+                    completion_tokens += res.usage.completion_tokens;
+                    prompt_tokens += res.usage.prompt_tokens;
+                    total_completion_time_sec += res.usage.total_completion_time_sec;
+                    total_prompt_time_sec += res.usage.total_prompt_time_sec;
                 }
                 Response::Chunk(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
@@ -75,4 +83,12 @@ pub fn prompt_mode(
             }
         }
     }
+
+    let avg_compl_tok_per_sec =
+        completion_tokens as f32 / (total_completion_time_sec / prompt_concurrency as f32);
+    let avg_prompt_tok_per_sec =
+        prompt_tokens as f32 / (total_prompt_time_sec / prompt_concurrency as f32);
+
+    println!("Prompt T/s = {}", avg_prompt_tok_per_sec);
+    println!("Completion T/s = {}", avg_compl_tok_per_sec);
 }
