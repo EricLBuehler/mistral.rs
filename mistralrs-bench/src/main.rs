@@ -2,9 +2,8 @@ use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
-    Constraint, Loader, MistralLoader, MistralRs, MistralRsConfig, MistralSpecificConfig,
-    ModelKind, Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
-    Usage,
+    Constraint, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelKind, ModelSelected,
+    Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource, Usage,
 };
 use std::sync::Arc;
 use std::{fmt::Display, sync::mpsc::channel};
@@ -191,6 +190,10 @@ fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
+    /// Model
+    #[clap(subcommand)]
+    model: ModelSelected,
+
     /// Number of prompt tokens to run.
     #[arg(long, short = 'p', default_value_t = 512)]
     n_prompt: usize,
@@ -210,36 +213,17 @@ struct Args {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let tok_model_id = "mistralai/Mistral-7B-Instruct-v0.1";
-    let tokenizer_json = None;
-    let quantized_model_id = "TheBloke/Mistral-7B-Instruct-v0.1-GGUF";
-    let quantized_filename = "mistral-7b-instruct-v0.1.Q4_K_M.gguf";
-    let repeat_last_n = 64;
-
-    let no_kv_cache = false;
-    let chat_template = None;
 
     #[cfg(not(feature = "flash-attn"))]
     let use_flash_attn = false;
     #[cfg(feature = "flash-attn")]
     let use_flash_attn = true;
 
-    let loader = MistralLoader::new(
-        tok_model_id.to_string(),
-        MistralSpecificConfig {
-            use_flash_attn,
-            repeat_last_n,
-        },
-        Some(quantized_model_id.to_string()),
-        Some(quantized_filename.to_string()),
-        None,
-        ModelKind::QuantizedGGUF,
-        None,
-        no_kv_cache,
-        chat_template,
-        tokenizer_json,
-        None,
-    );
+    let model_name = args.model.model_id();
+
+    let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
+        .with_use_flash_attn(use_flash_attn)
+        .build()?;
 
     #[cfg(feature = "metal")]
     let device = Device::new_metal(0)?;
@@ -275,14 +259,13 @@ fn main() -> anyhow::Result<()> {
     let pipeline = loader.load_model(None, token_source, None, &device)?;
     info!("Model loaded.");
 
-    let config = MistralRsConfig::new(
+    let mistralrs = MistralRsBuilder::new(
         pipeline,
         SchedulerMethod::Fixed(args.concurrency.try_into().unwrap()),
     )
     .with_no_prefix_cache(true)
-    .with_disable_eos_stop(true);
-
-    let mistralrs = MistralRs::new(config);
+    .with_disable_eos_stop(true)
+    .build();
 
     let mut results = vec![];
 
@@ -316,7 +299,7 @@ fn main() -> anyhow::Result<()> {
         results.push(r);
     }
 
-    print_usage(quantized_model_id, &device, results);
+    print_usage(&model_name, &device, results);
 
     Ok(())
 }

@@ -19,6 +19,11 @@ pub use pipeline::Pipeline;
 
 mod aici;
 mod engine;
+mod model_loader;
+pub use model_loader::{get_tgt_non_granular_index, LoaderBuilder};
+mod model_selected;
+pub use model_selected::ModelSelected;
+
 mod models;
 mod pipeline;
 mod prefix_cacher;
@@ -50,7 +55,7 @@ pub struct MistralRs {
     next_request_id: Mutex<RefCell<usize>>,
 }
 
-pub struct MistralRsConfig {
+pub struct MistralRsBuilder {
     pipeline: Box<Mutex<dyn Pipeline>>,
     method: SchedulerMethod,
     log: Option<String>,
@@ -61,7 +66,7 @@ pub struct MistralRsConfig {
     disable_eos_stop: Option<bool>,
 }
 
-impl MistralRsConfig {
+impl MistralRsBuilder {
     pub fn new(pipeline: Box<Mutex<dyn Pipeline>>, method: SchedulerMethod) -> Self {
         Self {
             pipeline,
@@ -103,11 +108,15 @@ impl MistralRsConfig {
         self.disable_eos_stop = Some(disable_eos_stop);
         self
     }
+
+    pub fn build(self) -> Arc<MistralRs> {
+        MistralRs::new(self)
+    }
 }
 
 impl MistralRs {
-    pub fn new(config: MistralRsConfig) -> Arc<Self> {
-        let MistralRsConfig {
+    fn new(config: MistralRsBuilder) -> Arc<Self> {
+        let MistralRsBuilder {
             pipeline,
             method,
             log,

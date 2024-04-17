@@ -690,3 +690,95 @@ pub enum ModelSelected {
         order: String,
     },
 }
+
+impl ModelSelected {
+    pub fn model_id(&self) -> String {
+        match self {
+            ModelSelected::Mistral { model_id, .. }
+            | ModelSelected::XLoraMistral { model_id, .. }
+            | ModelSelected::Gemma { model_id, .. }
+            | ModelSelected::XLoraGemma { model_id, .. }
+            | ModelSelected::Llama { model_id, .. }
+            | ModelSelected::XLoraLlama { model_id, .. }
+            | ModelSelected::Mixtral { model_id, .. }
+            | ModelSelected::XLoraMixtral { model_id, .. }
+            | ModelSelected::Phi2 { model_id, .. }
+            | ModelSelected::XLoraPhi2 { model_id, .. }
+            | ModelSelected::LoraMistral { model_id, .. }
+            | ModelSelected::LoraMixtral { model_id, .. }
+            | ModelSelected::LoraLlama { model_id, .. } => model_id.to_string(),
+            ModelSelected::MistralGGUF {
+                quantized_model_id, ..
+            } => quantized_model_id
+                .as_ref()
+                .map(|it| it.to_string())
+                .unwrap_or("MistralGGUF".to_string()),
+            ModelSelected::LlamaGGUF {
+                quantized_model_id, ..
+            } => quantized_model_id
+                .as_ref()
+                .map(|it| it.to_string())
+                .unwrap_or("LlamaGGUF".to_string()),
+            ModelSelected::LlamaGGML {
+                quantized_model_id, ..
+            } => quantized_model_id
+                .as_ref()
+                .map(|it| it.to_string())
+                .unwrap_or("LlamaGGML".to_string()),
+            ModelSelected::MixtralGGUF {
+                quantized_model_id, ..
+            } => quantized_model_id
+                .as_ref()
+                .map(|it| it.to_string())
+                .unwrap_or("MixtralGGUF".to_string()),
+            ModelSelected::XLoraMistralGGUF {
+                quantized_model_id, ..
+            } => quantized_model_id
+                .as_ref()
+                .map(|it| it.to_string())
+                .unwrap_or("XLoraMistralGGUF".to_string()),
+            ModelSelected::XLoraLlamaGGUF {
+                quantized_model_id, ..
+            } => quantized_model_id
+                .as_ref()
+                .map(|it| it.to_string())
+                .unwrap_or("XLoraLlamaGGUF".to_string()),
+            ModelSelected::XLoraLlamaGGML {
+                quantized_model_id, ..
+            } => quantized_model_id
+                .as_ref()
+                .map(|it| it.to_string())
+                .unwrap_or("XLoraLlamaGGML".to_string()),
+            ModelSelected::XLoraMixtralGGUF {
+                quantized_model_id, ..
+            } => quantized_model_id
+                .as_ref()
+                .map(|it| it.to_string())
+                .unwrap_or("XLoraMixtralGGUF".to_string()),
+            ModelSelected::LoraMistralGGUF {
+                quantized_model_id, ..
+            } => quantized_model_id
+                .as_ref()
+                .map(|it| it.to_string())
+                .unwrap_or("LoraMistralGGUF".to_string()),
+            ModelSelected::LoraLlamaGGUF {
+                quantized_model_id, ..
+            } => quantized_model_id
+                .as_ref()
+                .map(|it| it.to_string())
+                .unwrap_or("LoraLlamaGGUF".to_string()),
+            ModelSelected::LoraLlamaGGML {
+                quantized_model_id, ..
+            } => quantized_model_id
+                .as_ref()
+                .map(|it| it.to_string())
+                .unwrap_or("LoraLlamaGGML".to_string()),
+            ModelSelected::LoraMixtralGGUF {
+                quantized_model_id, ..
+            } => quantized_model_id
+                .as_ref()
+                .map(|it| it.to_string())
+                .unwrap_or("LoraMixtralGGUF".to_string()),
+        }
+    }
+}
