@@ -161,6 +161,7 @@ fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
                 backend.cell(),
                 r.test_name.to_string().cell(),
                 get_tok_s(&r).cell().justify(Justify::Right),
+                (1000.0 / get_tok_s(&r)).cell().justify(Justify::Right),
                 r.concurrency.cell().justify(Justify::Right),
                 (get_tok_s(&r) * r.concurrency as f32)
                     .cell()
@@ -179,8 +180,9 @@ fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
             // "ngl".cell().bold(true),
             "test".cell().bold(true),
             "t/s".cell().bold(true),
+            "ms/t".cell().bold(true),
             "concurrency".cell().bold(true),
-            "tp/s".cell().bold(true),
+            "throughput/s".cell().bold(true),
         ])
         .bold(true);
     print_stdout(table).expect("print table");
