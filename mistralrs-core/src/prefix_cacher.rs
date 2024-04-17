@@ -44,6 +44,9 @@ impl PrefixCacheManager {
     /// This always keeps the cache on the device. If later on, a new seq cannot be allocated due to memory shortage,
     /// some caches will be evicted.
     pub fn add_sequence(&mut self, seq: &mut Sequence) {
+        if self.no_prefix_cache {
+            return;
+        }
         self.caches
             .insert(seq.get_toks().to_vec(), seq.cache().clone());
         if seq.is_xlora() {
@@ -55,6 +58,9 @@ impl PrefixCacheManager {
     /// Evict the caches to CPU. This will evict the first k seqs such that the number of sequences on device after the copy is
     /// the maximum allowed. Returns the number of evicted sequences.
     pub fn evict_to_cpu(&mut self) -> Result<usize> {
+        if self.no_prefix_cache {
+            return Ok(0);
+        }
         // Intentionally evict the first ones first, as they are the oldest
         for (ids, cache) in self
             .caches
