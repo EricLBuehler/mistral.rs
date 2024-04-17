@@ -108,6 +108,8 @@ impl Engine {
                     Self::set_none_cache(&mut *pipeline);
                 }
 
+                handle_pipeline_forward_error!("sampling", Self::sample_seqs(&mut *pipeline, &mut scheduled.prompt, logits, &mut self.prefix_cacher), &mut scheduled.prompt, pipeline, 'lp);
+
                 for seq in scheduled.prompt.iter_mut() {
                     seq.set_state(SequenceState::RunningCompletion);
                     let now = SystemTime::now()
@@ -119,8 +121,6 @@ impl Engine {
                     seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
                     seq.prompt_timestamp = Some(now);
                 }
-
-                handle_pipeline_forward_error!("sampling", Self::sample_seqs(&mut *pipeline, &mut scheduled.prompt, logits, &mut self.prefix_cacher), &mut scheduled.prompt, pipeline, 'lp);
             }
 
             if self.is_debug {
@@ -142,7 +142,7 @@ impl Engine {
                         .collect::<Vec<_>>()
                         .join(", ");
 
-                    tracing::debug!(
+                    tracing::info!(
                         "Prompt[{}] Completion[{}] - {}ms",
                         prompt_lengths,
                         completion_lengths,
