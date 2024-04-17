@@ -59,6 +59,7 @@ impl MistralRs {
         no_kv_cache: bool,
         no_prefix_cache: bool,
         prefix_cache_n: usize,
+        disable_eos_stop: bool,
     ) -> Arc<Self> {
         let (tx, rx) = channel();
 
@@ -82,6 +83,7 @@ impl MistralRs {
                 no_kv_cache,
                 no_prefix_cache,
                 prefix_cache_n,
+                disable_eos_stop,
             );
             engine.run();
         });

@@ -221,6 +221,7 @@ impl MistralLoader {
             self.no_kv_cache,
             false,
             prefix_cache_n,
+            false,
         );
 
         Ok(Runner { runner: mistralrs })

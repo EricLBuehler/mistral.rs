@@ -894,6 +894,7 @@ async fn main() -> Result<()> {
         args.no_kv_cache,
         false,
         args.prefix_cache_n,
+        false,
     );
 
     if let Some(prompt) = args.prompt {

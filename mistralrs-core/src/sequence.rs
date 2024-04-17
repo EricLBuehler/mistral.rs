@@ -267,8 +267,17 @@ impl Sequence {
         self.state.set(state);
     }
 
-    pub fn is_done(&self, tok: u32, eos_tok: u32, max_model_len: usize) -> Option<StopReason> {
-        if tok == eos_tok {
+    pub fn is_done(
+        &self,
+        tok: u32,
+        eos_tok: Option<u32>,
+        max_model_len: usize,
+    ) -> Option<StopReason> {
+        let is_eos = match eos_tok {
+            Some(eos_tok) => eos_tok == tok,
+            None => false,
+        };
+        if is_eos {
             Some(StopReason::Eos)
         } else if self.stop_tokens.contains(&tok) {
             Some(StopReason::StopTok(tok))

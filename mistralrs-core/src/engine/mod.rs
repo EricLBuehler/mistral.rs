@@ -42,6 +42,7 @@ pub struct Engine {
     no_kv_cache: bool,
     prefix_cacher: PrefixCacheManager,
     is_debug: bool,
+    disable_eos_stop: bool,
 }
 
 impl Engine {
@@ -53,6 +54,7 @@ impl Engine {
         no_kv_cache: bool,
         no_prefix_cache: bool,
         prefix_cache_n: usize,
+        disable_eos_stop: bool,
     ) -> Self {
         let device = get_mut_arcmutex!(pipeline).device().clone();
         let is_xlora = get_mut_arcmutex!(pipeline).is_xlora();
@@ -72,6 +74,7 @@ impl Engine {
             is_debug: std::env::var("RUST_LOG")
                 .unwrap_or_default()
                 .contains("debug"),
+            disable_eos_stop,
         }
     }
 
@@ -98,7 +101,13 @@ impl Engine {
                     Self::set_none_cache(&mut *pipeline);
                 }
 
-                handle_pipeline_forward_error!("sampling", Self::sample_seqs(&mut *pipeline, &mut scheduled.completion, logits, &mut self.prefix_cacher), &mut scheduled.completion, pipeline, 'lp);
+                handle_pipeline_forward_error!(
+                    "sampling",
+                    Self::sample_seqs(&mut *pipeline, &mut scheduled.completion, logits, &mut self.prefix_cacher, self.disable_eos_stop),
+                    &mut scheduled.completion,
+                    pipeline,
+                    'lp
+                );
             }
 
             if scheduled.prompt.len() > 0 {
@@ -113,7 +122,13 @@ impl Engine {
                     Self::set_none_cache(&mut *pipeline);
                 }
 
-                handle_pipeline_forward_error!("sampling", Self::sample_seqs(&mut *pipeline, &mut scheduled.prompt, logits, &mut self.prefix_cacher), &mut scheduled.prompt, pipeline, 'lp);
+                handle_pipeline_forward_error!(
+                    "sampling",
+                    Self::sample_seqs(&mut *pipeline, &mut scheduled.prompt, logits, &mut self.prefix_cacher,self.disable_eos_stop,),
+                    &mut scheduled.prompt,
+                    pipeline,
+                    'lp
+                );
 
                 for seq in scheduled.prompt.iter_mut() {
                     seq.set_state(SequenceState::RunningCompletion);
@@ -173,6 +188,7 @@ impl Engine {
         seqs: &mut [&mut Sequence],
         logits: Tensor,
         prefix_cacher: &mut PrefixCacheManager,
+        disable_eos_stop: bool,
     ) -> Result<()> {
         let seqs_len = seqs.len();
         let logits_seq = logits.chunk(seqs_len, 0).unwrap();
@@ -185,6 +201,11 @@ impl Engine {
             let next_token = handle_seq_error_stateaware_ok!(sampled, seq);
             let next_token_id = next_token.token;
 
+            let eos_tok = if disable_eos_stop {
+                None
+            } else {
+                Some(eos_tok)
+            };
             let is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
             seq.add_token(
                 next_token.clone(),

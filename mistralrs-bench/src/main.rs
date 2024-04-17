@@ -266,6 +266,7 @@ fn main() -> anyhow::Result<()> {
         no_kv_cache,
         no_prefix_cache,
         args.prefix_cache_n,
+        true,
     );
 
     let mut results = vec![];
