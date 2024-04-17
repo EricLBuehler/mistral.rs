@@ -1,7 +1,7 @@
 use candle_core::DType as _DType;
 use mistralrs::{
-    LlamaLoader as _LlamaLoader, LlamaSpecificConfig, Loader, MistralRs, ModelKind as _ModelKind,
-    SchedulerMethod, TokenSource,
+    LlamaLoader as _LlamaLoader, LlamaSpecificConfig, Loader, MistralRs, MistralRsConfig,
+    ModelKind as _ModelKind, SchedulerMethod, TokenSource,
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
 use std::fs::File;
@@ -214,16 +214,15 @@ impl LlamaLoader {
             max_seqs
         };
 
-        let mistralrs = MistralRs::new(
+        let config = MistralRsConfig::new(
             pipeline,
             SchedulerMethod::Fixed(maxseqs.try_into().unwrap()),
-            logfile,
-            truncate_sequence,
-            self.no_kv_cache,
-            false,
-            prefix_cache_n,
-            false,
-        );
+        )
+        .with_opt_log(logfile)
+        .with_truncate_sequence(truncate_sequence)
+        .with_no_kv_cache(self.no_kv_cache)
+        .with_prefix_cache_n(prefix_cache_n);
+        let mistralrs = MistralRs::new(config);
 
         Ok(Runner { runner: mistralrs })
     }

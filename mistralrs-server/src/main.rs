@@ -11,8 +11,8 @@ use candle_core::Device;
 use clap::Parser;
 use mistralrs_core::{
     GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader, MistralLoader,
-    MistralRs, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind, Phi2Loader,
-    Phi2SpecificConfig, SchedulerMethod, TokenSource,
+    MistralRs, MistralRsConfig, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig,
+    ModelKind, Phi2Loader, Phi2SpecificConfig, SchedulerMethod, TokenSource,
 };
 use model_selected::ModelSelected;
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
@@ -886,16 +886,16 @@ async fn main() -> Result<()> {
     let pipeline = loader.load_model(None, args.token_source, None, &device)?;
     info!("Model loaded.");
 
-    let mistralrs = MistralRs::new(
+    let config = MistralRsConfig::new(
         pipeline,
         SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
-        args.log,
-        args.truncate_sequence,
-        args.no_kv_cache,
-        false,
-        args.prefix_cache_n,
-        false,
-    );
+    )
+    .with_opt_log(args.log)
+    .with_truncate_sequence(args.truncate_sequence)
+    .with_no_kv_cache(args.no_kv_cache)
+    .with_prefix_cache_n(args.prefix_cache_n);
+
+    let mistralrs = MistralRs::new(config);
 
     if let Some(prompt) = args.prompt {
         prompt_mode(

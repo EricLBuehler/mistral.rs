@@ -2,8 +2,9 @@ use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
-    Constraint, Loader, MistralLoader, MistralRs, MistralSpecificConfig, ModelKind, Request,
-    RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource, Usage,
+    Constraint, Loader, MistralLoader, MistralRs, MistralRsConfig, MistralSpecificConfig,
+    ModelKind, Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
+    Usage,
 };
 use std::sync::Arc;
 use std::{fmt::Display, sync::mpsc::channel};
@@ -254,20 +255,15 @@ fn main() -> anyhow::Result<()> {
     let pipeline = loader.load_model(None, token_source, None, &device)?;
     info!("Model loaded.");
 
-    let truncate_sequence = false;
-    let log = None;
-    let no_prefix_cache = true;
-
-    let mistralrs = MistralRs::new(
+    let config = MistralRsConfig::new(
         pipeline,
         SchedulerMethod::Fixed(args.batch_size.try_into().unwrap()),
-        log,
-        truncate_sequence,
-        no_kv_cache,
-        no_prefix_cache,
-        args.prefix_cache_n,
-        true,
-    );
+    )
+    .with_no_prefix_cache(true)
+    .with_prefix_cache_n(args.prefix_cache_n)
+    .with_disable_eos_stop(true);
+
+    let mistralrs = MistralRs::new(config);
 
     let mut results = vec![];
 
