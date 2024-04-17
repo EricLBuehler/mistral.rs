@@ -298,7 +298,7 @@ fn main() -> anyhow::Result<()> {
         results.push(r);
     }
 
-    print_usage(&model_name, &device, results);
+    print_usage(model_name, &device, results);
 
     Ok(())
 }
