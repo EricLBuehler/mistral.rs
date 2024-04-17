@@ -91,7 +91,7 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
         | ModelSelected::XLoraMixtralGGUF {
             tgt_non_granular_index,
             ..
-        } => tgt_non_granular_index.clone(),
+        } => *tgt_non_granular_index,
     }
 }
 
