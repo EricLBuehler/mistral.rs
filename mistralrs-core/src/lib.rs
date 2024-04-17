@@ -57,6 +57,7 @@ impl MistralRs {
         log: Option<String>,
         truncate_sequence: bool,
         no_kv_cache: bool,
+        no_prefix_cache: bool,
         prefix_cache_n: usize,
     ) -> Arc<Self> {
         let (tx, rx) = channel();
@@ -79,6 +80,7 @@ impl MistralRs {
                 method,
                 truncate_sequence,
                 no_kv_cache,
+                no_prefix_cache,
                 prefix_cache_n,
             );
             engine.run();

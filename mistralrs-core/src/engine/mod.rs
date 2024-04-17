@@ -52,6 +52,7 @@ impl Engine {
         method: SchedulerMethod,
         truncate_sequence: bool,
         no_kv_cache: bool,
+        no_prefix_cache: bool,
         prefix_cache_n: usize,
     ) -> Self {
         let device = get_mut_arcmutex!(pipeline).device().clone();
@@ -63,7 +64,12 @@ impl Engine {
             id: 0,
             truncate_sequence,
             no_kv_cache,
-            prefix_cacher: PrefixCacheManager::new(device, prefix_cache_n, is_xlora),
+            prefix_cacher: PrefixCacheManager::new(
+                device,
+                prefix_cache_n,
+                is_xlora,
+                no_prefix_cache,
+            ),
             is_debug: std::env::var("RUST_LOG")
                 .unwrap_or_default()
                 .contains("debug"),

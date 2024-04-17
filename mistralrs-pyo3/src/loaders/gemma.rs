@@ -216,6 +216,7 @@ impl GemmaLoader {
             logfile,
             truncate_sequence,
             self.no_kv_cache,
+            false,
             prefix_cache_n,
         );
 

@@ -10,6 +10,7 @@ pub struct PrefixCacheManager {
     xlora_cpu_caches: Option<IndexMap<Vec<u32>, LayerCaches>>,
     device: Device,
     pub n_on_device: usize,
+    no_prefix_cache: bool,
 }
 
 #[derive(Clone)]
@@ -20,7 +21,7 @@ pub struct MatchingCache {
 }
 
 impl PrefixCacheManager {
-    pub fn new(device: Device, n_on_device: usize, is_xlora: bool) -> Self {
+    pub fn new(device: Device, n_on_device: usize, is_xlora: bool, no_prefix_cache: bool) -> Self {
         PrefixCacheManager {
             caches: IndexMap::new(),
             cpu_caches: IndexMap::new(),
@@ -36,6 +37,7 @@ impl PrefixCacheManager {
             },
             device,
             n_on_device,
+            no_prefix_cache,
         }
     }
 
@@ -123,6 +125,9 @@ impl PrefixCacheManager {
 
     /// Search for a matching cache given some toks
     pub fn search_for_matching_cache(&mut self, toks: &[u32]) -> Result<Option<MatchingCache>> {
+        if self.no_prefix_cache {
+            return Ok(None);
+        }
         // Look for token ids such that they begins with `toks`
         let mut candidates = Vec::new();
         // Search the device cache

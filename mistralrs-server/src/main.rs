@@ -892,6 +892,7 @@ async fn main() -> Result<()> {
         args.log,
         args.truncate_sequence,
         args.no_kv_cache,
+        false,
         args.prefix_cache_n,
     );
 
