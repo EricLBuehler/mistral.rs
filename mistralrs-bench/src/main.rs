@@ -9,26 +9,6 @@ use std::sync::mpsc::channel;
 use std::sync::Arc;
 use tracing::{info, warn};
 
-#[derive(Parser)]
-#[command(version, about, long_about = None)]
-struct Args {
-    #[arg(long, default_value_t = 512)]
-    n_prompt: usize,
-
-    #[arg(long, default_value_t = 128)]
-    n_gen: usize,
-
-    #[arg(long, short, default_value_t = 512)]
-    batch_size: usize,
-
-    #[arg(long, short, default_value_t = 5)]
-    repetitions: usize,
-
-    /// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
-    #[arg(long, default_value_t = 16)]
-    prefix_cache_n: usize,
-}
-
 enum TestName {
     Prompt(usize),
     Gen(usize),
@@ -124,7 +104,6 @@ fn run_bench(
 fn get_tok_s(result: &BenchResult) -> f32 {
     match result.test_name {
         TestName::Prompt(_) => {
-            dbg!(&result.usages);
             let tokens = result.usages.iter().map(|u| u.prompt_tokens).sum::<usize>() as usize;
             let time = result
                 .usages
@@ -132,7 +111,7 @@ fn get_tok_s(result: &BenchResult) -> f32 {
                 .map(|u| u.total_prompt_time_sec)
                 .sum::<f32>();
 
-            tokens as f32 / time
+            tokens as f32 / (time / result.batch_size as f32)
         }
         TestName::Gen(_) => {
             let tokens = result
@@ -146,7 +125,7 @@ fn get_tok_s(result: &BenchResult) -> f32 {
                 .map(|u| u.total_completion_time_sec)
                 .sum::<f32>();
 
-            tokens as f32 / time
+            tokens as f32 / (time / result.batch_size as f32)
         }
     }
 }
@@ -185,7 +164,29 @@ fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
         .bold(true);
     print_stdout(table).expect("print table");
 }
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Args {
+    #[arg(long, short = 'p', default_value_t = 512)]
+    n_prompt: usize,
+
+    #[arg(long, short = 'n', default_value_t = 128)]
+    n_gen: usize,
+
+    #[arg(long, short, default_value_t = 512)]
+    batch_size: usize,
+
+    #[arg(long, short, default_value_t = 5)]
+    repetitions: usize,
+
+    /// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
+    #[arg(long, default_value_t = 16)]
+    prefix_cache_n: usize,
+}
+
 fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
     let tok_model_id = "mistralai/Mistral-7B-Instruct-v0.1";
     let tokenizer_json = None;
     let quantized_model_id = "TheBloke/Mistral-7B-Instruct-v0.1-GGUF";
@@ -250,7 +251,6 @@ fn main() -> anyhow::Result<()> {
     info!("Model kind is: {}", loader.get_kind().as_ref());
     let pipeline = loader.load_model(None, token_source, None, &device)?;
     info!("Model loaded.");
-    let args = Args::parse();
 
     let truncate_sequence = false;
     let log = None;
@@ -276,7 +276,7 @@ fn main() -> anyhow::Result<()> {
                 echo_prompt: false,
                 best_of: 1,
             },
-            args.n_gen,
+            args.n_gen - 1,
             args.batch_size,
             args.repetitions,
             TestName::Gen(args.n_gen),
