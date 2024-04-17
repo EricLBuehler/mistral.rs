@@ -107,28 +107,42 @@ fn run_bench(
 fn get_tok_s(result: &BenchResult) -> f32 {
     match result.test_name {
         TestName::Prompt(_) => {
-            let tokens = result.usages.iter().map(|u| u.prompt_tokens).sum::<usize>();
-            let time = result
+            // let tokens = result.usages.iter().map(|u| u.prompt_tokens).sum::<usize>();
+            // let time = result
+            //     .usages
+            //     .iter()
+            //     .map(|u| u.total_prompt_time_sec)
+            //     .sum::<f32>();
+
+            // tokens as f32 / time
+            let sum_of_avg = result
                 .usages
                 .iter()
-                .map(|u| u.total_prompt_time_sec)
+                .map(|u| u.avg_prompt_tok_per_sec)
                 .sum::<f32>();
-
-            tokens as f32 / (time / result.batch_size as f32)
+            sum_of_avg / result.usages.len() as f32
         }
         TestName::Gen(_) => {
-            let tokens = result
+            // let tokens = result
+            //     .usages
+            //     .iter()
+            //     .map(|u| u.completion_tokens)
+            //     .sum::<usize>();
+            // let time = result
+            //     .usages
+            //     .iter()
+            //     .map(|u| u.total_completion_time_sec)
+            //     .sum::<f32>();
+
+            // tokens as f32 / time
+
+            let sum_of_avg = result
                 .usages
                 .iter()
-                .map(|u| u.completion_tokens)
-                .sum::<usize>();
-            let time = result
-                .usages
-                .iter()
-                .map(|u| u.total_completion_time_sec)
+                .map(|u| u.avg_compl_tok_per_sec)
                 .sum::<f32>();
 
-            tokens as f32 / (time / result.batch_size as f32)
+            sum_of_avg / result.usages.len() as f32
         }
     }
 }
