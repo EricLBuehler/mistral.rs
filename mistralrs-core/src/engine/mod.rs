@@ -11,10 +11,9 @@ use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
     handle_seq_error_ok, handle_seq_error_stateaware_ok,
     response::CompletionChoice,
-    CompletionResponse, RequestType,
+    CompletionResponse, RequestMessage,
 };
 use candle_core::{Result, Tensor};
-use either::Either;
 use tracing::warn;
 
 use crate::{
@@ -487,7 +486,20 @@ impl Engine {
     }
 
     fn add_request(&mut self, request: Request) {
-        if request.messages.is_left()
+        let is_chat = matches!(request.messages, RequestMessage::Chat(_));
+        let echo_prompt = matches!(
+            request.messages,
+            RequestMessage::Completion {
+                echo_prompt: true,
+                ..
+            }
+        );
+
+        let best_of = match request.messages {
+            RequestMessage::Completion { best_of, .. } => best_of,
+            RequestMessage::Chat(_) | RequestMessage::CompletionTokens(_) => 1,
+        };
+        if is_chat
             && !get_mut_arcmutex!(self.pipeline)
                 .get_chat_template()
                 .has_chat_template()
@@ -500,14 +512,24 @@ impl Engine {
                     )).unwrap();
             return;
         }
+
+        let mut force_tokens = None;
         let formatted_prompt = match request.messages {
-            Either::Left(messages) => {
+            RequestMessage::Chat(messages) => {
                 handle_seq_error!(
                     get_mut_arcmutex!(self.pipeline).apply_chat_template(messages, true),
                     request.response
                 )
             }
-            Either::Right(prompt) => prompt,
+            RequestMessage::Completion { text, .. } => text,
+            RequestMessage::CompletionTokens(it) => {
+                let res = get_mut_arcmutex!(self.pipeline)
+                    .tokenizer()
+                    .decode(&it, false)
+                    .expect("cannot decode completion tokens");
+                force_tokens = Some(it);
+                res
+            }
         };
         if formatted_prompt.is_empty() {
             // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
@@ -519,10 +541,14 @@ impl Engine {
                 .unwrap();
             return;
         }
-        let mut prompt = handle_seq_error!(
-            get_mut_arcmutex!(self.pipeline).tokenize_prompt(&formatted_prompt),
-            request.response
-        );
+        let mut prompt = match force_tokens {
+            Some(tks) => tks,
+            None => handle_seq_error!(
+                get_mut_arcmutex!(self.pipeline).tokenize_prompt(&formatted_prompt),
+                request.response
+            ),
+        };
+
         if prompt.len() > get_mut_arcmutex!(self.pipeline).get_max_seq_len() {
             if !self.truncate_sequence {
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
@@ -615,8 +641,8 @@ impl Engine {
         let group = Rc::new(RefCell::new(SequenceGroup::new(
             request.sampling_params.n_choices,
             request.is_streaming,
-            request.request_type == RequestType::Chat,
-            request.best_of,
+            is_chat,
+            best_of,
         )));
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -678,12 +704,8 @@ impl Engine {
                 now.as_secs(),
                 recognizer.clone(),
                 request.suffix.clone(),
-                if let RequestType::Completion { echo_prompt } = request.request_type.clone() {
-                    if echo_prompt {
-                        Some(formatted_prompt.clone())
-                    } else {
-                        None
-                    }
+                if echo_prompt {
+                    Some(formatted_prompt.clone())
                 } else {
                     None
                 },

@@ -1,10 +1,9 @@
 use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
-use either::Either;
 use mistralrs_core::{
     Constraint, Loader, MistralLoader, MistralRs, MistralSpecificConfig, ModelKind, Request,
-    RequestType, Response, SamplingParams, SchedulerMethod, TokenSource, Usage,
+    RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource, Usage,
 };
 use std::sync::mpsc::channel;
 use std::sync::Arc;
@@ -51,7 +50,7 @@ struct BenchResult {
 
 fn run_bench(
     mistralrs: Arc<MistralRs>,
-    prompt: String,
+    prompt: RequestMessage,
     n_gen: usize,
     batch_size: usize,
     repetitions: usize,
@@ -74,15 +73,13 @@ fn run_bench(
 
     let req = Request {
         id: mistralrs.next_request_id(),
-        messages: Either::Right(prompt),
+        messages: prompt,
         sampling_params: sampling_params.clone(),
         response: tx,
         return_logprobs: false,
         is_streaming: false,
         constraint: Constraint::None,
-        request_type: RequestType::Chat,
         suffix: None,
-        best_of: None,
     };
 
     let mut usages = Vec::new();
@@ -108,7 +105,9 @@ fn run_bench(
                     }
                     Response::Chunk(_) => unreachable!(),
                     Response::CompletionModelError(_, _) => unreachable!(),
-                    Response::CompletionDone(_) => unreachable!(),
+                    Response::CompletionDone(res) => {
+                        usages.push(res.usage);
+                    }
                 },
                 Err(e) => unreachable!("Expected a Done response, got: {:?}", e),
             }
@@ -125,6 +124,7 @@ fn run_bench(
 fn get_tok_s(result: &BenchResult) -> f32 {
     match result.test_name {
         TestName::Prompt(_) => {
+            dbg!(&result.usages);
             let tokens = result.usages.iter().map(|u| u.prompt_tokens).sum::<usize>() as usize;
             let time = result
                 .usages
@@ -271,7 +271,11 @@ fn main() -> anyhow::Result<()> {
     if args.n_gen > 0 {
         let r = run_bench(
             mistralrs.clone(),
-            "Rust".to_string(),
+            RequestMessage::Completion {
+                text: "Rust".to_string(),
+                echo_prompt: false,
+                best_of: 1,
+            },
             args.n_gen,
             args.batch_size,
             args.repetitions,
@@ -281,9 +285,10 @@ fn main() -> anyhow::Result<()> {
     }
 
     if args.n_prompt > 0 {
+        let tks = (1000..1000 + args.n_prompt as u32).collect();
         let r = run_bench(
             mistralrs,
-            "Rust ".repeat(args.n_prompt),
+            RequestMessage::CompletionTokens(tks),
             1,
             args.batch_size,
             args.repetitions,

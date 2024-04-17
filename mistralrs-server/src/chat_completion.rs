@@ -23,8 +23,8 @@ use axum::{
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    ChatCompletionResponse, Constraint, MistralRs, Request, RequestType, Response, SamplingParams,
-    StopTokens as InternalStopTokens,
+    ChatCompletionResponse, Constraint, MistralRs, Request, RequestMessage, Response,
+    SamplingParams, StopTokens as InternalStopTokens,
 };
 use serde::Serialize;
 
@@ -167,9 +167,16 @@ fn parse_request(
                 message_map.insert("content".to_string(), message.content);
                 messages.push(message_map);
             }
-            Either::Left(messages)
+            RequestMessage::Chat(messages)
         }
-        Either::Right(prompt) => Either::Right(prompt),
+        Either::Right(prompt) => {
+            let mut messages = Vec::new();
+            let mut message_map = IndexMap::new();
+            message_map.insert("role".to_string(), "user".to_string());
+            message_map.insert("content".to_string(), prompt);
+            messages.push(message_map);
+            RequestMessage::Chat(messages)
+        }
     };
 
     Request {
@@ -191,15 +198,11 @@ fn parse_request(
         return_logprobs: oairequest.logprobs,
         is_streaming: oairequest.stream.unwrap_or(false),
         suffix: None,
-        best_of: None,
-
         constraint: match oairequest.grammar {
             Some(Grammar::Yacc(yacc)) => Constraint::Yacc(yacc),
             Some(Grammar::Regex(regex)) => Constraint::Regex(regex),
             None => Constraint::None,
         },
-
-        request_type: RequestType::Chat,
     }
 }
 

@@ -35,7 +35,7 @@ pub use pipeline::{
     MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind, Phi2Loader,
     Phi2SpecificConfig, TokenSource,
 };
-pub use request::{Constraint, Request, RequestType};
+pub use request::{Constraint, Request, RequestMessage};
 pub use response::Response;
 pub use response::{ChatCompletionResponse, CompletionResponse, Usage};
 pub use sampler::{SamplingParams, StopTokens};
