@@ -5,6 +5,7 @@ use super::{
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::deserialize_chat_template;
+use crate::device_map::new_dummy_mapper;
 use crate::models::Cache;
 use crate::pipeline::{calculate_eos_tok, ChatTemplate};
 use crate::xlora_models::{NonGranularState, XLoraConfig, XLoraMistral, XLoraModelWeights};
@@ -256,6 +257,7 @@ impl Loader for MistralLoader {
         } else {
             DType::F32
         };
+        let mapper = new_dummy_mapper();
 
         info!("Model config: {config:?}");
 
@@ -278,7 +280,7 @@ impl Loader for MistralLoader {
                     false,
                 )?;
 
-                let model = NormalModel::new(&config, vb)?;
+                let model = NormalModel::new(&config, vb, mapper)?;
                 Model::Normal(model)
             }
             ModelKind::XLoraNormal => {

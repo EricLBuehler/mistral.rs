@@ -1,28 +1,28 @@
+use std::fmt::Debug;
+
 use candle_core::{Device, Result, Tensor};
+use candle_nn::VarBuilder;
 use serde::Deserialize;
 use tracing::info;
 
 use crate::Pipeline;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct DeviceMapMetadata {
     device_layers: usize,
     host_layers: Option<usize>,
 }
 
-impl Default for DeviceMapMetadata {
-    fn default() -> Self {
-        Self {
-            device_layers: Default::default(),
-            host_layers: Default::default(),
-        }
-    }
-}
-
-pub trait DeviceMapper {
+pub trait DeviceMapper: Debug {
     fn map(&self, input: Tensor, layer: usize) -> Result<Tensor>;
+    fn set_device<'a>(&self, layer: usize, varbuilder: VarBuilder<'a>) -> VarBuilder<'a>;
 }
 
+pub fn new_dummy_mapper() -> Box<dyn DeviceMapper + Send + Sync> {
+    Box::new(DummyDeviceMapper)
+}
+
+#[derive(Debug)]
 pub struct LayerDeviceMapper {
     mappings: Vec<Device>,
 }
@@ -51,12 +51,19 @@ impl DeviceMapper for LayerDeviceMapper {
     fn map(&self, input: Tensor, layer: usize) -> Result<Tensor> {
         input.to_device(&self.mappings[layer])
     }
+    fn set_device<'a>(&self, layer: usize, varbuilder: VarBuilder<'a>) -> VarBuilder<'a> {
+        varbuilder.set_device(self.mappings[layer].clone())
+    }
 }
 
+#[derive(Debug)]
 pub struct DummyDeviceMapper;
 
 impl DeviceMapper for DummyDeviceMapper {
     fn map(&self, input: Tensor, _: usize) -> Result<Tensor> {
         Ok(input)
+    }
+    fn set_device<'a>(&self, _: usize, varbuilder: VarBuilder<'a>) -> VarBuilder<'a> {
+        varbuilder
     }
 }
