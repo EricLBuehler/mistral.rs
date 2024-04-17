@@ -235,11 +235,17 @@ impl Sampler {
             let presence_penalty = self.presence_penalty.unwrap_or(0.);
 
             //mu[j] -> mu[j] - c[j] * alpha_frequency - float(c[j] > 0) * alpha_presence
+
+            let mut counts = vec![0.0f32; logits.len()];
+            for ctx in context.iter() {
+                counts[*ctx as usize] += 1.0;
+            }
+
             for (token_id, logit) in logits.iter_mut().enumerate() {
-                let count = context.iter().filter(|x| **x as usize == token_id).count();
+                let count = counts[token_id];
                 *logit = *logit
-                    - count as f32 * frequency_penalty
-                    - if count > 0 { 1. } else { 0. } * presence_penalty;
+                    - count * frequency_penalty
+                    - if count > 0.0 { 1. } else { 0. } * presence_penalty;
             }
         }
         let vocab_size = logits.len();
