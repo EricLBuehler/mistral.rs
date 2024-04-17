@@ -4,7 +4,8 @@ members = [
     "mistralrs-core",
     "mistralrs-lora",
     "mistralrs-pyo3",
-    "mistralrs", "mistralrs-bench",
+    "mistralrs",
+    "mistralrs-bench",
 ]
 resolver = "2"
 
