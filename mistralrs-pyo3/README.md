@@ -24,6 +24,8 @@
 
 Please find [API docs here](API.md). We also provide type stubs [here](mistralrs.pyi), which can serve as another form of documentation.
 
+We also provide [a cookbook here](../examples/python/cookbook.ipynb)!
+
 ## Example
 ```python
 from mistralrs import ModelKind, MistralLoader, ChatCompletionRequest
