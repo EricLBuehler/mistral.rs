@@ -219,11 +219,10 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "flash-attn")]
     let use_flash_attn = true;
 
-    let model_name = args.model.model_id();
-
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
         .with_use_flash_attn(use_flash_attn)
         .build()?;
+    let model_name = loader.get_id();
 
     #[cfg(feature = "metal")]
     let device = Device::new_metal(0)?;
