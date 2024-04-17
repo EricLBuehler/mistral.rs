@@ -7,8 +7,7 @@ Mistral.rs is a fast LLM inference platform written. We support inference on a v
 - More models: please submit requests [here](https://github.com/EricLBuehler/mistral.rs/issues/156).
 - X-LoRA: Scalings `topk` and softmax `topk` ([#48](https://github.com/EricLBuehler/mistral.rs/issues/48)).
 - Parallel linear layers (sharding) ([#50](https://github.com/EricLBuehler/mistral.rs/issues/50)).
-- Phi2 Python support
-- Device offloading
+- Device offloading ([#157](https://github.com/EricLBuehler/mistral.rs/pull/157))
 
 ## Description
 **Fast**:
