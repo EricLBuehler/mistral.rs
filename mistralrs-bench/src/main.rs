@@ -162,6 +162,9 @@ fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
                 r.concurrency.cell().justify(Justify::Right),
                 r.test_name.to_string().cell(),
                 get_tok_s(&r).cell().justify(Justify::Right),
+                (get_tok_s(&r) * r.concurrency as f32)
+                    .cell()
+                    .justify(Justify::Right),
             ]
         })
         .collect();
@@ -177,6 +180,7 @@ fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
             "concurrency".cell().bold(true),
             "test".cell().bold(true),
             "t/s".cell().bold(true),
+            "tp/s".cell().bold(true),
         ])
         .bold(true);
     print_stdout(table).expect("print table");
@@ -185,21 +189,21 @@ fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
+    /// Number of prompt tokens to run.
     #[arg(long, short = 'p', default_value_t = 512)]
     n_prompt: usize,
 
+    /// Number of generations tokens to run.
     #[arg(long, short = 'n', default_value_t = 128)]
     n_gen: usize,
 
+    /// Number of concurrent requests to run.
     #[arg(long, short, default_value_t = 1)]
     concurrency: usize,
 
+    /// Number of times to repeat each test.
     #[arg(long, short, default_value_t = 5)]
     repetitions: usize,
-
-    /// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
-    #[arg(long, default_value_t = 16)]
-    prefix_cache_n: usize,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -274,7 +278,6 @@ fn main() -> anyhow::Result<()> {
         SchedulerMethod::Fixed(args.concurrency.try_into().unwrap()),
     )
     .with_no_prefix_cache(true)
-    .with_prefix_cache_n(args.prefix_cache_n)
     .with_disable_eos_stop(true);
 
     let mistralrs = MistralRs::new(config);
