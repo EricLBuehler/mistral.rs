@@ -27,7 +27,7 @@ impl Display for TestName {
 
 struct BenchResult {
     usages: Vec<Usage>,
-    batch_size: usize,
+    concurrency: usize,
     test_name: TestName,
 }
 
@@ -35,7 +35,7 @@ fn run_bench(
     mistralrs: Arc<MistralRs>,
     prompt: RequestMessage,
     n_gen: usize,
-    batch_size: usize,
+    concurrency: usize,
     repetitions: usize,
     test_name: TestName,
 ) -> anyhow::Result<BenchResult> {
@@ -68,10 +68,10 @@ fn run_bench(
     let mut usages = Vec::new();
 
     for _ in 0..repetitions {
-        for _ in 0..batch_size {
+        for _ in 0..concurrency {
             sender.send(req.clone()).unwrap();
         }
-        for _ in 0..batch_size {
+        for _ in 0..concurrency {
             match rx.recv() {
                 Ok(r) => match r {
                     Response::InternalError(e) => {
@@ -99,7 +99,7 @@ fn run_bench(
 
     Ok(BenchResult {
         usages,
-        batch_size,
+        concurrency,
         test_name,
     })
 }
@@ -159,7 +159,7 @@ fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
             vec![
                 model.cell(),
                 backend.cell(),
-                r.batch_size.cell().justify(Justify::Right),
+                r.concurrency.cell().justify(Justify::Right),
                 r.test_name.to_string().cell(),
                 get_tok_s(&r).cell().justify(Justify::Right),
             ]
@@ -174,7 +174,7 @@ fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
             // "params".cell().bold(true),
             "backend".cell().bold(true),
             // "ngl".cell().bold(true),
-            "n_batch".cell().bold(true),
+            "concurrency".cell().bold(true),
             "test".cell().bold(true),
             "t/s".cell().bold(true),
         ])
@@ -191,8 +191,8 @@ struct Args {
     #[arg(long, short = 'n', default_value_t = 128)]
     n_gen: usize,
 
-    #[arg(long, short, default_value_t = 512)]
-    batch_size: usize,
+    #[arg(long, short, default_value_t = 1)]
+    concurrency: usize,
 
     #[arg(long, short, default_value_t = 5)]
     repetitions: usize,
@@ -271,7 +271,7 @@ fn main() -> anyhow::Result<()> {
 
     let config = MistralRsConfig::new(
         pipeline,
-        SchedulerMethod::Fixed(args.batch_size.try_into().unwrap()),
+        SchedulerMethod::Fixed(args.concurrency.try_into().unwrap()),
     )
     .with_no_prefix_cache(true)
     .with_prefix_cache_n(args.prefix_cache_n)
@@ -290,7 +290,7 @@ fn main() -> anyhow::Result<()> {
                 best_of: 1,
             },
             args.n_gen - 1,
-            args.batch_size,
+            args.concurrency,
             args.repetitions,
             TestName::Gen(args.n_gen),
         )?;
@@ -303,7 +303,7 @@ fn main() -> anyhow::Result<()> {
             mistralrs,
             RequestMessage::CompletionTokens(tks),
             1,
-            args.batch_size,
+            args.concurrency,
             args.repetitions,
             TestName::Prompt(args.n_prompt),
         )?;
