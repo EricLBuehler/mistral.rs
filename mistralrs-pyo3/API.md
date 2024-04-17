@@ -50,6 +50,13 @@ There are several ways to load different architectures of model:
     - `tokenizer_json=None`: Tokenizer json file.
     - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached. If this is set then the max running sequences will be set to 1.
 
+The base loader classes listed below are passed to the wrapper loader classes above during construction:
+- `MistralLoader`
+- `GemmaLoader`
+- `LlamaLoader`
+- `MixtralLoader`
+- `Phi2Loader`
+
 Each class has one method:
 ### `load(self, token_source: str = "cache", max_seqs: int = 16, truncate_sequence: bool = false, logfile: str | None = None, revision: str | None = None, token_source_value: str | None = None) -> Runner`
 Load a model.

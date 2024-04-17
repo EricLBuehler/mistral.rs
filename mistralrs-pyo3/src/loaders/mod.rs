@@ -10,6 +10,7 @@ pub mod gemma;
 pub mod llama;
 pub mod mistral;
 pub mod mixtral;
+pub mod phi2;
 
 #[pyclass]
 pub struct NormalLoader {
