@@ -46,6 +46,7 @@ pub struct Engine {
 }
 
 impl Engine {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         rx: Receiver<Request>,
         pipeline: Box<Mutex<dyn Pipeline>>,
