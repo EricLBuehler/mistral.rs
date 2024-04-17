@@ -5,8 +5,8 @@ use mistralrs_core::{
     Constraint, Loader, MistralLoader, MistralRs, MistralSpecificConfig, ModelKind, Request,
     RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource, Usage,
 };
-use std::sync::mpsc::channel;
 use std::sync::Arc;
+use std::{fmt::Display, sync::mpsc::channel};
 use tracing::{info, warn};
 
 enum TestName {
@@ -14,14 +14,16 @@ enum TestName {
     Gen(usize),
 }
 
-impl TestName {
-    fn to_string(&self) -> String {
-        match self {
+impl Display for TestName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
             TestName::Prompt(n) => format!("pp {}", n),
             TestName::Gen(n) => format!("tg {}", n),
-        }
+        };
+        write!(f, "{}", name)
     }
 }
+
 struct BenchResult {
     usages: Vec<Usage>,
     batch_size: usize,
@@ -104,7 +106,7 @@ fn run_bench(
 fn get_tok_s(result: &BenchResult) -> f32 {
     match result.test_name {
         TestName::Prompt(_) => {
-            let tokens = result.usages.iter().map(|u| u.prompt_tokens).sum::<usize>() as usize;
+            let tokens = result.usages.iter().map(|u| u.prompt_tokens).sum::<usize>();
             let time = result
                 .usages
                 .iter()
@@ -118,7 +120,7 @@ fn get_tok_s(result: &BenchResult) -> f32 {
                 .usages
                 .iter()
                 .map(|u| u.completion_tokens)
-                .sum::<usize>() as usize;
+                .sum::<usize>();
             let time = result
                 .usages
                 .iter()
@@ -300,5 +302,5 @@ fn main() -> anyhow::Result<()> {
 
     print_usage(quantized_model_id, &device, results);
 
-    return Ok(());
+    Ok(())
 }
