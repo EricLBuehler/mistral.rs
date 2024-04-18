@@ -29,6 +29,7 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: check
+          args: -- --token-source literal:${{ secrets.HF_TOKEN }}
 
   test:
     name: Test Suite
@@ -47,7 +48,7 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --workspace
+          args: --workspace -- --token-source literal:${{ secrets.HF_TOKEN }}
 
   fmt:
     name: Rustfmt
