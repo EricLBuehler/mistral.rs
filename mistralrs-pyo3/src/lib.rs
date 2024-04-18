@@ -27,7 +27,6 @@ use pyo3::{
 use std::fs::File;
 mod stream;
 
-
 #[cfg(not(feature = "metal"))]
 static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
 #[cfg(feature = "metal")]
