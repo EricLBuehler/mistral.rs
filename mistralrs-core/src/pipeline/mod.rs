@@ -273,7 +273,7 @@ pub trait Pipeline: Send + Sync {
             Either::Right(ref added) => &added.content,
         };
         let unk_tok = if let Some(ref unk) = self.get_chat_template().unk_token {
-            match unk.unk {
+            match unk.0 {
                 Either::Left(ref lit) => Some(lit.to_string()),
                 Either::Right(ref added) => Some(added.content.to_string()),
             }
