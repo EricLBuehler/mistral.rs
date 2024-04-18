@@ -61,10 +61,7 @@ pub struct AddedTokensDecoder {
 }
 
 #[derive(Debug, Deserialize)]
-struct Unk {
-    #[serde(with = "either::serde_untagged")]
-    unk: Either<String, AddedTokensDecoder>,
-}
+struct Unk(#[serde(with = "either::serde_untagged")] Either<String, AddedTokensDecoder>);
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
