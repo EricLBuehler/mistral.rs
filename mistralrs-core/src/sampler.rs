@@ -287,7 +287,11 @@ mod tests {
 
     #[allow(dead_code)]
     fn get_tokenizer() -> Tokenizer {
-        let api = ApiBuilder::new().with_progress(true).build().unwrap();
+        let api = ApiBuilder::new()
+            .with_progress(true)
+            .with_token(Some(std::env::var("TESTS_HF_TOKEN").unwrap()))
+            .build()
+            .unwrap();
         let api = api.repo(Repo::with_revision(
             "mistralai/Mistral-7B-Instruct-v0.1".to_string(),
             RepoType::Model,

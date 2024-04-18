@@ -45,9 +45,11 @@ jobs:
           toolchain: ${{ matrix.rust }}
           override: true
       - uses: actions-rs/cargo@v1
+        env:
+          TESTS_HF_TOKEN: ${{ secrets.HF_TOKEN }}
         with:
           command: test
-          args: --workspace -- --token-source literal:${{ secrets.HF_TOKEN }}
+          args: --workspace
 
   fmt:
     name: Rustfmt
