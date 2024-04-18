@@ -267,8 +267,17 @@ impl Sequence {
         self.state.set(state);
     }
 
-    pub fn is_done(&self, tok: u32, eos_tok: u32, max_model_len: usize) -> Option<StopReason> {
-        if tok == eos_tok {
+    pub fn is_done(
+        &self,
+        tok: u32,
+        eos_tok: Option<u32>,
+        max_model_len: usize,
+    ) -> Option<StopReason> {
+        let is_eos = match eos_tok {
+            Some(eos_tok) => eos_tok == tok,
+            None => false,
+        };
+        if is_eos {
             Some(StopReason::Eos)
         } else if self.stop_tokens.contains(&tok) {
             Some(StopReason::StopTok(tok))
@@ -390,7 +399,7 @@ impl Sequence {
 
 pub struct SequenceGroup {
     n_choices: usize, // The target number of choices to return. Can be decreased if an error is thrown.
-    best_of: Option<usize>, // Top n seqs based on cumulative logprobs.
+    best_of: usize,   // Top n seqs based on cumulative logprobs.
     pub total_prompt_toks: usize,
     pub total_toks: usize,
     pub total_prompt_time: u128,
@@ -404,12 +413,7 @@ pub struct SequenceGroup {
 }
 
 impl SequenceGroup {
-    pub fn new(
-        n_choices: usize,
-        is_streaming: bool,
-        is_chat: bool,
-        best_of: Option<usize>,
-    ) -> Self {
+    pub fn new(n_choices: usize, is_streaming: bool, is_chat: bool, best_of: usize) -> Self {
         Self {
             choices: Vec::new(),
             completion_choices: Vec::new(),
@@ -438,7 +442,7 @@ impl SequenceGroup {
         choices.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
         choices
             .into_iter()
-            .take(self.best_of.unwrap())
+            .take(self.best_of)
             .map(|(_, x)| x)
             .collect::<Vec<_>>()
     }

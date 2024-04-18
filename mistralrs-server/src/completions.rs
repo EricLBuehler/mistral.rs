@@ -12,9 +12,8 @@ use axum::{
     http::{self, StatusCode},
     response::IntoResponse,
 };
-use either::Either;
 use mistralrs_core::{
-    CompletionResponse, Constraint, MistralRs, Request, RequestType, Response, SamplingParams,
+    CompletionResponse, Constraint, MistralRs, Request, RequestMessage, Response, SamplingParams,
     StopTokens as InternalStopTokens,
 };
 use serde::Serialize;
@@ -112,7 +111,11 @@ fn parse_request(
 
     Request {
         id: state.next_request_id(),
-        messages: Either::Right(oairequest.prompt),
+        messages: RequestMessage::Completion {
+            text: oairequest.prompt,
+            echo_prompt: oairequest.echo_prompt,
+            best_of: oairequest.best_of,
+        },
         sampling_params: SamplingParams {
             temperature: oairequest.temperature,
             top_k: oairequest.top_k,
@@ -129,16 +132,10 @@ fn parse_request(
         return_logprobs: false,
         is_streaming: false,
         suffix: oairequest.suffix,
-        best_of: Some(oairequest.best_of),
-
         constraint: match oairequest.grammar {
             Some(Grammar::Yacc(yacc)) => Constraint::Yacc(yacc),
             Some(Grammar::Regex(regex)) => Constraint::Regex(regex),
             None => Constraint::None,
-        },
-
-        request_type: RequestType::Completion {
-            echo_prompt: oairequest.echo_prompt,
         },
     }
 }

@@ -1,8 +1,7 @@
 use std::sync::{mpsc::channel, Arc};
 
-use either::Either;
 use indexmap::IndexMap;
-use mistralrs_core::{Constraint, MistralRs, Request, RequestType, Response, SamplingParams};
+use mistralrs_core::{Constraint, MistralRs, Request, RequestMessage, Response, SamplingParams};
 use tracing::{error, info};
 
 pub fn prompt_mode(
@@ -36,15 +35,13 @@ pub fn prompt_mode(
     let (tx, rx) = channel();
     let req = Request {
         id: mistralrs.next_request_id(),
-        messages: Either::Left(messages.clone()),
+        messages: RequestMessage::Chat(messages),
         sampling_params: sampling_params.clone(),
         response: tx,
         return_logprobs: false,
         is_streaming: false,
         constraint: Constraint::None,
-        request_type: RequestType::Chat,
         suffix: None,
-        best_of: None,
     };
     for _ in 0..prompt_concurrency {
         sender.send(req.clone()).unwrap();

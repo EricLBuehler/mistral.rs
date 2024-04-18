@@ -1,6 +1,6 @@
 use candle_core::DType as _DType;
 use mistralrs::{
-    Loader, MistralLoader as _MistralLoader, MistralRs, MistralSpecificConfig,
+    Loader, MistralLoader as _MistralLoader, MistralRsBuilder, MistralSpecificConfig,
     ModelKind as _ModelKind, SchedulerMethod, TokenSource,
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
@@ -213,14 +213,15 @@ impl MistralLoader {
             max_seqs
         };
 
-        let mistralrs = MistralRs::new(
+        let mistralrs = MistralRsBuilder::new(
             pipeline,
             SchedulerMethod::Fixed(maxseqs.try_into().unwrap()),
-            logfile,
-            truncate_sequence,
-            self.no_kv_cache,
-            prefix_cache_n,
-        );
+        )
+        .with_opt_log(logfile)
+        .with_truncate_sequence(truncate_sequence)
+        .with_no_kv_cache(self.no_kv_cache)
+        .with_prefix_cache_n(prefix_cache_n)
+        .build();
 
         Ok(Runner { runner: mistralrs })
     }
