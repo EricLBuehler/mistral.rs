@@ -28,7 +28,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
 use thiserror::Error;
-use tokenizers::{AddedToken, Tokenizer};
+use tokenizers::Tokenizer;
 use tracing::info;
 
 enum Model {
@@ -444,11 +444,16 @@ impl Loader for LlamaLoader {
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
 
         let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
-        let eot = tokenizer.encode("<|eot_id|>", true).unwrap().get_ids()[0];
+        // Handle Llama3 case
+        let eos_tok = if let Ok(tok) = tokenizer.encode("<|eot_id|>", true) {
+            tok.get_ids()[0]
+        } else {
+            calculate_eos_tok(&chat_template, &tokenizer)
+        };
 
         Ok(Box::new(Mutex::new(LlamaPipeline {
             model,
-            eos_tok: eot, //calculate_eos_tok(&chat_template, &tokenizer),
+            eos_tok,
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer: tokenizer.into(),
             config: self.config,

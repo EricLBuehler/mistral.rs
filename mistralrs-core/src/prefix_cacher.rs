@@ -1,3 +1,5 @@
+#![allow(dead_code, unreachable_code, unused_variables)]
+
 use candle_core::{Device, Result};
 use indexmap::IndexMap;
 
@@ -131,9 +133,12 @@ impl PrefixCacheManager {
 
     /// Search for a matching cache given some toks
     pub fn search_for_matching_cache(&mut self, toks: &[u32]) -> Result<Option<MatchingCache>> {
+        return Ok(None);
+
         if self.no_prefix_cache {
             return Ok(None);
         }
+
         // Look for token ids such that they begins with `toks`
         let mut candidates = Vec::new();
         // Search the device cache
