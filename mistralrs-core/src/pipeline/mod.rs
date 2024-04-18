@@ -251,7 +251,7 @@ pub trait Pipeline: Send + Sync {
     fn cache(&self) -> &Cache;
     fn tokenizer(&self) -> Arc<Tokenizer>;
     fn tok_trie(&self) -> &TokTrie;
-    fn eos_tok(&self) -> u32;
+    fn eos_tok(&self) -> &[u32];
     fn name(&self) -> String;
     fn get_max_seq_len(&self) -> usize;
     fn is_xlora(&self) -> bool;

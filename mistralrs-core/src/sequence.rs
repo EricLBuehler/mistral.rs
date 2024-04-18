@@ -270,11 +270,11 @@ impl Sequence {
     pub fn is_done(
         &self,
         tok: u32,
-        eos_tok: Option<u32>,
+        eos_tok: Option<&[u32]>,
         max_model_len: usize,
     ) -> Option<StopReason> {
         let is_eos = match eos_tok {
-            Some(eos_tok) => eos_tok == tok,
+            Some(eos_tok) => eos_tok.iter().any(|t| *t == tok),
             None => false,
         };
         if is_eos {

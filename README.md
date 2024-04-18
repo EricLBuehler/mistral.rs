@@ -9,6 +9,18 @@ Mistral.rs is a fast LLM inference platform written. We support inference on a v
 - Parallel linear layers (sharding) ([#50](https://github.com/EricLBuehler/mistral.rs/issues/50)).
 - Device offloading ([#157](https://github.com/EricLBuehler/mistral.rs/pull/157))
 
+**Running the new Llama 3 model on CUDA**
+
+`cargo run --release --features cuda -- -i llama -m meta-llama/Meta-Llama-3-8B-Instruct`
+
+**Running the new Llama 3 model on Metal**
+
+`cargo run --release --features metal -- -i llama -m meta-llama/Meta-Llama-3-8B-Instruct`
+
+**Running the new Llama 3 model on CPU**
+
+`cargo run --release -- -i llama -m meta-llama/Meta-Llama-3-8B-Instruct`
+
 ## Description
 **Fast**:
 - Quantized model support: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit for faster inference and optimized memory usage.

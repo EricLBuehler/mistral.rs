@@ -194,7 +194,7 @@ impl Engine {
         let seqs_len = seqs.len();
         let logits_seq = logits.chunk(seqs_len, 0).unwrap();
         debug_assert_eq!(logits_seq.len(), seqs_len);
-        let eos_tok = pipeline.eos_tok();
+        let eos_tok = pipeline.eos_tok().to_vec();
         for (logits_per_seq, seq) in zip(logits_seq, seqs.iter_mut()) {
             // Sample and extract next token
             let return_logprobs = seq.return_logprobs();
@@ -205,7 +205,7 @@ impl Engine {
             let eos_tok = if disable_eos_stop {
                 None
             } else {
-                Some(eos_tok)
+                Some(eos_tok.as_ref())
             };
             let is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
             seq.add_token(

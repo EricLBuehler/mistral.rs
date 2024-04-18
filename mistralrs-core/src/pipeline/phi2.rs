@@ -89,7 +89,7 @@ pub struct Phi2Pipeline {
     non_granular_state: Option<NonGranularState>,
     model_id: String,
     is_lora: bool,
-    eos_tok: u32,
+    eos_tok: Vec<u32>,
 }
 
 pub struct Phi2Loader {
@@ -347,7 +347,7 @@ impl Loader for Phi2Loader {
 
         Ok(Box::new(Mutex::new(Phi2Pipeline {
             model,
-            eos_tok: calculate_eos_tok(&chat_template, &tokenizer),
+            eos_tok: vec![calculate_eos_tok(&chat_template, &tokenizer)],
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer: tokenizer.into(),
             config: self.config,
@@ -436,8 +436,8 @@ impl Pipeline for Phi2Pipeline {
     fn tokenizer(&self) -> Arc<Tokenizer> {
         self.tokenizer.clone()
     }
-    fn eos_tok(&self) -> u32 {
-        self.eos_tok
+    fn eos_tok(&self) -> &[u32] {
+        &self.eos_tok
     }
     fn name(&self) -> String {
         self.model_id.clone()

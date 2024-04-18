@@ -91,7 +91,7 @@ pub struct LlamaPipeline {
     non_granular_state: Option<NonGranularState>,
     model_id: String,
     is_lora: bool,
-    eos_tok: u32,
+    eos_tok: Vec<u32>,
 }
 
 pub struct LlamaLoader {
@@ -290,7 +290,6 @@ impl Loader for LlamaLoader {
                     paths.get_adapter_configs().as_ref().unwrap(),
                     Some(paths.get_classifier_config().as_ref().unwrap().clone()),
                     paths.get_ordering().as_ref().unwrap().clone(),
-                    self.no_kv_cache,
                 )?;
                 Model::XLoraNormal(model)
             }
@@ -433,7 +432,6 @@ impl Loader for LlamaLoader {
                     paths.get_adapter_configs().as_ref().unwrap(),
                     None,
                     paths.get_ordering().as_ref().unwrap().clone(),
-                    self.no_kv_cache,
                 )?;
                 is_lora = true;
                 Model::XLoraNormal(model)
@@ -444,16 +442,16 @@ impl Loader for LlamaLoader {
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
 
         let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
-        // Handle Llama3 case
-        let eos_tok = if let Ok(tok) = tokenizer.encode("<|eot_id|>", true) {
-            tok.get_ids()[0]
-        } else {
-            calculate_eos_tok(&chat_template, &tokenizer)
-        };
+        let mut eos_toks = vec![calculate_eos_tok(&chat_template, &tokenizer)];
+
+        // Handle Llama3 chat case
+        if let Ok(tok) = tokenizer.encode("<|eot_id|>", true) {
+            eos_toks.push(tok.get_ids()[0])
+        }
 
         Ok(Box::new(Mutex::new(LlamaPipeline {
             model,
-            eos_tok,
+            eos_tok: eos_toks,
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer: tokenizer.into(),
             config: self.config,
@@ -563,8 +561,8 @@ impl Pipeline for LlamaPipeline {
     fn tokenizer(&self) -> Arc<Tokenizer> {
         self.tokenizer.clone()
     }
-    fn eos_tok(&self) -> u32 {
-        self.eos_tok
+    fn eos_tok(&self) -> &[u32] {
+        &self.eos_tok
     }
     fn name(&self) -> String {
         self.model_id.clone()
