@@ -24,7 +24,7 @@ use pyo3::{
     prelude::*,
     types::{PyDict, PyList, PyString},
 };
-mod loaders;
+use std::fs::File;
 mod stream;
 
 

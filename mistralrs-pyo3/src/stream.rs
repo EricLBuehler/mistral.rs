@@ -1,6 +1,6 @@
 use std::sync::mpsc::Receiver;
 
-use mistralrs::Response;
+use mistralrs_core::Response;
 use pyo3::{exceptions::PyValueError, pyclass, pymethods, PyRef, PyRefMut, PyResult};
 
 #[pyclass]
