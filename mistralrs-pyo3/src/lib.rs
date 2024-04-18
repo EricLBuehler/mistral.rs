@@ -12,9 +12,9 @@ use std::{
 use candle_core::Device;
 use mistralrs_core::{
     Constraint, GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader,
-    MistralLoader, MistralRs, MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig,
-    ModelKind, Phi2Loader, Phi2SpecificConfig, Request as _Request, RequestType, Response,
-    SamplingParams, SchedulerMethod, StopTokens, TokenSource,
+    MistralLoader, MistralRs, MistralRsBuilder, MistralSpecificConfig, MixtralLoader,
+    MixtralSpecificConfig, ModelKind, Phi2Loader, Phi2SpecificConfig, Request as _Request,
+    RequestMessage, Response, SamplingParams, SchedulerMethod, StopTokens, TokenSource,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
@@ -1040,18 +1040,17 @@ impl Runner {
             )
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
-        let mistralrs = MistralRs::new(
+        let mistralrs = MistralRsBuilder::new(
             pipeline,
             SchedulerMethod::Fixed(
                 max_seqs
                     .try_into()
                     .map_err(|e| PyValueError::new_err(format!("{e:?}")))?,
             ),
-            None,
-            false,
-            no_kv_cache,
-            prefix_cache_n,
-        );
+        )
+        .with_no_kv_cache(no_kv_cache)
+        .with_prefix_cache_n(prefix_cache_n)
+        .build();
 
         Ok(Self { runner: mistralrs })
     }
@@ -1097,7 +1096,17 @@ impl Runner {
                     *last += 1;
                     last_v
                 },
-                messages: request.messages.clone(),
+                messages: match request.messages {
+                    Either::Left(ref messages) => RequestMessage::Chat(messages.clone()),
+                    Either::Right(ref prompt) => {
+                        let mut messages = Vec::new();
+                        let mut message_map = IndexMap::new();
+                        message_map.insert("role".to_string(), "user".to_string());
+                        message_map.insert("content".to_string(), prompt.to_string());
+                        messages.push(message_map);
+                        RequestMessage::Chat(messages)
+                    }
+                },
                 sampling_params: SamplingParams {
                     temperature: request.temperature,
                     top_k: request.top_k,
@@ -1114,9 +1123,7 @@ impl Runner {
                 return_logprobs: request.logprobs,
                 is_streaming: request.stream,
                 constraint,
-                request_type: RequestType::Chat,
                 suffix: None,
-                best_of: None,
             };
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -1178,7 +1185,11 @@ impl Runner {
                     *last += 1;
                     last_v
                 },
-                messages: Either::Right(request.prompt.clone()),
+                messages: RequestMessage::Completion {
+                    text: request.prompt.clone(),
+                    echo_prompt: request.echo_prompt,
+                    best_of: request.best_of,
+                },
                 sampling_params: SamplingParams {
                     temperature: request.temperature,
                     top_k: request.top_k,
@@ -1195,11 +1206,7 @@ impl Runner {
                 return_logprobs: false,
                 is_streaming: false,
                 constraint,
-                request_type: RequestType::Completion {
-                    echo_prompt: request.echo_prompt,
-                },
                 suffix: request.suffix.clone(),
-                best_of: Some(request.best_of),
             };
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));

@@ -19,6 +19,11 @@ pub use pipeline::Pipeline;
 
 mod aici;
 mod engine;
+mod model_loader;
+pub use model_loader::{get_tgt_non_granular_index, LoaderBuilder};
+mod model_selected;
+pub use model_selected::ModelSelected;
+
 mod models;
 mod pipeline;
 mod prefix_cacher;
@@ -35,7 +40,7 @@ pub use pipeline::{
     MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind, Phi2Loader,
     Phi2SpecificConfig, TokenSource,
 };
-pub use request::{Constraint, Request, RequestType};
+pub use request::{Constraint, Request, RequestMessage};
 pub use response::Response;
 pub use response::{ChatCompletionResponse, CompletionResponse, Usage};
 pub use sampler::{SamplingParams, StopTokens};
@@ -50,15 +55,84 @@ pub struct MistralRs {
     next_request_id: Mutex<RefCell<usize>>,
 }
 
+pub struct MistralRsBuilder {
+    pipeline: Box<Mutex<dyn Pipeline>>,
+    method: SchedulerMethod,
+    log: Option<String>,
+    truncate_sequence: Option<bool>,
+    no_kv_cache: Option<bool>,
+    no_prefix_cache: Option<bool>,
+    prefix_cache_n: Option<usize>,
+    disable_eos_stop: Option<bool>,
+}
+
+impl MistralRsBuilder {
+    pub fn new(pipeline: Box<Mutex<dyn Pipeline>>, method: SchedulerMethod) -> Self {
+        Self {
+            pipeline,
+            method,
+            log: None,
+            truncate_sequence: None,
+            no_kv_cache: None,
+            no_prefix_cache: None,
+            prefix_cache_n: None,
+            disable_eos_stop: None,
+        }
+    }
+
+    pub fn with_log(mut self, log: String) -> Self {
+        self.log = Some(log);
+        self
+    }
+    pub fn with_opt_log(mut self, log: Option<String>) -> Self {
+        self.log = log;
+        self
+    }
+    pub fn with_truncate_sequence(mut self, truncate_sequence: bool) -> Self {
+        self.truncate_sequence = Some(truncate_sequence);
+        self
+    }
+    pub fn with_no_kv_cache(mut self, no_kv_cache: bool) -> Self {
+        self.no_kv_cache = Some(no_kv_cache);
+        self
+    }
+    pub fn with_no_prefix_cache(mut self, no_prefix_cache: bool) -> Self {
+        self.no_prefix_cache = Some(no_prefix_cache);
+        self
+    }
+    pub fn with_prefix_cache_n(mut self, prefix_cache_n: usize) -> Self {
+        self.prefix_cache_n = Some(prefix_cache_n);
+        self
+    }
+    pub fn with_disable_eos_stop(mut self, disable_eos_stop: bool) -> Self {
+        self.disable_eos_stop = Some(disable_eos_stop);
+        self
+    }
+
+    pub fn build(self) -> Arc<MistralRs> {
+        MistralRs::new(self)
+    }
+}
+
 impl MistralRs {
-    pub fn new(
-        pipeline: Box<Mutex<dyn Pipeline>>,
-        method: SchedulerMethod,
-        log: Option<String>,
-        truncate_sequence: bool,
-        no_kv_cache: bool,
-        prefix_cache_n: usize,
-    ) -> Arc<Self> {
+    fn new(config: MistralRsBuilder) -> Arc<Self> {
+        let MistralRsBuilder {
+            pipeline,
+            method,
+            log,
+            truncate_sequence,
+            no_kv_cache,
+            no_prefix_cache,
+            prefix_cache_n,
+            disable_eos_stop,
+        } = config;
+
+        let truncate_sequence = truncate_sequence.unwrap_or(false);
+        let no_kv_cache = no_kv_cache.unwrap_or(false);
+        let no_prefix_cache = no_prefix_cache.unwrap_or(false);
+        let prefix_cache_n = prefix_cache_n.unwrap_or(16);
+        let disable_eos_stop = disable_eos_stop.unwrap_or(false);
+
         let (tx, rx) = channel();
 
         let this = Arc::new(Self {
@@ -79,7 +153,9 @@ impl MistralRs {
                 method,
                 truncate_sequence,
                 no_kv_cache,
+                no_prefix_cache,
                 prefix_cache_n,
+                disable_eos_stop,
             );
             engine.run();
         });
