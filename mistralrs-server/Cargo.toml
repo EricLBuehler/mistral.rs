@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 license.workspace = true
 homepage.workspace = true
+default-run = "mistralrs-server"
 
 [dependencies]
 anyhow.workspace = true
@@ -40,7 +41,3 @@ metal = ["mistralrs-core/metal"]
 flash-attn = ["cuda", "mistralrs-core/flash-attn"]
 accelerate = ["mistralrs-core/accelerate"]
 mkl = ["mistralrs-core/mkl"]
-
-[[bin]]
-name = "mistralrs-server"
-default = true
