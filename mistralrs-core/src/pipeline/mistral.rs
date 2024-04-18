@@ -92,7 +92,7 @@ pub struct MistralPipeline {
     non_granular_state: Option<NonGranularState>,
     model_id: String,
     is_lora: bool,
-    eos_tok: u32,
+    eos_tok: Vec<u32>,
 }
 
 pub struct MistralLoader {
@@ -405,7 +405,7 @@ impl Loader for MistralLoader {
 
         Ok(Box::new(Mutex::new(MistralPipeline {
             model,
-            eos_tok: calculate_eos_tok(&chat_template, &tokenizer),
+            eos_tok: vec![calculate_eos_tok(&chat_template, &tokenizer)],
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer: tokenizer.into(),
             config: self.config,
@@ -515,8 +515,8 @@ impl Pipeline for MistralPipeline {
     fn tokenizer(&self) -> Arc<Tokenizer> {
         self.tokenizer.clone()
     }
-    fn eos_tok(&self) -> u32 {
-        self.eos_tok
+    fn eos_tok(&self) -> &[u32] {
+        &self.eos_tok
     }
     fn name(&self) -> String {
         self.model_id.clone()

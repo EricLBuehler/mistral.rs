@@ -79,7 +79,7 @@ impl PrefixCacheManager {
             }
             self.cpu_caches.insert(ids, new_cache);
         }
-        Ok(self.caches.len() - self.n_on_device)
+        Ok(self.caches.len().saturating_sub(self.n_on_device))
     }
 
     pub fn promote_into_device_cache(
@@ -134,6 +134,7 @@ impl PrefixCacheManager {
         if self.no_prefix_cache {
             return Ok(None);
         }
+
         // Look for token ids such that they begins with `toks`
         let mut candidates = Vec::new();
         // Search the device cache

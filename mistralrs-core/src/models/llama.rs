@@ -60,15 +60,13 @@ pub struct Config {
 #[derive(Debug, Clone)]
 pub struct Cache {
     masks: HashMap<usize, Tensor>,
-    pub use_kv_cache: bool,
     device: Device,
 }
 
 impl Cache {
-    pub fn new(use_kv_cache: bool, device: &Device) -> Result<Self> {
+    pub fn new(device: &Device) -> Result<Self> {
         Ok(Self {
             masks: HashMap::new(),
-            use_kv_cache,
             device: device.clone(),
         })
     }
@@ -135,25 +133,23 @@ impl CausalSelfAttention {
                 .contiguous()?;
         }
 
-        if cache.use_kv_cache {
-            if let Some((cache_k, cache_v)) = &kv_cache[block_idx] {
-                k = candle_nn::ops::kvconcat(cache_k, &k, 2)?.contiguous()?;
-                v = candle_nn::ops::kvconcat(cache_v, &v, 2)?.contiguous()?;
-                let k_seq_len = k.dims()[1];
-                if k_seq_len > MAX_SEQ_LEN {
-                    k = k
-                        .narrow(D::Minus1, k_seq_len - MAX_SEQ_LEN, MAX_SEQ_LEN)?
-                        .contiguous()?
-                }
-                let v_seq_len = v.dims()[1];
-                if v_seq_len > 2 * MAX_SEQ_LEN {
-                    v = v
-                        .narrow(D::Minus1, v_seq_len - MAX_SEQ_LEN, MAX_SEQ_LEN)?
-                        .contiguous()?
-                }
+        if let Some((cache_k, cache_v)) = &kv_cache[block_idx] {
+            k = candle_nn::ops::kvconcat(cache_k, &k, 2)?.contiguous()?;
+            v = candle_nn::ops::kvconcat(cache_v, &v, 2)?.contiguous()?;
+            let k_seq_len = k.dims()[1];
+            if k_seq_len > MAX_SEQ_LEN {
+                k = k
+                    .narrow(D::Minus1, k_seq_len - MAX_SEQ_LEN, MAX_SEQ_LEN)?
+                    .contiguous()?
             }
-            kv_cache[block_idx] = Some((k.clone(), v.clone()))
+            let v_seq_len = v.dims()[1];
+            if v_seq_len > 2 * MAX_SEQ_LEN {
+                v = v
+                    .narrow(D::Minus1, v_seq_len - MAX_SEQ_LEN, MAX_SEQ_LEN)?
+                    .contiguous()?
+            }
         }
+        kv_cache[block_idx] = Some((k.clone(), v.clone()));
 
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
@@ -348,7 +344,7 @@ impl Llama {
         extract_logits(&logits.to_dtype(DType::F32)?, context_lens)
     }
 
-    pub fn load(vb: VarBuilder, cfg: &Config, device: &Device, no_kv_cache: bool) -> Result<Self> {
+    pub fn load(vb: VarBuilder, cfg: &Config, device: &Device) -> Result<Self> {
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
@@ -361,7 +357,7 @@ impl Llama {
             blocks,
             ln_f,
             lm_head,
-            cache: Cache::new(!no_kv_cache, device)?,
+            cache: Cache::new(device)?,
             kv_cache: super::Cache::new(cfg.num_hidden_layers, false),
             device: device.clone(),
         })
