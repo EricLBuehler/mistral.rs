@@ -865,9 +865,6 @@
 <a href="#863" id="863">863</a>
 <a href="#864" id="864">864</a>
 <a href="#865" id="865">865</a>
-<a href="#866" id="866">866</a>
-<a href="#867" id="867">867</a>
-<a href="#868" id="868">868</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -931,10 +928,7 @@
 }
 
 <span class="attr">#[derive(Debug, Deserialize)]
-</span><span class="kw">struct </span>Unk {
-    <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)]
-    </span>unk: Either&lt;String, AddedTokensDecoder&gt;,
-}
+</span><span class="kw">struct </span>Unk(<span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span>Either&lt;String, AddedTokensDecoder&gt;);
 
 <span class="attr">#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
@@ -1146,7 +1140,7 @@
             Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="kw-2">&amp;</span>added.content,
         };
         <span class="kw">let </span>unk_tok = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>unk) = <span class="self">self</span>.get_chat_template().unk_token {
-            <span class="kw">match </span>unk.unk {
+            <span class="kw">match </span>unk.<span class="number">0 </span>{
                 Either::Left(<span class="kw-2">ref </span>lit) =&gt; <span class="prelude-val">Some</span>(lit.to_string()),
                 Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="prelude-val">Some</span>(added.content.to_string()),
             }
