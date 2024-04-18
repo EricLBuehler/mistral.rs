@@ -34,8 +34,7 @@ class CompletionRequest:
 
     prompt: str
     model: str
-    best_of: int
-    echo_prompt: bool
+    echo_prompt: bool = False
     logit_bias: dict[int, float] | None = None
     max_tokens: int | None = None
     n_choices: int = 1
@@ -45,7 +44,6 @@ class CompletionRequest:
     stop_seqs: list[str] | None = None
     temperature: float | None = None
     top_p: float | None = None
-    stream: bool = False
     top_k: int | None = None
     suffix: str | None = None
     grammar: str | None = None
@@ -56,6 +54,12 @@ class Runner:
     The Runner is a class with no constructor. It is only created via one of the loader classes.
     """
     def send_chat_completion_request(self, request: ChatCompletionRequest) -> str:
+        """
+        Send a chat completion request to the mistral.rs engine, returning the response as a string which
+        can be parsed as JSON or a generator returning chunks.
+        """
+
+    def send_completion_request(self, request: CompletionRequest) -> str:
         """
         Send a chat completion request to the mistral.rs engine, returning the response as a string.
         This can be parsed as JSON.

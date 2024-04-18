@@ -352,55 +352,52 @@ class MistralRS(CustomLLM):
 
     @llm_chat_callback()
     def chat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponse:
-        messages_raw = []
-        for message in messages:
-            messages_raw.append({"role": str(message.role), "content": message.content})
-        request = ChatCompletionRequest(
-            messages=messages_raw,
-            model="",
-            max_tokens=self.generate_kwargs["max_tokens"],
-            logit_bias=None,
-            logprobs=False,
-            top_logprobs=None,
-            top_k=self.generate_kwargs["top_k"],
-            top_p=self.generate_kwargs["top_p"],
-            presence_penalty=self.generate_kwargs.get("presence_penalty", None),
-            repetition_penalty=self.generate_kwargs.get("repetition_penalty", None),
-            temperature=self.generate_kwargs.get("temperature", None),
-        )
-        completion_response = self._runner.send_chat_completion_request(request)
-        json_resp = json.loads(completion_response)
-        return completion_response_to_chat_response(
-            CompletionResponse(
-                text=json_resp["choices"][0]["message"]["content"],
-                raw=json_resp,
-            )
-        )
+        prompt = self.messages_to_prompt(messages)
+        completion_response = self.complete(prompt, formatted=True, **kwargs)
+        return completion_response_to_chat_response(completion_response)
 
     @llm_chat_callback()
     def stream_chat(
         self, messages: Sequence[ChatMessage], **kwargs: Any
     ) -> ChatResponseGen:
         prompt = self.messages_to_prompt(messages)
-        completion_response = self.stream_complete(prompt, formatted=True, **kwargs)
-        return stream_completion_response_to_chat_response(completion_response)
+        self.generate_kwargs.update({"stream": True})
+
+        request = ChatCompletionRequest(
+            messages=prompt,
+            model="",
+            logit_bias=None,
+            logprobs=False,
+            top_logprobs=None,
+            **self.generate_kwargs,
+        )
+
+        streamer = self._runner.send_chat_completion_request(request)
+
+        def gen() -> CompletionResponseGen:
+            text = ""
+            for response in streamer:
+                delta = response["choices"][0]["text"]
+                text += delta
+                yield CompletionResponse(delta=delta, text=text, raw=response)
+
+        return gen()
 
     @llm_completion_callback()
     def complete(
         self, prompt: str, formatted: bool = False, **kwargs: Any
     ) -> CompletionResponse:
+        self.generate_kwargs.update({"stream": False})
+        if not formatted:
+            prompt = self.completion_to_prompt(prompt)
+
         request = ChatCompletionRequest(
             messages=prompt,
             model="",
-            max_tokens=self.generate_kwargs["max_tokens"],
             logit_bias=None,
             logprobs=False,
             top_logprobs=None,
-            top_k=self.generate_kwargs["top_k"],
-            top_p=self.generate_kwargs["top_p"],
-            presence_penalty=self.generate_kwargs.get("presence_penalty", None),
-            repetition_penalty=self.generate_kwargs.get("repetition_penalty", None),
-            temperature=self.generate_kwargs.get("temperature", None),
+            **self.generate_kwargs,
         )
         completion_response = self._runner.send_chat_completion_request(request)
         json_resp = json.loads(completion_response)
@@ -413,4 +410,6 @@ class MistralRS(CustomLLM):
     def stream_complete(
         self, prompt: str, formatted: bool = False, **kwargs: Any
     ) -> CompletionResponseGen:
-        raise NotImplementedError(".stream_complete is not implemented yet.")
+        raise NotImplementedError(
+            "Streaming completions requests are not implemented yet."
+        )
