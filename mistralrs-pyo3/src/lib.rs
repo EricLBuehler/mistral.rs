@@ -7,6 +7,7 @@ use std::{
     fmt::Debug,
     sync::{mpsc::channel, Arc, Mutex},
 };
+use stream::ChatCompletionStreamer;
 
 use ::mistralrs::{
     Constraint, MistralRs, Request as _Request, RequestMessage, Response, SamplingParams,
@@ -23,6 +24,7 @@ use pyo3::{
     types::{PyDict, PyList, PyString},
 };
 mod loaders;
+mod stream;
 
 #[pyclass]
 enum ModelKind {
@@ -93,7 +95,7 @@ impl Runner {
     fn send_chat_completion_request(
         &mut self,
         request: Py<ChatCompletionRequest>,
-    ) -> PyResult<String> {
+    ) -> PyResult<Either<String, ChatCompletionStreamer>> {
         let (tx, rx) = channel();
         Python::with_gil(|py| {
             let request = request.bind(py).borrow();
@@ -163,20 +165,25 @@ impl Runner {
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
             let sender = self.runner.get_sender();
             sender.send(model_request).unwrap();
-            let response = rx.recv().unwrap();
 
-            match response {
-                Response::ValidationError(e) | Response::InternalError(e) => {
-                    Err(PyValueError::new_err(e.to_string()))
+            if request.stream {
+                Ok(Either::Right(ChatCompletionStreamer::from_rx(rx)))
+            } else {
+                let response = rx.recv().unwrap();
+
+                match response {
+                    Response::ValidationError(e) | Response::InternalError(e) => {
+                        Err(PyValueError::new_err(e.to_string()))
+                    }
+                    Response::Done(response) => {
+                        MistralRs::maybe_log_response(self.runner.clone(), &response);
+                        Ok(Either::Left(serde_json::to_string(&response).unwrap()))
+                    }
+                    Response::ModelError(msg, _) => Err(PyValueError::new_err(msg.to_string())),
+                    Response::Chunk(_) => unreachable!(),
+                    Response::CompletionDone(_) => unreachable!(),
+                    Response::CompletionModelError(_, _) => unreachable!(),
                 }
-                Response::Done(response) => {
-                    MistralRs::maybe_log_response(self.runner.clone(), &response);
-                    Ok(serde_json::to_string(&response).unwrap())
-                }
-                Response::ModelError(msg, _) => Err(PyValueError::new_err(msg.to_string())),
-                Response::Chunk(_) => unreachable!(),
-                Response::CompletionDone(_) => unreachable!(),
-                Response::CompletionModelError(_, _) => unreachable!(),
             }
         })
     }
