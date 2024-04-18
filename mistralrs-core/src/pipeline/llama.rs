@@ -441,24 +441,15 @@ impl Loader for LlamaLoader {
             }
         };
 
-        let mut tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
+        let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
-        info!("adding eos");
-        tokenizer.add_special_tokens(&[AddedToken {
-            content: "<|end_of_text|>".to_string(),
-            lstrip: false,
-            normalized: false,
-            rstrip: false,
-            single_word: false,
-            special: true
-        }]);
 
         let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
-        info!("eos is {}", calculate_eos_tok(&chat_template, &tokenizer));
+        let eot = tokenizer.encode("<|eot_id|>", true).unwrap().get_ids()[0];
 
         Ok(Box::new(Mutex::new(LlamaPipeline {
             model,
-            eos_tok: calculate_eos_tok(&chat_template, &tokenizer),
+            eos_tok: eot, //calculate_eos_tok(&chat_template, &tokenizer),
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer: tokenizer.into(),
             config: self.config,
