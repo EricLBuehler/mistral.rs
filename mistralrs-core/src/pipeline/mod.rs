@@ -81,8 +81,8 @@ pub struct ChatTemplate {
     spaces_between_special_tokens: Option<bool>,
     tokenizer_class: String,
     truncation_size: Option<String>,
-    #[serde(with = "either::serde_untagged")]
-    unk_token: Either<String, AddedTokensDecoder>,
+    //#[serde(with = "either::serde_untagged")]
+    unk_token: Option<Either<String, AddedTokensDecoder>>,
     use_default_system_prompt: Option<bool>,
 }
 
@@ -213,7 +213,7 @@ fn apply_chat_template_to(
     template: &str,
     bos_tok: &str,
     eos_tok: &str,
-    unk_tok: &str,
+    unk_tok: Option<String>,
 ) -> Result<String> {
     let mut env = Environment::new();
     // https://github.com/huggingface/transformers/blob/76a33a10923ccc1074917f6b6a1e719e626b7dc9/src/transformers/tokenization_utils_base.py#L1842
@@ -270,9 +270,13 @@ pub trait Pipeline: Send + Sync {
             Either::Left(ref lit) => lit,
             Either::Right(ref added) => &added.content,
         };
-        let unk_tok = match self.get_chat_template().unk_token {
-            Either::Left(ref lit) => lit,
-            Either::Right(ref added) => &added.content,
+        let unk_tok = if let Some(ref unk) = self.get_chat_template().unk_token {
+            match unk {
+                Either::Left(ref lit) => Some(lit.to_string()),
+                Either::Right(ref added) => Some(added.content.to_string()),
+            }
+        } else {
+            None
         };
         apply_chat_template_to(
             messages,
@@ -839,7 +843,7 @@ mod tests {
                 template,
                 bos,
                 eos,
-                unk,
+                Some(unk.to_string()),
             )
             .unwrap_or_else(|_| panic!("Template number {i}"));
             assert_eq!(output, expected, "Template number {i}");
