@@ -2,8 +2,8 @@ use std::fs::File;
 
 use candle_core::DType as _DType;
 use mistralrs::{
-    GemmaLoader as _GemmaLoader, GemmaSpecificConfig, Loader, MistralRs, ModelKind as _ModelKind,
-    SchedulerMethod, TokenSource,
+    GemmaLoader as _GemmaLoader, GemmaSpecificConfig, Loader, MistralRsBuilder,
+    ModelKind as _ModelKind, SchedulerMethod, TokenSource,
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
 
@@ -210,14 +210,15 @@ impl GemmaLoader {
             max_seqs
         };
 
-        let mistralrs = MistralRs::new(
+        let mistralrs = MistralRsBuilder::new(
             pipeline,
             SchedulerMethod::Fixed(maxseqs.try_into().unwrap()),
-            logfile,
-            truncate_sequence,
-            self.no_kv_cache,
-            prefix_cache_n,
-        );
+        )
+        .with_opt_log(logfile)
+        .with_truncate_sequence(truncate_sequence)
+        .with_no_kv_cache(self.no_kv_cache)
+        .with_prefix_cache_n(prefix_cache_n)
+        .build();
 
         Ok(Runner { runner: mistralrs })
     }

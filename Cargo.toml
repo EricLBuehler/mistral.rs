@@ -5,6 +5,7 @@ members = [
     "mistralrs-lora",
     "mistralrs-pyo3",
     "mistralrs",
+    "mistralrs-bench",
 ]
 resolver = "2"
 
@@ -28,9 +29,9 @@ indexmap = { version = "2.2.5", features = ["serde"] }
 either = { version = "1.10.0", features = ["serde"] }
 accelerate-src = { version = "0.3.2" }
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
-libc = { version = "0.2.147" }
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
+clap = { version = "4.5.1", features = ["derive"] }
 
 [profile.profiling]
 inherits = "release"
