@@ -1,5 +1,3 @@
-#![allow(dead_code, unreachable_code, unused_variables)]
-
 use candle_core::{Device, Result};
 use indexmap::IndexMap;
 
@@ -81,7 +79,7 @@ impl PrefixCacheManager {
             }
             self.cpu_caches.insert(ids, new_cache);
         }
-        Ok(self.caches.len() - self.n_on_device)
+        Ok(self.caches.len().saturating_sub(self.n_on_device))
     }
 
     pub fn promote_into_device_cache(
@@ -133,8 +131,6 @@ impl PrefixCacheManager {
 
     /// Search for a matching cache given some toks
     pub fn search_for_matching_cache(&mut self, toks: &[u32]) -> Result<Option<MatchingCache>> {
-        return Ok(None);
-
         if self.no_prefix_cache {
             return Ok(None);
         }
