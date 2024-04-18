@@ -60,6 +60,12 @@ pub struct AddedTokensDecoder {
     special: Option<bool>,
 }
 
+#[derive(Debug, Deserialize)]
+struct Unk {
+    #[serde(with = "either::serde_untagged")]
+    unk: Either<String, AddedTokensDecoder>,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct ChatTemplate {
@@ -81,8 +87,7 @@ pub struct ChatTemplate {
     spaces_between_special_tokens: Option<bool>,
     tokenizer_class: String,
     truncation_size: Option<String>,
-    //#[serde(with = "either::serde_untagged")]
-    unk_token: Option<Either<String, AddedTokensDecoder>>,
+    unk_token: Option<Unk>,
     use_default_system_prompt: Option<bool>,
 }
 
@@ -271,7 +276,7 @@ pub trait Pipeline: Send + Sync {
             Either::Right(ref added) => &added.content,
         };
         let unk_tok = if let Some(ref unk) = self.get_chat_template().unk_token {
-            match unk {
+            match unk.unk {
                 Either::Left(ref lit) => Some(lit.to_string()),
                 Either::Right(ref added) => Some(added.content.to_string()),
             }
