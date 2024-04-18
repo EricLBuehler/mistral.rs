@@ -18,7 +18,6 @@ doc = false
 [dependencies]
 pyo3 = { version = "0.21.0", features = ["either"] } # { version = "0.21.0", features = ["extension-module"] }
 mistralrs-core = { version = "0.1.0", path = "../mistralrs-core" }
-mistralrs-server = { version = "0.1.0", path = "../mistralrs-server" }
 serde.workspace = true
 serde_json.workspace = true
 candle-core.workspace = true

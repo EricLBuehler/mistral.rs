@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use candle_core::Result;
 use either::Either;
 use indexmap::IndexMap;
@@ -1033,7 +1035,7 @@ impl Runner {
         let pipeline = loader
             .load_model(
                 None,
-                TokenSource::from_str(&token_source)
+                TokenSource::from_str(token_source)
                     .map_err(|e| PyValueError::new_err(e.to_string()))?,
                 None,
                 &device,
@@ -1256,8 +1258,24 @@ struct CompletionRequest {
 #[pymethods]
 impl CompletionRequest {
     #[new]
-    #[pyo3(signature = (prompt, model, best_of = 1, echo_prompt = false, presence_penalty=None,frequency_penalty=None,logit_bias=None,max_tokens=None,n_choices=1,stop_seqs=None,temperature=None,top_p=None,suffix=None,top_k=None, grammar = None, grammar_type = None))]
-    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        prompt,
+        model,
+        best_of = 1,
+        echo_prompt = false,
+        presence_penalty=None,
+        frequency_penalty=None,
+        logit_bias=None,
+        max_tokens=None,
+        n_choices=1,
+        stop_seqs=None,
+        temperature=None,
+        top_p=None,
+        suffix=None,
+        top_k=None,
+        grammar = None,
+        grammar_type = None
+    ))]
     fn new(
         prompt: String,
         model: String,
@@ -1322,8 +1340,24 @@ struct ChatCompletionRequest {
 #[pymethods]
 impl ChatCompletionRequest {
     #[new]
-    #[pyo3(signature = (messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, frequency_penalty = None, stop_seqs = None, temperature = None, top_p = None, top_k = None, stream=false, grammar = None, grammar_type = None))]
-    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        messages,
+        model,
+        logprobs = false,
+        n_choices = 1,
+        logit_bias = None,
+        top_logprobs = None,
+        max_tokens = None,
+        presence_penalty = None,
+        frequency_penalty = None,
+        stop_seqs = None,
+        temperature = None,
+        top_p = None,
+        top_k = None,
+        stream=false,
+        grammar = None,
+        grammar_type = None
+    ))]
     fn new(
         messages: Py<PyAny>,
         model: String,
