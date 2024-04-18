@@ -17,7 +17,8 @@ doc = false
 
 [dependencies]
 pyo3 = { version = "0.21.0", features = ["either"] } # { version = "0.21.0", features = ["extension-module"] }
-mistralrs = { version = "0.1.0", path = "../mistralrs" }
+mistralrs-core = { version = "0.1.0", path = "../mistralrs-core" }
+mistralrs-server = { version = "0.1.0", path = "../mistralrs-server" }
 serde.workspace = true
 serde_json.workspace = true
 candle-core.workspace = true
@@ -27,9 +28,9 @@ intel-mkl-src = { workspace = true, optional = true }
 either.workspace = true
 
 [features]
-cuda = ["candle-core/cuda", "mistralrs/cuda"]
-cudnn = ["candle-core/cudnn", "mistralrs/cudnn"]
-metal = ["candle-core/metal", "mistralrs/metal"]
-flash-attn = ["cuda", "mistralrs/flash-attn"]
-accelerate = ["mistralrs/accelerate"]
-mkl = ["mistralrs/mkl"]
+cuda = ["candle-core/cuda", "mistralrs-core/cuda"]
+cudnn = ["candle-core/cudnn", "mistralrs-core/cudnn"]
+metal = ["candle-core/metal", "mistralrs-core/metal"]
+flash-attn = ["cuda", "mistralrs-core/flash-attn"]
+accelerate = ["mistralrs-core/accelerate"]
+mkl = ["mistralrs-core/mkl"]

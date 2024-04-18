@@ -352,7 +352,7 @@ Options:
       --repeat-last-n <REPEAT_LAST_N>
           Control the application of repeat penalty for the last n tokens [default: 64]
   -x, --xlora-model-id <XLORA_MODEL_ID>
-          Model ID to load Xlora from [default: lamm-mit/x-lora]
+          Model ID to load X-LoRA from [default: lamm-mit/x-lora]
   -o, --order <ORDER>
           Ordering JSON file
       --tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>
