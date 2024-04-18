@@ -24,7 +24,7 @@ impl ChatCompletionStreamer {
         if this.is_done {
             return None;
         }
-        match this.rx.try_recv() {
+        match this.rx.recv() {
             Ok(resp) => match resp {
                 Response::ModelError(msg, _) => Some(Err(PyValueError::new_err(msg.to_string()))),
                 Response::ValidationError(e) => Some(Err(PyValueError::new_err(e.to_string()))),
