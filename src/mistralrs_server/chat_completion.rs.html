@@ -264,6 +264,9 @@
 <a href="#262" id="262">262</a>
 <a href="#263" id="263">263</a>
 <a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     env,
     error::Error,
@@ -289,8 +292,8 @@
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_core::{
-    ChatCompletionResponse, Constraint, MistralRs, Request, RequestType, Response, SamplingParams,
-    StopTokens <span class="kw">as </span>InternalStopTokens,
+    ChatCompletionResponse, Constraint, MistralRs, Request, RequestMessage, Response,
+    SamplingParams, StopTokens <span class="kw">as </span>InternalStopTokens,
 };
 <span class="kw">use </span>serde::Serialize;
 
@@ -433,9 +436,16 @@
                 message_map.insert(<span class="string">"content"</span>.to_string(), message.content);
                 messages.push(message_map);
             }
-            Either::Left(messages)
+            RequestMessage::Chat(messages)
         }
-        Either::Right(prompt) =&gt; Either::Right(prompt),
+        Either::Right(prompt) =&gt; {
+            <span class="kw">let </span><span class="kw-2">mut </span>messages = Vec::new();
+            <span class="kw">let </span><span class="kw-2">mut </span>message_map = IndexMap::new();
+            message_map.insert(<span class="string">"role"</span>.to_string(), <span class="string">"user"</span>.to_string());
+            message_map.insert(<span class="string">"content"</span>.to_string(), prompt);
+            messages.push(message_map);
+            RequestMessage::Chat(messages)
+        }
     };
 
     Request {
@@ -457,15 +467,11 @@
         return_logprobs: oairequest.logprobs,
         is_streaming: oairequest.stream.unwrap_or(<span class="bool-val">false</span>),
         suffix: <span class="prelude-val">None</span>,
-        best_of: <span class="prelude-val">None</span>,
-
         constraint: <span class="kw">match </span>oairequest.grammar {
             <span class="prelude-val">Some</span>(Grammar::Yacc(yacc)) =&gt; Constraint::Yacc(yacc),
             <span class="prelude-val">Some</span>(Grammar::Regex(regex)) =&gt; Constraint::Regex(regex),
             <span class="prelude-val">None </span>=&gt; Constraint::None,
         },
-
-        request_type: RequestType::Chat,
     }
 }
 

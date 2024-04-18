@@ -192,6 +192,17 @@
 <a href="#190" id="190">190</a>
 <a href="#191" id="191">191</a>
 <a href="#192" id="192">192</a>
+<a href="#193" id="193">193</a>
+<a href="#194" id="194">194</a>
+<a href="#195" id="195">195</a>
+<a href="#196" id="196">196</a>
+<a href="#197" id="197">197</a>
+<a href="#198" id="198">198</a>
+<a href="#199" id="199">199</a>
+<a href="#200" id="200">200</a>
+<a href="#201" id="201">201</a>
+<a href="#202" id="202">202</a>
+<a href="#203" id="203">203</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>indexmap::IndexMap;
 
@@ -204,6 +215,7 @@
     xlora_cpu_caches: <span class="prelude-ty">Option</span>&lt;IndexMap&lt;Vec&lt;u32&gt;, LayerCaches&gt;&gt;,
     device: Device,
     <span class="kw">pub </span>n_on_device: usize,
+    no_prefix_cache: bool,
 }
 
 <span class="attr">#[derive(Clone)]
@@ -214,7 +226,7 @@
 }
 
 <span class="kw">impl </span>PrefixCacheManager {
-    <span class="kw">pub fn </span>new(device: Device, n_on_device: usize, is_xlora: bool) -&gt; <span class="self">Self </span>{
+    <span class="kw">pub fn </span>new(device: Device, n_on_device: usize, is_xlora: bool, no_prefix_cache: bool) -&gt; <span class="self">Self </span>{
         PrefixCacheManager {
             caches: IndexMap::new(),
             cpu_caches: IndexMap::new(),
@@ -230,12 +242,16 @@
             </span>},
             device,
             n_on_device,
+            no_prefix_cache,
         }
     }
 
     <span class="doccomment">/// This always keeps the cache on the device. If later on, a new seq cannot be allocated due to memory shortage,
     /// some caches will be evicted.
     </span><span class="kw">pub fn </span>add_sequence(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seq: <span class="kw-2">&amp;mut </span>Sequence) {
+        <span class="kw">if </span><span class="self">self</span>.no_prefix_cache {
+            <span class="kw">return</span>;
+        }
         <span class="self">self</span>.caches
             .insert(seq.get_toks().to_vec(), seq.cache().clone());
         <span class="kw">if </span>seq.is_xlora() {
@@ -247,6 +263,9 @@
     <span class="doccomment">/// Evict the caches to CPU. This will evict the first k seqs such that the number of sequences on device after the copy is
     /// the maximum allowed. Returns the number of evicted sequences.
     </span><span class="kw">pub fn </span>evict_to_cpu(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">if </span><span class="self">self</span>.no_prefix_cache {
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="number">0</span>);
+        }
         <span class="comment">// Intentionally evict the first ones first, as they are the oldest
         </span><span class="kw">for </span>(ids, cache) <span class="kw">in </span><span class="self">self
             </span>.caches
@@ -317,6 +336,9 @@
 
     <span class="doccomment">/// Search for a matching cache given some toks
     </span><span class="kw">pub fn </span>search_for_matching_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, toks: <span class="kw-2">&amp;</span>[u32]) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;MatchingCache&gt;&gt; {
+        <span class="kw">if </span><span class="self">self</span>.no_prefix_cache {
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
+        }
         <span class="comment">// Look for token ids such that they begins with `toks`
         </span><span class="kw">let </span><span class="kw-2">mut </span>candidates = Vec::new();
         <span class="comment">// Search the device cache

@@ -504,6 +504,10 @@
 <a href="#502" id="502">502</a>
 <a href="#503" id="503">503</a>
 <a href="#504" id="504">504</a>
+<a href="#505" id="505">505</a>
+<a href="#506" id="506">506</a>
+<a href="#507" id="507">507</a>
+<a href="#508" id="508">508</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
@@ -773,8 +777,17 @@
         <span class="self">self</span>.state.set(state);
     }
 
-    <span class="kw">pub fn </span>is_done(<span class="kw-2">&amp;</span><span class="self">self</span>, tok: u32, eos_tok: u32, max_model_len: usize) -&gt; <span class="prelude-ty">Option</span>&lt;StopReason&gt; {
-        <span class="kw">if </span>tok == eos_tok {
+    <span class="kw">pub fn </span>is_done(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        tok: u32,
+        eos_tok: <span class="prelude-ty">Option</span>&lt;u32&gt;,
+        max_model_len: usize,
+    ) -&gt; <span class="prelude-ty">Option</span>&lt;StopReason&gt; {
+        <span class="kw">let </span>is_eos = <span class="kw">match </span>eos_tok {
+            <span class="prelude-val">Some</span>(eos_tok) =&gt; eos_tok == tok,
+            <span class="prelude-val">None </span>=&gt; <span class="bool-val">false</span>,
+        };
+        <span class="kw">if </span>is_eos {
             <span class="prelude-val">Some</span>(StopReason::Eos)
         } <span class="kw">else if </span><span class="self">self</span>.stop_tokens.contains(<span class="kw-2">&amp;</span>tok) {
             <span class="prelude-val">Some</span>(StopReason::StopTok(tok))
@@ -896,7 +909,7 @@
 
 <span class="kw">pub struct </span>SequenceGroup {
     n_choices: usize, <span class="comment">// The target number of choices to return. Can be decreased if an error is thrown.
-    </span>best_of: <span class="prelude-ty">Option</span>&lt;usize&gt;, <span class="comment">// Top n seqs based on cumulative logprobs.
+    </span>best_of: usize,   <span class="comment">// Top n seqs based on cumulative logprobs.
     </span><span class="kw">pub </span>total_prompt_toks: usize,
     <span class="kw">pub </span>total_toks: usize,
     <span class="kw">pub </span>total_prompt_time: u128,
@@ -910,12 +923,7 @@
 }
 
 <span class="kw">impl </span>SequenceGroup {
-    <span class="kw">pub fn </span>new(
-        n_choices: usize,
-        is_streaming: bool,
-        is_chat: bool,
-        best_of: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-    ) -&gt; <span class="self">Self </span>{
+    <span class="kw">pub fn </span>new(n_choices: usize, is_streaming: bool, is_chat: bool, best_of: usize) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             choices: Vec::new(),
             completion_choices: Vec::new(),
@@ -944,7 +952,7 @@
         </span>choices.sort_by(|a, b| b.<span class="number">0</span>.partial_cmp(<span class="kw-2">&amp;</span>a.<span class="number">0</span>).unwrap());
         choices
             .into_iter()
-            .take(<span class="self">self</span>.best_of.unwrap())
+            .take(<span class="self">self</span>.best_of)
             .map(|(<span class="kw">_</span>, x)| x)
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
     }

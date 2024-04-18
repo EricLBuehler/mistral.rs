@@ -698,6 +698,56 @@
 <a href="#696" id="696">696</a>
 <a href="#697" id="697">697</a>
 <a href="#698" id="698">698</a>
+<a href="#699" id="699">699</a>
+<a href="#700" id="700">700</a>
+<a href="#701" id="701">701</a>
+<a href="#702" id="702">702</a>
+<a href="#703" id="703">703</a>
+<a href="#704" id="704">704</a>
+<a href="#705" id="705">705</a>
+<a href="#706" id="706">706</a>
+<a href="#707" id="707">707</a>
+<a href="#708" id="708">708</a>
+<a href="#709" id="709">709</a>
+<a href="#710" id="710">710</a>
+<a href="#711" id="711">711</a>
+<a href="#712" id="712">712</a>
+<a href="#713" id="713">713</a>
+<a href="#714" id="714">714</a>
+<a href="#715" id="715">715</a>
+<a href="#716" id="716">716</a>
+<a href="#717" id="717">717</a>
+<a href="#718" id="718">718</a>
+<a href="#719" id="719">719</a>
+<a href="#720" id="720">720</a>
+<a href="#721" id="721">721</a>
+<a href="#722" id="722">722</a>
+<a href="#723" id="723">723</a>
+<a href="#724" id="724">724</a>
+<a href="#725" id="725">725</a>
+<a href="#726" id="726">726</a>
+<a href="#727" id="727">727</a>
+<a href="#728" id="728">728</a>
+<a href="#729" id="729">729</a>
+<a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a>
+<a href="#733" id="733">733</a>
+<a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a>
+<a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a>
+<a href="#742" id="742">742</a>
+<a href="#743" id="743">743</a>
+<a href="#744" id="744">744</a>
+<a href="#745" id="745">745</a>
+<a href="#746" id="746">746</a>
+<a href="#747" id="747">747</a>
+<a href="#748" id="748">748</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
@@ -711,10 +761,9 @@
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
     handle_seq_error_ok, handle_seq_error_stateaware_ok,
     response::CompletionChoice,
-    CompletionResponse, RequestType,
+    CompletionResponse, RequestMessage,
 };
 <span class="kw">use </span>candle_core::{<span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>either::Either;
 <span class="kw">use </span>tracing::warn;
 
 <span class="kw">use crate</span>::{
@@ -743,16 +792,20 @@
     no_kv_cache: bool,
     prefix_cacher: PrefixCacheManager,
     is_debug: bool,
+    disable_eos_stop: bool,
 }
 
 <span class="kw">impl </span>Engine {
-    <span class="kw">pub fn </span>new(
+    <span class="attr">#[allow(clippy::too_many_arguments)]
+    </span><span class="kw">pub fn </span>new(
         rx: Receiver&lt;Request&gt;,
         pipeline: Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
         method: SchedulerMethod,
         truncate_sequence: bool,
         no_kv_cache: bool,
+        no_prefix_cache: bool,
         prefix_cache_n: usize,
+        disable_eos_stop: bool,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>device = <span class="macro">get_mut_arcmutex!</span>(pipeline).device().clone();
         <span class="kw">let </span>is_xlora = <span class="macro">get_mut_arcmutex!</span>(pipeline).is_xlora();
@@ -763,10 +816,16 @@
             id: <span class="number">0</span>,
             truncate_sequence,
             no_kv_cache,
-            prefix_cacher: PrefixCacheManager::new(device, prefix_cache_n, is_xlora),
+            prefix_cacher: PrefixCacheManager::new(
+                device,
+                prefix_cache_n,
+                is_xlora,
+                no_prefix_cache,
+            ),
             is_debug: std::env::var(<span class="string">"RUST_LOG"</span>)
                 .unwrap_or_default()
                 .contains(<span class="string">"debug"</span>),
+            disable_eos_stop,
         }
     }
 
@@ -793,7 +852,13 @@
                     <span class="self">Self</span>::set_none_cache(<span class="kw-2">&amp;mut *</span>pipeline);
                 }
 
-                <span class="macro">handle_pipeline_forward_error!</span>(<span class="string">"sampling"</span>, <span class="self">Self</span>::sample_seqs(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.completion, logits, <span class="kw-2">&amp;mut </span><span class="self">self</span>.prefix_cacher), <span class="kw-2">&amp;mut </span>scheduled.completion, pipeline, <span class="lifetime">'lp</span>);
+                <span class="macro">handle_pipeline_forward_error!</span>(
+                    <span class="string">"sampling"</span>,
+                    <span class="self">Self</span>::sample_seqs(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.completion, logits, <span class="kw-2">&amp;mut </span><span class="self">self</span>.prefix_cacher, <span class="self">self</span>.disable_eos_stop),
+                    <span class="kw-2">&amp;mut </span>scheduled.completion,
+                    pipeline,
+                    <span class="lifetime">'lp
+                </span>);
             }
 
             <span class="kw">if </span>scheduled.prompt.len() &gt; <span class="number">0 </span>{
@@ -808,7 +873,13 @@
                     <span class="self">Self</span>::set_none_cache(<span class="kw-2">&amp;mut *</span>pipeline);
                 }
 
-                <span class="macro">handle_pipeline_forward_error!</span>(<span class="string">"sampling"</span>, <span class="self">Self</span>::sample_seqs(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.prompt, logits, <span class="kw-2">&amp;mut </span><span class="self">self</span>.prefix_cacher), <span class="kw-2">&amp;mut </span>scheduled.prompt, pipeline, <span class="lifetime">'lp</span>);
+                <span class="macro">handle_pipeline_forward_error!</span>(
+                    <span class="string">"sampling"</span>,
+                    <span class="self">Self</span>::sample_seqs(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.prompt, logits, <span class="kw-2">&amp;mut </span><span class="self">self</span>.prefix_cacher,<span class="self">self</span>.disable_eos_stop,),
+                    <span class="kw-2">&amp;mut </span>scheduled.prompt,
+                    pipeline,
+                    <span class="lifetime">'lp
+                </span>);
 
                 <span class="kw">for </span>seq <span class="kw">in </span>scheduled.prompt.iter_mut() {
                     seq.set_state(SequenceState::RunningCompletion);
@@ -868,6 +939,7 @@
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         logits: Tensor,
         prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
+        disable_eos_stop: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span>seqs_len = seqs.len();
         <span class="kw">let </span>logits_seq = logits.chunk(seqs_len, <span class="number">0</span>).unwrap();
@@ -880,6 +952,11 @@
             <span class="kw">let </span>next_token = <span class="macro">handle_seq_error_stateaware_ok!</span>(sampled, seq);
             <span class="kw">let </span>next_token_id = next_token.token;
 
+            <span class="kw">let </span>eos_tok = <span class="kw">if </span>disable_eos_stop {
+                <span class="prelude-val">None
+            </span>} <span class="kw">else </span>{
+                <span class="prelude-val">Some</span>(eos_tok)
+            };
             <span class="kw">let </span>is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
             seq.add_token(
                 next_token.clone(),
@@ -1181,7 +1258,20 @@
     }
 
     <span class="kw">fn </span>add_request(<span class="kw-2">&amp;mut </span><span class="self">self</span>, request: Request) {
-        <span class="kw">if </span>request.messages.is_left()
+        <span class="kw">let </span>is_chat = <span class="macro">matches!</span>(request.messages, RequestMessage::Chat(<span class="kw">_</span>));
+        <span class="kw">let </span>echo_prompt = <span class="macro">matches!</span>(
+            request.messages,
+            RequestMessage::Completion {
+                echo_prompt: <span class="bool-val">true</span>,
+                ..
+            }
+        );
+
+        <span class="kw">let </span>best_of = <span class="kw">match </span>request.messages {
+            RequestMessage::Completion { best_of, .. } =&gt; best_of,
+            RequestMessage::Chat(<span class="kw">_</span>) | RequestMessage::CompletionTokens(<span class="kw">_</span>) =&gt; <span class="number">1</span>,
+        };
+        <span class="kw">if </span>is_chat
             &amp;&amp; !<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
                 .get_chat_template()
                 .has_chat_template()
@@ -1194,14 +1284,24 @@
                     )).unwrap();
             <span class="kw">return</span>;
         }
+
+        <span class="kw">let </span><span class="kw-2">mut </span>force_tokens = <span class="prelude-val">None</span>;
         <span class="kw">let </span>formatted_prompt = <span class="kw">match </span>request.messages {
-            Either::Left(messages) =&gt; {
+            RequestMessage::Chat(messages) =&gt; {
                 <span class="macro">handle_seq_error!</span>(
                     <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).apply_chat_template(messages, <span class="bool-val">true</span>),
                     request.response
                 )
             }
-            Either::Right(prompt) =&gt; prompt,
+            RequestMessage::Completion { text, .. } =&gt; text,
+            RequestMessage::CompletionTokens(it) =&gt; {
+                <span class="kw">let </span>res = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
+                    .tokenizer()
+                    .decode(<span class="kw-2">&amp;</span>it, <span class="bool-val">false</span>)
+                    .expect(<span class="string">"cannot decode completion tokens"</span>);
+                force_tokens = <span class="prelude-val">Some</span>(it);
+                res
+            }
         };
         <span class="kw">if </span>formatted_prompt.is_empty() {
             <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
@@ -1213,10 +1313,14 @@
                 .unwrap();
             <span class="kw">return</span>;
         }
-        <span class="kw">let </span><span class="kw-2">mut </span>prompt = <span class="macro">handle_seq_error!</span>(
-            <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenize_prompt(<span class="kw-2">&amp;</span>formatted_prompt),
-            request.response
-        );
+        <span class="kw">let </span><span class="kw-2">mut </span>prompt = <span class="kw">match </span>force_tokens {
+            <span class="prelude-val">Some</span>(tks) =&gt; tks,
+            <span class="prelude-val">None </span>=&gt; <span class="macro">handle_seq_error!</span>(
+                <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenize_prompt(<span class="kw-2">&amp;</span>formatted_prompt),
+                request.response
+            ),
+        };
+
         <span class="kw">if </span>prompt.len() &gt; <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_max_seq_len() {
             <span class="kw">if </span>!<span class="self">self</span>.truncate_sequence {
                 <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
@@ -1309,8 +1413,8 @@
         <span class="kw">let </span>group = Rc::new(RefCell::new(SequenceGroup::new(
             request.sampling_params.n_choices,
             request.is_streaming,
-            request.request_type == RequestType::Chat,
-            request.best_of,
+            is_chat,
+            best_of,
         )));
         <span class="kw">let </span>now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1372,12 +1476,8 @@
                 now.as_secs(),
                 recognizer.clone(),
                 request.suffix.clone(),
-                <span class="kw">if let </span>RequestType::Completion { echo_prompt } = request.request_type.clone() {
-                    <span class="kw">if </span>echo_prompt {
-                        <span class="prelude-val">Some</span>(formatted_prompt.clone())
-                    } <span class="kw">else </span>{
-                        <span class="prelude-val">None
-                    </span>}
+                <span class="kw">if </span>echo_prompt {
+                    <span class="prelude-val">Some</span>(formatted_prompt.clone())
                 } <span class="kw">else </span>{
                     <span class="prelude-val">None
                 </span>},

@@ -194,9 +194,6 @@
 <a href="#192" id="192">192</a>
 <a href="#193" id="193">193</a>
 <a href="#194" id="194">194</a>
-<a href="#195" id="195">195</a>
-<a href="#196" id="196">196</a>
-<a href="#197" id="197">197</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     error::Error,
     sync::{
@@ -211,9 +208,8 @@
     http::{<span class="self">self</span>, StatusCode},
     response::IntoResponse,
 };
-<span class="kw">use </span>either::Either;
 <span class="kw">use </span>mistralrs_core::{
-    CompletionResponse, Constraint, MistralRs, Request, RequestType, Response, SamplingParams,
+    CompletionResponse, Constraint, MistralRs, Request, RequestMessage, Response, SamplingParams,
     StopTokens <span class="kw">as </span>InternalStopTokens,
 };
 <span class="kw">use </span>serde::Serialize;
@@ -311,7 +307,11 @@
 
     Request {
         id: state.next_request_id(),
-        messages: Either::Right(oairequest.prompt),
+        messages: RequestMessage::Completion {
+            text: oairequest.prompt,
+            echo_prompt: oairequest.echo_prompt,
+            best_of: oairequest.best_of,
+        },
         sampling_params: SamplingParams {
             temperature: oairequest.temperature,
             top_k: oairequest.top_k,
@@ -328,16 +328,10 @@
         return_logprobs: <span class="bool-val">false</span>,
         is_streaming: <span class="bool-val">false</span>,
         suffix: oairequest.suffix,
-        best_of: <span class="prelude-val">Some</span>(oairequest.best_of),
-
         constraint: <span class="kw">match </span>oairequest.grammar {
             <span class="prelude-val">Some</span>(Grammar::Yacc(yacc)) =&gt; Constraint::Yacc(yacc),
             <span class="prelude-val">Some</span>(Grammar::Regex(regex)) =&gt; Constraint::Regex(regex),
             <span class="prelude-val">None </span>=&gt; Constraint::None,
-        },
-
-        request_type: RequestType::Completion {
-            echo_prompt: oairequest.echo_prompt,
         },
     }
 }
