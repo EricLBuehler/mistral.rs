@@ -324,6 +324,10 @@
 <a href="#322" id="322">322</a>
 <a href="#323" id="323">323</a>
 <a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, iter::zip, sync::Arc};
@@ -613,7 +617,11 @@
 
     <span class="attr">#[allow(dead_code)]
     </span><span class="kw">fn </span>get_tokenizer() -&gt; Tokenizer {
-        <span class="kw">let </span>api = ApiBuilder::new().with_progress(<span class="bool-val">true</span>).build().unwrap();
+        <span class="kw">let </span>api = ApiBuilder::new()
+            .with_progress(<span class="bool-val">true</span>)
+            .with_token(<span class="prelude-val">Some</span>(std::env::var(<span class="string">"TESTS_HF_TOKEN"</span>).unwrap()))
+            .build()
+            .unwrap();
         <span class="kw">let </span>api = api.repo(Repo::with_revision(
             <span class="string">"mistralai/Mistral-7B-Instruct-v0.1"</span>.to_string(),
             RepoType::Model,
