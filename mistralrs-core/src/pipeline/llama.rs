@@ -259,7 +259,6 @@ impl Loader for LlamaLoader {
                     vb,
                     &basic_config.into_config(self.config.use_flash_attn),
                     device,
-                    self.no_kv_cache,
                 )?;
                 Model::Normal(model)
             }
