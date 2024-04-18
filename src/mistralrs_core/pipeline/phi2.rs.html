@@ -560,7 +560,7 @@
     non_granular_state: <span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
     model_id: String,
     is_lora: bool,
-    eos_tok: u32,
+    eos_tok: Vec&lt;u32&gt;,
 }
 
 <span class="kw">pub struct </span>Phi2Loader {
@@ -818,7 +818,7 @@
 
         <span class="prelude-val">Ok</span>(Box::new(Mutex::new(Phi2Pipeline {
             model,
-            eos_tok: calculate_eos_tok(<span class="kw-2">&amp;</span>chat_template, <span class="kw-2">&amp;</span>tokenizer),
+            eos_tok: <span class="macro">vec!</span>[calculate_eos_tok(<span class="kw-2">&amp;</span>chat_template, <span class="kw-2">&amp;</span>tokenizer)],
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer: tokenizer.into(),
             config: <span class="self">self</span>.config,
@@ -907,8 +907,8 @@
     <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;Tokenizer&gt; {
         <span class="self">self</span>.tokenizer.clone()
     }
-    <span class="kw">fn </span>eos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u32 {
-        <span class="self">self</span>.eos_tok
+    <span class="kw">fn </span>eos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[u32] {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.eos_tok
     }
     <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
         <span class="self">self</span>.model_id.clone()

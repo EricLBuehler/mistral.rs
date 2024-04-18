@@ -593,6 +593,9 @@
 <a href="#591" id="591">591</a>
 <a href="#592" id="592">592</a>
 <a href="#593" id="593">593</a>
+<a href="#594" id="594">594</a>
+<a href="#595" id="595">595</a>
+<a href="#596" id="596">596</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, ChatTemplate, Loader, ModelInputs,
     ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
@@ -632,7 +635,7 @@
     XLoraNormal(XLoraLlama),
     XLoraQuantized(XLoraModelWeights),
 }
-<span class="kw">pub const </span>LLAMA_IS_GPTX: bool = <span class="bool-val">false</span>;
+<span class="kw">pub const </span>LLAMA_IS_GPTX: bool = <span class="bool-val">true</span>;
 
 <span class="kw">pub struct </span>LlamaModelPaths&lt;P&gt; {
     tokenizer_filename: P,
@@ -686,7 +689,7 @@
     non_granular_state: <span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
     model_id: String,
     is_lora: bool,
-    eos_tok: u32,
+    eos_tok: Vec&lt;u32&gt;,
 }
 
 <span class="kw">pub struct </span>LlamaLoader {
@@ -854,7 +857,6 @@
                     vb,
                     <span class="kw-2">&amp;</span>basic_config.into_config(<span class="self">self</span>.config.use_flash_attn),
                     device,
-                    <span class="self">self</span>.no_kv_cache,
                 )<span class="question-mark">?</span>;
                 Model::Normal(model)
             }
@@ -886,7 +888,6 @@
                     paths.get_adapter_configs().as_ref().unwrap(),
                     <span class="prelude-val">Some</span>(paths.get_classifier_config().as_ref().unwrap().clone()),
                     paths.get_ordering().as_ref().unwrap().clone(),
-                    <span class="self">self</span>.no_kv_cache,
                 )<span class="question-mark">?</span>;
                 Model::XLoraNormal(model)
             }
@@ -1029,7 +1030,6 @@
                     paths.get_adapter_configs().as_ref().unwrap(),
                     <span class="prelude-val">None</span>,
                     paths.get_ordering().as_ref().unwrap().clone(),
-                    <span class="self">self</span>.no_kv_cache,
                 )<span class="question-mark">?</span>;
                 is_lora = <span class="bool-val">true</span>;
                 Model::XLoraNormal(model)
@@ -1040,10 +1040,16 @@
             .map_err(|e| TokenizerError::Error(e.to_string()))<span class="question-mark">?</span>;
 
         <span class="kw">let </span>chat_template: ChatTemplate = <span class="macro">deserialize_chat_template!</span>(paths, <span class="self">self</span>);
+        <span class="kw">let </span><span class="kw-2">mut </span>eos_toks = <span class="macro">vec!</span>[calculate_eos_tok(<span class="kw-2">&amp;</span>chat_template, <span class="kw-2">&amp;</span>tokenizer)];
+
+        <span class="comment">// Handle Llama3 chat case
+        </span><span class="kw">if let </span><span class="prelude-val">Ok</span>(tok) = tokenizer.encode(<span class="string">"&lt;|eot_id|&gt;"</span>, <span class="bool-val">true</span>) {
+            eos_toks.push(tok.get_ids()[<span class="number">0</span>])
+        }
 
         <span class="prelude-val">Ok</span>(Box::new(Mutex::new(LlamaPipeline {
             model,
-            eos_tok: calculate_eos_tok(<span class="kw-2">&amp;</span>chat_template, <span class="kw-2">&amp;</span>tokenizer),
+            eos_tok: eos_toks,
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer: tokenizer.into(),
             config: <span class="self">self</span>.config,
@@ -1153,8 +1159,8 @@
     <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;Tokenizer&gt; {
         <span class="self">self</span>.tokenizer.clone()
     }
-    <span class="kw">fn </span>eos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u32 {
-        <span class="self">self</span>.eos_tok
+    <span class="kw">fn </span>eos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[u32] {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.eos_tok
     }
     <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
         <span class="self">self</span>.model_id.clone()

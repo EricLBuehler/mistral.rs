@@ -859,6 +859,10 @@
 <a href="#857" id="857">857</a>
 <a href="#858" id="858">858</a>
 <a href="#859" id="859">859</a>
+<a href="#860" id="860">860</a>
+<a href="#861" id="861">861</a>
+<a href="#862" id="862">862</a>
+<a href="#863" id="863">863</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -942,8 +946,8 @@
     spaces_between_special_tokens: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     tokenizer_class: String,
     truncation_size: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)]
-    </span>unk_token: Either&lt;String, AddedTokensDecoder&gt;,
+    <span class="comment">//#[serde(with = "either::serde_untagged")]
+    </span>unk_token: <span class="prelude-ty">Option</span>&lt;Either&lt;String, AddedTokensDecoder&gt;&gt;,
     use_default_system_prompt: <span class="prelude-ty">Option</span>&lt;bool&gt;,
 }
 
@@ -1074,7 +1078,7 @@
     template: <span class="kw-2">&amp;</span>str,
     bos_tok: <span class="kw-2">&amp;</span>str,
     eos_tok: <span class="kw-2">&amp;</span>str,
-    unk_tok: <span class="kw-2">&amp;</span>str,
+    unk_tok: <span class="prelude-ty">Option</span>&lt;String&gt;,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
     <span class="kw">let </span><span class="kw-2">mut </span>env = Environment::new();
     <span class="comment">// https://github.com/huggingface/transformers/blob/76a33a10923ccc1074917f6b6a1e719e626b7dc9/src/transformers/tokenization_utils_base.py#L1842
@@ -1112,7 +1116,7 @@
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache;
     <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;Tokenizer&gt;;
     <span class="kw">fn </span>tok_trie(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>TokTrie;
-    <span class="kw">fn </span>eos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u32;
+    <span class="kw">fn </span>eos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[u32];
     <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String;
     <span class="kw">fn </span>get_max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
     <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
@@ -1131,10 +1135,14 @@
             Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit,
             Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="kw-2">&amp;</span>added.content,
         };
-        <span class="kw">let </span>unk_tok = <span class="kw">match </span><span class="self">self</span>.get_chat_template().unk_token {
-            Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit,
-            Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="kw-2">&amp;</span>added.content,
-        };
+        <span class="kw">let </span>unk_tok = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>unk) = <span class="self">self</span>.get_chat_template().unk_token {
+            <span class="kw">match </span>unk {
+                Either::Left(<span class="kw-2">ref </span>lit) =&gt; <span class="prelude-val">Some</span>(lit.to_string()),
+                Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="prelude-val">Some</span>(added.content.to_string()),
+            }
+        } <span class="kw">else </span>{
+            <span class="prelude-val">None
+        </span>};
         apply_chat_template_to(
             messages,
             add_generation_prompt,
@@ -1700,7 +1708,7 @@
                 template,
                 bos,
                 eos,
-                unk,
+                <span class="prelude-val">Some</span>(unk.to_string()),
             )
             .unwrap_or_else(|<span class="kw">_</span>| <span class="macro">panic!</span>(<span class="string">"Template number {i}"</span>));
             <span class="macro">assert_eq!</span>(output, expected, <span class="string">"Template number {i}"</span>);

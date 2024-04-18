@@ -549,11 +549,6 @@
 <a href="#547" id="547">547</a>
 <a href="#548" id="548">548</a>
 <a href="#549" id="549">549</a>
-<a href="#550" id="550">550</a>
-<a href="#551" id="551">551</a>
-<a href="#552" id="552">552</a>
-<a href="#553" id="553">553</a>
-<a href="#554" id="554">554</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -575,15 +570,13 @@
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">pub struct </span>Cache {
     masks: HashMap&lt;usize, Tensor&gt;,
-    <span class="kw">pub </span>use_kv_cache: bool,
     device: Device,
 }
 
 <span class="kw">impl </span>Cache {
-    <span class="kw">pub fn </span>new(use_kv_cache: bool, device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">pub fn </span>new(device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             masks: HashMap::new(),
-            use_kv_cache,
             device: device.clone(),
         })
     }
@@ -669,25 +662,23 @@
                 </span>.contiguous()<span class="question-mark">?</span>;
         }
 
-        <span class="kw">if </span>cache.use_kv_cache {
-            <span class="kw">if let </span><span class="prelude-val">Some</span>((cache_k, cache_v)) = <span class="kw-2">&amp;</span>kv_cache[block_idx] {
-                k = candle_nn::ops::kvconcat(cache_k, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-                v = candle_nn::ops::kvconcat(cache_v, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-                <span class="kw">let </span>k_seq_len = k.dims()[<span class="number">1</span>];
-                <span class="kw">if </span>k_seq_len &gt; MAX_SEQ_LEN {
-                    k = k
-                        .narrow(D::Minus1, k_seq_len - MAX_SEQ_LEN, MAX_SEQ_LEN)<span class="question-mark">?
-                        </span>.contiguous()<span class="question-mark">?
-                </span>}
-                <span class="kw">let </span>v_seq_len = v.dims()[<span class="number">1</span>];
-                <span class="kw">if </span>v_seq_len &gt; <span class="number">2 </span>* MAX_SEQ_LEN {
-                    v = v
-                        .narrow(D::Minus1, v_seq_len - MAX_SEQ_LEN, MAX_SEQ_LEN)<span class="question-mark">?
-                        </span>.contiguous()<span class="question-mark">?
-                </span>}
-            }
-            kv_cache[block_idx] = <span class="prelude-val">Some</span>((k.clone(), v.clone()))
+        <span class="kw">if let </span><span class="prelude-val">Some</span>((cache_k, cache_v)) = <span class="kw-2">&amp;</span>kv_cache[block_idx] {
+            k = candle_nn::ops::kvconcat(cache_k, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+            v = candle_nn::ops::kvconcat(cache_v, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+            <span class="kw">let </span>k_seq_len = k.dims()[<span class="number">1</span>];
+            <span class="kw">if </span>k_seq_len &gt; MAX_SEQ_LEN {
+                k = k
+                    .narrow(D::Minus1, k_seq_len - MAX_SEQ_LEN, MAX_SEQ_LEN)<span class="question-mark">?
+                    </span>.contiguous()<span class="question-mark">?
+            </span>}
+            <span class="kw">let </span>v_seq_len = v.dims()[<span class="number">1</span>];
+            <span class="kw">if </span>v_seq_len &gt; <span class="number">2 </span>* MAX_SEQ_LEN {
+                v = v
+                    .narrow(D::Minus1, v_seq_len - MAX_SEQ_LEN, MAX_SEQ_LEN)<span class="question-mark">?
+                    </span>.contiguous()<span class="question-mark">?
+            </span>}
         }
+        kv_cache[block_idx] = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
 
         <span class="kw">let </span>k = <span class="self">self</span>.repeat_kv(k)<span class="question-mark">?</span>;
         <span class="kw">let </span>v = <span class="self">self</span>.repeat_kv(v)<span class="question-mark">?</span>;
@@ -1042,7 +1033,6 @@
         lora_config: <span class="kw-2">&amp;</span>Vec&lt;(String, LoraConfig)&gt;,
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         xlora_ordering: Ordering,
-        no_kv_cache: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp(<span class="string">"model.embed_tokens"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>lm_head = candle_nn::linear(cfg.hidden_size, cfg.vocab_size, vb.pp(<span class="string">"lm_head"</span>))<span class="question-mark">?</span>;
@@ -1066,7 +1056,7 @@
             blocks,
             ln_f,
             lm_head,
-            cache: Cache::new(!no_kv_cache, device)<span class="question-mark">?</span>,
+            cache: Cache::new(device)<span class="question-mark">?</span>,
             kv_cache: models::Cache::new(cfg.num_hidden_layers, <span class="bool-val">true</span>),
             device: device.clone(),
             xlora_classifier: xlora_config.map(|xlora_config| {

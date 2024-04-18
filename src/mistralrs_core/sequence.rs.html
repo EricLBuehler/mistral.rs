@@ -780,11 +780,11 @@
     <span class="kw">pub fn </span>is_done(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         tok: u32,
-        eos_tok: <span class="prelude-ty">Option</span>&lt;u32&gt;,
+        eos_tok: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[u32]&gt;,
         max_model_len: usize,
     ) -&gt; <span class="prelude-ty">Option</span>&lt;StopReason&gt; {
         <span class="kw">let </span>is_eos = <span class="kw">match </span>eos_tok {
-            <span class="prelude-val">Some</span>(eos_tok) =&gt; eos_tok == tok,
+            <span class="prelude-val">Some</span>(eos_tok) =&gt; eos_tok.iter().any(|t| <span class="kw-2">*</span>t == tok),
             <span class="prelude-val">None </span>=&gt; <span class="bool-val">false</span>,
         };
         <span class="kw">if </span>is_eos {

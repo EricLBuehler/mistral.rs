@@ -203,6 +203,7 @@
 <a href="#201" id="201">201</a>
 <a href="#202" id="202">202</a>
 <a href="#203" id="203">203</a>
+<a href="#204" id="204">204</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>indexmap::IndexMap;
 
@@ -284,7 +285,7 @@
             }
             <span class="self">self</span>.cpu_caches.insert(ids, new_cache);
         }
-        <span class="prelude-val">Ok</span>(<span class="self">self</span>.caches.len() - <span class="self">self</span>.n_on_device)
+        <span class="prelude-val">Ok</span>(<span class="self">self</span>.caches.len().saturating_sub(<span class="self">self</span>.n_on_device))
     }
 
     <span class="kw">pub fn </span>promote_into_device_cache(
@@ -339,6 +340,7 @@
         <span class="kw">if </span><span class="self">self</span>.no_prefix_cache {
             <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
         }
+
         <span class="comment">// Look for token ids such that they begins with `toks`
         </span><span class="kw">let </span><span class="kw-2">mut </span>candidates = Vec::new();
         <span class="comment">// Search the device cache

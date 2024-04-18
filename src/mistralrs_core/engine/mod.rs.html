@@ -944,7 +944,7 @@
         <span class="kw">let </span>seqs_len = seqs.len();
         <span class="kw">let </span>logits_seq = logits.chunk(seqs_len, <span class="number">0</span>).unwrap();
         <span class="macro">debug_assert_eq!</span>(logits_seq.len(), seqs_len);
-        <span class="kw">let </span>eos_tok = pipeline.eos_tok();
+        <span class="kw">let </span>eos_tok = pipeline.eos_tok().to_vec();
         <span class="kw">for </span>(logits_per_seq, seq) <span class="kw">in </span>zip(logits_seq, seqs.iter_mut()) {
             <span class="comment">// Sample and extract next token
             </span><span class="kw">let </span>return_logprobs = seq.return_logprobs();
@@ -955,7 +955,7 @@
             <span class="kw">let </span>eos_tok = <span class="kw">if </span>disable_eos_stop {
                 <span class="prelude-val">None
             </span>} <span class="kw">else </span>{
-                <span class="prelude-val">Some</span>(eos_tok)
+                <span class="prelude-val">Some</span>(eos_tok.as_ref())
             };
             <span class="kw">let </span>is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
             seq.add_token(
