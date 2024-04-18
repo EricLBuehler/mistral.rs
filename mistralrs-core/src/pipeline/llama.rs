@@ -37,7 +37,7 @@ enum Model {
     XLoraNormal(XLoraLlama),
     XLoraQuantized(XLoraModelWeights),
 }
-pub const LLAMA_IS_GPTX: bool = false;
+pub const LLAMA_IS_GPTX: bool = true;
 
 pub struct LlamaModelPaths<P> {
     tokenizer_filename: P,
