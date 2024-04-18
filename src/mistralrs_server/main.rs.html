@@ -258,14 +258,6 @@
 <a href="#256" id="256">256</a>
 <a href="#257" id="257">257</a>
 <a href="#258" id="258">258</a>
-<a href="#259" id="259">259</a>
-<a href="#260" id="260">260</a>
-<a href="#261" id="261">261</a>
-<a href="#262" id="262">262</a>
-<a href="#263" id="263">263</a>
-<a href="#264" id="264">264</a>
-<a href="#265" id="265">265</a>
-<a href="#266" id="266">266</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{Json, State},
@@ -281,7 +273,6 @@
 };
 <span class="kw">use </span>openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 <span class="kw">use </span>std::sync::Arc;
-<span class="kw">use </span>tracing_subscriber::{filter::Targets, layer::SubscriberExt, util::SubscriberInitExt};
 <span class="kw">mod </span>chat_completion;
 <span class="kw">mod </span>completions;
 <span class="kw">use crate</span>::{chat_completion::__path_chatcompletions, completions::completions};
@@ -294,7 +285,7 @@
 <span class="kw">use </span>interactive_mode::interactive_mode;
 <span class="kw">use </span>prompt_mode::prompt_mode;
 <span class="kw">use </span>tower_http::cors::{AllowOrigin, CorsLayer};
-<span class="kw">use </span>tracing::{info, level_filters::LevelFilter, warn};
+<span class="kw">use </span>tracing::{info, warn};
 <span class="kw">use </span>utoipa::OpenApi;
 <span class="kw">use </span>utoipa_swagger_ui::SwaggerUi;
 <span class="kw">fn </span>parse_token_source(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;TokenSource, String&gt; {
@@ -457,14 +448,7 @@
     <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
     </span><span class="kw">let </span>device = Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?</span>;
 
-    <span class="kw">let </span>filter = Targets::new()
-        <span class="comment">// Disable all traces from `tokenizers`.
-        </span>.with_target(<span class="string">"tokenizers"</span>, LevelFilter::OFF);
-
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
-        .with(filter)
-        .init();
+    tracing_subscriber::fmt().init();
 
     <span class="macro">info!</span>(
         <span class="string">"avx: {}, neon: {}, simd128: {}, f16c: {}"</span>,
