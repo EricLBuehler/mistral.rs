@@ -219,7 +219,7 @@ struct Args {
     n_gen: usize,
 
     /// Number of concurrent requests to run.
-    #[arg(long, short, value_parser, num_args = 1.., value_delimiter = ',')]
+    #[arg(long, short, value_parser, num_args = 1.., value_delimiter = ',', value_terminator = " ")]
     concurrency: Vec<usize>,
 
     /// Number of times to repeat each test.
