@@ -219,8 +219,8 @@ struct Args {
     n_gen: usize,
 
     /// Number of concurrent requests to run.
-    #[arg(long, short, default_value_t = 1)]
-    concurrency: usize,
+    #[arg(long, short, value_parser, num_args = 1.., value_delimiter = ',')]
+    concurrency: Vec<usize>,
 
     /// Number of times to repeat each test.
     #[arg(long, short, default_value_t = 5)]
@@ -276,42 +276,47 @@ fn main() -> anyhow::Result<()> {
 
     let mistralrs = MistralRsBuilder::new(
         pipeline,
-        SchedulerMethod::Fixed(args.concurrency.try_into().unwrap()),
+        SchedulerMethod::Fixed(
+            (*args.concurrency.iter().max().unwrap())
+                .try_into()
+                .unwrap(),
+        ),
     )
     .with_no_prefix_cache(true)
     .with_disable_eos_stop(true)
     .build();
 
     let mut results = vec![];
+    for concurrency in args.concurrency {
+        if args.n_gen > 0 {
+            let r = run_bench(
+                mistralrs.clone(),
+                RequestMessage::Completion {
+                    text: "Rust".to_string(),
+                    echo_prompt: false,
+                    best_of: 1,
+                },
+                args.n_gen - 1,
+                concurrency,
+                args.repetitions,
+                TestName::Gen(args.n_gen),
+            )?;
+            results.push(r);
+        }
 
-    if args.n_gen > 0 {
-        let r = run_bench(
-            mistralrs.clone(),
-            RequestMessage::Completion {
-                text: "Rust".to_string(),
-                echo_prompt: false,
-                best_of: 1,
-            },
-            args.n_gen - 1,
-            args.concurrency,
-            args.repetitions,
-            TestName::Gen(args.n_gen),
-        )?;
-        results.push(r);
-    }
+        if args.n_prompt > 0 {
+            let tks = (1000..1000 + args.n_prompt as u32).collect();
+            let r = run_bench(
+                mistralrs.clone(),
+                RequestMessage::CompletionTokens(tks),
+                1,
+                concurrency,
+                args.repetitions,
+                TestName::Prompt(args.n_prompt),
+            )?;
 
-    if args.n_prompt > 0 {
-        let tks = (1000..1000 + args.n_prompt as u32).collect();
-        let r = run_bench(
-            mistralrs,
-            RequestMessage::CompletionTokens(tks),
-            1,
-            args.concurrency,
-            args.repetitions,
-            TestName::Prompt(args.n_prompt),
-        )?;
-
-        results.push(r);
+            results.push(r);
+        }
     }
 
     print_usage(model_name, &device, results);
