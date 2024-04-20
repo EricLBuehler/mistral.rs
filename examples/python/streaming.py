@@ -20,6 +20,8 @@ res = runner.send_chat_completion_request(
         presence_penalty=1.0,
         top_p=0.1,
         temperature=0.1,
+        stream=True,
     )
 )
-print(res)
+for chunk in res:
+    print(chunk)
