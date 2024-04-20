@@ -3,11 +3,12 @@
 
 Mistral.rs is a fast LLM inference platform written. We support inference on a variety of devices, quantization, and easy-to-use application with an Open-AI API compatible HTTP server and Python bindings. 
 
-## Current work
+## Current work and upcoming features
 - More models: please submit requests [here](https://github.com/EricLBuehler/mistral.rs/issues/156).
 - X-LoRA: Scalings `topk` and softmax `topk` ([#48](https://github.com/EricLBuehler/mistral.rs/issues/48)).
-- Parallel linear layers (sharding) ([#50](https://github.com/EricLBuehler/mistral.rs/issues/50)).
-- Device offloading ([#157](https://github.com/EricLBuehler/mistral.rs/pull/157))
+- Parallel linear layers (sharding) ([#50](https://github.com/EricLBuehler/mistral.rs/issues/50)). ⭐ Top priority, active work
+- Device offloading ([#157](https://github.com/EricLBuehler/mistral.rs/pull/157)). ⭐ Top priority, active work
+- Completion streaming support (pending PR, this is holding back the Llama-index integration).
 
 **Running the new Llama 3 model on CUDA**
 
