@@ -37,7 +37,7 @@ enum Model {
     XLoraNormal(XLoraLlama),
     XLoraQuantized(XLoraModelWeights),
 }
-pub const LLAMA_IS_GPTX: bool = false;
+pub const LLAMA_IS_GPTX: bool = true;
 
 pub struct LlamaModelPaths<P> {
     tokenizer_filename: P,
@@ -91,7 +91,7 @@ pub struct LlamaPipeline {
     non_granular_state: Option<NonGranularState>,
     model_id: String,
     is_lora: bool,
-    eos_tok: u32,
+    eos_tok: Vec<u32>,
 }
 
 pub struct LlamaLoader {
@@ -259,7 +259,6 @@ impl Loader for LlamaLoader {
                     vb,
                     &basic_config.into_config(self.config.use_flash_attn),
                     device,
-                    self.no_kv_cache,
                 )?;
                 Model::Normal(model)
             }
@@ -291,7 +290,6 @@ impl Loader for LlamaLoader {
                     paths.get_adapter_configs().as_ref().unwrap(),
                     Some(paths.get_classifier_config().as_ref().unwrap().clone()),
                     paths.get_ordering().as_ref().unwrap().clone(),
-                    self.no_kv_cache,
                 )?;
                 Model::XLoraNormal(model)
             }
@@ -434,7 +432,6 @@ impl Loader for LlamaLoader {
                     paths.get_adapter_configs().as_ref().unwrap(),
                     None,
                     paths.get_ordering().as_ref().unwrap().clone(),
-                    self.no_kv_cache,
                 )?;
                 is_lora = true;
                 Model::XLoraNormal(model)
@@ -446,9 +443,23 @@ impl Loader for LlamaLoader {
 
         let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
 
+        let mut eos_toks = vec![chat_template.eos_tok()];
+
+        // Handle Llama3 chat case
+        if tokenizer.encode("<|eot_id|>", true).is_ok() {
+            eos_toks.push("<|eot_id|>".to_string())
+        }
+
+        info!(
+            "bos_tok = {}, eos_tok = {:?}, unk_tok = {}",
+            chat_template.bos_tok(),
+            eos_toks,
+            chat_template.eos_tok()
+        );
+
         Ok(Box::new(Mutex::new(LlamaPipeline {
             model,
-            eos_tok: calculate_eos_tok(&chat_template, &tokenizer),
+            eos_tok: calculate_eos_tok(eos_toks, &tokenizer),
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer: tokenizer.into(),
             config: self.config,
@@ -558,8 +569,8 @@ impl Pipeline for LlamaPipeline {
     fn tokenizer(&self) -> Arc<Tokenizer> {
         self.tokenizer.clone()
     }
-    fn eos_tok(&self) -> u32 {
-        self.eos_tok
+    fn eos_tok(&self) -> &[u32] {
+        &self.eos_tok
     }
     fn name(&self) -> String {
         self.model_id.clone()
