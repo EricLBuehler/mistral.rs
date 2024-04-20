@@ -37,7 +37,7 @@ struct UncertainTokSec {
 
 impl Display for UncertainTokSec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}±{}", self.mean, self.std_dev)
+        write!(f, "{:.3}±{:.3}", self.mean, self.std_dev)
     }
 }
 
