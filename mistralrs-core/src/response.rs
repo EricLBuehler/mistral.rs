@@ -1,11 +1,22 @@
 use std::error::Error;
 
-use pyo3::pyclass;
+use pyo3::{pyclass, pymethods};
 use serde::Serialize;
 
 use crate::sampler::TopLogprob;
 
 pub const SYSTEM_FINGERPRINT: &str = "local";
+
+macro_rules! generate_repr {
+    ($t:ident) => {
+        #[pymethods]
+        impl $t {
+            fn __repr__(&self) -> String {
+                serde_json::to_string(self).unwrap()
+            }
+        }
+    };
+}
 
 #[pyclass]
 #[pyo3(get_all)]
@@ -15,6 +26,8 @@ pub struct ResponseMessage {
     pub role: String,
 }
 
+generate_repr!(ResponseMessage);
+
 #[pyclass]
 #[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
@@ -22,6 +35,8 @@ pub struct Delta {
     pub content: String,
     pub role: String,
 }
+
+generate_repr!(Delta);
 
 #[pyclass]
 #[pyo3(get_all)]
@@ -33,12 +48,16 @@ pub struct ResponseLogprob {
     pub top_logprobs: Vec<TopLogprob>,
 }
 
+generate_repr!(ResponseLogprob);
+
 #[pyclass]
 #[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
 pub struct Logprobs {
     pub content: Option<Vec<ResponseLogprob>>,
 }
+
+generate_repr!(Logprobs);
 
 #[pyclass]
 #[pyo3(get_all)]
@@ -50,6 +69,8 @@ pub struct Choice {
     pub logprobs: Option<Logprobs>,
 }
 
+generate_repr!(Choice);
+
 #[pyclass]
 #[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
@@ -59,6 +80,8 @@ pub struct ChunkChoice {
     pub delta: Delta,
     pub logprobs: Option<ResponseLogprob>,
 }
+
+generate_repr!(ChunkChoice);
 
 #[pyclass]
 #[pyo3(get_all)]
@@ -75,6 +98,8 @@ pub struct Usage {
     pub total_completion_time_sec: f32,
 }
 
+generate_repr!(Usage);
+
 #[pyclass]
 #[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
@@ -88,6 +113,8 @@ pub struct ChatCompletionResponse {
     pub usage: Usage,
 }
 
+generate_repr!(ChatCompletionResponse);
+
 #[pyclass]
 #[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
@@ -100,6 +127,8 @@ pub struct ChatCompletionChunkResponse {
     pub object: String,
 }
 
+generate_repr!(ChatCompletionChunkResponse);
+
 #[pyclass]
 #[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
@@ -109,6 +138,8 @@ pub struct CompletionChoice {
     pub text: String,
     pub logprobs: Option<()>,
 }
+
+generate_repr!(CompletionChoice);
 
 #[pyclass]
 #[pyo3(get_all)]
@@ -122,6 +153,8 @@ pub struct CompletionResponse {
     pub object: String,
     pub usage: Usage,
 }
+
+generate_repr!(CompletionResponse);
 
 pub enum Response {
     InternalError(Box<dyn Error + Send + Sync>),
