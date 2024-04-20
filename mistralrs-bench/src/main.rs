@@ -287,8 +287,8 @@ fn main() -> anyhow::Result<()> {
     .with_disable_eos_stop(true)
     .build();
 
-    let mut results = vec![];
     for concurrency in args.concurrency.as_ref().unwrap() {
+        let mut results = vec![];
         if args.n_gen > 0 {
             let r = run_bench(
                 mistralrs.clone(),
@@ -318,9 +318,9 @@ fn main() -> anyhow::Result<()> {
 
             results.push(r);
         }
-    }
 
-    print_usage(model_name, &device, results);
+        print_usage(model_name, &device, results);
+    }
 
     Ok(())
 }
