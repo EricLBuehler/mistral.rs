@@ -320,6 +320,12 @@
 <a href="#318" id="318">318</a>
 <a href="#319" id="319">319</a>
 <a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
@@ -540,9 +546,9 @@
     </span><span class="attr">#[arg(long, short = <span class="string">'n'</span>, default_value_t = <span class="number">128</span>)]
     </span>n_gen: usize,
 
-    <span class="doccomment">/// Number of concurrent requests to run.
-    </span><span class="attr">#[arg(long, short, default_value_t = <span class="number">1</span>)]
-    </span>concurrency: usize,
+    <span class="doccomment">/// Number of concurrent requests to run. Default is 1
+    </span><span class="attr">#[clap(short, long, value_parser, value_delimiter = <span class="string">','</span>)]
+    </span>concurrency: <span class="prelude-ty">Option</span>&lt;Vec&lt;usize&gt;&gt;,
 
     <span class="doccomment">/// Number of times to repeat each test.
     </span><span class="attr">#[arg(long, short, default_value_t = <span class="number">5</span>)]
@@ -550,7 +556,8 @@
 }
 
 <span class="kw">fn </span>main() -&gt; anyhow::Result&lt;()&gt; {
-    <span class="kw">let </span>args = Args::parse();
+    <span class="kw">let </span><span class="kw-2">mut </span>args = Args::parse();
+    args.concurrency = <span class="prelude-val">Some</span>(args.concurrency.unwrap_or(<span class="macro">vec!</span>[<span class="number">1</span>]));
 
     <span class="attr">#[cfg(not(feature = <span class="string">"flash-attn"</span>))]
     </span><span class="kw">let </span>use_flash_attn = <span class="bool-val">false</span>;
@@ -598,45 +605,50 @@
 
     <span class="kw">let </span>mistralrs = MistralRsBuilder::new(
         pipeline,
-        SchedulerMethod::Fixed(args.concurrency.try_into().unwrap()),
+        SchedulerMethod::Fixed(
+            (<span class="kw-2">*</span>args.concurrency.as_ref().unwrap().iter().max().unwrap())
+                .try_into()
+                .unwrap(),
+        ),
     )
     .with_no_prefix_cache(<span class="bool-val">true</span>)
     .with_disable_eos_stop(<span class="bool-val">true</span>)
     .build();
 
-    <span class="kw">let </span><span class="kw-2">mut </span>results = <span class="macro">vec!</span>[];
+    <span class="kw">for </span>concurrency <span class="kw">in </span>args.concurrency.as_ref().unwrap() {
+        <span class="kw">let </span><span class="kw-2">mut </span>results = <span class="macro">vec!</span>[];
+        <span class="kw">if </span>args.n_gen &gt; <span class="number">0 </span>{
+            <span class="kw">let </span>r = run_bench(
+                mistralrs.clone(),
+                RequestMessage::Completion {
+                    text: <span class="string">"Rust"</span>.to_string(),
+                    echo_prompt: <span class="bool-val">false</span>,
+                    best_of: <span class="number">1</span>,
+                },
+                args.n_gen - <span class="number">1</span>,
+                <span class="kw-2">*</span>concurrency,
+                args.repetitions,
+                TestName::Gen(args.n_gen),
+            )<span class="question-mark">?</span>;
+            results.push(r);
+        }
 
-    <span class="kw">if </span>args.n_gen &gt; <span class="number">0 </span>{
-        <span class="kw">let </span>r = run_bench(
-            mistralrs.clone(),
-            RequestMessage::Completion {
-                text: <span class="string">"Rust"</span>.to_string(),
-                echo_prompt: <span class="bool-val">false</span>,
-                best_of: <span class="number">1</span>,
-            },
-            args.n_gen - <span class="number">1</span>,
-            args.concurrency,
-            args.repetitions,
-            TestName::Gen(args.n_gen),
-        )<span class="question-mark">?</span>;
-        results.push(r);
+        <span class="kw">if </span>args.n_prompt &gt; <span class="number">0 </span>{
+            <span class="kw">let </span>tks = (<span class="number">1000</span>..<span class="number">1000 </span>+ args.n_prompt <span class="kw">as </span>u32).collect();
+            <span class="kw">let </span>r = run_bench(
+                mistralrs.clone(),
+                RequestMessage::CompletionTokens(tks),
+                <span class="number">1</span>,
+                <span class="kw-2">*</span>concurrency,
+                args.repetitions,
+                TestName::Prompt(args.n_prompt),
+            )<span class="question-mark">?</span>;
+
+            results.push(r);
+        }
+
+        print_usage(model_name, <span class="kw-2">&amp;</span>device, results);
     }
-
-    <span class="kw">if </span>args.n_prompt &gt; <span class="number">0 </span>{
-        <span class="kw">let </span>tks = (<span class="number">1000</span>..<span class="number">1000 </span>+ args.n_prompt <span class="kw">as </span>u32).collect();
-        <span class="kw">let </span>r = run_bench(
-            mistralrs,
-            RequestMessage::CompletionTokens(tks),
-            <span class="number">1</span>,
-            args.concurrency,
-            args.repetitions,
-            TestName::Prompt(args.n_prompt),
-        )<span class="question-mark">?</span>;
-
-        results.push(r);
-    }
-
-    print_usage(model_name, <span class="kw-2">&amp;</span>device, results);
 
     <span class="prelude-val">Ok</span>(())
 }
