@@ -12,7 +12,7 @@ macro_rules! generate_repr {
         #[pymethods]
         impl $t {
             fn __repr__(&self) -> String {
-                serde_json::to_string_pretty(self).unwrap()
+                format!("{self:#?}")
             }
         }
     };
