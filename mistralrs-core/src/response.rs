@@ -1,23 +1,27 @@
 use std::error::Error;
 
+use pyo3::pyclass;
 use serde::Serialize;
 
 use crate::sampler::TopLogprob;
 
 pub const SYSTEM_FINGERPRINT: &str = "local";
 
+#[pyclass]
 #[derive(Debug, Clone, Serialize)]
 pub struct ResponseMessage {
     pub content: String,
     pub role: String,
 }
 
+#[pyclass]
 #[derive(Debug, Clone, Serialize)]
 pub struct Delta {
     pub content: String,
     pub role: String,
 }
 
+#[pyclass]
 #[derive(Debug, Clone, Serialize)]
 pub struct ResponseLogprob {
     pub token: String,
@@ -26,29 +30,31 @@ pub struct ResponseLogprob {
     pub top_logprobs: Vec<TopLogprob>,
 }
 
+#[pyclass]
 #[derive(Debug, Clone, Serialize)]
 pub struct Logprobs {
     pub content: Option<Vec<ResponseLogprob>>,
 }
 
+#[pyclass]
 #[derive(Debug, Clone, Serialize)]
 pub struct Choice {
-    #[serde(rename = "finish_reason")]
-    pub stopreason: String,
+    pub finish_reason: String,
     pub index: usize,
     pub message: ResponseMessage,
     pub logprobs: Option<Logprobs>,
 }
 
+#[pyclass]
 #[derive(Debug, Clone, Serialize)]
 pub struct ChunkChoice {
-    #[serde(rename = "finish_reason")]
-    pub stopreason: Option<String>,
+    pub finish_reason: Option<String>,
     pub index: usize,
     pub delta: Delta,
     pub logprobs: Option<ResponseLogprob>,
 }
 
+#[pyclass]
 #[derive(Debug, Clone, Serialize)]
 pub struct Usage {
     pub completion_tokens: usize,
@@ -62,6 +68,7 @@ pub struct Usage {
     pub total_completion_time_sec: f32,
 }
 
+#[pyclass]
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatCompletionResponse {
     pub id: String,
@@ -73,6 +80,7 @@ pub struct ChatCompletionResponse {
     pub usage: Usage,
 }
 
+#[pyclass]
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatCompletionChunkResponse {
     pub id: String,
@@ -83,15 +91,16 @@ pub struct ChatCompletionChunkResponse {
     pub object: String,
 }
 
+#[pyclass]
 #[derive(Debug, Clone, Serialize)]
 pub struct CompletionChoice {
-    #[serde(rename = "finish_reason")]
-    pub stopreason: String,
+    pub finish_reason: String,
     pub index: usize,
     pub text: String,
     pub logprobs: Option<()>,
 }
 
+#[pyclass]
 #[derive(Debug, Clone, Serialize)]
 pub struct CompletionResponse {
     pub id: String,

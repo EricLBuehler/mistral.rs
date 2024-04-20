@@ -14,10 +14,11 @@ use stream::ChatCompletionStreamer;
 
 use candle_core::Device;
 use mistralrs_core::{
-    Constraint, GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader,
-    MistralLoader, MistralRs, MistralRsBuilder, MistralSpecificConfig, MixtralLoader,
-    MixtralSpecificConfig, ModelKind, Phi2Loader, Phi2SpecificConfig, Request as _Request,
-    RequestMessage, Response, SamplingParams, SchedulerMethod, StopTokens, TokenSource,
+    ChatCompletionResponse, CompletionResponse, Constraint, GemmaLoader, GemmaSpecificConfig,
+    LlamaLoader, LlamaSpecificConfig, Loader, MistralLoader, MistralRs, MistralRsBuilder,
+    MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind, Phi2Loader,
+    Phi2SpecificConfig, Request as _Request, RequestMessage, Response, SamplingParams,
+    SchedulerMethod, StopTokens, TokenSource,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
@@ -1059,11 +1060,11 @@ impl Runner {
         Ok(Self { runner: mistralrs })
     }
 
-    /// Send an OpenAI API compatible request, returning raw JSON.
+    /// Send an OpenAI API compatible request, returning the result.
     fn send_chat_completion_request(
         &mut self,
         request: Py<ChatCompletionRequest>,
-    ) -> PyResult<Either<String, ChatCompletionStreamer>> {
+    ) -> PyResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
         let (tx, rx) = channel();
         Python::with_gil(|py| {
             let request = request.bind(py).borrow();
@@ -1143,10 +1144,7 @@ impl Runner {
                     Response::ValidationError(e) | Response::InternalError(e) => {
                         Err(PyValueError::new_err(e.to_string()))
                     }
-                    Response::Done(response) => {
-                        MistralRs::maybe_log_response(self.runner.clone(), &response);
-                        Ok(Either::Left(serde_json::to_string(&response).unwrap()))
-                    }
+                    Response::Done(response) => Ok(Either::Left(response)),
                     Response::ModelError(msg, _) => Err(PyValueError::new_err(msg.to_string())),
                     Response::Chunk(_) => unreachable!(),
                     Response::CompletionDone(_) => unreachable!(),
@@ -1156,8 +1154,11 @@ impl Runner {
         })
     }
 
-    /// Send an OpenAI API compatible request, returning raw JSON.
-    fn send_completion_request(&mut self, request: Py<CompletionRequest>) -> PyResult<String> {
+    /// Send an OpenAI API compatible request, returning the result.
+    fn send_completion_request(
+        &mut self,
+        request: Py<CompletionRequest>,
+    ) -> PyResult<CompletionResponse> {
         let (tx, rx) = channel();
         Python::with_gil(|py| {
             let request = request.bind(py).borrow();
@@ -1227,14 +1228,13 @@ impl Runner {
                 Response::ValidationError(e) | Response::InternalError(e) => {
                     Err(PyValueError::new_err(e.to_string()))
                 }
-                Response::Done(response) => {
-                    MistralRs::maybe_log_response(self.runner.clone(), &response);
-                    Ok(serde_json::to_string(&response).unwrap())
+                Response::CompletionDone(response) => Ok(response),
+                Response::CompletionModelError(msg, _) => {
+                    Err(PyValueError::new_err(msg.to_string()))
                 }
-                Response::ModelError(msg, _) => Err(PyValueError::new_err(msg.to_string())),
                 Response::Chunk(_) => unreachable!(),
-                Response::CompletionDone(_) => unreachable!(),
-                Response::CompletionModelError(_, _) => unreachable!(),
+                Response::Done(_) => unreachable!(),
+                Response::ModelError(_, _) => unreachable!(),
             }
         })
     }

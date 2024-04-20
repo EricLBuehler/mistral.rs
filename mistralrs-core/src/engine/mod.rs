@@ -226,7 +226,7 @@ impl Engine {
                                 role: "assistant".to_string(),
                             },
                             index: seq.get_response_index(),
-                            stopreason: is_done.map(|x| x.to_string()),
+                            finish_reason: is_done.map(|x| x.to_string()),
                             logprobs: if seq.return_logprobs() {
                                 Some(ResponseLogprob {
                                     token: delta,
@@ -304,7 +304,7 @@ impl Engine {
 
         if seq.get_mut_group().is_chat {
             let choice = Choice {
-                stopreason: reason.to_string(),
+                finish_reason: reason.to_string(),
                 index: seq.get_response_index(),
                 message: ResponseMessage {
                     content: text,
@@ -315,7 +315,7 @@ impl Engine {
             seq.add_choice_to_group(choice);
         } else {
             let choice = CompletionChoice {
-                stopreason: reason.to_string(),
+                finish_reason: reason.to_string(),
                 index: seq.get_response_index(),
                 text,
                 logprobs: None,

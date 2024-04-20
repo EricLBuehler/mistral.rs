@@ -66,7 +66,7 @@ impl futures::Stream for Streamer {
                     Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
                 }
                 Response::Chunk(response) => {
-                    if response.choices.iter().all(|x| x.stopreason.is_some()) {
+                    if response.choices.iter().all(|x| x.finish_reason.is_some()) {
                         self.is_done = true;
                     }
                     MistralRs::maybe_log_response(self.state.clone(), &response);

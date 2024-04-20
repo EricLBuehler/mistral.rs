@@ -16,7 +16,7 @@ crate-type = ["cdylib"]
 doc = false
 
 [dependencies]
-pyo3 = { version = "0.21.0", features = ["either"] } # { version = "0.21.0", features = ["extension-module"] }
+pyo3.workspace = true
 mistralrs-core = { version = "0.1.0", path = "../mistralrs-core" }
 serde.workspace = true
 serde_json.workspace = true
