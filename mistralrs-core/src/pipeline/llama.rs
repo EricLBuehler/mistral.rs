@@ -442,16 +442,24 @@ impl Loader for LlamaLoader {
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
 
         let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
-        let mut eos_toks = vec![calculate_eos_tok(&chat_template, &tokenizer)];
+
+        let mut eos_toks = vec![chat_template.eos_tok()];
 
         // Handle Llama3 chat case
-        if let Ok(tok) = tokenizer.encode("<|eot_id|>", true) {
-            eos_toks.push(tok.get_ids()[0])
+        if tokenizer.encode("<|eot_id|>", true).is_ok() {
+            eos_toks.push("<|eot_id|>".to_string())
         }
+
+        info!(
+            "bos_tok = {}, eos_tok = {:?}, unk_tok = {}",
+            chat_template.bos_tok(),
+            eos_toks,
+            chat_template.eos_tok()
+        );
 
         Ok(Box::new(Mutex::new(LlamaPipeline {
             model,
-            eos_tok: eos_toks,
+            eos_tok: calculate_eos_tok(eos_toks, &tokenizer),
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer: tokenizer.into(),
             config: self.config,
