@@ -3,12 +3,24 @@
 
 Mistral.rs is a fast LLM inference platform written. We support inference on a variety of devices, quantization, and easy-to-use application with an Open-AI API compatible HTTP server and Python bindings. 
 
-## Current work
+## Current work and upcoming features
 - More models: please submit requests [here](https://github.com/EricLBuehler/mistral.rs/issues/156).
 - X-LoRA: Scalings `topk` and softmax `topk` ([#48](https://github.com/EricLBuehler/mistral.rs/issues/48)).
-- Parallel linear layers (sharding) ([#50](https://github.com/EricLBuehler/mistral.rs/issues/50)).
-- Phi2 Python support
-- Device offloading
+- Parallel linear layers (sharding) ([#50](https://github.com/EricLBuehler/mistral.rs/issues/50)). ⭐ Top priority, active work
+- Device offloading ([#157](https://github.com/EricLBuehler/mistral.rs/pull/157)). ⭐ Top priority, active work
+- Completion streaming support (pending PR, this is holding back the Llama-index integration).
+
+**Running the new Llama 3 model on CUDA**
+
+`cargo run --release --features cuda -- -i llama -m meta-llama/Meta-Llama-3-8B-Instruct`
+
+**Running the new Llama 3 model on Metal**
+
+`cargo run --release --features metal -- -i llama -m meta-llama/Meta-Llama-3-8B-Instruct`
+
+**Running the new Llama 3 model on CPU**
+
+`cargo run --release -- -i llama -m meta-llama/Meta-Llama-3-8B-Instruct`
 
 ## Description
 **Fast**:
@@ -452,3 +464,6 @@ If you have any problems or want to contribute something, please raise an issue 
 Consider enabling `RUST_LOG=debug` environment variable.
 
 If you want to add a new model, please see [our guide](ADDING_MODELS.md).
+
+## Credits
+This project would not be possible without the excellent work at [`candle`](https://github.com/huggingface/candle). Additionally, thank you to all contributors! Contributing can range from raising an issue or suggesting a feature to adding some new functionality.

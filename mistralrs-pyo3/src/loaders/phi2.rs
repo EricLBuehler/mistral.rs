@@ -1,28 +1,27 @@
-use std::fs::File;
-
 use candle_core::DType as _DType;
 use mistralrs::{
-    GemmaLoader as _GemmaLoader, GemmaSpecificConfig, Loader, MistralRsBuilder,
-    ModelKind as _ModelKind, SchedulerMethod, TokenSource,
+    Loader, MistralRsBuilder, ModelKind as _ModelKind, Phi2Loader as _Phi2Loader,
+    Phi2SpecificConfig, SchedulerMethod, TokenSource,
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
+use std::fs::File;
 
 use crate::{get_device, DType, ModelKind, Runner};
 
 #[pyclass]
 /// A loader for a Runner.
-pub struct GemmaLoader {
-    loader: _GemmaLoader,
+pub struct Phi2Loader {
+    loader: _Phi2Loader,
     no_kv_cache: bool,
     tgt_non_granular_index: Option<usize>,
 }
 
 #[pymethods]
-impl GemmaLoader {
+impl Phi2Loader {
     /// - `model_id`: Base model ID, or tokenizer ID if quantized model type.
     /// - `kind`: Model kind
     /// - `no_kv_cache=False`: Disable kv cache.
-    /// - `use_flash_attn=None`: Use flash attn, irrelevant.
+    /// - `use_flash_attn=<feature>`: Use flash attn, only used if feature is enabled.
     /// - `repeat_last_n=64`: Repeat last n context window.
     /// - `gqa=None`: GQA, irrelevant.
     /// - `order_file=None`: Ordering JSON file.
@@ -37,7 +36,7 @@ impl GemmaLoader {
         model_id,
         kind,
         no_kv_cache=false,
-        _use_flash_attn=None,
+        use_flash_attn=cfg!(feature="flash-attn"),
         repeat_last_n=64,
         _gqa=None,
         order_file=None,
@@ -53,7 +52,7 @@ impl GemmaLoader {
         model_id: String,
         kind: Py<ModelKind>,
         no_kv_cache: bool,
-        _use_flash_attn: Option<bool>,
+        use_flash_attn: Option<bool>,
         repeat_last_n: usize,
         _gqa: Option<usize>,
         order_file: Option<String>,
@@ -64,6 +63,8 @@ impl GemmaLoader {
         tokenizer_json: Option<String>,
         tgt_non_granular_index: Option<usize>,
     ) -> PyResult<Self> {
+        let mut use_flash_attn = use_flash_attn.unwrap_or(false);
+        use_flash_attn &= cfg!(feature = "flash-attn");
         let order = if let Some(ref order_file) = order_file {
             let f = File::open(order_file.clone())
                 .unwrap_or_else(|_| panic!("Could not load ordering file at {order_file}"));
@@ -96,27 +97,29 @@ impl GemmaLoader {
                 || xlora_model_id.is_none())
         {
             return Err(PyValueError::new_err("Expected an order file and xlora model id but no quantized model id and no quantized filename."));
-        } else if matches!(kind, _ModelKind::QuantizedGGUF)
-            || matches!(kind, _ModelKind::QuantizedGGML)
-                && (order_file.is_some()
-                    || quantized_model_id.is_none()
-                    || quantized_filename.is_none()
-                    || xlora_model_id.is_some())
+        } else if (matches!(kind, _ModelKind::QuantizedGGUF)
+            || matches!(kind, _ModelKind::QuantizedGGML))
+            && (order_file.is_some()
+                || quantized_model_id.is_none()
+                || quantized_filename.is_none()
+                || xlora_model_id.is_some())
         {
             return Err(PyValueError::new_err("Expected a quantized model id and quantized filename but no order file and no xlora model id."));
-        } else if matches!(kind, _ModelKind::XLoraGGUF)
-            || matches!(kind, _ModelKind::XLoraGGML)
-                && (order_file.is_none()
-                    || quantized_model_id.is_none()
-                    || quantized_filename.is_none()
-                    || xlora_model_id.is_none())
+        } else if (matches!(kind, _ModelKind::XLoraGGUF) || matches!(kind, _ModelKind::XLoraGGML))
+            && (order_file.is_none()
+                || quantized_model_id.is_none()
+                || quantized_filename.is_none()
+                || xlora_model_id.is_none())
         {
             return Err(PyValueError::new_err("Expected a quantized model id and quantized filename and order file and xlora model id."));
         }
         Ok(Self {
-            loader: _GemmaLoader::new(
+            loader: _Phi2Loader::new(
                 model_id,
-                GemmaSpecificConfig { repeat_last_n },
+                Phi2SpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n,
+                },
                 quantized_model_id,
                 quantized_filename,
                 xlora_model_id,
@@ -215,9 +218,9 @@ impl GemmaLoader {
             SchedulerMethod::Fixed(maxseqs.try_into().unwrap()),
         )
         .with_opt_log(logfile)
+        .with_prefix_cache_n(prefix_cache_n)
         .with_truncate_sequence(truncate_sequence)
         .with_no_kv_cache(self.no_kv_cache)
-        .with_prefix_cache_n(prefix_cache_n)
         .build();
 
         Ok(Runner { runner: mistralrs })

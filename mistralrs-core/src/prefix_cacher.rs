@@ -1,15 +1,37 @@
-use candle_core::{Device, Result};
-use indexmap::IndexMap;
+use std::{cell::RefCell, rc::Rc};
+
+use candle_core::{Device, Result, Tensor};
+use radix_trie::{Trie, TrieCommon, TrieKey};
 
 use crate::{models::LayerCaches, sequence::Sequence};
 
+#[derive(PartialEq, Eq)]
+struct Tokens(Vec<u32>);
+
+impl TrieKey for Tokens {
+    fn encode_bytes(&self) -> Vec<u8> {
+        self.0
+            .iter()
+            .flat_map(|x| bytemuck::bytes_of(x).to_vec())
+            .collect::<Vec<u8>>()
+    }
+}
+
+impl From<Vec<u32>> for Tokens {
+    fn from(value: Vec<u32>) -> Self {
+        Self(value)
+    }
+}
+
+type EvictionCacheGroup = (Rc<RefCell<LayerCaches>>, Option<Rc<RefCell<LayerCaches>>>);
+
 pub struct PrefixCacheManager {
-    caches: IndexMap<Vec<u32>, LayerCaches>,
-    cpu_caches: IndexMap<Vec<u32>, LayerCaches>,
-    xlora_caches: Option<IndexMap<Vec<u32>, LayerCaches>>,
-    xlora_cpu_caches: Option<IndexMap<Vec<u32>, LayerCaches>>,
+    caches: Trie<Tokens, Rc<RefCell<LayerCaches>>>,
+    xlora_caches: Option<Trie<Tokens, Rc<RefCell<LayerCaches>>>>,
     device: Device,
     pub n_on_device: usize,
+    no_prefix_cache: bool,
+    eviction_cache_ptrs: Vec<EvictionCacheGroup>,
 }
 
 #[derive(Clone)]
@@ -20,173 +42,120 @@ pub struct MatchingCache {
 }
 
 impl PrefixCacheManager {
-    pub fn new(device: Device, n_on_device: usize, is_xlora: bool) -> Self {
+    pub fn new(device: Device, n_on_device: usize, is_xlora: bool, no_prefix_cache: bool) -> Self {
         PrefixCacheManager {
-            caches: IndexMap::new(),
-            cpu_caches: IndexMap::new(),
-            xlora_caches: if is_xlora {
-                Some(IndexMap::new())
-            } else {
-                None
-            },
-            xlora_cpu_caches: if is_xlora {
-                Some(IndexMap::new())
-            } else {
-                None
-            },
+            caches: Trie::new(),
+            xlora_caches: if is_xlora { Some(Trie::new()) } else { None },
             device,
             n_on_device,
+            no_prefix_cache,
+            eviction_cache_ptrs: Vec::new(),
         }
     }
 
     /// This always keeps the cache on the device. If later on, a new seq cannot be allocated due to memory shortage,
     /// some caches will be evicted.
     pub fn add_sequence(&mut self, seq: &mut Sequence) {
-        self.caches
-            .insert(seq.get_toks().to_vec(), seq.cache().clone());
-        if seq.is_xlora() {
-            self.caches
-                .insert(seq.get_toks().to_vec(), seq.xlora_cache().clone());
+        if self.no_prefix_cache {
+            return;
         }
+        let cache = Rc::new(RefCell::new(seq.cache().clone()));
+        self.caches
+            .insert(seq.get_toks().to_vec().into(), cache.clone());
+        if seq.is_xlora() {
+            let xlora_cache = Rc::new(RefCell::new(seq.xlora_cache().clone()));
+            self.xlora_caches
+                .as_mut()
+                .unwrap()
+                .insert(seq.get_toks().to_vec().into(), xlora_cache.clone());
+            self.eviction_cache_ptrs.push((cache, Some(xlora_cache)));
+        } else {
+            self.eviction_cache_ptrs.push((cache, None));
+        }
+    }
+
+    fn cache_to<'a>(
+        cache: impl Iterator<Item = &'a mut Option<(Tensor, Tensor)>>,
+        device: &Device,
+    ) -> Result<()> {
+        for layer in cache {
+            if let Some((ref q, ref k)) = layer {
+                *layer = Some((q.to_device(device)?, k.to_device(device)?));
+            }
+        }
+        Ok(())
     }
 
     /// Evict the caches to CPU. This will evict the first k seqs such that the number of sequences on device after the copy is
     /// the maximum allowed. Returns the number of evicted sequences.
     pub fn evict_to_cpu(&mut self) -> Result<usize> {
+        if self.no_prefix_cache {
+            return Ok(0);
+        }
+        let mut n_on_device = 0;
+        for (cache, _) in &self.eviction_cache_ptrs {
+            if !matches!(
+                cache.as_ref().borrow()[0].as_ref().unwrap().0.device(),
+                Device::Cpu
+            ) {
+                n_on_device += 1;
+            }
+        }
+        let mut n_evicted = 0;
         // Intentionally evict the first ones first, as they are the oldest
-        for (ids, cache) in self
-            .caches
-            .drain(0..self.caches.len().saturating_sub(self.n_on_device))
-        {
-            let mut new_cache = Vec::new();
-            for layer in cache {
-                if let Some((ref q, ref k)) = layer {
-                    new_cache.push(Some((
-                        q.to_device(&Device::Cpu)?,
-                        k.to_device(&Device::Cpu)?,
-                    )));
-                } else {
-                    new_cache.push(None);
+        for (cache, xlora_cache) in &self.eviction_cache_ptrs {
+            if n_on_device - n_evicted == self.n_on_device {
+                break;
+            }
+            if !matches!(
+                cache.as_ref().borrow()[0].as_ref().unwrap().0.device(),
+                Device::Cpu
+            ) {
+                let mut cache = cache.borrow_mut();
+                let mut xlora_cache = xlora_cache.as_ref().map(|c| c.borrow_mut());
+
+                Self::cache_to(cache.iter_mut(), &Device::Cpu)?;
+                if let Some(ref mut xlora_cache) = xlora_cache {
+                    Self::cache_to(xlora_cache.iter_mut(), &Device::Cpu)?;
                 }
-            }
-            self.cpu_caches.insert(ids, new_cache);
-        }
-        Ok(self.caches.len() - self.n_on_device)
-    }
-
-    pub fn promote_into_device_cache(
-        &mut self,
-        toks: Vec<u32>,
-        cache: &LayerCaches,
-    ) -> Result<LayerCaches> {
-        let mut new_cache = Vec::new();
-        for layer in cache {
-            if let Some((ref q, ref k)) = layer {
-                new_cache.push(Some((
-                    q.to_device(&self.device)?,
-                    k.to_device(&self.device)?,
-                )));
-            } else {
-                new_cache.push(None);
+                n_evicted += 1;
             }
         }
-        // Load it into the cache
-        self.cpu_caches.swap_remove(&toks);
-        self.caches.insert(toks, new_cache.clone());
-        Ok(new_cache)
-    }
-
-    pub fn promote_into_device_xlora_cache(
-        &mut self,
-        toks: Vec<u32>,
-        cache: &LayerCaches,
-    ) -> Result<LayerCaches> {
-        let mut new_cache = Vec::new();
-        for layer in cache {
-            if let Some((ref q, ref k)) = layer {
-                new_cache.push(Some((
-                    q.to_device(&self.device)?,
-                    k.to_device(&self.device)?,
-                )));
-            } else {
-                new_cache.push(None);
-            }
-        }
-        // Load it into the cache
-        self.xlora_cpu_caches.as_mut().unwrap().swap_remove(&toks);
-        self.xlora_caches
-            .as_mut()
-            .unwrap()
-            .insert(toks, new_cache.clone());
-        Ok(new_cache)
+        Ok(self.caches.len().saturating_sub(self.n_on_device))
     }
 
     /// Search for a matching cache given some toks
     pub fn search_for_matching_cache(&mut self, toks: &[u32]) -> Result<Option<MatchingCache>> {
-        // Look for token ids such that they begins with `toks`
-        let mut candidates = Vec::new();
-        // Search the device cache
-        for (ids, cache) in &self.caches {
-            if ids.len() <= toks.len() && &toks[0..ids.len()] == ids {
-                if let Some(xlora_cache) = &self.xlora_caches {
-                    candidates.push(MatchingCache {
-                        normal: cache.clone(),
-                        xlora: Some(xlora_cache.get(ids).unwrap().clone()),
-                        toks: toks[ids.len()..].to_vec(),
-                    });
-                } else {
-                    candidates.push(MatchingCache {
-                        normal: cache.clone(),
-                        xlora: None,
-                        toks: toks[ids.len()..].to_vec(),
-                    });
-                }
-            }
-        }
-        // Sort the candidates by ascending `toks` length
-        candidates.sort_by_key(|x| x.toks.len());
-        if !candidates.is_empty() {
-            // The first one has the shortest `toks` length and therefore maximizes cache usage
-            return Ok(Some(candidates.swap_remove(0)));
+        if self.no_prefix_cache {
+            return Ok(None);
         }
 
-        let mut candidates = Vec::new();
-        // Search the CPU cache and promote if needed
-        for (ids, cache) in self.cpu_caches.clone() {
-            if ids.len() <= toks.len() && toks[0..ids.len()] == ids {
-                if self.xlora_cpu_caches.is_some() {
-                    candidates.push(MatchingCache {
-                        normal: self.promote_into_device_cache(toks.to_vec(), &cache)?,
-                        xlora: Some(
-                            self.promote_into_device_xlora_cache(
-                                toks.to_vec(),
-                                &self
-                                    .xlora_cpu_caches
-                                    .as_ref()
-                                    .unwrap()
-                                    .get(toks)
-                                    .unwrap()
-                                    .clone(),
-                            )?,
-                        ),
-                        toks: toks[ids.len()..].to_vec(),
-                    });
-                } else {
-                    candidates.push(MatchingCache {
-                        normal: self.promote_into_device_cache(toks.to_vec(), &cache)?,
-                        xlora: None,
-                        toks: toks[ids.len()..].to_vec(),
-                    });
-                }
-            }
+        let toks = Tokens(toks.to_vec());
+        if let Some(cache) = self.caches.get(&toks) {
+            Self::cache_to(cache.as_ref().borrow_mut().iter_mut(), &self.device)?;
+            let cache = cache.as_ref().borrow().clone();
+            let xlora_cache = if let Some(ref xlora_caches) = self.xlora_caches {
+                let mut xlora_cache = xlora_caches.get(&toks).unwrap().as_ref().borrow_mut();
+                Self::cache_to(xlora_cache.iter_mut(), &self.device)?;
+                Some(xlora_cache.clone())
+            } else {
+                None
+            };
+            let ancestor = &self
+                .caches
+                .get_ancestor(&toks)
+                .expect("No ancestor.")
+                .key()
+                .expect("Cannot get the key.")
+                .0;
+            // Know ancestor.len() < toks.len(), and toks[0..ancestor.len()] == toks
+            Ok(Some(MatchingCache {
+                normal: cache,
+                xlora: xlora_cache,
+                toks: toks.0[ancestor.len()..].to_vec(),
+            }))
+        } else {
+            Ok(None)
         }
-        // Sort the candidates by ascending `toks` length
-        candidates.sort_by_key(|x| x.toks.len());
-        if !candidates.is_empty() {
-            // The first one has the shortest `toks` length and therefore maximizes cache usage
-            return Ok(Some(candidates.swap_remove(0)));
-        }
-
-        Ok(None)
     }
 }

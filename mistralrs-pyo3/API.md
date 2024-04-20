@@ -50,6 +50,13 @@ There are several ways to load different architectures of model:
     - `tokenizer_json=None`: Tokenizer json file.
     - `tgt_non_granular_index=None`: Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached. If this is set then the max running sequences will be set to 1.
 
+The base loader classes listed below are passed to the wrapper loader classes above during construction:
+- `MistralLoader`
+- `GemmaLoader`
+- `LlamaLoader`
+- `MixtralLoader`
+- `Phi2Loader`
+
 Each class has one method:
 ### `load(self, token_source: str = "cache", max_seqs: int = 16, truncate_sequence: bool = false, logfile: str | None = None, revision: str | None = None, token_source_value: str | None = None) -> Runner`
 Load a model.
@@ -81,11 +88,14 @@ If `max_tokens` is not specified in the request, space for 10 tokens will be res
 
 Runner has no constructor and is created by calling `load` on a loader class.
 
-### `send_chat_completion_request(self, request: ChatCompletionRequest) -> str`
-Send an OpenAI compatible request, returning JSON.
+### `send_chat_completion_request(self, request: ChatCompletionRequest) -> str | ChatCompletionStreamer`
+Send an OpenAI compatible request, returning OpenAI compatible JSON or a streamer which returns OpenAI compatible JSON chunks.
+
+### `send_completion_request(self, request: CompletionRequest) -> str`
+Send an OpenAI compatible request, returning OpenAI compatible JSON.
 
 ## `ChatCompletionRequest`
-Request is a class with a constructor which accepts the following arguments. It is used to create a chat completion request.
+Request is a class with a constructor which accepts the following arguments. It is used to create a chat completion request to pass to `send_chat_completion_request`.
 
 - `messages: list[dict[str, str]]`
 - `model: str`
@@ -100,8 +110,32 @@ Request is a class with a constructor which accepts the following arguments. It 
 - `temperature: float | None`
 - `top_p: float | None`
 - `top_k: usize | None`
+- `stream: bool = False`
 
-`ChatCompletionRequest(messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, frequency_penalty = None, stop_token_ids = None, temperature = None, top_p = None, top_k = None)`
+`ChatCompletionRequest(messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, frequency_penalty = None, stop_token_ids = None, temperature = None, top_p = None, top_k = None, stream = False)`
+
+## `CompletionRequest`
+Request is a class with a constructor which accepts the following arguments. It is used to create a chat completion request to pass to `send_completion_request`.
+
+- `prompt: str`
+- `model: str`
+- `best_of: int`
+- `echo_prompt: bool = False`
+- `logit_bias: dict[int, float] | None = None`
+- `max_tokens: int | None = None`
+- `n_choices: int = 1`
+- `best_of: int = 1`
+- `presence_penalty: float | None = None`
+- `frequency_penalty: float | None = None`
+- `stop_seqs: list[str] | None = None`
+- `temperature: float | None = None`
+- `top_p: float | None = None`
+- `top_k: int | None = None`
+- `suffix: str | None = None`
+- `grammar: str | None = None`
+- `grammar_type: str | None = None`
+
+`CompletionRequest(prompt, model, best_of, echo_prompt = False, logit_bias = None, max_tokens: None, n_choices = 1, best_of = 1, presence_penalty = None, frequency_penalty = None, stop_seqs = None, temperature = None, top_p = None, top_k = None, suffix = None, grammar = None, grammar_type = None)`
 
 ## `ModelKind`
 - Normal

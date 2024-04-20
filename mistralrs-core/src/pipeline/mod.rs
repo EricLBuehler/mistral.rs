@@ -60,6 +60,9 @@ pub struct AddedTokensDecoder {
     special: Option<bool>,
 }
 
+#[derive(Debug, Deserialize)]
+struct Unk(#[serde(with = "either::serde_untagged")] Either<String, AddedTokensDecoder>);
+
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct ChatTemplate {
@@ -81,14 +84,34 @@ pub struct ChatTemplate {
     spaces_between_special_tokens: Option<bool>,
     tokenizer_class: String,
     truncation_size: Option<String>,
-    #[serde(with = "either::serde_untagged")]
-    unk_token: Either<String, AddedTokensDecoder>,
+    unk_token: Option<Unk>,
     use_default_system_prompt: Option<bool>,
 }
 
 impl ChatTemplate {
     pub fn has_chat_template(&self) -> bool {
         self.chat_template.is_some()
+    }
+
+    pub fn eos_tok(&self) -> String {
+        match self.eos_token {
+            Either::Left(ref lit) => lit.clone(),
+            Either::Right(ref added) => added.content.clone(),
+        }
+    }
+
+    pub fn bos_tok(&self) -> String {
+        match self.bos_token {
+            Either::Left(ref lit) => lit.clone(),
+            Either::Right(ref added) => added.content.clone(),
+        }
+    }
+
+    pub fn unk_tok(&self) -> Option<String> {
+        match self.unk_token.as_ref()?.0 {
+            Either::Left(ref lit) => Some(lit.clone()),
+            Either::Right(ref added) => Some(added.content.clone()),
+        }
     }
 }
 
@@ -213,7 +236,7 @@ fn apply_chat_template_to(
     template: &str,
     bos_tok: &str,
     eos_tok: &str,
-    unk_tok: &str,
+    unk_tok: Option<String>,
 ) -> Result<String> {
     let mut env = Environment::new();
     // https://github.com/huggingface/transformers/blob/76a33a10923ccc1074917f6b6a1e719e626b7dc9/src/transformers/tokenization_utils_base.py#L1842
@@ -251,7 +274,7 @@ pub trait Pipeline: Send + Sync {
     fn cache(&self) -> &Cache;
     fn tokenizer(&self) -> Arc<Tokenizer>;
     fn tok_trie(&self) -> &TokTrie;
-    fn eos_tok(&self) -> u32;
+    fn eos_tok(&self) -> &[u32];
     fn name(&self) -> String;
     fn get_max_seq_len(&self) -> usize;
     fn is_xlora(&self) -> bool;
@@ -270,9 +293,13 @@ pub trait Pipeline: Send + Sync {
             Either::Left(ref lit) => lit,
             Either::Right(ref added) => &added.content,
         };
-        let unk_tok = match self.get_chat_template().unk_token {
-            Either::Left(ref lit) => lit,
-            Either::Right(ref added) => &added.content,
+        let unk_tok = if let Some(ref unk) = self.get_chat_template().unk_token {
+            match unk.0 {
+                Either::Left(ref lit) => Some(lit.to_string()),
+                Either::Right(ref added) => Some(added.content.to_string()),
+            }
+        } else {
+            None
         };
         apply_chat_template_to(
             messages,
@@ -839,21 +866,23 @@ mod tests {
                 template,
                 bos,
                 eos,
-                unk,
+                Some(unk.to_string()),
             )
             .unwrap_or_else(|_| panic!("Template number {i}"));
             assert_eq!(output, expected, "Template number {i}");
         }
     }
 }
-fn calculate_eos_tok(chat_template: &ChatTemplate, tokenizer: &Tokenizer) -> u32 {
-    let eos_tok = match chat_template.eos_token {
-        Either::Left(ref lit) => lit,
-        Either::Right(ref added) => &added.content,
-    };
-    tokenizer
-        .get_vocab(true)
-        .get(eos_tok)
-        .copied()
-        .unwrap_or_else(|| panic!("Unable to extract `{eos_tok}` EOS token."))
+fn calculate_eos_tok(tokens: Vec<String>, tokenizer: &Tokenizer) -> Vec<u32> {
+    let mut eos_toks = Vec::new();
+    for eos_tok in tokens {
+        eos_toks.push(
+            tokenizer
+                .get_vocab(true)
+                .get(&eos_tok)
+                .copied()
+                .unwrap_or_else(|| panic!("Unable to extract `{eos_tok}` EOS token.")),
+        )
+    }
+    eos_toks
 }

@@ -11,10 +11,9 @@ use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
     handle_seq_error_ok, handle_seq_error_stateaware_ok,
     response::CompletionChoice,
-    CompletionResponse, RequestType,
+    CompletionResponse, RequestMessage,
 };
 use candle_core::{Result, Tensor};
-use either::Either;
 use tracing::warn;
 
 use crate::{
@@ -43,16 +42,20 @@ pub struct Engine {
     no_kv_cache: bool,
     prefix_cacher: PrefixCacheManager,
     is_debug: bool,
+    disable_eos_stop: bool,
 }
 
 impl Engine {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         rx: Receiver<Request>,
         pipeline: Box<Mutex<dyn Pipeline>>,
         method: SchedulerMethod,
         truncate_sequence: bool,
         no_kv_cache: bool,
+        no_prefix_cache: bool,
         prefix_cache_n: usize,
+        disable_eos_stop: bool,
     ) -> Self {
         let device = get_mut_arcmutex!(pipeline).device().clone();
         let is_xlora = get_mut_arcmutex!(pipeline).is_xlora();
@@ -63,10 +66,16 @@ impl Engine {
             id: 0,
             truncate_sequence,
             no_kv_cache,
-            prefix_cacher: PrefixCacheManager::new(device, prefix_cache_n, is_xlora),
+            prefix_cacher: PrefixCacheManager::new(
+                device,
+                prefix_cache_n,
+                is_xlora,
+                no_prefix_cache,
+            ),
             is_debug: std::env::var("RUST_LOG")
                 .unwrap_or_default()
                 .contains("debug"),
+            disable_eos_stop,
         }
     }
 
@@ -93,7 +102,13 @@ impl Engine {
                     Self::set_none_cache(&mut *pipeline);
                 }
 
-                handle_pipeline_forward_error!("sampling", Self::sample_seqs(&mut *pipeline, &mut scheduled.completion, logits, &mut self.prefix_cacher), &mut scheduled.completion, pipeline, 'lp);
+                handle_pipeline_forward_error!(
+                    "sampling",
+                    Self::sample_seqs(&mut *pipeline, &mut scheduled.completion, logits, &mut self.prefix_cacher, self.disable_eos_stop),
+                    &mut scheduled.completion,
+                    pipeline,
+                    'lp
+                );
             }
 
             if scheduled.prompt.len() > 0 {
@@ -108,7 +123,13 @@ impl Engine {
                     Self::set_none_cache(&mut *pipeline);
                 }
 
-                handle_pipeline_forward_error!("sampling", Self::sample_seqs(&mut *pipeline, &mut scheduled.prompt, logits, &mut self.prefix_cacher), &mut scheduled.prompt, pipeline, 'lp);
+                handle_pipeline_forward_error!(
+                    "sampling",
+                    Self::sample_seqs(&mut *pipeline, &mut scheduled.prompt, logits, &mut self.prefix_cacher,self.disable_eos_stop,),
+                    &mut scheduled.prompt,
+                    pipeline,
+                    'lp
+                );
 
                 for seq in scheduled.prompt.iter_mut() {
                     seq.set_state(SequenceState::RunningCompletion);
@@ -168,11 +189,12 @@ impl Engine {
         seqs: &mut [&mut Sequence],
         logits: Tensor,
         prefix_cacher: &mut PrefixCacheManager,
+        disable_eos_stop: bool,
     ) -> Result<()> {
         let seqs_len = seqs.len();
         let logits_seq = logits.chunk(seqs_len, 0).unwrap();
         debug_assert_eq!(logits_seq.len(), seqs_len);
-        let eos_tok = pipeline.eos_tok();
+        let eos_tok = pipeline.eos_tok().to_vec();
         for (logits_per_seq, seq) in zip(logits_seq, seqs.iter_mut()) {
             // Sample and extract next token
             let return_logprobs = seq.return_logprobs();
@@ -180,6 +202,11 @@ impl Engine {
             let next_token = handle_seq_error_stateaware_ok!(sampled, seq);
             let next_token_id = next_token.token;
 
+            let eos_tok = if disable_eos_stop {
+                None
+            } else {
+                Some(eos_tok.as_ref())
+            };
             let is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
             seq.add_token(
                 next_token.clone(),
@@ -481,7 +508,20 @@ impl Engine {
     }
 
     fn add_request(&mut self, request: Request) {
-        if request.messages.is_left()
+        let is_chat = matches!(request.messages, RequestMessage::Chat(_));
+        let echo_prompt = matches!(
+            request.messages,
+            RequestMessage::Completion {
+                echo_prompt: true,
+                ..
+            }
+        );
+
+        let best_of = match request.messages {
+            RequestMessage::Completion { best_of, .. } => best_of,
+            RequestMessage::Chat(_) | RequestMessage::CompletionTokens(_) => 1,
+        };
+        if is_chat
             && !get_mut_arcmutex!(self.pipeline)
                 .get_chat_template()
                 .has_chat_template()
@@ -494,14 +534,24 @@ impl Engine {
                     )).unwrap();
             return;
         }
+
+        let mut force_tokens = None;
         let formatted_prompt = match request.messages {
-            Either::Left(messages) => {
+            RequestMessage::Chat(messages) => {
                 handle_seq_error!(
                     get_mut_arcmutex!(self.pipeline).apply_chat_template(messages, true),
                     request.response
                 )
             }
-            Either::Right(prompt) => prompt,
+            RequestMessage::Completion { text, .. } => text,
+            RequestMessage::CompletionTokens(it) => {
+                let res = get_mut_arcmutex!(self.pipeline)
+                    .tokenizer()
+                    .decode(&it, false)
+                    .expect("cannot decode completion tokens");
+                force_tokens = Some(it);
+                res
+            }
         };
         if formatted_prompt.is_empty() {
             // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
@@ -513,10 +563,14 @@ impl Engine {
                 .unwrap();
             return;
         }
-        let mut prompt = handle_seq_error!(
-            get_mut_arcmutex!(self.pipeline).tokenize_prompt(&formatted_prompt),
-            request.response
-        );
+        let mut prompt = match force_tokens {
+            Some(tks) => tks,
+            None => handle_seq_error!(
+                get_mut_arcmutex!(self.pipeline).tokenize_prompt(&formatted_prompt),
+                request.response
+            ),
+        };
+
         if prompt.len() > get_mut_arcmutex!(self.pipeline).get_max_seq_len() {
             if !self.truncate_sequence {
                 // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
@@ -609,8 +663,8 @@ impl Engine {
         let group = Rc::new(RefCell::new(SequenceGroup::new(
             request.sampling_params.n_choices,
             request.is_streaming,
-            request.request_type == RequestType::Chat,
-            request.best_of,
+            is_chat,
+            best_of,
         )));
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -672,12 +726,8 @@ impl Engine {
                 now.as_secs(),
                 recognizer.clone(),
                 request.suffix.clone(),
-                if let RequestType::Completion { echo_prompt } = request.request_type.clone() {
-                    if echo_prompt {
-                        Some(formatted_prompt.clone())
-                    } else {
-                        None
-                    }
+                if echo_prompt {
+                    Some(formatted_prompt.clone())
                 } else {
                     None
                 },

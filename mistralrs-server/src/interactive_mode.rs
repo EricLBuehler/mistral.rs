@@ -1,11 +1,9 @@
+use indexmap::IndexMap;
+use mistralrs_core::{Constraint, MistralRs, Request, RequestMessage, Response, SamplingParams};
 use std::{
     io::{self, Write},
     sync::{mpsc::channel, Arc},
 };
-
-use either::Either;
-use indexmap::IndexMap;
-use mistralrs_core::{Constraint, MistralRs, Request, RequestType, Response, SamplingParams};
 use tracing::{error, info};
 
 pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
@@ -40,15 +38,13 @@ pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
         let (tx, rx) = channel();
         let req = Request {
             id: mistralrs.next_request_id(),
-            messages: Either::Left(messages.clone()),
+            messages: RequestMessage::Chat(messages.clone()),
             sampling_params: sampling_params.clone(),
             response: tx,
             return_logprobs: false,
             is_streaming: true,
             constraint: Constraint::None,
-            request_type: RequestType::Chat,
             suffix: None,
-            best_of: None,
         };
         sender.send(req).unwrap();
 
