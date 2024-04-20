@@ -560,6 +560,7 @@ struct XLoraPaths {
 }
 
 fn get_xlora_paths(
+    base_model_id: String,
     xlora_model_id: &Option<String>,
     token_source: &TokenSource,
     revision: String,
@@ -676,6 +677,20 @@ fn get_xlora_paths(
                 }
             }
         }
+
+        if xlora_order
+            .as_ref()
+            .is_some_and(|order| order.base_model_id != xlora_config.base_model_id)
+            || xlora_config.base_model_id != base_model_id
+        {
+            anyhow::bail!(
+                "X-LoRA ordering file, X-LoRA config, and base model ID do not match: {}, {}, and {} respectively.",
+                xlora_order.as_ref().unwrap().base_model_id,
+                xlora_config.base_model_id,
+                base_model_id
+            );
+        }
+
         XLoraPaths {
             adapter_configs: Some(adapters_configs),
             adapter_safetensors: Some(adapters_safetensors),

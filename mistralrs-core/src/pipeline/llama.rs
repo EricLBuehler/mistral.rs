@@ -193,6 +193,7 @@ impl Loader for LlamaLoader {
             xlora_order,
             xlora_config,
         } = get_xlora_paths(
+            self.model_id.clone(),
             &self.xlora_model_id,
             &token_source,
             revision.clone(),

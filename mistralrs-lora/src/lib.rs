@@ -17,6 +17,7 @@ pub struct Ordering {
     #[serde(rename = "order")]
     pub adapters: Option<Vec<String>>,
     pub layers: HashMap<String, usize>,
+    pub base_model_id: String,
 }
 
 #[derive(Clone, Debug)]
