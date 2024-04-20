@@ -218,9 +218,9 @@ struct Args {
     #[arg(long, short = 'n', default_value_t = 128)]
     n_gen: usize,
 
-    /// Number of concurrent requests to run.
-    #[arg(long, short, value_parser, num_args = 1.., value_delimiter = ',', use_value_delimiter = true)]
-    concurrency: Vec<usize>,
+    /// Number of concurrent requests to run. Default is 1
+    #[clap(long, value_parser, value_delimiter = ',')]
+    concurrency: Option<Vec<usize>>,
 
     /// Number of times to repeat each test.
     #[arg(long, short, default_value_t = 5)]
@@ -228,7 +228,8 @@ struct Args {
 }
 
 fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
+    let mut args = Args::parse();
+    args.concurrency = Some(args.concurrency.unwrap_or(vec![1]));
 
     #[cfg(not(feature = "flash-attn"))]
     let use_flash_attn = false;
@@ -277,7 +278,7 @@ fn main() -> anyhow::Result<()> {
     let mistralrs = MistralRsBuilder::new(
         pipeline,
         SchedulerMethod::Fixed(
-            (*args.concurrency.iter().max().unwrap())
+            (*args.concurrency.as_ref().unwrap().iter().max().unwrap())
                 .try_into()
                 .unwrap(),
         ),
@@ -287,7 +288,7 @@ fn main() -> anyhow::Result<()> {
     .build();
 
     let mut results = vec![];
-    for concurrency in args.concurrency {
+    for concurrency in args.concurrency.as_ref().unwrap() {
         if args.n_gen > 0 {
             let r = run_bench(
                 mistralrs.clone(),
@@ -297,7 +298,7 @@ fn main() -> anyhow::Result<()> {
                     best_of: 1,
                 },
                 args.n_gen - 1,
-                concurrency,
+                *concurrency,
                 args.repetitions,
                 TestName::Gen(args.n_gen),
             )?;
@@ -310,7 +311,7 @@ fn main() -> anyhow::Result<()> {
                 mistralrs.clone(),
                 RequestMessage::CompletionTokens(tks),
                 1,
-                concurrency,
+                *concurrency,
                 args.repetitions,
                 TestName::Prompt(args.n_prompt),
             )?;
