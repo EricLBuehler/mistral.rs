@@ -30,6 +30,17 @@ struct BenchResult {
     test_name: TestName,
 }
 
+struct UncertainTokSec {
+    mean: f32,
+    std_dev: f32,
+}
+
+impl Display for UncertainTokSec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:.3}±{:.3}", self.mean, self.std_dev)
+    }
+}
+
 fn run_bench(
     mistralrs: Arc<MistralRs>,
     prompt: RequestMessage,
@@ -103,47 +114,52 @@ fn run_bench(
     })
 }
 
-fn get_tok_s(result: &BenchResult) -> f32 {
-    match result.test_name {
-        TestName::Prompt(_) => {
-            // let tokens = result.usages.iter().map(|u| u.prompt_tokens).sum::<usize>();
-            // let time = result
-            //     .usages
-            //     .iter()
-            //     .map(|u| u.total_prompt_time_sec)
-            //     .sum::<f32>();
+fn get_tok_s(result: &BenchResult) -> UncertainTokSec {
+    let ts_measurements = match result.test_name {
+        TestName::Prompt(_) => result
+            .usages
+            .iter()
+            .map(|u| u.avg_prompt_tok_per_sec)
+            .collect::<Vec<_>>(),
+        TestName::Gen(_) => result
+            .usages
+            .iter()
+            .map(|u| u.avg_compl_tok_per_sec)
+            .collect::<Vec<_>>(),
+    };
+    // Calculate uncertainty
+    let mean = ts_measurements.iter().sum::<f32>() / ts_measurements.len() as f32;
+    let variance = ts_measurements
+        .iter()
+        .map(|e| (mean - e).powf(2.))
+        .sum::<f32>()
+        / ts_measurements.len() as f32;
+    let std_dev = variance.sqrt();
+    UncertainTokSec { mean, std_dev }
+}
 
-            // tokens as f32 / time
-            let sum_of_avg = result
-                .usages
-                .iter()
-                .map(|u| u.avg_prompt_tok_per_sec)
-                .sum::<f32>();
-            sum_of_avg / result.usages.len() as f32
-        }
-        TestName::Gen(_) => {
-            // let tokens = result
-            //     .usages
-            //     .iter()
-            //     .map(|u| u.completion_tokens)
-            //     .sum::<usize>();
-            // let time = result
-            //     .usages
-            //     .iter()
-            //     .map(|u| u.total_completion_time_sec)
-            //     .sum::<f32>();
-
-            // tokens as f32 / time
-
-            let sum_of_avg = result
-                .usages
-                .iter()
-                .map(|u| u.avg_compl_tok_per_sec)
-                .sum::<f32>();
-
-            sum_of_avg / result.usages.len() as f32
-        }
-    }
+fn get_ms_tok(result: &BenchResult) -> UncertainTokSec {
+    let ms_tok_measurements = match result.test_name {
+        TestName::Prompt(_) => result
+            .usages
+            .iter()
+            .map(|u| 1000. / u.avg_prompt_tok_per_sec)
+            .collect::<Vec<_>>(),
+        TestName::Gen(_) => result
+            .usages
+            .iter()
+            .map(|u| 1000. / u.avg_compl_tok_per_sec)
+            .collect::<Vec<_>>(),
+    };
+    // Calculate uncertainty
+    let mean = ms_tok_measurements.iter().sum::<f32>() / ms_tok_measurements.len() as f32;
+    let variance = ms_tok_measurements
+        .iter()
+        .map(|e| (mean - e).powf(2.))
+        .sum::<f32>()
+        / ms_tok_measurements.len() as f32;
+    let std_dev = variance.sqrt();
+    UncertainTokSec { mean, std_dev }
 }
 
 fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
@@ -160,9 +176,9 @@ fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
                 backend.cell(),
                 r.test_name.to_string().cell(),
                 get_tok_s(&r).cell().justify(Justify::Right),
-                (1000.0 / get_tok_s(&r)).cell().justify(Justify::Right),
+                get_ms_tok(&r).cell().justify(Justify::Right),
                 r.concurrency.cell().justify(Justify::Right),
-                (get_tok_s(&r) * r.concurrency as f32)
+                (get_tok_s(&r).mean * r.concurrency as f32)
                     .cell()
                     .justify(Justify::Right),
             ]
@@ -202,9 +218,9 @@ struct Args {
     #[arg(long, short = 'n', default_value_t = 128)]
     n_gen: usize,
 
-    /// Number of concurrent requests to run.
-    #[arg(long, short, default_value_t = 1)]
-    concurrency: usize,
+    /// Number of concurrent requests to run. Default is 1
+    #[clap(short, long, value_parser, value_delimiter = ',')]
+    concurrency: Option<Vec<usize>>,
 
     /// Number of times to repeat each test.
     #[arg(long, short, default_value_t = 5)]
@@ -212,7 +228,8 @@ struct Args {
 }
 
 fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
+    let mut args = Args::parse();
+    args.concurrency = Some(args.concurrency.unwrap_or(vec![1]));
 
     #[cfg(not(feature = "flash-attn"))]
     let use_flash_attn = false;
@@ -260,45 +277,50 @@ fn main() -> anyhow::Result<()> {
 
     let mistralrs = MistralRsBuilder::new(
         pipeline,
-        SchedulerMethod::Fixed(args.concurrency.try_into().unwrap()),
+        SchedulerMethod::Fixed(
+            (*args.concurrency.as_ref().unwrap().iter().max().unwrap())
+                .try_into()
+                .unwrap(),
+        ),
     )
     .with_no_prefix_cache(true)
     .with_disable_eos_stop(true)
     .build();
 
-    let mut results = vec![];
+    for concurrency in args.concurrency.as_ref().unwrap() {
+        let mut results = vec![];
+        if args.n_gen > 0 {
+            let r = run_bench(
+                mistralrs.clone(),
+                RequestMessage::Completion {
+                    text: "Rust".to_string(),
+                    echo_prompt: false,
+                    best_of: 1,
+                },
+                args.n_gen - 1,
+                *concurrency,
+                args.repetitions,
+                TestName::Gen(args.n_gen),
+            )?;
+            results.push(r);
+        }
 
-    if args.n_gen > 0 {
-        let r = run_bench(
-            mistralrs.clone(),
-            RequestMessage::Completion {
-                text: "Rust".to_string(),
-                echo_prompt: false,
-                best_of: 1,
-            },
-            args.n_gen - 1,
-            args.concurrency,
-            args.repetitions,
-            TestName::Gen(args.n_gen),
-        )?;
-        results.push(r);
+        if args.n_prompt > 0 {
+            let tks = (1000..1000 + args.n_prompt as u32).collect();
+            let r = run_bench(
+                mistralrs.clone(),
+                RequestMessage::CompletionTokens(tks),
+                1,
+                *concurrency,
+                args.repetitions,
+                TestName::Prompt(args.n_prompt),
+            )?;
+
+            results.push(r);
+        }
+
+        print_usage(model_name, &device, results);
     }
-
-    if args.n_prompt > 0 {
-        let tks = (1000..1000 + args.n_prompt as u32).collect();
-        let r = run_bench(
-            mistralrs,
-            RequestMessage::CompletionTokens(tks),
-            1,
-            args.concurrency,
-            args.repetitions,
-            TestName::Prompt(args.n_prompt),
-        )?;
-
-        results.push(r);
-    }
-
-    print_usage(model_name, &device, results);
 
     Ok(())
 }

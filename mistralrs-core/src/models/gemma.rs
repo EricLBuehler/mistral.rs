@@ -2,12 +2,12 @@
 
 use std::sync::Arc;
 
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{linear_b as linear, Linear, RotaryEmbedding, VarBuilder};
+use candle_core::{DType, Device, Module, Result, Tensor, D};
+use candle_nn::{linear_b as linear, Activation, Linear, RotaryEmbedding, VarBuilder};
 
 use crate::pipeline::{extract_logits, GEMMA_IS_GPTX};
 
-use super::{Cache, RmsNorm};
+use super::Cache;
 
 fn default_max_position_embeddings() -> usize {
     4096
@@ -17,7 +17,9 @@ fn default_max_position_embeddings() -> usize {
 pub struct Config {
     pub attention_bias: bool,
     pub head_dim: usize,
-    pub hidden_act: candle_nn::Activation,
+    // The code gemma configs include both hidden_act and hidden_activation.
+    pub hidden_act: Option<Activation>,
+    pub hidden_activation: Option<Activation>,
     pub hidden_size: usize,
     pub intermediate_size: usize,
     pub num_attention_heads: usize,
@@ -29,6 +31,48 @@ pub struct Config {
 
     #[serde(default = "default_max_position_embeddings")]
     pub max_position_embeddings: usize,
+}
+
+impl Config {
+    pub fn hidden_act(&self) -> Result<Activation> {
+        match (self.hidden_act, self.hidden_activation) {
+            (None, Some(act)) | (Some(act), None) => Ok(act),
+            (Some(_), Some(_)) => {
+                candle_core::bail!("both hidden_act and hidden_activation are set")
+            }
+            (None, None) => candle_core::bail!("none of hidden_act and hidden_activation are set"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RmsNorm {
+    weight: Tensor,
+    eps: f64,
+}
+
+impl RmsNorm {
+    fn new(dim: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        let weight = vb.get(dim, "weight")?;
+        Ok(Self { weight, eps })
+    }
+}
+
+impl Module for RmsNorm {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let x_dtype = x.dtype();
+        let internal_dtype = match x_dtype {
+            DType::F16 | DType::BF16 => DType::F32,
+            d => d,
+        };
+        let hidden_size = x.dim(D::Minus1)?;
+        let x = x.to_dtype(internal_dtype)?;
+        let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
+        let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
+        x_normed
+            .to_dtype(x_dtype)?
+            .broadcast_mul(&(&self.weight + 1.0)?)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -51,7 +95,7 @@ impl MLP {
             gate_proj,
             up_proj,
             down_proj,
-            act_fn: cfg.hidden_act,
+            act_fn: cfg.hidden_act()?,
         })
     }
 }
@@ -297,22 +341,6 @@ impl Model {
             .to_dtype(self.dtype)
     }
 
-    fn calculate_past_kv_len(&mut self, seq_len: usize) -> Result<usize> {
-        let cache = self.cache.lock();
-        let kv_cache_1 = cache.first().unwrap();
-        if kv_cache_1.is_none() {
-            return Ok(0);
-        }
-        let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
-        if k_cache_1.dims()[0] <= seq_len {
-            Ok(0)
-        } else {
-            let indexed = k_cache_1.i(seq_len)?;
-            let dims = indexed.dims();
-            Ok(dims[dims.len() - 2])
-        }
-    }
-
     pub fn forward(
         &mut self,
         input_ids: &Tensor,
@@ -321,16 +349,10 @@ impl Model {
         context_lens: Vec<usize>,
     ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
-        if seqlen_offsets.len() > b_size {
-            candle_core::bail!("Expected seqlen offsets have length equal to batch size.")
-        }
-
-        let past_key_values_length = self.calculate_past_kv_len(seq_len)?;
         let attention_mask = if seq_len <= 1 {
             None
         } else {
-            let mask =
-                self.prepare_decoder_attention_mask(b_size, seq_len, past_key_values_length)?;
+            let mask = self.prepare_decoder_attention_mask(b_size, seq_len, seqlen_offsets[0])?;
             Some(mask)
         };
         let xs = self.embed_tokens.forward(input_ids)?;
