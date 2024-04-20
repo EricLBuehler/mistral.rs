@@ -30,6 +30,17 @@ struct BenchResult {
     test_name: TestName,
 }
 
+struct UncertainTokSec {
+    mean: f32,
+    std_dev: f32,
+}
+
+impl Display for UncertainTokSec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}±{}", self.mean, self.std_dev)
+    }
+}
+
 fn run_bench(
     mistralrs: Arc<MistralRs>,
     prompt: RequestMessage,
@@ -103,47 +114,52 @@ fn run_bench(
     })
 }
 
-fn get_tok_s(result: &BenchResult) -> f32 {
-    match result.test_name {
-        TestName::Prompt(_) => {
-            // let tokens = result.usages.iter().map(|u| u.prompt_tokens).sum::<usize>();
-            // let time = result
-            //     .usages
-            //     .iter()
-            //     .map(|u| u.total_prompt_time_sec)
-            //     .sum::<f32>();
+fn get_tok_s(result: &BenchResult) -> UncertainTokSec {
+    let ts_measurements = match result.test_name {
+        TestName::Prompt(_) => result
+            .usages
+            .iter()
+            .map(|u| u.avg_prompt_tok_per_sec)
+            .collect::<Vec<_>>(),
+        TestName::Gen(_) => result
+            .usages
+            .iter()
+            .map(|u| u.avg_compl_tok_per_sec)
+            .collect::<Vec<_>>(),
+    };
+    // Calculate uncertainty
+    let mean = ts_measurements.iter().sum::<f32>() / ts_measurements.len() as f32;
+    let variance = ts_measurements
+        .iter()
+        .map(|e| (mean - e).powf(2.))
+        .sum::<f32>()
+        / ts_measurements.len() as f32;
+    let std_dev = variance.sqrt();
+    UncertainTokSec { mean, std_dev }
+}
 
-            // tokens as f32 / time
-            let sum_of_avg = result
-                .usages
-                .iter()
-                .map(|u| u.avg_prompt_tok_per_sec)
-                .sum::<f32>();
-            sum_of_avg / result.usages.len() as f32
-        }
-        TestName::Gen(_) => {
-            // let tokens = result
-            //     .usages
-            //     .iter()
-            //     .map(|u| u.completion_tokens)
-            //     .sum::<usize>();
-            // let time = result
-            //     .usages
-            //     .iter()
-            //     .map(|u| u.total_completion_time_sec)
-            //     .sum::<f32>();
-
-            // tokens as f32 / time
-
-            let sum_of_avg = result
-                .usages
-                .iter()
-                .map(|u| u.avg_compl_tok_per_sec)
-                .sum::<f32>();
-
-            sum_of_avg / result.usages.len() as f32
-        }
-    }
+fn get_ms_tok(result: &BenchResult) -> UncertainTokSec {
+    let ms_tok_measurements = match result.test_name {
+        TestName::Prompt(_) => result
+            .usages
+            .iter()
+            .map(|u| 1000. / u.avg_prompt_tok_per_sec)
+            .collect::<Vec<_>>(),
+        TestName::Gen(_) => result
+            .usages
+            .iter()
+            .map(|u| 1000. / u.avg_compl_tok_per_sec)
+            .collect::<Vec<_>>(),
+    };
+    // Calculate uncertainty
+    let mean = ms_tok_measurements.iter().sum::<f32>() / ms_tok_measurements.len() as f32;
+    let variance = ms_tok_measurements
+        .iter()
+        .map(|e| (mean - e).powf(2.))
+        .sum::<f32>()
+        / ms_tok_measurements.len() as f32;
+    let std_dev = variance.sqrt();
+    UncertainTokSec { mean, std_dev }
 }
 
 fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
@@ -160,9 +176,9 @@ fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
                 backend.cell(),
                 r.test_name.to_string().cell(),
                 get_tok_s(&r).cell().justify(Justify::Right),
-                (1000.0 / get_tok_s(&r)).cell().justify(Justify::Right),
+                get_ms_tok(&r).cell().justify(Justify::Right),
                 r.concurrency.cell().justify(Justify::Right),
-                (get_tok_s(&r) * r.concurrency as f32)
+                (get_tok_s(&r).mean * r.concurrency as f32)
                     .cell()
                     .justify(Justify::Right),
             ]
