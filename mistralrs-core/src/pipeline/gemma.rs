@@ -15,6 +15,7 @@ use crate::{
 };
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
+use candle_nn::Activation;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
 use serde::Deserialize;
@@ -118,7 +119,9 @@ fn default_max_position_embeddings() -> usize {
 pub struct BasicConfig {
     pub attention_bias: bool,
     pub head_dim: usize,
-    pub hidden_act: candle_nn::Activation,
+    // The code gemma configs include both hidden_act and hidden_activation.
+    pub hidden_act: Option<Activation>,
+    pub hidden_activation: Option<Activation>,
     pub hidden_size: usize,
     pub intermediate_size: usize,
     pub num_attention_heads: usize,
@@ -247,6 +250,7 @@ impl Loader for GemmaLoader {
             num_attention_heads: basic_config.num_attention_heads,
             num_key_value_heads: basic_config.num_key_value_heads,
             hidden_act: basic_config.hidden_act,
+            hidden_activation: basic_config.hidden_activation,
             max_position_embeddings: basic_config.max_position_embeddings,
             rms_norm_eps: basic_config.rms_norm_eps,
             rope_theta: basic_config.rope_theta,
