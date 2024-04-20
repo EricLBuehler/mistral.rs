@@ -666,7 +666,9 @@ fn get_xlora_paths(
             .iter()
             .enumerate()
         {
-            let paths = adapters_paths.get(name).unwrap();
+            let paths = adapters_paths
+                .get(name)
+                .unwrap_or_else(|| panic!("Adapter {name} not found."));
             for path in paths {
                 if path.extension().unwrap() == "safetensors" {
                     adapters_safetensors.push((name.clone(), path.to_owned()));
