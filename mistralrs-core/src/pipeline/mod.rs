@@ -92,6 +92,27 @@ impl ChatTemplate {
     pub fn has_chat_template(&self) -> bool {
         self.chat_template.is_some()
     }
+
+    pub fn eos_tok(&self) -> String {
+        match self.eos_token {
+            Either::Left(ref lit) => lit.clone(),
+            Either::Right(ref added) => added.content.clone(),
+        }
+    }
+
+    pub fn bos_tok(&self) -> String {
+        match self.bos_token {
+            Either::Left(ref lit) => lit.clone(),
+            Either::Right(ref added) => added.content.clone(),
+        }
+    }
+
+    pub fn unk_tok(&self) -> Option<String> {
+        match self.unk_token.as_ref()?.0 {
+            Either::Left(ref lit) => Some(lit.clone()),
+            Either::Right(ref added) => Some(added.content.clone()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -852,14 +873,16 @@ mod tests {
         }
     }
 }
-fn calculate_eos_tok(chat_template: &ChatTemplate, tokenizer: &Tokenizer) -> u32 {
-    let eos_tok = match chat_template.eos_token {
-        Either::Left(ref lit) => lit,
-        Either::Right(ref added) => &added.content,
-    };
-    tokenizer
-        .get_vocab(true)
-        .get(eos_tok)
-        .copied()
-        .unwrap_or_else(|| panic!("Unable to extract `{eos_tok}` EOS token."))
+fn calculate_eos_tok(tokens: Vec<String>, tokenizer: &Tokenizer) -> Vec<u32> {
+    let mut eos_toks = Vec::new();
+    for eos_tok in tokens {
+        eos_toks.push(
+            tokenizer
+                .get_vocab(true)
+                .get(&eos_tok)
+                .copied()
+                .unwrap_or_else(|| panic!("Unable to extract `{eos_tok}` EOS token.")),
+        )
+    }
+    eos_toks
 }

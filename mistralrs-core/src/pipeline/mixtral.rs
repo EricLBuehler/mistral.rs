@@ -407,9 +407,16 @@ impl Loader for MixtralLoader {
 
         let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
 
+        info!(
+            "bos_tok = {}, eos_tok = {}, unk_tok = {}",
+            chat_template.bos_tok(),
+            chat_template.eos_tok(),
+            chat_template.eos_tok()
+        );
+
         Ok(Box::new(Mutex::new(MixtralPipeline {
             model,
-            eos_tok: vec![calculate_eos_tok(&chat_template, &tokenizer)],
+            eos_tok: calculate_eos_tok(vec![chat_template.eos_tok()], &tokenizer),
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer: tokenizer.into(),
             config: self.config,
