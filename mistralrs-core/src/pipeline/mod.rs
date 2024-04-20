@@ -389,6 +389,7 @@ fn get_prompt_input(input_toks: &[&mut Sequence], device: &Device) -> Result<Inp
     let mut context_lens = Vec::new();
     for seq in input_toks.iter() {
         let mut ctxt = seq.get_toks().to_vec();
+        dbg!(&ctxt);
         seqlen_offsets.push(0);
 
         ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
@@ -430,6 +431,7 @@ fn get_completion_input(
     for seq in input_toks.iter() {
         let start_pos = seq.get_toks().len().saturating_sub(1);
         let ctxt = seq.get_toks()[start_pos..].to_vec();
+        dbg!(&ctxt);
         seqlen_offsets.push(start_pos);
         context_lens.push(0);
 
