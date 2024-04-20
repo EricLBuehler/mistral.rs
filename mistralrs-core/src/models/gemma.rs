@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::sync::Arc;
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
@@ -5,7 +7,7 @@ use candle_nn::{linear_b as linear, Activation, Linear, RotaryEmbedding, VarBuil
 
 use crate::pipeline::{extract_logits, GEMMA_IS_GPTX};
 
-use super::{Cache, RmsNorm};
+use super::Cache;
 
 fn default_max_position_embeddings() -> usize {
     4096
@@ -40,6 +42,36 @@ impl Config {
             }
             (None, None) => candle_core::bail!("none of hidden_act and hidden_activation are set"),
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RmsNorm {
+    weight: Tensor,
+    eps: f64,
+}
+
+impl RmsNorm {
+    fn new(dim: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        let weight = vb.get(dim, "weight")?;
+        Ok(Self { weight, eps })
+    }
+}
+
+impl Module for RmsNorm {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let x_dtype = x.dtype();
+        let internal_dtype = match x_dtype {
+            DType::F16 | DType::BF16 => DType::F32,
+            d => d,
+        };
+        let hidden_size = x.dim(D::Minus1)?;
+        let x = x.to_dtype(internal_dtype)?;
+        let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
+        let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
+        x_normed
+            .to_dtype(x_dtype)?
+            .broadcast_mul(&(&self.weight + 1.0)?)
     }
 }
 
