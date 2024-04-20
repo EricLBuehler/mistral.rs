@@ -8,6 +8,7 @@ use crate::sampler::TopLogprob;
 pub const SYSTEM_FINGERPRINT: &str = "local";
 
 #[pyclass]
+#[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
 pub struct ResponseMessage {
     pub content: String,
@@ -15,6 +16,7 @@ pub struct ResponseMessage {
 }
 
 #[pyclass]
+#[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
 pub struct Delta {
     pub content: String,
@@ -22,6 +24,7 @@ pub struct Delta {
 }
 
 #[pyclass]
+#[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
 pub struct ResponseLogprob {
     pub token: String,
@@ -31,12 +34,14 @@ pub struct ResponseLogprob {
 }
 
 #[pyclass]
+#[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
 pub struct Logprobs {
     pub content: Option<Vec<ResponseLogprob>>,
 }
 
 #[pyclass]
+#[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
 pub struct Choice {
     pub finish_reason: String,
@@ -46,6 +51,7 @@ pub struct Choice {
 }
 
 #[pyclass]
+#[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
 pub struct ChunkChoice {
     pub finish_reason: Option<String>,
@@ -55,6 +61,7 @@ pub struct ChunkChoice {
 }
 
 #[pyclass]
+#[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
 pub struct Usage {
     pub completion_tokens: usize,
@@ -69,6 +76,7 @@ pub struct Usage {
 }
 
 #[pyclass]
+#[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatCompletionResponse {
     pub id: String,
@@ -81,6 +89,7 @@ pub struct ChatCompletionResponse {
 }
 
 #[pyclass]
+#[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatCompletionChunkResponse {
     pub id: String,
@@ -92,6 +101,7 @@ pub struct ChatCompletionChunkResponse {
 }
 
 #[pyclass]
+#[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
 pub struct CompletionChoice {
     pub finish_reason: String,
@@ -101,6 +111,7 @@ pub struct CompletionChoice {
 }
 
 #[pyclass]
+#[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
 pub struct CompletionResponse {
     pub id: String,

@@ -3,6 +3,7 @@
 use std::{collections::HashMap, iter::zip, sync::Arc};
 
 use candle_core::{bail, Device, Error, Result, Tensor, D};
+use pyo3::pyclass;
 use rand::{
     distributions::{Distribution, WeightedIndex},
     SeedableRng,
@@ -44,6 +45,8 @@ pub struct Sampler {
     topp: f64,
 }
 
+#[pyclass]
+#[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 // Top-n logprobs element
 pub struct TopLogprob {
