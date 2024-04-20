@@ -218,9 +218,9 @@ struct Args {
     #[arg(long, short = 'n', default_value_t = 128)]
     n_gen: usize,
 
-    /// Number of concurrent requests to run.
-    #[arg(long, short, default_value_t = 1)]
-    concurrency: usize,
+    /// Number of concurrent requests to run. Default is 1
+    #[clap(short, long, value_parser, value_delimiter = ',')]
+    concurrency: Option<Vec<usize>>,
 
     /// Number of times to repeat each test.
     #[arg(long, short, default_value_t = 5)]
@@ -228,7 +228,8 @@ struct Args {
 }
 
 fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
+    let mut args = Args::parse();
+    args.concurrency = Some(args.concurrency.unwrap_or(vec![1]));
 
     #[cfg(not(feature = "flash-attn"))]
     let use_flash_attn = false;
@@ -276,45 +277,50 @@ fn main() -> anyhow::Result<()> {
 
     let mistralrs = MistralRsBuilder::new(
         pipeline,
-        SchedulerMethod::Fixed(args.concurrency.try_into().unwrap()),
+        SchedulerMethod::Fixed(
+            (*args.concurrency.as_ref().unwrap().iter().max().unwrap())
+                .try_into()
+                .unwrap(),
+        ),
     )
     .with_no_prefix_cache(true)
     .with_disable_eos_stop(true)
     .build();
 
-    let mut results = vec![];
+    for concurrency in args.concurrency.as_ref().unwrap() {
+        let mut results = vec![];
+        if args.n_gen > 0 {
+            let r = run_bench(
+                mistralrs.clone(),
+                RequestMessage::Completion {
+                    text: "Rust".to_string(),
+                    echo_prompt: false,
+                    best_of: 1,
+                },
+                args.n_gen - 1,
+                *concurrency,
+                args.repetitions,
+                TestName::Gen(args.n_gen),
+            )?;
+            results.push(r);
+        }
 
-    if args.n_gen > 0 {
-        let r = run_bench(
-            mistralrs.clone(),
-            RequestMessage::Completion {
-                text: "Rust".to_string(),
-                echo_prompt: false,
-                best_of: 1,
-            },
-            args.n_gen - 1,
-            args.concurrency,
-            args.repetitions,
-            TestName::Gen(args.n_gen),
-        )?;
-        results.push(r);
+        if args.n_prompt > 0 {
+            let tks = (1000..1000 + args.n_prompt as u32).collect();
+            let r = run_bench(
+                mistralrs.clone(),
+                RequestMessage::CompletionTokens(tks),
+                1,
+                *concurrency,
+                args.repetitions,
+                TestName::Prompt(args.n_prompt),
+            )?;
+
+            results.push(r);
+        }
+
+        print_usage(model_name, &device, results);
     }
-
-    if args.n_prompt > 0 {
-        let tks = (1000..1000 + args.n_prompt as u32).collect();
-        let r = run_bench(
-            mistralrs,
-            RequestMessage::CompletionTokens(tks),
-            1,
-            args.concurrency,
-            args.repetitions,
-            TestName::Prompt(args.n_prompt),
-        )?;
-
-        results.push(r);
-    }
-
-    print_usage(model_name, &device, results);
 
     Ok(())
 }
