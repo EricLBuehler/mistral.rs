@@ -304,6 +304,22 @@
 <a href="#302" id="302">302</a>
 <a href="#303" id="303">303</a>
 <a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
+<a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
@@ -334,6 +350,17 @@
     usages: Vec&lt;Usage&gt;,
     concurrency: usize,
     test_name: TestName,
+}
+
+<span class="kw">struct </span>UncertainTokSec {
+    mean: f32,
+    std_dev: f32,
+}
+
+<span class="kw">impl </span>Display <span class="kw">for </span>UncertainTokSec {
+    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
+        <span class="macro">write!</span>(f, <span class="string">"{:.3}±{:.3}"</span>, <span class="self">self</span>.mean, <span class="self">self</span>.std_dev)
+    }
 }
 
 <span class="kw">fn </span>run_bench(
@@ -409,47 +436,52 @@
     })
 }
 
-<span class="kw">fn </span>get_tok_s(result: <span class="kw-2">&amp;</span>BenchResult) -&gt; f32 {
-    <span class="kw">match </span>result.test_name {
-        TestName::Prompt(<span class="kw">_</span>) =&gt; {
-            <span class="comment">// let tokens = result.usages.iter().map(|u| u.prompt_tokens).sum::&lt;usize&gt;();
-            // let time = result
-            //     .usages
-            //     .iter()
-            //     .map(|u| u.total_prompt_time_sec)
-            //     .sum::&lt;f32&gt;();
+<span class="kw">fn </span>get_tok_s(result: <span class="kw-2">&amp;</span>BenchResult) -&gt; UncertainTokSec {
+    <span class="kw">let </span>ts_measurements = <span class="kw">match </span>result.test_name {
+        TestName::Prompt(<span class="kw">_</span>) =&gt; result
+            .usages
+            .iter()
+            .map(|u| u.avg_prompt_tok_per_sec)
+            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+        TestName::Gen(<span class="kw">_</span>) =&gt; result
+            .usages
+            .iter()
+            .map(|u| u.avg_compl_tok_per_sec)
+            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+    };
+    <span class="comment">// Calculate uncertainty
+    </span><span class="kw">let </span>mean = ts_measurements.iter().sum::&lt;f32&gt;() / ts_measurements.len() <span class="kw">as </span>f32;
+    <span class="kw">let </span>variance = ts_measurements
+        .iter()
+        .map(|e| (mean - e).powf(<span class="number">2.</span>))
+        .sum::&lt;f32&gt;()
+        / ts_measurements.len() <span class="kw">as </span>f32;
+    <span class="kw">let </span>std_dev = variance.sqrt();
+    UncertainTokSec { mean, std_dev }
+}
 
-            // tokens as f32 / time
-            </span><span class="kw">let </span>sum_of_avg = result
-                .usages
-                .iter()
-                .map(|u| u.avg_prompt_tok_per_sec)
-                .sum::&lt;f32&gt;();
-            sum_of_avg / result.usages.len() <span class="kw">as </span>f32
-        }
-        TestName::Gen(<span class="kw">_</span>) =&gt; {
-            <span class="comment">// let tokens = result
-            //     .usages
-            //     .iter()
-            //     .map(|u| u.completion_tokens)
-            //     .sum::&lt;usize&gt;();
-            // let time = result
-            //     .usages
-            //     .iter()
-            //     .map(|u| u.total_completion_time_sec)
-            //     .sum::&lt;f32&gt;();
-
-            // tokens as f32 / time
-
-            </span><span class="kw">let </span>sum_of_avg = result
-                .usages
-                .iter()
-                .map(|u| u.avg_compl_tok_per_sec)
-                .sum::&lt;f32&gt;();
-
-            sum_of_avg / result.usages.len() <span class="kw">as </span>f32
-        }
-    }
+<span class="kw">fn </span>get_ms_tok(result: <span class="kw-2">&amp;</span>BenchResult) -&gt; UncertainTokSec {
+    <span class="kw">let </span>ms_tok_measurements = <span class="kw">match </span>result.test_name {
+        TestName::Prompt(<span class="kw">_</span>) =&gt; result
+            .usages
+            .iter()
+            .map(|u| <span class="number">1000. </span>/ u.avg_prompt_tok_per_sec)
+            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+        TestName::Gen(<span class="kw">_</span>) =&gt; result
+            .usages
+            .iter()
+            .map(|u| <span class="number">1000. </span>/ u.avg_compl_tok_per_sec)
+            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+    };
+    <span class="comment">// Calculate uncertainty
+    </span><span class="kw">let </span>mean = ms_tok_measurements.iter().sum::&lt;f32&gt;() / ms_tok_measurements.len() <span class="kw">as </span>f32;
+    <span class="kw">let </span>variance = ms_tok_measurements
+        .iter()
+        .map(|e| (mean - e).powf(<span class="number">2.</span>))
+        .sum::&lt;f32&gt;()
+        / ms_tok_measurements.len() <span class="kw">as </span>f32;
+    <span class="kw">let </span>std_dev = variance.sqrt();
+    UncertainTokSec { mean, std_dev }
 }
 
 <span class="kw">fn </span>print_usage(model: <span class="kw-2">&amp;</span>str, device: <span class="kw-2">&amp;</span>Device, results: Vec&lt;BenchResult&gt;) {
@@ -466,9 +498,9 @@
                 backend.cell(),
                 r.test_name.to_string().cell(),
                 get_tok_s(<span class="kw-2">&amp;</span>r).cell().justify(Justify::Right),
-                (<span class="number">1000.0 </span>/ get_tok_s(<span class="kw-2">&amp;</span>r)).cell().justify(Justify::Right),
+                get_ms_tok(<span class="kw-2">&amp;</span>r).cell().justify(Justify::Right),
                 r.concurrency.cell().justify(Justify::Right),
-                (get_tok_s(<span class="kw-2">&amp;</span>r) * r.concurrency <span class="kw">as </span>f32)
+                (get_tok_s(<span class="kw-2">&amp;</span>r).mean * r.concurrency <span class="kw">as </span>f32)
                     .cell()
                     .justify(Justify::Right),
             ]
