@@ -219,7 +219,7 @@ struct Args {
     n_gen: usize,
 
     /// Number of concurrent requests to run. Default is 1
-    #[clap(long, value_parser, value_delimiter = ',')]
+    #[clap(short, long, value_parser, value_delimiter = ',')]
     concurrency: Option<Vec<usize>>,
 
     /// Number of times to repeat each test.
