@@ -471,6 +471,13 @@
 <a href="#469" id="469">469</a>
 <a href="#470" id="470">470</a>
 <a href="#471" id="471">471</a>
+<a href="#472" id="472">472</a>
+<a href="#473" id="473">473</a>
+<a href="#474" id="474">474</a>
+<a href="#475" id="475">475</a>
+<a href="#476" id="476">476</a>
+<a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -820,9 +827,16 @@
 
         <span class="kw">let </span>chat_template: ChatTemplate = <span class="macro">deserialize_chat_template!</span>(paths, <span class="self">self</span>);
 
+        <span class="macro">info!</span>(
+            <span class="string">"bos_tok = {}, eos_tok = {}, unk_tok = {}"</span>,
+            chat_template.bos_tok(),
+            chat_template.eos_tok(),
+            chat_template.eos_tok()
+        );
+
         <span class="prelude-val">Ok</span>(Box::new(Mutex::new(GemmaPipeline {
             model,
-            eos_tok: <span class="macro">vec!</span>[calculate_eos_tok(<span class="kw-2">&amp;</span>chat_template, <span class="kw-2">&amp;</span>tokenizer)],
+            eos_tok: calculate_eos_tok(<span class="macro">vec!</span>[chat_template.eos_tok()], <span class="kw-2">&amp;</span>tokenizer),
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer: tokenizer.into(),
             config: <span class="self">self</span>.config,

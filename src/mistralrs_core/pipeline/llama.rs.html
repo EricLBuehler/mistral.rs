@@ -596,6 +596,14 @@
 <a href="#594" id="594">594</a>
 <a href="#595" id="595">595</a>
 <a href="#596" id="596">596</a>
+<a href="#597" id="597">597</a>
+<a href="#598" id="598">598</a>
+<a href="#599" id="599">599</a>
+<a href="#600" id="600">600</a>
+<a href="#601" id="601">601</a>
+<a href="#602" id="602">602</a>
+<a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, ChatTemplate, Loader, ModelInputs,
     ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
@@ -1040,16 +1048,24 @@
             .map_err(|e| TokenizerError::Error(e.to_string()))<span class="question-mark">?</span>;
 
         <span class="kw">let </span>chat_template: ChatTemplate = <span class="macro">deserialize_chat_template!</span>(paths, <span class="self">self</span>);
-        <span class="kw">let </span><span class="kw-2">mut </span>eos_toks = <span class="macro">vec!</span>[calculate_eos_tok(<span class="kw-2">&amp;</span>chat_template, <span class="kw-2">&amp;</span>tokenizer)];
+
+        <span class="kw">let </span><span class="kw-2">mut </span>eos_toks = <span class="macro">vec!</span>[chat_template.eos_tok()];
 
         <span class="comment">// Handle Llama3 chat case
-        </span><span class="kw">if let </span><span class="prelude-val">Ok</span>(tok) = tokenizer.encode(<span class="string">"&lt;|eot_id|&gt;"</span>, <span class="bool-val">true</span>) {
-            eos_toks.push(tok.get_ids()[<span class="number">0</span>])
+        </span><span class="kw">if </span>tokenizer.encode(<span class="string">"&lt;|eot_id|&gt;"</span>, <span class="bool-val">true</span>).is_ok() {
+            eos_toks.push(<span class="string">"&lt;|eot_id|&gt;"</span>.to_string())
         }
+
+        <span class="macro">info!</span>(
+            <span class="string">"bos_tok = {}, eos_tok = {:?}, unk_tok = {}"</span>,
+            chat_template.bos_tok(),
+            eos_toks,
+            chat_template.eos_tok()
+        );
 
         <span class="prelude-val">Ok</span>(Box::new(Mutex::new(LlamaPipeline {
             model,
-            eos_tok: eos_toks,
+            eos_tok: calculate_eos_tok(eos_toks, <span class="kw-2">&amp;</span>tokenizer),
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer: tokenizer.into(),
             config: <span class="self">self</span>.config,

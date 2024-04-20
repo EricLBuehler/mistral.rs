@@ -865,6 +865,29 @@
 <a href="#863" id="863">863</a>
 <a href="#864" id="864">864</a>
 <a href="#865" id="865">865</a>
+<a href="#866" id="866">866</a>
+<a href="#867" id="867">867</a>
+<a href="#868" id="868">868</a>
+<a href="#869" id="869">869</a>
+<a href="#870" id="870">870</a>
+<a href="#871" id="871">871</a>
+<a href="#872" id="872">872</a>
+<a href="#873" id="873">873</a>
+<a href="#874" id="874">874</a>
+<a href="#875" id="875">875</a>
+<a href="#876" id="876">876</a>
+<a href="#877" id="877">877</a>
+<a href="#878" id="878">878</a>
+<a href="#879" id="879">879</a>
+<a href="#880" id="880">880</a>
+<a href="#881" id="881">881</a>
+<a href="#882" id="882">882</a>
+<a href="#883" id="883">883</a>
+<a href="#884" id="884">884</a>
+<a href="#885" id="885">885</a>
+<a href="#886" id="886">886</a>
+<a href="#887" id="887">887</a>
+<a href="#888" id="888">888</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -958,6 +981,27 @@
 <span class="kw">impl </span>ChatTemplate {
     <span class="kw">pub fn </span>has_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="self">self</span>.chat_template.is_some()
+    }
+
+    <span class="kw">pub fn </span>eos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+        <span class="kw">match </span><span class="self">self</span>.eos_token {
+            Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit.clone(),
+            Either::Right(<span class="kw-2">ref </span>added) =&gt; added.content.clone(),
+        }
+    }
+
+    <span class="kw">pub fn </span>bos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+        <span class="kw">match </span><span class="self">self</span>.bos_token {
+            Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit.clone(),
+            Either::Right(<span class="kw-2">ref </span>added) =&gt; added.content.clone(),
+        }
+    }
+
+    <span class="kw">pub fn </span>unk_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;String&gt; {
+        <span class="kw">match </span><span class="self">self</span>.unk_token.as_ref()<span class="question-mark">?</span>.<span class="number">0 </span>{
+            Either::Left(<span class="kw-2">ref </span>lit) =&gt; <span class="prelude-val">Some</span>(lit.clone()),
+            Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="prelude-val">Some</span>(added.content.clone()),
+        }
     }
 }
 
@@ -1719,15 +1763,17 @@
         }
     }
 }
-<span class="kw">fn </span>calculate_eos_tok(chat_template: <span class="kw-2">&amp;</span>ChatTemplate, tokenizer: <span class="kw-2">&amp;</span>Tokenizer) -&gt; u32 {
-    <span class="kw">let </span>eos_tok = <span class="kw">match </span>chat_template.eos_token {
-        Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit,
-        Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="kw-2">&amp;</span>added.content,
-    };
-    tokenizer
-        .get_vocab(<span class="bool-val">true</span>)
-        .get(eos_tok)
-        .copied()
-        .unwrap_or_else(|| <span class="macro">panic!</span>(<span class="string">"Unable to extract `{eos_tok}` EOS token."</span>))
+<span class="kw">fn </span>calculate_eos_tok(tokens: Vec&lt;String&gt;, tokenizer: <span class="kw-2">&amp;</span>Tokenizer) -&gt; Vec&lt;u32&gt; {
+    <span class="kw">let </span><span class="kw-2">mut </span>eos_toks = Vec::new();
+    <span class="kw">for </span>eos_tok <span class="kw">in </span>tokens {
+        eos_toks.push(
+            tokenizer
+                .get_vocab(<span class="bool-val">true</span>)
+                .get(<span class="kw-2">&amp;</span>eos_tok)
+                .copied()
+                .unwrap_or_else(|| <span class="macro">panic!</span>(<span class="string">"Unable to extract `{eos_tok}` EOS token."</span>)),
+        )
+    }
+    eos_toks
 }
 </code></pre></div></section></main></body></html>

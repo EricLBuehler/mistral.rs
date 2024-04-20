@@ -554,6 +554,13 @@
 <a href="#552" id="552">552</a>
 <a href="#553" id="553">553</a>
 <a href="#554" id="554">554</a>
+<a href="#555" id="555">555</a>
+<a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -963,9 +970,16 @@
 
         <span class="kw">let </span>chat_template: ChatTemplate = <span class="macro">deserialize_chat_template!</span>(paths, <span class="self">self</span>);
 
+        <span class="macro">info!</span>(
+            <span class="string">"bos_tok = {}, eos_tok = {}, unk_tok = {}"</span>,
+            chat_template.bos_tok(),
+            chat_template.eos_tok(),
+            chat_template.eos_tok()
+        );
+
         <span class="prelude-val">Ok</span>(Box::new(Mutex::new(MixtralPipeline {
             model,
-            eos_tok: <span class="macro">vec!</span>[calculate_eos_tok(<span class="kw-2">&amp;</span>chat_template, <span class="kw-2">&amp;</span>tokenizer)],
+            eos_tok: calculate_eos_tok(<span class="macro">vec!</span>[chat_template.eos_tok()], <span class="kw-2">&amp;</span>tokenizer),
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer: tokenizer.into(),
             config: <span class="self">self</span>.config,
