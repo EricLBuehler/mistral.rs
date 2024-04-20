@@ -54,7 +54,9 @@ class Runner:
     """
     The Runner is a class with no constructor. It is only created via one of the loader classes.
     """
-    def send_chat_completion_request(self, request: ChatCompletionRequest) -> str | Iterator[str]:
+    def send_chat_completion_request(
+        self, request: ChatCompletionRequest
+    ) -> str | Iterator[str]:
         """
         Send a chat completion request to the mistral.rs engine, returning the response object or a generator
         over chunk objects.

@@ -23,4 +23,5 @@ res = runner.send_chat_completion_request(
         temperature=0.5,
     )
 )
-print(res)
+print(res.choices[0].message.content)
+print(res.usage)
