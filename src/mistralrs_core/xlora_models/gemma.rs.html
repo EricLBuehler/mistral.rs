@@ -615,6 +615,36 @@
 <a href="#613" id="613">613</a>
 <a href="#614" id="614">614</a>
 <a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
+<a href="#617" id="617">617</a>
+<a href="#618" id="618">618</a>
+<a href="#619" id="619">619</a>
+<a href="#620" id="620">620</a>
+<a href="#621" id="621">621</a>
+<a href="#622" id="622">622</a>
+<a href="#623" id="623">623</a>
+<a href="#624" id="624">624</a>
+<a href="#625" id="625">625</a>
+<a href="#626" id="626">626</a>
+<a href="#627" id="627">627</a>
+<a href="#628" id="628">628</a>
+<a href="#629" id="629">629</a>
+<a href="#630" id="630">630</a>
+<a href="#631" id="631">631</a>
+<a href="#632" id="632">632</a>
+<a href="#633" id="633">633</a>
+<a href="#634" id="634">634</a>
+<a href="#635" id="635">635</a>
+<a href="#636" id="636">636</a>
+<a href="#637" id="637">637</a>
+<a href="#638" id="638">638</a>
+<a href="#639" id="639">639</a>
+<a href="#640" id="640">640</a>
+<a href="#641" id="641">641</a>
+<a href="#642" id="642">642</a>
+<a href="#643" id="643">643</a>
+<a href="#644" id="644">644</a>
+<a href="#645" id="645">645</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
@@ -624,7 +654,7 @@
 <span class="kw">use </span>mistralrs_lora::{linear_b <span class="kw">as </span>linear, LinearLayerLike, LoraConfig, Ordering};
 
 <span class="kw">use crate</span>::{
-    models::{gemma::Config, Cache, RmsNorm},
+    models::{gemma::Config, Cache},
     pipeline::{extract_logits, GEMMA_IS_GPTX},
 };
 
@@ -633,6 +663,36 @@
 <span class="kw">fn </span>default_max_position_embeddings() -&gt; usize {
     <span class="number">4096
 </span>}
+
+<span class="attr">#[derive(Debug, Clone)]
+</span><span class="kw">struct </span>RmsNorm {
+    weight: Tensor,
+    eps: f64,
+}
+
+<span class="kw">impl </span>RmsNorm {
+    <span class="kw">fn </span>new(dim: usize, eps: f64, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">let </span>weight = vb.get(dim, <span class="string">"weight"</span>)<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ weight, eps })
+    }
+}
+
+<span class="kw">impl </span>Module <span class="kw">for </span>RmsNorm {
+    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">let </span>x_dtype = x.dtype();
+        <span class="kw">let </span>internal_dtype = <span class="kw">match </span>x_dtype {
+            DType::F16 | DType::BF16 =&gt; DType::F32,
+            d =&gt; d,
+        };
+        <span class="kw">let </span>hidden_size = x.dim(D::Minus1)<span class="question-mark">?</span>;
+        <span class="kw">let </span>x = x.to_dtype(internal_dtype)<span class="question-mark">?</span>;
+        <span class="kw">let </span>norm_x = (x.sqr()<span class="question-mark">?</span>.sum_keepdim(D::Minus1)<span class="question-mark">? </span>/ hidden_size <span class="kw">as </span>f64)<span class="question-mark">?</span>;
+        <span class="kw">let </span>x_normed = x.broadcast_div(<span class="kw-2">&amp;</span>(norm_x + <span class="self">self</span>.eps)<span class="question-mark">?</span>.sqrt()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+        x_normed
+            .to_dtype(x_dtype)<span class="question-mark">?
+            </span>.broadcast_mul(<span class="kw-2">&amp;</span>(<span class="kw-2">&amp;</span><span class="self">self</span>.weight + <span class="number">1.0</span>)<span class="question-mark">?</span>)
+    }
+}
 
 <span class="attr">#[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
@@ -684,7 +744,7 @@
             gate_proj,
             up_proj,
             down_proj,
-            act_fn: cfg.hidden_act,
+            act_fn: cfg.hidden_act()<span class="question-mark">?</span>,
         })
     }
 

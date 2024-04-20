@@ -478,6 +478,10 @@
 <a href="#476" id="476">476</a>
 <a href="#477" id="477">477</a>
 <a href="#478" id="478">478</a>
+<a href="#479" id="479">479</a>
+<a href="#480" id="480">480</a>
+<a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -495,6 +499,7 @@
 };
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
+<span class="kw">use </span>candle_nn::Activation;
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
 <span class="kw">use </span>serde::Deserialize;
@@ -598,7 +603,9 @@
 </span><span class="kw">pub struct </span>BasicConfig {
     <span class="kw">pub </span>attention_bias: bool,
     <span class="kw">pub </span>head_dim: usize,
-    <span class="kw">pub </span>hidden_act: candle_nn::Activation,
+    <span class="comment">// The code gemma configs include both hidden_act and hidden_activation.
+    </span><span class="kw">pub </span>hidden_act: <span class="prelude-ty">Option</span>&lt;Activation&gt;,
+    <span class="kw">pub </span>hidden_activation: <span class="prelude-ty">Option</span>&lt;Activation&gt;,
     <span class="kw">pub </span>hidden_size: usize,
     <span class="kw">pub </span>intermediate_size: usize,
     <span class="kw">pub </span>num_attention_heads: usize,
@@ -727,6 +734,7 @@
             num_attention_heads: basic_config.num_attention_heads,
             num_key_value_heads: basic_config.num_key_value_heads,
             hidden_act: basic_config.hidden_act,
+            hidden_activation: basic_config.hidden_activation,
             max_position_embeddings: basic_config.max_position_embeddings,
             rms_norm_eps: basic_config.rms_norm_eps,
             rope_theta: basic_config.rope_theta,
