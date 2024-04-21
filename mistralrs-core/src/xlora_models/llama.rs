@@ -9,7 +9,7 @@ use crate::{
     models::{
         self, flash_attn,
         llama::{Config, MAX_SEQ_LEN},
-        LayerCaches, RmsNorm,
+        repeat_kv, LayerCaches, RmsNorm,
     },
     pipeline::{extract_logits, LLAMA_IS_GPTX},
 };
@@ -129,8 +129,8 @@ impl CausalSelfAttention {
         }
         kv_cache[block_idx] = Some((k.clone(), v.clone()));
 
-        let k = self.repeat_kv(k)?;
-        let v = self.repeat_kv(v)?;
+        let k = repeat_kv(k, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
+        let v = repeat_kv(v, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
 
         let y = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
@@ -159,20 +159,6 @@ impl CausalSelfAttention {
             is_scaling_pass,
         )?;
         Ok(y)
-    }
-
-    fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_attention_heads / self.num_key_value_heads;
-        if n_rep == 1 {
-            Ok(x)
-        } else {
-            let (b_sz, n_kv_head, seq_len, head_dim) = x.dims4()?;
-            let x = x
-                .unsqueeze(2)?
-                .expand((b_sz, n_kv_head, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))?;
-            Ok(x)
-        }
     }
 
     fn load(

@@ -689,4 +689,28 @@ pub enum ModelSelected {
         #[arg(short, long)]
         order: String,
     },
+
+    /// Select the quantized phi2 model with gguf.
+    Phi2GGUF {
+        /// Model ID to load the tokenizer from
+        #[arg(short, long, default_value = "miscrosoft/phi-2")]
+        tok_model_id: String,
+
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(long)]
+        tokenizer_json: Option<String>,
+
+        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
+        #[arg(short = 'm', long, default_value = "TheBloke/phi-2-GGUF")]
+        quantized_model_id: Option<String>,
+
+        /// Quantized filename, only applicable if `quantized` is set.
+        #[arg(short = 'f', long, default_value = "phi-2.Q4_K_M.gguf")]
+        quantized_filename: Option<String>,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
+    },
 }

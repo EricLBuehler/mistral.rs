@@ -7,7 +7,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::pipeline::{extract_logits, LLAMA_IS_GPTX};
 
-use super::{flash_attn, RmsNorm};
+use super::{flash_attn, repeat_kv, RmsNorm};
 
 pub const MAX_SEQ_LEN: usize = 4096;
 
@@ -151,8 +151,8 @@ impl CausalSelfAttention {
         }
         kv_cache[block_idx] = Some((k.clone(), v.clone()));
 
-        let k = self.repeat_kv(k)?;
-        let v = self.repeat_kv(v)?;
+        let k = repeat_kv(k, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
+        let v = repeat_kv(v, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
 
         let y = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
@@ -176,20 +176,6 @@ impl CausalSelfAttention {
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
         let y = self.o_proj.forward(&y)?;
         Ok(y)
-    }
-
-    fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_attention_heads / self.num_key_value_heads;
-        if n_rep == 1 {
-            Ok(x)
-        } else {
-            let (b_sz, n_kv_head, seq_len, head_dim) = x.dims4()?;
-            let x = x
-                .unsqueeze(2)?
-                .expand((b_sz, n_kv_head, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))?;
-            Ok(x)
-        }
     }
 
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {

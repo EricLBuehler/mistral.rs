@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::pipeline::{extract_logits, MISTRAL_IS_GPTX};
 
-use super::{flash_attn, Cache, RmsNorm};
+use super::{flash_attn, repeat_kv, Cache, RmsNorm};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -100,16 +100,6 @@ impl Attention {
         })
     }
 
-    fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_kv_groups;
-        if n_rep == 1 {
-            Ok(x)
-        } else {
-            let (b_sz, n_kv_head, seq_len, head_dim) = x.dims4()?;
-            Tensor::cat(&vec![&x; n_rep], 2)?.reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))
-        }
-    }
-
     fn forward(
         &mut self,
         xs: &Tensor,
@@ -154,8 +144,8 @@ impl Attention {
         };
         *kv_cache = Some((k.clone(), v.clone()));
 
-        let k = self.repeat_kv(k)?;
-        let v = self.repeat_kv(v)?;
+        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
+        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
         let attn_output = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)

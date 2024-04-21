@@ -7,7 +7,7 @@ use candle_nn::{RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_b as linear, LinearLayerLike, LoraConfig, Ordering};
 
 use crate::{
-    models::{gemma::Config, Cache},
+    models::{gemma::Config, repeat_kv, Cache},
     pipeline::{extract_logits, GEMMA_IS_GPTX},
 };
 
@@ -204,18 +204,6 @@ impl Attention {
         })
     }
 
-    fn repeat_kv(&self, xs: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_kv_groups;
-        if n_rep == 1 {
-            Ok(xs)
-        } else {
-            let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
-            xs.unsqueeze(2)?
-                .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
-        }
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn forward(
         &mut self,
@@ -279,8 +267,8 @@ impl Attention {
         };
         *kv_cache = Some((k.clone(), v.clone()));
 
-        let k = self.repeat_kv(k)?.contiguous()?;
-        let v = self.repeat_kv(v)?.contiguous()?;
+        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
+        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
         let attn_output = {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);

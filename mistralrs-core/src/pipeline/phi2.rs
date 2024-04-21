@@ -9,12 +9,16 @@ use crate::models::Cache;
 use crate::pipeline::{calculate_eos_tok, ChatTemplate};
 use crate::xlora_models::{NonGranularState, XLoraConfig};
 use crate::{
-    models::phi2::{Config, Model as NormalModel},
+    models::{
+        phi2::{Config, Model as NormalModel},
+        quantized_phi2::ModelWeights as QModelWeights,
+    },
     sequence::Sequence,
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
     xlora_models::XLoraPhi2,
 };
 use anyhow::Result;
+use candle_core::quantized::gguf_file;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Activation;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -34,6 +38,7 @@ use tracing::{info, warn};
 enum Model {
     Normal(NormalModel),
     XLoraNormal(XLoraPhi2),
+    Quantized(QModelWeights),
 }
 pub const PHI2_IS_GPTX: bool = true;
 
@@ -263,7 +268,13 @@ impl Loader for Phi2Loader {
 
         let mut is_lora = false;
         let model = match self.kind {
-            ModelKind::QuantizedGGUF => unreachable!(),
+            ModelKind::QuantizedGGUF => {
+                let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
+                let model = gguf_file::Content::read(&mut file)
+                    .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
+                let model = QModelWeights::from_gguf(model, &mut file, device)?;
+                Model::Quantized(model)
+            }
             ModelKind::QuantizedGGML => unreachable!(),
             ModelKind::Normal => {
                 let vb = from_mmaped_safetensors(
@@ -421,12 +432,19 @@ impl Pipeline for Phi2Pipeline {
                 &self.non_granular_state,
                 context_lens,
             ),
+            Model::Quantized(ref mut model) => model.forward(
+                &input_ids,
+                &seqlen_offsets,
+                seqlen_offsets_kernel,
+                context_lens,
+            ),
         }
     }
     fn device(&self) -> &Device {
         match self.model {
             Model::Normal(ref model) => &model.device,
             Model::XLoraNormal(ref model) => &model.device,
+            Model::Quantized(ref model) => &model.device,
         }
     }
     fn num_hidden_layers(&self) -> usize {
@@ -436,6 +454,7 @@ impl Pipeline for Phi2Pipeline {
         match self.model {
             Model::Normal(ref model) => &model.cache,
             Model::XLoraNormal(ref model) => &model.cache,
+            Model::Quantized(ref model) => &model.cache,
         }
     }
     fn get_repeat_last_n(&self) -> usize {
@@ -454,11 +473,12 @@ impl Pipeline for Phi2Pipeline {
         match &self.model {
             Model::Normal(ref model) => model.max_seq_len,
             Model::XLoraNormal(ref model) => model.max_seq_len,
+            Model::Quantized(ref model) => model.max_seq_len,
         }
     }
     fn is_xlora(&self) -> bool {
         match &self.model {
-            Model::Normal(_) => false,
+            Model::Normal(_) | Model::Quantized(_) => false,
             Model::XLoraNormal(_) => !self.is_lora,
         }
     }

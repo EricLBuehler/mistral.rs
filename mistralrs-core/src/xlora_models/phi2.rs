@@ -14,7 +14,7 @@ use candle_nn::{
 use mistralrs_lora::{linear, LinearLayerLike, LoraConfig, Ordering};
 
 use crate::{
-    models::{flash_attn, phi2::Config},
+    models::{flash_attn, phi2::Config, repeat_kv},
     pipeline::{extract_logits, PHI2_IS_GPTX},
 };
 
@@ -187,18 +187,6 @@ impl Attention {
         })
     }
 
-    fn repeat_kv(&self, xs: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_heads / self.num_kv_heads;
-        if n_rep == 1 {
-            Ok(xs)
-        } else {
-            let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
-            xs.unsqueeze(2)?
-                .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
-        }
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn forward(
         &mut self,
@@ -275,9 +263,8 @@ impl Attention {
         };
         *kv_cache = Some((k.clone(), v.clone()));
 
-        // Repeat kv.
-        let k = self.repeat_kv(k)?.contiguous()?;
-        let v = self.repeat_kv(v)?.contiguous()?;
+        let k = repeat_kv(k, self.num_heads / self.num_kv_heads)?.contiguous()?;
+        let v = repeat_kv(v, self.num_heads / self.num_kv_heads)?.contiguous()?;
 
         let attn_output = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
