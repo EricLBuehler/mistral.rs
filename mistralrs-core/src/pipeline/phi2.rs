@@ -143,7 +143,7 @@ enum TokenizerError {
 impl Phi2Loader {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        model_id: String,
+        model_id: Option<String>,
         config: Phi2SpecificConfig,
         quantized_model_id: Option<String>,
         quantized_filename: Option<String>,
@@ -155,6 +155,12 @@ impl Phi2Loader {
         tokenizer_json: Option<String>,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
+        let model_id = if let Some(id) = model_id {
+            id
+        } else {
+            xlora_order.as_ref().unwrap().base_model_id.clone()
+        };
+
         Self {
             model_id,
             config,
@@ -384,7 +390,7 @@ impl Loader for Phi2Loader {
     }
 
     fn get_id(&self) -> &str {
-        &self.model_id
+        self.xlora_model_id.as_deref().unwrap_or(&self.model_id)
     }
 
     fn get_kind(&self) -> ModelKind {

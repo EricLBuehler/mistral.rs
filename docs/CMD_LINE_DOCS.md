@@ -32,6 +32,7 @@ Commands:
   lora-llama-gguf      Select the quantized mistral model with gguf and LoRA
   lora-llama-ggml      Select the quantized mistral model with gguf and LoRA
   lora-mixtral-gguf    Select the quantized mistral model with gguf and LoRA
+  phi2-gguf            Select the quantized phi2 model with gguf
   help                 Print this message or the help of the given subcommand(s)
 
 Options:
@@ -101,7 +102,7 @@ Usage: mistralrs-server x-lora-mistral-gguf [OPTIONS] --order <ORDER>
 
 Options:
   -t, --tok-model-id <TOK_MODEL_ID>
-          Model ID to load the tokenizer from [default: HuggingFaceH4/zephyr-7b-beta]
+          Force a base model ID to load the tokenizer from instead of using the ordering file
       --tokenizer-json <TOKENIZER_JSON>
           Path to local tokenizer.json file. If this is specified it is used over any remote file
   -m, --quantized-model-id <QUANTIZED_MODEL_ID>
