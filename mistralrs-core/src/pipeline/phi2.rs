@@ -435,7 +435,6 @@ impl Pipeline for Phi2Pipeline {
             Model::Quantized(ref mut model) => model.forward(
                 &input_ids,
                 &seqlen_offsets,
-                seqlen_offsets_kernel,
                 context_lens,
             ),
         }

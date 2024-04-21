@@ -1,14 +1,9 @@
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-
 use std::collections::HashMap;
 
 use candle_core::quantized::gguf_file;
 use candle_core::quantized::QTensor;
-use candle_core::D;
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Embedding, LayerNorm};
-
-use crate::pipeline::extract_logits;
 
 use super::repeat_kv;
 use super::Cache;
@@ -63,10 +58,10 @@ struct LayerWeights {
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
-    neg_inf: Tensor,
     cos: Tensor,
     sin: Tensor,
     rope_dim: usize,
+    neg_inf: Tensor,
 }
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Tensor> {
@@ -76,25 +71,21 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Ten
 }
 
 impl LayerWeights {
-    fn apply_rotary_emb(&self, xs: &Tensor, start_offsets: &[usize]) -> Result<Tensor> {
+    fn apply_rotary_emb(&self, xs: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (_b_sz, _n_head, seq_len, _n_embd) = xs.dims4()?;
         let xs_rot = xs.i((.., .., .., ..self.rope_dim))?;
         let xs_pass = xs.i((.., .., .., self.rope_dim..))?;
-        let mut res = Vec::new();
-        for (b, offset) in (0..xs.dim(0)?).into_iter().zip(start_offsets) {
-            let cos = self.cos.narrow(0, *offset, seq_len)?;
-            let sin = self.sin.narrow(0, *offset, seq_len)?;
-            let xs_rot = candle_nn::rotary_emb::rope(&xs_rot.i(b)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-            res.push(Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?);
-        }
-        Tensor::cat(&res, 0)
+        let cos = self.cos.narrow(0, index_pos, seq_len)?;
+        let sin = self.sin.narrow(0, index_pos, seq_len)?;
+        let xs_rot = candle_nn::rotary_emb::rope(&xs_rot.contiguous()?, &cos, &sin)?;
+        Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)
     }
 
     fn forward_attn(
         &mut self,
         x: &Tensor,
         mask: Option<&Tensor>,
-        start_offsets: &[usize],
+        seqlen_offsets: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
@@ -111,21 +102,21 @@ impl LayerWeights {
         // impact on performance.
         let v = v.contiguous()?;
 
-        let q = self.apply_rotary_emb(&q, start_offsets)?.contiguous()?;
-        let k = self.apply_rotary_emb(&k, start_offsets)?;
+        let q = self.apply_rotary_emb(&q, seqlen_offsets[0])?.contiguous()?;
+        let k = self.apply_rotary_emb(&k, seqlen_offsets[0])?;
 
         let (k, v) = match &*kv_cache {
             None => (k, v),
-            Some((k_cache, v_cache)) => {
-                let k = candle_nn::ops::kvconcat(k_cache, &k, 2)?.contiguous()?;
-                let v = candle_nn::ops::kvconcat(v_cache, &v, 2)?.contiguous()?;
+            Some((prev_k, prev_v)) => {
+                let k = candle_nn::ops::kvconcat(prev_k, &k, 2)?;
+                let v = candle_nn::ops::kvconcat(prev_v, &v, 2)?;
                 (k, v)
             }
         };
         *kv_cache = Some((k.clone(), v.clone()));
 
-        let k = repeat_kv(k, self.n_head / self.n_kv_head)?.contiguous()?;
-        let v = repeat_kv(v, self.n_head / self.n_kv_head)?.contiguous()?;
+        let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
+        let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
 
         let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
         let att = match mask {
@@ -156,13 +147,6 @@ pub struct ModelWeights {
     pub max_seq_len: usize,
 }
 
-fn layer_norm(w: QTensor, b: QTensor, eps: f64) -> Result<LayerNorm> {
-    let w = w.dequantize(&w.device())?;
-    let b = b.dequantize(&b.device())?;
-    let ln = LayerNorm::new(w, b, eps);
-    Ok(ln)
-}
-
 fn precomput_freqs_cis(
     head_dim: usize,
     freq_base: f32,
@@ -180,6 +164,13 @@ fn precomput_freqs_cis(
     let cos = idx_theta.cos()?;
     let sin = idx_theta.sin()?;
     Ok((cos, sin))
+}
+
+fn layer_norm(w: QTensor, b: QTensor, eps: f64) -> Result<LayerNorm> {
+    let w = w.dequantize(&w.device())?;
+    let b = b.dequantize(&b.device())?;
+    let ln = LayerNorm::new(w, b, eps);
+    Ok(ln)
 }
 
 impl ModelWeights {
@@ -268,9 +259,8 @@ impl ModelWeights {
     pub fn forward(
         &mut self,
         xs: &Tensor,
-        start_offsets: &[usize],
-        _start_offsets_kernel: Tensor,
-        context_lens: Vec<usize>,
+        seqlen_offsets: &[usize],
+        _context_lens: Vec<usize>,
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = xs.dims2()?;
         let mask = if seq_len == 1 {
@@ -286,13 +276,13 @@ impl ModelWeights {
             let attn_outputs = layer.forward_attn(
                 &xs_norm,
                 mask.as_ref(),
-                start_offsets,
+                seqlen_offsets,
                 cache.get_mut(i).unwrap(),
             )?;
             let feed_forward_hidden_states = layer.mlp.forward(&xs_norm)?;
             xs = (attn_outputs + feed_forward_hidden_states + residual)?
         }
-        let xs = xs.apply(&self.output_norm)?;
-        extract_logits(&self.output.forward(&xs.contiguous()?)?, context_lens)
+        let xs = xs.apply(&self.output_norm)?.i((.., seq_len - 1, ..))?;
+        self.output.forward(&xs)
     }
 }
