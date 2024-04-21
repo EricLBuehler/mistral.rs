@@ -170,6 +170,7 @@ class Runner:
         Send a chat completion request to the mistral.rs engine, returning the response object.
         """
 
+@dataclass
 class Role(Enum):
     """
     The role for each `Message` of a chat completion request.
@@ -178,6 +179,7 @@ class Role(Enum):
     User = 1
     Assistant = 2
 
+@dataclass
 class Message:
     """
     A message for a chat completion request.
@@ -186,6 +188,7 @@ class Message:
     role: Role
     content: str
 
+@dataclass
 class Usage:
     completion_tokens: int
     prompt_tokens: int
@@ -197,30 +200,36 @@ class Usage:
     total_prompt_time_sec: float
     total_completion_time_sec: float
 
+@dataclass
 class ResponseMessage:
     content: str
     role: str
 
+@dataclass
 class TopLogprob:
     token: int
     logprob: float
     bytes: str
 
+@dataclass
 class ResponseLogprob:
     token: str
     logprob: float
     bytes: list[int]
     top_logprobs: list[TopLogprob]
 
+@dataclass
 class Logprobs:
     content: list[ResponseLogprob] | None
 
+@dataclass
 class Choice:
     finish_reason: str
     index: int
     message: ResponseMessage
     logprobs: Logprobs
 
+@dataclass
 class ChatCompletionResponse:
     id: str
     choices: list[Choice]
@@ -230,16 +239,19 @@ class ChatCompletionResponse:
     object: str
     usage: Usage
 
+@dataclass
 class Delta:
     content: str
     role: str
 
+@dataclass
 class ChunkChoice:
     finish_reason: str | None
     index: int
     delta: Delta
     logprobs: ResponseLogprob | None
 
+@dataclass
 class ChatCompletionChunkResponse:
     id: str
     choices: list[ChunkChoice]
@@ -248,12 +260,14 @@ class ChatCompletionChunkResponse:
     system_fingerprint: str
     object: str
 
+@dataclass
 class CompletionChoice:
     finish_reason: str
     index: int
     text: str
     # NOTE(EricLBuehler): `logprobs` in undocumented
 
+@dataclass
 class CompletionResponse:
     id: str
     choices: list[CompletionChoice]
