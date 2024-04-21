@@ -85,7 +85,7 @@ impl LayerWeights {
                 candle_nn::rotary_emb::rope(&xs_rot.i(b)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
             chunks.push(Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?);
         }
-        Tensor::cat(&chunks, 0)
+        Tensor::cat(&chunks, 0)?.contiguous()
     }
 
     fn forward_attn(
