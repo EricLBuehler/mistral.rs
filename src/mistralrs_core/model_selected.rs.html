@@ -769,15 +769,15 @@
 
     <span class="doccomment">/// Select the mistral model, with X-LoRA.
     </span>XLoraMistral {
-        <span class="doccomment">/// Model ID to load from
-        </span><span class="attr">#[arg(short, long, default_value = <span class="string">"HuggingFaceH4/zephyr-7b-beta"</span>)]
-        </span>model_id: String,
+        <span class="doccomment">/// Force a base model ID to load from instead of using the ordering file.
+        </span><span class="attr">#[arg(short, long)]
+        </span>model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         </span><span class="attr">#[arg(short, long)]
         </span>tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Model ID to load Xlora from
+        <span class="doccomment">/// Model ID to load X-LoRA from.
         </span><span class="attr">#[arg(short, long, default_value = <span class="string">"lamm-mit/x-lora"</span>)]
         </span>xlora_model_id: String,
 
@@ -812,16 +812,16 @@
 
     <span class="doccomment">/// Select the gemma model, with X-LoRA.
     </span>XLoraGemma {
-        <span class="doccomment">/// Model ID to load from
+        <span class="doccomment">/// Force a base model ID to load from instead of using the ordering file.
         </span><span class="attr">#[arg(short, long)]
-        </span>model_id: String,
+        </span>model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         </span><span class="attr">#[arg(short, long)]
         </span>tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Model ID to load Xlora from
-        </span><span class="attr">#[arg(short, long)]
+        <span class="doccomment">/// Model ID to load X-LoRA from.
+        </span><span class="attr">#[arg(short, long, default_value = <span class="string">"lamm-mit/x-lora-gemma-7b"</span>)]
         </span>xlora_model_id: String,
 
         <span class="doccomment">/// Control the application of repeat penalty for the last n tokens
@@ -911,15 +911,15 @@
 
     <span class="doccomment">/// Select the llama model, with X-LoRA.
     </span>XLoraLlama {
-        <span class="doccomment">/// Model ID to load from
+        <span class="doccomment">/// Force a base model ID to load from instead of using the ordering file.
         </span><span class="attr">#[arg(short, long)]
-        </span>model_id: String,
+        </span>model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         </span><span class="attr">#[arg(short, long)]
         </span>tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Model ID to load Xlora from
+        <span class="doccomment">/// Model ID to load X-LoRA from.
         </span><span class="attr">#[arg(short, long)]
         </span>xlora_model_id: String,
 
@@ -978,15 +978,15 @@
 
     <span class="doccomment">/// Select the mixtral model, with X-LoRA.
     </span>XLoraMixtral {
-        <span class="doccomment">/// Model ID to load from
+        <span class="doccomment">/// Force a base model ID to load from instead of using the ordering file.
         </span><span class="attr">#[arg(short, long)]
-        </span>model_id: String,
+        </span>model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         </span><span class="attr">#[arg(short, long)]
         </span>tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Model ID to load Xlora from
+        <span class="doccomment">/// Model ID to load X-LoRA from.
         </span><span class="attr">#[arg(short, long)]
         </span>xlora_model_id: String,
 
@@ -1006,9 +1006,9 @@
 
     <span class="doccomment">/// Select the quantized mistral model with gguf and X-LoRA.
     </span>XLoraMistralGGUF {
-        <span class="doccomment">/// Model ID to load the tokenizer from
-        </span><span class="attr">#[arg(short, long, default_value = <span class="string">"HuggingFaceH4/zephyr-7b-beta"</span>)]
-        </span>tok_model_id: String,
+        <span class="doccomment">/// Force a base model ID to load the tokenizer from instead of using the ordering file.
+        </span><span class="attr">#[arg(short, long)]
+        </span>tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         </span><span class="attr">#[arg(long)]
@@ -1027,7 +1027,7 @@
         </span><span class="attr">#[arg(long, default_value_t = <span class="number">64</span>)]
         </span>repeat_last_n: usize,
 
-        <span class="doccomment">/// Model ID to load Xlora from
+        <span class="doccomment">/// Model ID to load X-LoRA from.
         </span><span class="attr">#[arg(short, long, default_value = <span class="string">"lamm-mit/x-lora"</span>)]
         </span>xlora_model_id: String,
 
@@ -1043,9 +1043,9 @@
 
     <span class="doccomment">/// Select the quantized mistral model with gguf and X-LoRA.
     </span>XLoraLlamaGGUF {
-        <span class="doccomment">/// Model ID to load the tokenizer from
-        </span><span class="attr">#[arg(short, long, default_value = <span class="string">"meta-llama/Llama-2-13b-chat-hf"</span>)]
-        </span>tok_model_id: String,
+        <span class="doccomment">/// Force a base model ID to load the tokenizer from instead of using the ordering file.
+        </span><span class="attr">#[arg(short, long)]
+        </span>tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         </span><span class="attr">#[arg(long)]
@@ -1064,7 +1064,7 @@
         </span><span class="attr">#[arg(long, default_value_t = <span class="number">64</span>)]
         </span>repeat_last_n: usize,
 
-        <span class="doccomment">/// Model ID to load Xlora from
+        <span class="doccomment">/// Model ID to load X-LoRA from.
         </span><span class="attr">#[arg(short, long)]
         </span>xlora_model_id: String,
 
@@ -1080,9 +1080,9 @@
 
     <span class="doccomment">/// Select the quantized mistral model with gguf and X-LoRA.
     </span>XLoraLlamaGGML {
-        <span class="doccomment">/// Model ID to load the tokenizer from
-        </span><span class="attr">#[arg(short, long, default_value = <span class="string">"meta-llama/Llama-2-13b-chat-hf"</span>)]
-        </span>tok_model_id: String,
+        <span class="doccomment">/// Force a base model ID to load the tokenizer from instead of using the ordering file.
+        </span><span class="attr">#[arg(short, long)]
+        </span>tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         </span><span class="attr">#[arg(long)]
@@ -1105,7 +1105,7 @@
         </span><span class="attr">#[arg(long, default_value_t = <span class="number">64</span>)]
         </span>repeat_last_n: usize,
 
-        <span class="doccomment">/// Model ID to load Xlora from
+        <span class="doccomment">/// Model ID to load X-LoRA from.
         </span><span class="attr">#[arg(short, long)]
         </span>xlora_model_id: String,
 
@@ -1125,9 +1125,9 @@
 
     <span class="doccomment">/// Select the quantized mistral model with gguf and X-LoRA.
     </span>XLoraMixtralGGUF {
-        <span class="doccomment">/// Model ID to load the tokenizer from
-        </span><span class="attr">#[arg(short, long, default_value = <span class="string">"mistralai/Mixtral-8x7B-Instruct-v0.1"</span>)]
-        </span>tok_model_id: String,
+        <span class="doccomment">/// Force a base model ID to load the tokenizer from instead of using the ordering file.
+        </span><span class="attr">#[arg(short, long)]
+        </span>tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         </span><span class="attr">#[arg(long)]
@@ -1146,7 +1146,7 @@
         </span><span class="attr">#[arg(long, default_value_t = <span class="number">64</span>)]
         </span>repeat_last_n: usize,
 
-        <span class="doccomment">/// Model ID to load Xlora from
+        <span class="doccomment">/// Model ID to load X-LoRA from.
         </span><span class="attr">#[arg(short, long)]
         </span>xlora_model_id: String,
 
@@ -1177,15 +1177,15 @@
 
     <span class="doccomment">/// Select the phi2 model, with X-LoRA.
     </span>XLoraPhi2 {
-        <span class="doccomment">/// Model ID to load from
+        <span class="doccomment">/// Force a base model ID to load from instead of using the ordering file.
         </span><span class="attr">#[arg(short, long)]
-        </span>model_id: String,
+        </span>model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         </span><span class="attr">#[arg(short, long)]
         </span>tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Model ID to load Xlora from
+        <span class="doccomment">/// Model ID to load X-LoRA from.
         </span><span class="attr">#[arg(short, long)]
         </span>xlora_model_id: String,
 
@@ -1205,9 +1205,9 @@
 
     <span class="doccomment">/// Select the mistral model, with LoRA and gguf.
     </span>LoraMistralGGUF {
-        <span class="doccomment">/// Model ID to load the tokenizer from
-        </span><span class="attr">#[arg(short, long, default_value = <span class="string">"HuggingFaceH4/zephyr-7b-beta"</span>)]
-        </span>tok_model_id: String,
+        <span class="doccomment">/// Force a base model ID to load the tokenizer from instead of using the ordering file.
+        </span><span class="attr">#[arg(short, long)]
+        </span>tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         </span><span class="attr">#[arg(short, long)]
@@ -1222,7 +1222,7 @@
         </span><span class="attr">#[arg(short = <span class="string">'f'</span>, long, default_value = <span class="string">"zephyr-7b-beta.Q8_0.gguf"</span>)]
         </span>quantized_filename: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Model ID to load Xlora from
+        <span class="doccomment">/// Model ID to load X-LoRA from.
         </span><span class="attr">#[arg(short, long, default_value = <span class="string">"lamm-mit/x-lora"</span>)]
         </span>adapters_model_id: String,
 
@@ -1237,15 +1237,15 @@
 
     <span class="doccomment">/// Select the mistral model, with LoRA.
     </span>LoraMistral {
-        <span class="doccomment">/// Model ID to load from
-        </span><span class="attr">#[arg(short, long, default_value = <span class="string">"HuggingFaceH4/zephyr-7b-beta"</span>)]
-        </span>model_id: String,
+        <span class="doccomment">/// Force a base model ID to load from instead of using the ordering file.
+        </span><span class="attr">#[arg(short, long)]
+        </span>model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         </span><span class="attr">#[arg(short, long)]
         </span>tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Model ID to load Xlora from
+        <span class="doccomment">/// Model ID to load X-LoRA from.
         </span><span class="attr">#[arg(short, long, default_value = <span class="string">"lamm-mit/x-lora"</span>)]
         </span>adapters_model_id: String,
 
@@ -1260,15 +1260,15 @@
 
     <span class="doccomment">/// Select the mixtral model, with LoRA.
     </span>LoraMixtral {
-        <span class="doccomment">/// Model ID to load from
+        <span class="doccomment">/// Force a base model ID to load from instead of using the ordering file.
         </span><span class="attr">#[arg(short, long)]
-        </span>model_id: String,
+        </span>model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         </span><span class="attr">#[arg(short, long)]
         </span>tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Model ID to load Xlora from
+        <span class="doccomment">/// Model ID to load X-LoRA from.
         </span><span class="attr">#[arg(short, long)]
         </span>adapters_model_id: String,
 
@@ -1283,15 +1283,15 @@
 
     <span class="doccomment">/// Select the llama model, with LoRA.
     </span>LoraLlama {
-        <span class="doccomment">/// Model ID to load from
+        <span class="doccomment">/// Force a base model ID to load from instead of using the ordering file.
         </span><span class="attr">#[arg(short, long)]
-        </span>model_id: String,
+        </span>model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         </span><span class="attr">#[arg(short, long)]
         </span>tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Model ID to load Xlora from
+        <span class="doccomment">/// Model ID to load X-LoRA from.
         </span><span class="attr">#[arg(short, long)]
         </span>adapters_model_id: String,
 
@@ -1306,9 +1306,9 @@
 
     <span class="doccomment">/// Select the quantized mistral model with gguf and LoRA.
     </span>LoraLlamaGGUF {
-        <span class="doccomment">/// Model ID to load the tokenizer from
-        </span><span class="attr">#[arg(short, long, default_value = <span class="string">"meta-llama/Llama-2-13b-chat-hf"</span>)]
-        </span>tok_model_id: String,
+        <span class="doccomment">/// Force a base model ID to load the tokenizer from instead of using the ordering file.
+        </span><span class="attr">#[arg(short, long)]
+        </span>tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         </span><span class="attr">#[arg(long)]
@@ -1327,7 +1327,7 @@
         </span><span class="attr">#[arg(long, default_value_t = <span class="number">64</span>)]
         </span>repeat_last_n: usize,
 
-        <span class="doccomment">/// Model ID to load Xlora from
+        <span class="doccomment">/// Model ID to load X-LoRA from.
         </span><span class="attr">#[arg(short, long)]
         </span>adapters_model_id: String,
 
@@ -1338,9 +1338,9 @@
 
     <span class="doccomment">/// Select the quantized mistral model with gguf and LoRA.
     </span>LoraLlamaGGML {
-        <span class="doccomment">/// Model ID to load the tokenizer from
-        </span><span class="attr">#[arg(short, long, default_value = <span class="string">"meta-llama/Llama-2-13b-chat-hf"</span>)]
-        </span>tok_model_id: String,
+        <span class="doccomment">/// Force a base model ID to load the tokenizer from instead of using the ordering file.
+        </span><span class="attr">#[arg(short, long)]
+        </span>tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         </span><span class="attr">#[arg(long)]
@@ -1363,7 +1363,7 @@
         </span><span class="attr">#[arg(long, default_value_t = <span class="number">64</span>)]
         </span>repeat_last_n: usize,
 
-        <span class="doccomment">/// Model ID to load Xlora from
+        <span class="doccomment">/// Model ID to load X-LoRA from.
         </span><span class="attr">#[arg(short, long)]
         </span>adapters_model_id: String,
 
@@ -1378,9 +1378,9 @@
 
     <span class="doccomment">/// Select the quantized mistral model with gguf and LoRA.
     </span>LoraMixtralGGUF {
-        <span class="doccomment">/// Model ID to load the tokenizer from
-        </span><span class="attr">#[arg(short, long, default_value = <span class="string">"mistralai/Mixtral-8x7B-Instruct-v0.1"</span>)]
-        </span>tok_model_id: String,
+        <span class="doccomment">/// Force a base model ID to load the tokenizer from instead of using the ordering file.
+        </span><span class="attr">#[arg(short, long)]
+        </span>tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         </span><span class="attr">#[arg(long)]
@@ -1399,7 +1399,7 @@
         </span><span class="attr">#[arg(long, default_value_t = <span class="number">64</span>)]
         </span>repeat_last_n: usize,
 
-        <span class="doccomment">/// Model ID to load Xlora from
+        <span class="doccomment">/// Model ID to load X-LoRA from.
         </span><span class="attr">#[arg(short, long)]
         </span>adapters_model_id: String,
 

@@ -483,6 +483,16 @@
 <a href="#481" id="481">481</a>
 <a href="#482" id="482">482</a>
 <a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a>
+<a href="#491" id="491">491</a>
+<a href="#492" id="492">492</a>
+<a href="#493" id="493">493</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -629,7 +639,7 @@
 <span class="kw">impl </span>GemmaLoader {
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>new(
-        model_id: String,
+        model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         config: GemmaSpecificConfig,
         quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         quantized_filename: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -641,6 +651,16 @@
         tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
         tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     ) -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span>model_id = <span class="kw">if let </span><span class="prelude-val">Some</span>(id) = model_id {
+            id
+        } <span class="kw">else </span>{
+            <span class="macro">info!</span>(
+                <span class="string">"Using adapter base model ID: `{}`"</span>,
+                xlora_order.as_ref().unwrap().base_model_id
+            );
+            xlora_order.as_ref().unwrap().base_model_id.clone()
+        };
+
         <span class="self">Self </span>{
             model_id,
             config,
@@ -864,7 +884,7 @@
     }
 
     <span class="kw">fn </span>get_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.model_id
+        <span class="self">self</span>.xlora_model_id.as_deref().unwrap_or(<span class="kw-2">&amp;</span><span class="self">self</span>.model_id)
     }
 
     <span class="kw">fn </span>get_kind(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelKind {

@@ -562,6 +562,15 @@
 <a href="#560" id="560">560</a>
 <a href="#561" id="561">561</a>
 <a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -705,7 +714,7 @@
 <span class="kw">impl </span>MixtralLoader {
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>new(
-        model_id: String,
+        model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         config: MixtralSpecificConfig,
         quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         quantized_filename: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -717,6 +726,15 @@
         tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
         tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     ) -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span>model_id = <span class="kw">if let </span><span class="prelude-val">Some</span>(id) = model_id {
+            id
+        } <span class="kw">else </span>{
+            <span class="macro">info!</span>(
+                <span class="string">"Using adapter base model ID: `{}`"</span>,
+                xlora_order.as_ref().unwrap().base_model_id
+            );
+            xlora_order.as_ref().unwrap().base_model_id.clone()
+        };
         <span class="self">Self </span>{
             model_id,
             config,
@@ -999,7 +1017,7 @@
     }
 
     <span class="kw">fn </span>get_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.model_id
+        <span class="self">self</span>.xlora_model_id.as_deref().unwrap_or(<span class="kw-2">&amp;</span><span class="self">self</span>.model_id)
     }
 
     <span class="kw">fn </span>get_kind(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelKind {

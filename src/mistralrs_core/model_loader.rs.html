@@ -858,7 +858,7 @@
             repeat_last_n,
             tokenizer_json,
         } =&gt; Box::new(MistralLoader::new(
-            model_id,
+            <span class="prelude-val">Some</span>(model_id),
             MistralSpecificConfig {
                 use_flash_attn,
                 repeat_last_n,
@@ -880,7 +880,7 @@
             repeat_last_n,
             tokenizer_json,
         } =&gt; Box::new(MistralLoader::new(
-            tok_model_id,
+            <span class="prelude-val">Some</span>(tok_model_id),
             MistralSpecificConfig {
                 use_flash_attn,
                 repeat_last_n,
@@ -926,7 +926,7 @@
             repeat_last_n,
             tokenizer_json,
         } =&gt; Box::new(GemmaLoader::new(
-            model_id,
+            <span class="prelude-val">Some</span>(model_id),
             GemmaSpecificConfig { repeat_last_n },
             <span class="prelude-val">None</span>,
             <span class="prelude-val">None</span>,
@@ -966,7 +966,7 @@
             repeat_last_n,
             tokenizer_json,
         } =&gt; Box::new(LlamaLoader::new(
-            model_id,
+            <span class="prelude-val">Some</span>(model_id),
             LlamaSpecificConfig {
                 repeat_last_n,
                 use_flash_attn,
@@ -989,7 +989,7 @@
             repeat_last_n,
             tokenizer_json,
         } =&gt; Box::new(LlamaLoader::new(
-            tok_model_id,
+            <span class="prelude-val">Some</span>(tok_model_id),
             LlamaSpecificConfig {
                 repeat_last_n,
                 use_flash_attn,
@@ -1013,7 +1013,7 @@
             gqa,
             tokenizer_json,
         } =&gt; Box::new(LlamaLoader::new(
-            tok_model_id,
+            <span class="prelude-val">Some</span>(tok_model_id),
             LlamaSpecificConfig {
                 repeat_last_n,
                 use_flash_attn,
@@ -1061,7 +1061,7 @@
             repeat_last_n,
             tokenizer_json,
         } =&gt; Box::new(MixtralLoader::new(
-            model_id,
+            <span class="prelude-val">Some</span>(model_id),
             MixtralSpecificConfig {
                 repeat_last_n,
                 use_flash_attn,
@@ -1083,7 +1083,7 @@
             repeat_last_n,
             tokenizer_json,
         } =&gt; Box::new(MixtralLoader::new(
-            tok_model_id,
+            <span class="prelude-val">Some</span>(tok_model_id),
             MixtralSpecificConfig {
                 repeat_last_n,
                 use_flash_attn,
@@ -1244,7 +1244,7 @@
             repeat_last_n,
             tokenizer_json,
         } =&gt; Box::new(Phi2Loader::new(
-            model_id,
+            <span class="prelude-val">Some</span>(model_id),
             Phi2SpecificConfig {
                 use_flash_attn,
                 repeat_last_n,
@@ -1478,7 +1478,7 @@
             quantized_filename,
             repeat_last_n,
         } =&gt; Box::new(Phi2Loader::new(
-            tok_model_id,
+            <span class="prelude-val">Some</span>(tok_model_id),
             Phi2SpecificConfig {
                 use_flash_attn,
                 repeat_last_n,
