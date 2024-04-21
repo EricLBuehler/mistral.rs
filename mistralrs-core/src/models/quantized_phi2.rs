@@ -284,7 +284,7 @@ impl ModelWeights {
             let feed_forward_hidden_states = layer.mlp.forward(&xs_norm)?;
             xs = (attn_outputs + feed_forward_hidden_states + residual)?
         }
-        let xs = xs.apply(&self.output_norm)?.i((.., seq_len - 1, ..))?;
+        let xs = xs.apply(&self.output_norm)?;
         extract_logits(&self.output.forward(&xs.contiguous()?)?, context_lens)
     }
 }
