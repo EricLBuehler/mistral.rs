@@ -259,6 +259,7 @@ impl Engine {
                             prefix_cacher.add_sequence(seq);
                             prefix_cacher.evict_to_cpu()?;
                             seq.set_state(SequenceState::Done(reason));
+                            pipeline.reset_non_granular_state();
                         }
 
                         seq.get_mut_group()

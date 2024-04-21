@@ -394,7 +394,7 @@ fn get_prompt_input(input_seqs: &[&mut Sequence], device: &Device) -> Result<Inp
         let mut ctxt = seq.get_toks().to_vec();
         seqlen_offsets.push(0);
 
-        ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
+        ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));
         context_lens.push(seq.len() - 1);
 
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
