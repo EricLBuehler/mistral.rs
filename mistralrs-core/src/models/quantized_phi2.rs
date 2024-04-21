@@ -85,7 +85,7 @@ impl LayerWeights {
             let cos = self.cos.narrow(0, *offset, seq_len)?;
             let sin = self.sin.narrow(0, *offset, seq_len)?;
             let xs_rot = candle_nn::rotary_emb::rope(&xs_rot.i(b)?.contiguous()?, &cos, &sin)?;
-            res.push(Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?);
+            res.push(Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?.unsqueeze(0)?);
         }
         Tensor::cat(&res, 0)
     }
