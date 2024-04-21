@@ -833,7 +833,7 @@ impl Runner {
                 Some(quantized_model_id),
                 Some(quantized_filename),
                 None,
-                ModelKind::Normal,
+                ModelKind::QuantizedGGUF,
                 None,
                 no_kv_cache,
                 chat_template,

@@ -736,7 +736,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_model_id,
             quantized_filename,
             None,
-            ModelKind::Normal,
+            ModelKind::QuantizedGGUF,
             None,
             args.no_kv_cache,
             args.chat_template,
