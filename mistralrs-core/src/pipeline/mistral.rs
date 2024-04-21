@@ -154,6 +154,7 @@ impl MistralLoader {
         let model_id = if let Some(id) = model_id {
             id
         } else {
+            info!("Using adapter base model ID: `{}`", xlora_order.as_ref().unwrap().base_model_id);
             xlora_order.as_ref().unwrap().base_model_id.clone()
         };
         Self {
