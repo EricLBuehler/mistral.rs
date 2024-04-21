@@ -108,7 +108,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             repeat_last_n,
             tokenizer_json,
         } => Box::new(MistralLoader::new(
-            model_id,
+            Some(model_id),
             MistralSpecificConfig {
                 use_flash_attn,
                 repeat_last_n,
@@ -130,7 +130,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             repeat_last_n,
             tokenizer_json,
         } => Box::new(MistralLoader::new(
-            tok_model_id,
+            Some(tok_model_id),
             MistralSpecificConfig {
                 use_flash_attn,
                 repeat_last_n,
@@ -176,7 +176,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             repeat_last_n,
             tokenizer_json,
         } => Box::new(GemmaLoader::new(
-            model_id,
+            Some(model_id),
             GemmaSpecificConfig { repeat_last_n },
             None,
             None,
@@ -216,7 +216,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             repeat_last_n,
             tokenizer_json,
         } => Box::new(LlamaLoader::new(
-            model_id,
+            Some(model_id),
             LlamaSpecificConfig {
                 repeat_last_n,
                 use_flash_attn,
@@ -239,7 +239,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             repeat_last_n,
             tokenizer_json,
         } => Box::new(LlamaLoader::new(
-            tok_model_id,
+            Some(tok_model_id),
             LlamaSpecificConfig {
                 repeat_last_n,
                 use_flash_attn,
@@ -263,7 +263,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             gqa,
             tokenizer_json,
         } => Box::new(LlamaLoader::new(
-            tok_model_id,
+            Some(tok_model_id),
             LlamaSpecificConfig {
                 repeat_last_n,
                 use_flash_attn,
@@ -311,7 +311,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             repeat_last_n,
             tokenizer_json,
         } => Box::new(MixtralLoader::new(
-            model_id,
+            Some(model_id),
             MixtralSpecificConfig {
                 repeat_last_n,
                 use_flash_attn,
@@ -333,7 +333,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             repeat_last_n,
             tokenizer_json,
         } => Box::new(MixtralLoader::new(
-            tok_model_id,
+            Some(tok_model_id),
             MixtralSpecificConfig {
                 repeat_last_n,
                 use_flash_attn,
@@ -494,7 +494,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             repeat_last_n,
             tokenizer_json,
         } => Box::new(Phi2Loader::new(
-            model_id,
+            Some(model_id),
             Phi2SpecificConfig {
                 use_flash_attn,
                 repeat_last_n,
@@ -728,7 +728,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_filename,
             repeat_last_n,
         } => Box::new(Phi2Loader::new(
-            tok_model_id,
+            Some(tok_model_id),
             Phi2SpecificConfig {
                 use_flash_attn,
                 repeat_last_n,

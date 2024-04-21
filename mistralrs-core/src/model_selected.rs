@@ -51,15 +51,15 @@ pub enum ModelSelected {
 
     /// Select the mistral model, with X-LoRA.
     XLoraMistral {
-        /// Model ID to load from
-        #[arg(short, long, default_value = "HuggingFaceH4/zephyr-7b-beta")]
-        model_id: String,
+        /// Force a base model ID to load from instead of using the ordering file.
+        #[arg(short, long)]
+        model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(short, long)]
         tokenizer_json: Option<String>,
 
-        /// Model ID to load Xlora from
+        /// Model ID to load X-LoRA from.
         #[arg(short, long, default_value = "lamm-mit/x-lora")]
         xlora_model_id: String,
 
@@ -94,16 +94,16 @@ pub enum ModelSelected {
 
     /// Select the gemma model, with X-LoRA.
     XLoraGemma {
-        /// Model ID to load from
+        /// Force a base model ID to load from instead of using the ordering file.
         #[arg(short, long)]
-        model_id: String,
+        model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(short, long)]
         tokenizer_json: Option<String>,
 
-        /// Model ID to load Xlora from
-        #[arg(short, long)]
+        /// Model ID to load X-LoRA from.
+        #[arg(short, long, default_value = "lamm-mit/x-lora-gemma-7b")]
         xlora_model_id: String,
 
         /// Control the application of repeat penalty for the last n tokens
@@ -193,15 +193,15 @@ pub enum ModelSelected {
 
     /// Select the llama model, with X-LoRA.
     XLoraLlama {
-        /// Model ID to load from
+        /// Force a base model ID to load from instead of using the ordering file.
         #[arg(short, long)]
-        model_id: String,
+        model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(short, long)]
         tokenizer_json: Option<String>,
 
-        /// Model ID to load Xlora from
+        /// Model ID to load X-LoRA from.
         #[arg(short, long)]
         xlora_model_id: String,
 
@@ -260,15 +260,15 @@ pub enum ModelSelected {
 
     /// Select the mixtral model, with X-LoRA.
     XLoraMixtral {
-        /// Model ID to load from
+        /// Force a base model ID to load from instead of using the ordering file.
         #[arg(short, long)]
-        model_id: String,
+        model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(short, long)]
         tokenizer_json: Option<String>,
 
-        /// Model ID to load Xlora from
+        /// Model ID to load X-LoRA from.
         #[arg(short, long)]
         xlora_model_id: String,
 
@@ -288,9 +288,9 @@ pub enum ModelSelected {
 
     /// Select the quantized mistral model with gguf and X-LoRA.
     XLoraMistralGGUF {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "HuggingFaceH4/zephyr-7b-beta")]
-        tok_model_id: String,
+        /// Force a base model ID to load the tokenizer from instead of using the ordering file.
+        #[arg(short, long)]
+        tok_model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(long)]
@@ -309,7 +309,7 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
 
-        /// Model ID to load Xlora from
+        /// Model ID to load X-LoRA from.
         #[arg(short, long, default_value = "lamm-mit/x-lora")]
         xlora_model_id: String,
 
@@ -325,9 +325,9 @@ pub enum ModelSelected {
 
     /// Select the quantized mistral model with gguf and X-LoRA.
     XLoraLlamaGGUF {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
-        tok_model_id: String,
+        /// Force a base model ID to load the tokenizer from instead of using the ordering file.
+        #[arg(short, long)]
+        tok_model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(long)]
@@ -346,7 +346,7 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
 
-        /// Model ID to load Xlora from
+        /// Model ID to load X-LoRA from.
         #[arg(short, long)]
         xlora_model_id: String,
 
@@ -362,9 +362,9 @@ pub enum ModelSelected {
 
     /// Select the quantized mistral model with gguf and X-LoRA.
     XLoraLlamaGGML {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
-        tok_model_id: String,
+        /// Force a base model ID to load the tokenizer from instead of using the ordering file.
+        #[arg(short, long)]
+        tok_model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(long)]
@@ -387,7 +387,7 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
 
-        /// Model ID to load Xlora from
+        /// Model ID to load X-LoRA from.
         #[arg(short, long)]
         xlora_model_id: String,
 
@@ -407,9 +407,9 @@ pub enum ModelSelected {
 
     /// Select the quantized mistral model with gguf and X-LoRA.
     XLoraMixtralGGUF {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "mistralai/Mixtral-8x7B-Instruct-v0.1")]
-        tok_model_id: String,
+        /// Force a base model ID to load the tokenizer from instead of using the ordering file.
+        #[arg(short, long)]
+        tok_model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(long)]
@@ -428,7 +428,7 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
 
-        /// Model ID to load Xlora from
+        /// Model ID to load X-LoRA from.
         #[arg(short, long)]
         xlora_model_id: String,
 
@@ -459,15 +459,15 @@ pub enum ModelSelected {
 
     /// Select the phi2 model, with X-LoRA.
     XLoraPhi2 {
-        /// Model ID to load from
+        /// Force a base model ID to load from instead of using the ordering file.
         #[arg(short, long)]
-        model_id: String,
+        model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(short, long)]
         tokenizer_json: Option<String>,
 
-        /// Model ID to load Xlora from
+        /// Model ID to load X-LoRA from.
         #[arg(short, long)]
         xlora_model_id: String,
 
@@ -487,9 +487,9 @@ pub enum ModelSelected {
 
     /// Select the mistral model, with LoRA and gguf.
     LoraMistralGGUF {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "HuggingFaceH4/zephyr-7b-beta")]
-        tok_model_id: String,
+        /// Force a base model ID to load the tokenizer from instead of using the ordering file.
+        #[arg(short, long)]
+        tok_model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(short, long)]
@@ -504,7 +504,7 @@ pub enum ModelSelected {
         #[arg(short = 'f', long, default_value = "zephyr-7b-beta.Q8_0.gguf")]
         quantized_filename: Option<String>,
 
-        /// Model ID to load Xlora from
+        /// Model ID to load X-LoRA from.
         #[arg(short, long, default_value = "lamm-mit/x-lora")]
         adapters_model_id: String,
 
@@ -519,15 +519,15 @@ pub enum ModelSelected {
 
     /// Select the mistral model, with LoRA.
     LoraMistral {
-        /// Model ID to load from
-        #[arg(short, long, default_value = "HuggingFaceH4/zephyr-7b-beta")]
-        model_id: String,
+        /// Force a base model ID to load from instead of using the ordering file.
+        #[arg(short, long)]
+        model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(short, long)]
         tokenizer_json: Option<String>,
 
-        /// Model ID to load Xlora from
+        /// Model ID to load X-LoRA from.
         #[arg(short, long, default_value = "lamm-mit/x-lora")]
         adapters_model_id: String,
 
@@ -542,15 +542,15 @@ pub enum ModelSelected {
 
     /// Select the mixtral model, with LoRA.
     LoraMixtral {
-        /// Model ID to load from
+        /// Force a base model ID to load from instead of using the ordering file.
         #[arg(short, long)]
-        model_id: String,
+        model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(short, long)]
         tokenizer_json: Option<String>,
 
-        /// Model ID to load Xlora from
+        /// Model ID to load X-LoRA from.
         #[arg(short, long)]
         adapters_model_id: String,
 
@@ -565,15 +565,15 @@ pub enum ModelSelected {
 
     /// Select the llama model, with LoRA.
     LoraLlama {
-        /// Model ID to load from
+        /// Force a base model ID to load from instead of using the ordering file.
         #[arg(short, long)]
-        model_id: String,
+        model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(short, long)]
         tokenizer_json: Option<String>,
 
-        /// Model ID to load Xlora from
+        /// Model ID to load X-LoRA from.
         #[arg(short, long)]
         adapters_model_id: String,
 
@@ -588,9 +588,9 @@ pub enum ModelSelected {
 
     /// Select the quantized mistral model with gguf and LoRA.
     LoraLlamaGGUF {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
-        tok_model_id: String,
+        /// Force a base model ID to load the tokenizer from instead of using the ordering file.
+        #[arg(short, long)]
+        tok_model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(long)]
@@ -609,7 +609,7 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
 
-        /// Model ID to load Xlora from
+        /// Model ID to load X-LoRA from.
         #[arg(short, long)]
         adapters_model_id: String,
 
@@ -620,9 +620,9 @@ pub enum ModelSelected {
 
     /// Select the quantized mistral model with gguf and LoRA.
     LoraLlamaGGML {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
-        tok_model_id: String,
+        /// Force a base model ID to load the tokenizer from instead of using the ordering file.
+        #[arg(short, long)]
+        tok_model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(long)]
@@ -645,7 +645,7 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
 
-        /// Model ID to load Xlora from
+        /// Model ID to load X-LoRA from.
         #[arg(short, long)]
         adapters_model_id: String,
 
@@ -660,9 +660,9 @@ pub enum ModelSelected {
 
     /// Select the quantized mistral model with gguf and LoRA.
     LoraMixtralGGUF {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "mistralai/Mixtral-8x7B-Instruct-v0.1")]
-        tok_model_id: String,
+        /// Force a base model ID to load the tokenizer from instead of using the ordering file.
+        #[arg(short, long)]
+        tok_model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(long)]
@@ -681,7 +681,7 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
 
-        /// Model ID to load Xlora from
+        /// Model ID to load X-LoRA from.
         #[arg(short, long)]
         adapters_model_id: String,
 
