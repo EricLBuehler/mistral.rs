@@ -9,7 +9,7 @@ class ChatCompletionRequest:
     about input data, sampling, and how to return the response.
     """
 
-    messages: list[dict[str, str]] | str
+    messages: list[Message] | str
     model: str
     logit_bias: dict[int, float] | None = None
     logprobs: bool = False
@@ -66,13 +66,13 @@ class _Quantized(_Base):
     quantized_filename: str
 
 @dataclass
-class _XLoraQuantized(_Base, _Quantized):
+class _XLoraQuantized(_Quantized):
     xlora_model_id: str
     order: str
     tgt_non_granular_index: int | None
 
 @dataclass
-class _XLoraNormal(_Base, _Normal):
+class _XLoraNormal(_Normal):
     xlora_model_id: str
     order: str
     tgt_non_granular_index: int | None
@@ -138,7 +138,7 @@ class Runner:
         prefix_cache_n: int = 16,
         token_source="cache",
         chat_template=None,
-    ) -> Runner:
+    ) -> None:
         """
         Load a model.
 
@@ -166,3 +166,11 @@ class Runner:
         """
         Send a chat completion request to the mistral.rs engine, returning the response object.
         """
+
+class Role(Enum):
+    User = 1
+    Assistant = 2
+
+class Message:
+    role: Role
+    content: str

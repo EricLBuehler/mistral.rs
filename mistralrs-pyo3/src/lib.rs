@@ -3,6 +3,7 @@
 use candle_core::Result;
 use either::Either;
 use indexmap::IndexMap;
+use message::{Message, Role};
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -23,12 +24,13 @@ use mistralrs_core::{
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
     prelude::*,
-    types::{PyDict, PyList, PyString},
+    types::{PyList, PyString},
 };
 use std::fs::File;
 mod stream;
 mod which;
 use which::Which;
+mod message;
 
 #[cfg(not(feature = "metal"))]
 static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
@@ -882,7 +884,20 @@ impl Runner {
                     last_v
                 },
                 messages: match request.messages {
-                    Either::Left(ref messages) => RequestMessage::Chat(messages.clone()),
+                    Either::Left(ref messages) => {
+                        let mut messages_vec = Vec::new();
+                        for message in messages {
+                            let mut message_map = IndexMap::new();
+                            let role = match message.role {
+                                Role::Assistant => "assistant",
+                                Role::User => "user",
+                            };
+                            message_map.insert("role".to_string(), role.to_string());
+                            message_map.insert("content".to_string(), message.content.clone());
+                            messages_vec.push(message_map);
+                        }
+                        RequestMessage::Chat(messages_vec)
+                    }
                     Either::Right(ref prompt) => {
                         let mut messages = Vec::new();
                         let mut message_map = IndexMap::new();
@@ -1106,7 +1121,7 @@ impl CompletionRequest {
 #[derive(Debug)]
 /// An OpenAI API compatible chat completion request.
 struct ChatCompletionRequest {
-    messages: Either<Vec<IndexMap<String, String>>, String>,
+    messages: Either<Vec<Message>, String>,
     _model: String,
     logit_bias: Option<HashMap<u32, f32>>,
     logprobs: bool,
@@ -1167,29 +1182,12 @@ impl ChatCompletionRequest {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
                 let mut messages_vec = Vec::new();
                 for message in messages {
-                    let mapping = message.downcast::<PyDict>()?.as_mapping();
-                    let mut messages_map = IndexMap::new();
-                    for i in 0..mapping.len()? {
-                        let k = mapping
-                            .keys()?
-                            .get_item(i)?
-                            .downcast::<PyString>()?
-                            .extract::<String>()?;
-                        let v = mapping
-                            .values()?
-                            .get_item(i)?
-                            .downcast::<PyString>()?
-                            .extract::<String>()?;
-                        messages_map.insert(k, v);
-                    }
-                    messages_vec.push(messages_map);
+                    messages_vec.push(message.extract::<Message>()?);
                 }
-                Ok::<Either<Vec<IndexMap<String, String>>, String>, PyErr>(Either::Left(
-                    messages_vec,
-                ))
+                Ok::<Either<Vec<Message>, String>, PyErr>(Either::Left(messages_vec))
             } else if let Ok(messages) = messages.bind(py).downcast_exact::<PyString>() {
                 let prompt = messages.extract::<String>()?;
-                Ok::<Either<Vec<IndexMap<String, String>>, String>, PyErr>(Either::Right(prompt))
+                Ok::<Either<Vec<Message>, String>, PyErr>(Either::Right(prompt))
             } else {
                 return Err(PyTypeError::new_err("Expected a string or list of dicts."));
             }
@@ -1221,5 +1219,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Which>()?;
     m.add_class::<ChatCompletionRequest>()?;
     m.add_class::<CompletionRequest>()?;
+    m.add_class::<Message>()?;
+    m.add_class::<Role>()?;
     Ok(())
 }
