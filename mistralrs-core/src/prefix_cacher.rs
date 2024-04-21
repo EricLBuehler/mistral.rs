@@ -124,6 +124,29 @@ impl PrefixCacheManager {
         Ok(self.caches.len().saturating_sub(self.n_on_device))
     }
 
+    /// Evict all the caches to CPU.
+    pub fn evict_all_to_cpu(&mut self) -> Result<usize> {
+        if self.no_prefix_cache {
+            return Ok(0);
+        }
+        // Intentionally evict the first ones first, as they are the oldest
+        for (cache, xlora_cache) in &self.eviction_cache_ptrs {
+            if !matches!(
+                cache.as_ref().borrow()[0].as_ref().unwrap().0.device(),
+                Device::Cpu
+            ) {
+                let mut cache = cache.borrow_mut();
+                let mut xlora_cache = xlora_cache.as_ref().map(|c| c.borrow_mut());
+
+                Self::cache_to(cache.iter_mut(), &Device::Cpu)?;
+                if let Some(ref mut xlora_cache) = xlora_cache {
+                    Self::cache_to(xlora_cache.iter_mut(), &Device::Cpu)?;
+                }
+            }
+        }
+        Ok(self.caches.len())
+    }
+
     /// Search for a matching cache given some toks
     pub fn search_for_matching_cache(&mut self, toks: &[u32]) -> Result<Option<MatchingCache>> {
         if self.no_prefix_cache {

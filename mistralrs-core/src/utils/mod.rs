@@ -78,7 +78,7 @@ macro_rules! handle_seq_error_stateaware_ok {
 
 #[macro_export]
 macro_rules! handle_pipeline_forward_error {
-    ($stage: tt, $fallible:expr, $seq_slice:expr, $pipeline:expr, $label:tt) => {
+    ($stage: tt, $fallible:expr, $seq_slice:expr, $pipeline:expr, $label:tt, $prefix_cacher:expr) => {
         match $fallible {
             Ok(v) => v,
             Err(e) => {
@@ -165,6 +165,7 @@ macro_rules! handle_pipeline_forward_error {
                 }
 
                 Engine::set_none_cache(&mut *$pipeline);
+                $prefix_cacher.evict_all_to_cpu().unwrap();
 
                 continue $label;
             }
