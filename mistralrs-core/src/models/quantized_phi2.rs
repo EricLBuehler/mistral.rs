@@ -84,8 +84,8 @@ impl LayerWeights {
         for (b, offset) in (0..xs.dim(0)?).into_iter().zip(start_offsets) {
             let cos = self.cos.narrow(0, *offset, seq_len)?;
             let sin = self.sin.narrow(0, *offset, seq_len)?;
-            let xs_rot = candle_nn::rotary_emb::rope(&xs_rot.i(b)?.contiguous()?, &cos, &sin)?;
-            res.push(Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?.unsqueeze(0)?);
+            let xs_rot = candle_nn::rotary_emb::rope(&xs_rot.i(b)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+            res.push(Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?);
         }
         Tensor::cat(&res, 0)
     }
