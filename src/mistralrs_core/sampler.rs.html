@@ -328,11 +328,15 @@
 <a href="#326" id="326">326</a>
 <a href="#327" id="327">327</a>
 <a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, iter::zip, sync::Arc};
 
 <span class="kw">use </span>candle_core::{bail, Device, Error, <span class="prelude-ty">Result</span>, Tensor, D};
+<span class="kw">use </span>pyo3::pyclass;
 <span class="kw">use </span>rand::{
     distributions::{Distribution, WeightedIndex},
     SeedableRng,
@@ -374,7 +378,9 @@
     topp: f64,
 }
 
-<span class="attr">#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+<span class="attr">#[pyclass]
+#[pyo3(get_all)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 </span><span class="comment">// Top-n logprobs element
 </span><span class="kw">pub struct </span>TopLogprob {
     <span class="kw">pub </span>token: u32,

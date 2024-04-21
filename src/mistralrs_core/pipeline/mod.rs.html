@@ -888,6 +888,23 @@
 <a href="#886" id="886">886</a>
 <a href="#887" id="887">887</a>
 <a href="#888" id="888">888</a>
+<a href="#889" id="889">889</a>
+<a href="#890" id="890">890</a>
+<a href="#891" id="891">891</a>
+<a href="#892" id="892">892</a>
+<a href="#893" id="893">893</a>
+<a href="#894" id="894">894</a>
+<a href="#895" id="895">895</a>
+<a href="#896" id="896">896</a>
+<a href="#897" id="897">897</a>
+<a href="#898" id="898">898</a>
+<a href="#899" id="899">899</a>
+<a href="#900" id="900">900</a>
+<a href="#901" id="901">901</a>
+<a href="#902" id="902">902</a>
+<a href="#903" id="903">903</a>
+<a href="#904" id="904">904</a>
+<a href="#905" id="905">905</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -1450,6 +1467,7 @@
 }
 
 <span class="kw">fn </span>get_xlora_paths(
+    base_model_id: String,
     xlora_model_id: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;String&gt;,
     token_source: <span class="kw-2">&amp;</span>TokenSource,
     revision: String,
@@ -1555,7 +1573,9 @@
             .iter()
             .enumerate()
         {
-            <span class="kw">let </span>paths = adapters_paths.get(name).unwrap();
+            <span class="kw">let </span>paths = adapters_paths
+                .get(name)
+                .unwrap_or_else(|| <span class="macro">panic!</span>(<span class="string">"Adapter {name} not found."</span>));
             <span class="kw">for </span>path <span class="kw">in </span>paths {
                 <span class="kw">if </span>path.extension().unwrap() == <span class="string">"safetensors" </span>{
                     adapters_safetensors.push((name.clone(), path.to_owned()));
@@ -1566,6 +1586,20 @@
                 }
             }
         }
+
+        <span class="kw">if </span>xlora_order
+            .as_ref()
+            .is_some_and(|order| order.base_model_id != xlora_config.base_model_id)
+            || xlora_config.base_model_id != base_model_id
+        {
+            <span class="macro">anyhow::bail!</span>(
+                <span class="string">"X-LoRA ordering file, X-LoRA config, and base model ID do not match: {}, {}, and {} respectively."</span>,
+                xlora_order.as_ref().unwrap().base_model_id,
+                xlora_config.base_model_id,
+                base_model_id
+            );
+        }
+
         XLoraPaths {
             adapter_configs: <span class="prelude-val">Some</span>(adapters_configs),
             adapter_safetensors: <span class="prelude-val">Some</span>(adapters_safetensors),

@@ -152,8 +152,8 @@
                         assistant_output.push_str(<span class="kw-2">&amp;</span>choice.delta.content);
                         <span class="macro">print!</span>(<span class="string">"{}"</span>, choice.delta.content);
                         io::stdout().flush().unwrap();
-                        <span class="kw">if </span>choice.stopreason.is_some() {
-                            <span class="kw">if </span><span class="macro">matches!</span>(choice.stopreason.as_ref().unwrap().as_str(), <span class="string">"length"</span>) {
+                        <span class="kw">if </span>choice.finish_reason.is_some() {
+                            <span class="kw">if </span><span class="macro">matches!</span>(choice.finish_reason.as_ref().unwrap().as_str(), <span class="string">"length"</span>) {
                                 <span class="macro">print!</span>(<span class="string">"..."</span>);
                             }
                             <span class="kw">break</span>;

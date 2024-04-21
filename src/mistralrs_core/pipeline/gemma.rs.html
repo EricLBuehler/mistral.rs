@@ -482,6 +482,7 @@
 <a href="#480" id="480">480</a>
 <a href="#481" id="481">481</a>
 <a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -697,6 +698,7 @@
             xlora_order,
             xlora_config,
         } = get_xlora_paths(
+            <span class="self">self</span>.model_id.clone(),
             <span class="kw-2">&amp;</span><span class="self">self</span>.xlora_model_id,
             <span class="kw-2">&amp;</span>token_source,
             revision.clone(),

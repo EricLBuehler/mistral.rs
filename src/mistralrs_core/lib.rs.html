@@ -225,6 +225,8 @@
 <a href="#223" id="223">223</a>
 <a href="#224" id="224">224</a>
 <a href="#225" id="225">225</a>
+<a href="#226" id="226">226</a>
+<a href="#227" id="227">227</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -269,8 +271,10 @@
 };
 <span class="kw">pub use </span>request::{Constraint, Request, RequestMessage};
 <span class="kw">pub use </span>response::Response;
-<span class="kw">pub use </span>response::{ChatCompletionResponse, CompletionResponse, Usage};
-<span class="kw">pub use </span>sampler::{SamplingParams, StopTokens};
+<span class="kw">pub use </span>response::{
+    ChatCompletionChunkResponse, ChatCompletionResponse, CompletionResponse, Usage,
+};
+<span class="kw">pub use </span>sampler::{SamplingParams, StopTokens, TopLogprob};
 <span class="kw">pub use </span>scheduler::SchedulerMethod;
 <span class="kw">use </span>serde::Serialize;
 

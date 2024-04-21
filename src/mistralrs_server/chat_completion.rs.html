@@ -335,7 +335,7 @@
                     Poll::Ready(<span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>(Event::default().data(e.to_string()))))
                 }
                 Response::Chunk(response) =&gt; {
-                    <span class="kw">if </span>response.choices.iter().all(|x| x.stopreason.is_some()) {
+                    <span class="kw">if </span>response.choices.iter().all(|x| x.finish_reason.is_some()) {
                         <span class="self">self</span>.is_done = <span class="bool-val">true</span>;
                     }
                     MistralRs::maybe_log_response(<span class="self">self</span>.state.clone(), <span class="kw-2">&amp;</span>response);

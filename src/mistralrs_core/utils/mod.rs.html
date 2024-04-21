@@ -299,7 +299,7 @@
 
                     <span class="kw">if </span>seq.get_mut_group().is_chat {
                         <span class="kw">let </span>choice = Choice {
-                            stopreason: <span class="string">"error"</span>.to_string(),
+                            finish_reason: <span class="string">"error"</span>.to_string(),
                             index: seq.get_response_index(),
                             message: ResponseMessage {
                                 content: res,
@@ -310,7 +310,7 @@
                         seq.add_choice_to_group(choice);
                     } <span class="kw">else </span>{
                         <span class="kw">let </span>choice = CompletionChoice {
-                            stopreason: <span class="string">"error"</span>.to_string(),
+                            finish_reason: <span class="string">"error"</span>.to_string(),
                             index: seq.get_response_index(),
                             text: res,
                             logprobs: <span class="prelude-val">None</span>,

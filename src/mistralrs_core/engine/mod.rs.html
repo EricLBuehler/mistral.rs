@@ -976,7 +976,7 @@
                                 role: <span class="string">"assistant"</span>.to_string(),
                             },
                             index: seq.get_response_index(),
-                            stopreason: is_done.map(|x| x.to_string()),
+                            finish_reason: is_done.map(|x| x.to_string()),
                             logprobs: <span class="kw">if </span>seq.return_logprobs() {
                                 <span class="prelude-val">Some</span>(ResponseLogprob {
                                     token: delta,
@@ -1054,7 +1054,7 @@
 
         <span class="kw">if </span>seq.get_mut_group().is_chat {
             <span class="kw">let </span>choice = Choice {
-                stopreason: reason.to_string(),
+                finish_reason: reason.to_string(),
                 index: seq.get_response_index(),
                 message: ResponseMessage {
                     content: text,
@@ -1065,7 +1065,7 @@
             seq.add_choice_to_group(choice);
         } <span class="kw">else </span>{
             <span class="kw">let </span>choice = CompletionChoice {
-                stopreason: reason.to_string(),
+                finish_reason: reason.to_string(),
                 index: seq.get_response_index(),
                 text,
                 logprobs: <span class="prelude-val">None</span>,

@@ -604,6 +604,7 @@
 <a href="#602" id="602">602</a>
 <a href="#603" id="603">603</a>
 <a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, ChatTemplate, Loader, ModelInputs,
     ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
@@ -799,6 +800,7 @@
             xlora_order,
             xlora_config,
         } = get_xlora_paths(
+            <span class="self">self</span>.model_id.clone(),
             <span class="kw-2">&amp;</span><span class="self">self</span>.xlora_model_id,
             <span class="kw-2">&amp;</span>token_source,
             revision.clone(),
