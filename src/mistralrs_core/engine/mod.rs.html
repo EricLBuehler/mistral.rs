@@ -748,6 +748,22 @@
 <a href="#746" id="746">746</a>
 <a href="#747" id="747">747</a>
 <a href="#748" id="748">748</a>
+<a href="#749" id="749">749</a>
+<a href="#750" id="750">750</a>
+<a href="#751" id="751">751</a>
+<a href="#752" id="752">752</a>
+<a href="#753" id="753">753</a>
+<a href="#754" id="754">754</a>
+<a href="#755" id="755">755</a>
+<a href="#756" id="756">756</a>
+<a href="#757" id="757">757</a>
+<a href="#758" id="758">758</a>
+<a href="#759" id="759">759</a>
+<a href="#760" id="760">760</a>
+<a href="#761" id="761">761</a>
+<a href="#762" id="762">762</a>
+<a href="#763" id="763">763</a>
+<a href="#764" id="764">764</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
@@ -844,7 +860,14 @@
                     <span class="self">Self</span>::clone_in_cache(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.completion);
                 }
                 <span class="kw">let </span>logits = pipeline.forward(<span class="kw-2">&amp;</span>scheduled.completion, <span class="bool-val">false</span>);
-                <span class="kw">let </span>logits = <span class="macro">handle_pipeline_forward_error!</span>(<span class="string">"completion"</span>, logits, <span class="kw-2">&amp;mut </span>scheduled.completion, pipeline, <span class="lifetime">'lp</span>);
+                <span class="kw">let </span>logits = <span class="macro">handle_pipeline_forward_error!</span>(
+                    <span class="string">"completion"</span>,
+                    logits,
+                    <span class="kw-2">&amp;mut </span>scheduled.completion,
+                    pipeline,
+                    <span class="lifetime">'lp</span>,
+                    <span class="self">self</span>.prefix_cacher
+                );
 
                 <span class="kw">if </span>!<span class="self">self</span>.no_kv_cache {
                     <span class="self">Self</span>::clone_out_cache(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.completion);
@@ -857,15 +880,23 @@
                     <span class="self">Self</span>::sample_seqs(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.completion, logits, <span class="kw-2">&amp;mut </span><span class="self">self</span>.prefix_cacher, <span class="self">self</span>.disable_eos_stop),
                     <span class="kw-2">&amp;mut </span>scheduled.completion,
                     pipeline,
-                    <span class="lifetime">'lp
-                </span>);
+                    <span class="lifetime">'lp</span>,
+                    <span class="self">self</span>.prefix_cacher
+                );
             }
 
             <span class="kw">if </span>scheduled.prompt.len() &gt; <span class="number">0 </span>{
                 <span class="comment">// Run the prompt seqs
                 </span><span class="self">Self</span>::set_none_cache(<span class="kw-2">&amp;mut *</span>pipeline);
                 <span class="kw">let </span>logits = pipeline.forward(<span class="kw-2">&amp;</span>scheduled.prompt, <span class="bool-val">true</span>);
-                <span class="kw">let </span>logits = <span class="macro">handle_pipeline_forward_error!</span>(<span class="string">"prompt"</span>, logits, <span class="kw-2">&amp;mut </span>scheduled.prompt, pipeline, <span class="lifetime">'lp</span>);
+                <span class="kw">let </span>logits = <span class="macro">handle_pipeline_forward_error!</span>(
+                    <span class="string">"prompt"</span>,
+                    logits,
+                    <span class="kw-2">&amp;mut </span>scheduled.prompt,
+                    pipeline,
+                    <span class="lifetime">'lp</span>,
+                    <span class="self">self</span>.prefix_cacher
+                );
 
                 <span class="kw">if </span>!<span class="self">self</span>.no_kv_cache {
                     <span class="self">Self</span>::clone_out_cache(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.prompt);
@@ -878,8 +909,9 @@
                     <span class="self">Self</span>::sample_seqs(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.prompt, logits, <span class="kw-2">&amp;mut </span><span class="self">self</span>.prefix_cacher,<span class="self">self</span>.disable_eos_stop,),
                     <span class="kw-2">&amp;mut </span>scheduled.prompt,
                     pipeline,
-                    <span class="lifetime">'lp
-                </span>);
+                    <span class="lifetime">'lp</span>,
+                    <span class="self">self</span>.prefix_cacher
+                );
 
                 <span class="kw">for </span>seq <span class="kw">in </span>scheduled.prompt.iter_mut() {
                     seq.set_state(SequenceState::RunningCompletion);
