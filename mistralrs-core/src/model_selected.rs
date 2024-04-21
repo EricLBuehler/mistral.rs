@@ -693,7 +693,7 @@ pub enum ModelSelected {
     /// Select the quantized phi2 model with gguf.
     Phi2GGUF {
         /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "miscrosoft/phi-2")]
+        #[arg(short, long, default_value = "microsoft/phi-2")]
         tok_model_id: String,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
