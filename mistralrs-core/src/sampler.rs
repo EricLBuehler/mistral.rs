@@ -17,7 +17,7 @@ pub enum StopTokens {
     Ids(Vec<u32>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SamplingParams {
     pub temperature: Option<f64>,
     pub top_k: Option<usize>,
