@@ -1,16 +1,14 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use candle_core::quantized::gguf_file;
 use candle_core::quantized::QTensor;
+use candle_core::D;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor};
-use candle_nn::RotaryEmbedding;
 use candle_nn::{Embedding, LayerNorm};
 
 use crate::pipeline::extract_logits;
-use crate::pipeline::PHI2_IS_GPTX;
 
 use super::repeat_kv;
 use super::Cache;
@@ -66,7 +64,9 @@ struct LayerWeights {
     n_kv_head: usize,
     head_dim: usize,
     neg_inf: Tensor,
-    rotary: Arc<RotaryEmbedding>,
+    cos: Tensor,
+    sin: Tensor,
+    rope_dim: usize,
 }
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Tensor> {
@@ -76,12 +76,25 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Ten
 }
 
 impl LayerWeights {
+    fn apply_rotary_emb(&self, xs: &Tensor, start_offsets: &[usize]) -> Result<Tensor> {
+        let (_b_sz, _n_head, seq_len, _n_embd) = xs.dims4()?;
+        let xs_rot = xs.i((.., .., .., ..self.rope_dim))?;
+        let xs_pass = xs.i((.., .., .., self.rope_dim..))?;
+        let mut res = Vec::new();
+        for (b, offset) in (0..xs.dim(0)?).into_iter().zip(start_offsets) {
+            let cos = self.cos.narrow(0, *offset, seq_len)?;
+            let sin = self.sin.narrow(0, *offset, seq_len)?;
+            let xs_rot = candle_nn::rotary_emb::rope(&xs_rot.i(b)?.contiguous()?, &cos, &sin)?;
+            res.push(Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?);
+        }
+        Tensor::cat(&res, 0)
+    }
+
     fn forward_attn(
         &mut self,
         x: &Tensor,
         mask: Option<&Tensor>,
         start_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
@@ -98,24 +111,8 @@ impl LayerWeights {
         // impact on performance.
         let v = v.contiguous()?;
 
-        let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
-        let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
-        let v = v
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
-
-        self.rotary
-            .forward(start_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
-
-        if q.rank() == 3 {
-            q = q
-                .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-            k = k
-                .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-                .transpose(1, 2)?;
-        }
+        let q = self.apply_rotary_emb(&q, start_offsets)?.contiguous()?;
+        let k = self.apply_rotary_emb(&k, start_offsets)?;
 
         let (k, v) = match &*kv_cache {
             None => (k, v),
@@ -166,6 +163,25 @@ fn layer_norm(w: QTensor, b: QTensor, eps: f64) -> Result<LayerNorm> {
     Ok(ln)
 }
 
+fn precomput_freqs_cis(
+    head_dim: usize,
+    freq_base: f32,
+    device: &Device,
+) -> Result<(Tensor, Tensor)> {
+    let theta: Vec<_> = (0..head_dim)
+        .step_by(2)
+        .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))
+        .collect();
+    let theta = Tensor::new(theta.as_slice(), device)?;
+    let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, device)?
+        .to_dtype(DType::F32)?
+        .reshape((MAX_SEQ_LEN, 1))?
+        .matmul(&theta.reshape((1, theta.elem_count()))?)?;
+    let cos = idx_theta.cos()?;
+    let sin = idx_theta.sin()?;
+    Ok((cos, sin))
+}
+
 impl ModelWeights {
     pub fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: gguf_file::Content,
@@ -184,21 +200,12 @@ impl ModelWeights {
         let embedding_length = md_get("phi2.embedding_length")?.to_u32()? as usize;
         let rope_dim = md_get("phi2.rope.dimension_count")?.to_u32()? as usize;
         let ln_eps = md_get("phi2.attention.layer_norm_epsilon")?.to_f32()? as f64;
+        let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device)?;
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
-        let head_dim = embedding_length / head_count;
         let max_seq_len = md_get("phi2.context_length")
             .and_then(|m| m.to_u64())
             .unwrap_or(MAX_SEQ_LEN as u64) as usize;
-        let rotary = Arc::new(RotaryEmbedding::new_partial(
-            10_000.,
-            head_dim,
-            rope_dim,
-            max_seq_len,
-            device,
-            PHI2_IS_GPTX,
-            DType::F32,
-        )?);
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
@@ -226,9 +233,11 @@ impl ModelWeights {
                 mlp,
                 n_head: head_count,
                 n_kv_head: head_count_kv,
-                head_dim,
+                head_dim: embedding_length / head_count,
+                cos: cos.clone(),
+                sin: sin.clone(),
+                rope_dim,
                 neg_inf: neg_inf.clone(),
-                rotary: rotary.clone(),
             })
         }
         Ok(Self {
@@ -260,7 +269,7 @@ impl ModelWeights {
         &mut self,
         xs: &Tensor,
         start_offsets: &[usize],
-        start_offsets_kernel: Tensor,
+        _start_offsets_kernel: Tensor,
         context_lens: Vec<usize>,
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = xs.dims2()?;
@@ -278,7 +287,6 @@ impl ModelWeights {
                 &xs_norm,
                 mask.as_ref(),
                 start_offsets,
-                start_offsets_kernel.clone(),
                 cache.get_mut(i).unwrap(),
             )?;
             let feed_forward_hidden_states = layer.mlp.forward(&xs_norm)?;

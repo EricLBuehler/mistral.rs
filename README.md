@@ -236,7 +236,7 @@ Command line docs [here](docs/CMD_LINE_DOCS.md)
 |Gemma| | |
 |Llama|✅|✅|
 |Mixtral 8x7B|✅| |
-|Phi 2| | |
+|Phi 2|✅| |
 
 **X-LoRA and LoRA support**
 |Model|X-LoRA|X-LoRA+GGUF|X-LoRA+GGML|
