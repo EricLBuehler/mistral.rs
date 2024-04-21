@@ -78,6 +78,9 @@ class _XLoraNormal(_Normal):
     tgt_non_granular_index: int | None
 
 class Which(Enum):
+    """
+    Which model to select.
+    """
     @dataclass
     class Mistral(_Normal): ...
     @dataclass
@@ -168,9 +171,17 @@ class Runner:
         """
 
 class Role(Enum):
+    """
+    The role for each `Message` of a chat completion request.
+    """
+
     User = 1
     Assistant = 2
 
 class Message:
+    """
+    A message for a chat completion request.
+    """
+
     role: Role
     content: str
