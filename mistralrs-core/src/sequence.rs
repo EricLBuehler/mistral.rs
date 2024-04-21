@@ -471,8 +471,7 @@ impl SequenceGroup {
         sender: Sender<Response>,
     ) {
         if self.choices.len() == self.n_choices {
-            // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-            sender.send(Response::Done(response)).unwrap();
+            sender.send(Response::Done(response)).expect("Expected receiver.");
         }
     }
 
@@ -490,8 +489,7 @@ impl SequenceGroup {
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "chat.completion.chunk".to_string(),
-                }))
-                .unwrap();
+                })).expect("Expected receiver.");
         }
     }
 
@@ -501,8 +499,7 @@ impl SequenceGroup {
         sender: Sender<Response>,
     ) {
         if self.completion_choices.len() == self.n_choices {
-            // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-            sender.send(Response::CompletionDone(response)).unwrap();
+            sender.send(Response::CompletionDone(response)).expect("Expected receiver.");
         }
     }
 }
