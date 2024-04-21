@@ -142,7 +142,7 @@ More benchmarks coming!
 ### Installation and Build
 To install mistral.rs, one should ensure they have Rust installed by following [this](https://rustup.rs/) link. Additionally, the Huggingface token should be provided in `~/.cache/huggingface/token` when using the server to enable automatic download of gated models.
 
-Detailed installation guide: [here](INSTALLATION.md).
+Detailed installation guide: [here](docs/INSTALLATION.md).
 
 **Easy quickstart**
 For an easy quickstart on a `*nix` system, the script below will 
