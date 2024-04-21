@@ -2,7 +2,7 @@ from mistralrs import Runner, Which, ChatCompletionRequest, Message, Role
 
 runner = Runner(
     which=Which.XLoraMistralGGUF(
-        tok_model_id="HuggingFaceH4/zephyr-7b-beta",
+        tok_model_id=None,  # Automatically determine from ordering file
         quantized_model_id="TheBloke/zephyr-7B-beta-GGUF",
         quantized_filename="zephyr-7b-beta.Q4_0.gguf",
         tokenizer_json=None,

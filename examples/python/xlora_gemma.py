@@ -2,7 +2,7 @@ from mistralrs import Runner, Which, ChatCompletionRequest, Message, Role
 
 runner = Runner(
     which=Which.XLoraGemma(
-        model_id="google/gemma-7b-it",
+        model_id=None,  # Automatically determine from ordering file
         tokenizer_json=None,
         repeat_last_n=64,
         xlora_model_id="lamm-mit/x-lora-gemma-7b",
