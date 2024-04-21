@@ -14,7 +14,7 @@ use serde::Deserialize;
 
 use crate::pipeline::{extract_logits, PHI2_IS_GPTX};
 
-use super::{flash_attn, Cache};
+use super::{flash_attn, repeat_kv, Cache};
 
 // https://huggingface.co/microsoft/phi-2/blob/main/configuration_phi.py
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -146,18 +146,6 @@ impl Attention {
         })
     }
 
-    fn repeat_kv(&self, xs: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_heads / self.num_kv_heads;
-        if n_rep == 1 {
-            Ok(xs)
-        } else {
-            let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
-            xs.unsqueeze(2)?
-                .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
-        }
-    }
-
     fn forward(
         &mut self,
         xs: &Tensor,
@@ -215,9 +203,8 @@ impl Attention {
         };
         *kv_cache = Some((k.clone(), v.clone()));
 
-        // Repeat kv.
-        let k = self.repeat_kv(k)?.contiguous()?;
-        let v = self.repeat_kv(v)?.contiguous()?;
+        let k = repeat_kv(k, self.num_heads / self.num_kv_heads)?.contiguous()?;
+        let v = repeat_kv(v, self.num_heads / self.num_kv_heads)?.contiguous()?;
 
         let attn_output = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)

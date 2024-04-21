@@ -9,7 +9,7 @@ use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 use std::sync::Arc;
 
 use crate::{
-    models::{flash_attn, mixtral::Config, Cache, RmsNorm},
+    models::{flash_attn, mixtral::Config, repeat_kv, Cache, RmsNorm},
     pipeline::{extract_logits, MIXTRAL_IS_GPTX},
 };
 
@@ -91,18 +91,6 @@ impl Attention {
         })
     }
 
-    fn repeat_kv(&self, xs: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_kv_groups;
-        if n_rep == 1 {
-            Ok(xs)
-        } else {
-            let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
-            xs.unsqueeze(2)?
-                .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
-        }
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn forward(
         &mut self,
@@ -166,8 +154,8 @@ impl Attention {
         };
         *kv_cache = Some((k.clone(), v.clone()));
 
-        let k = self.repeat_kv(k)?;
-        let v = self.repeat_kv(v)?;
+        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
+        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
         let attn_output = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)

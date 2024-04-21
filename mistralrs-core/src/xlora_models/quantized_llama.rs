@@ -8,7 +8,7 @@ use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear};
 
-use crate::models::{verify_sanity_gguf, Cache, QRmsNorm};
+use crate::models::{repeat_kv, verify_sanity_gguf, Cache, QRmsNorm};
 use crate::pipeline::extract_logits;
 
 use super::classifier::XLoraClassifier;
@@ -238,9 +238,8 @@ impl LayerWeights {
         };
         *kv_cache = Some((k.clone(), v.clone()));
 
-        // Support for MQA, useful for 70B models.
-        let k = self.repeat_kv(k)?;
-        let v = self.repeat_kv(v)?;
+        let k = repeat_kv(k, self.n_head / self.n_kv_head)?.contiguous()?;
+        let v = repeat_kv(v, self.n_head / self.n_kv_head)?.contiguous()?;
 
         let att = (q.contiguous()?.matmul(&k.t()?.contiguous()?)? / (self.head_dim as f64).sqrt())?;
         let att = match mask {
@@ -261,16 +260,6 @@ impl LayerWeights {
             is_scaling_pass,
         )?;
         Ok(y)
-    }
-
-    fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
-        let n_rep = self.n_head / self.n_kv_head;
-        if n_rep == 1 {
-            Ok(x)
-        } else {
-            let (b_sz, n_kv_head, seq_len, head_dim) = x.dims4()?;
-            Tensor::cat(&vec![&x; n_rep], 2)?.reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))
-        }
     }
 }
 

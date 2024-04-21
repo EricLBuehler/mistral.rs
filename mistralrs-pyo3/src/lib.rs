@@ -96,14 +96,14 @@ impl Runner {
             | Which::Mixtral { .. }
             | Which::MixtralGGUF { .. }
             | Which::Phi2 { .. }
-            | Which::XLoraPhi2 { .. }
             | Which::LoraMistralGGUF { .. }
             | Which::LoraMistral { .. }
             | Which::LoraLlama { .. }
             | Which::LoraLlamaGGML { .. }
             | Which::LoraLlamaGGUF { .. }
             | Which::LoraMixtral { .. }
-            | Which::LoraMixtralGGUF { .. } => None,
+            | Which::LoraMixtralGGUF { .. }
+            | Which::Phi2GGUF { .. } => None,
             Which::XLoraGemma {
                 tgt_non_granular_index,
                 ..
@@ -133,6 +133,10 @@ impl Runner {
                 ..
             }
             | Which::XLoraMixtralGGUF {
+                tgt_non_granular_index,
+                ..
+            }
+            | Which::XLoraPhi2 {
                 tgt_non_granular_index,
                 ..
             } => tgt_non_granular_index,
@@ -813,6 +817,28 @@ impl Runner {
                 chat_template,
                 tokenizer_json,
                 tgt_non_granular_index,
+            )),
+            Which::Phi2GGUF {
+                tok_model_id,
+                tokenizer_json,
+                quantized_model_id,
+                quantized_filename,
+                repeat_last_n,
+            } => Box::new(Phi2Loader::new(
+                tok_model_id,
+                Phi2SpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                },
+                Some(quantized_model_id),
+                Some(quantized_filename),
+                None,
+                ModelKind::QuantizedGGUF,
+                None,
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                None,
             )),
         };
 

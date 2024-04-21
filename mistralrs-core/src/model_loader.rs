@@ -52,14 +52,14 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
         | ModelSelected::Mixtral { .. }
         | ModelSelected::MixtralGGUF { .. }
         | ModelSelected::Phi2 { .. }
-        | ModelSelected::XLoraPhi2 { .. }
         | ModelSelected::LoraMistralGGUF { .. }
         | ModelSelected::LoraMistral { .. }
         | ModelSelected::LoraLlama { .. }
         | ModelSelected::LoraLlamaGGML { .. }
         | ModelSelected::LoraLlamaGGUF { .. }
         | ModelSelected::LoraMixtral { .. }
-        | ModelSelected::LoraMixtralGGUF { .. } => None,
+        | ModelSelected::LoraMixtralGGUF { .. }
+        | ModelSelected::Phi2GGUF { .. } => None,
         ModelSelected::XLoraGemma {
             tgt_non_granular_index,
             ..
@@ -89,6 +89,10 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
             ..
         }
         | ModelSelected::XLoraMixtralGGUF {
+            tgt_non_granular_index,
+            ..
+        }
+        | ModelSelected::XLoraPhi2 {
             tgt_non_granular_index,
             ..
         } => *tgt_non_granular_index,
@@ -716,6 +720,28 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.chat_template,
             tokenizer_json,
             tgt_non_granular_index,
+        )),
+        ModelSelected::Phi2GGUF {
+            tok_model_id,
+            tokenizer_json,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+        } => Box::new(Phi2Loader::new(
+            tok_model_id,
+            Phi2SpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+            },
+            quantized_model_id,
+            quantized_filename,
+            None,
+            ModelKind::QuantizedGGUF,
+            None,
+            args.no_kv_cache,
+            args.chat_template,
+            tokenizer_json,
+            None,
         )),
     };
     Ok(loader)
