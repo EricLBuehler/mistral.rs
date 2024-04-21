@@ -49,13 +49,16 @@ impl Cache {
     /// # Panics
     /// If there is no xlora cache
     pub(crate) fn xlora_lock(&self) -> MutexGuard<'_, LayerCaches> {
-        get_mut_arcmutex!(self.xlora_cache.as_ref().unwrap())
+        get_mut_arcmutex!(self.xlora_cache.as_ref().expect("No X-LoRA cache."))
     }
 
     /// # Panics
     /// If there is no xlora cache
     pub(crate) fn get_scalings_cache(&self) -> MutexGuard<'_, Option<Tensor>> {
-        get_mut_arcmutex!(self.scalings_cache.as_ref().unwrap())
+        get_mut_arcmutex!(self
+            .scalings_cache
+            .as_ref()
+            .expect("No X-LoRA scalings cache."))
     }
 
     pub(crate) fn is_xlora(&self) -> bool {

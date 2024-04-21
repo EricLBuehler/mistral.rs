@@ -215,7 +215,7 @@ impl Sequence {
     }
 
     pub fn xlora_cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
-        self.xlora_cache.as_mut().unwrap()
+        self.xlora_cache.as_mut().expect("No X-LoRA cache.")
     }
 
     pub fn scaling_cache(&mut self) -> &mut Option<Tensor> {
@@ -439,7 +439,7 @@ impl SequenceGroup {
     pub fn get_completion_choices(&self) -> Vec<CompletionChoice> {
         let mut choices = self.completion_choices.clone();
         // Sort by descending logprobs
-        choices.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        choices.sort_by(|a, b| b.0.partial_cmp(&a.0).expect("No ordering."));
         choices
             .into_iter()
             .take(self.best_of)
@@ -471,8 +471,9 @@ impl SequenceGroup {
         sender: Sender<Response>,
     ) {
         if self.choices.len() == self.n_choices {
-            // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-            sender.send(Response::Done(response)).unwrap();
+            sender
+                .send(Response::Done(response))
+                .expect("Expected receiver.");
         }
     }
 
@@ -491,7 +492,7 @@ impl SequenceGroup {
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "chat.completion.chunk".to_string(),
                 }))
-                .unwrap();
+                .expect("Expected receiver.");
         }
     }
 
@@ -501,8 +502,9 @@ impl SequenceGroup {
         sender: Sender<Response>,
     ) {
         if self.completion_choices.len() == self.n_choices {
-            // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-            sender.send(Response::CompletionDone(response)).unwrap();
+            sender
+                .send(Response::CompletionDone(response))
+                .expect("Expected receiver.");
         }
     }
 }

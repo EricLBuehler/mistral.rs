@@ -19,8 +19,9 @@ macro_rules! handle_seq_error {
             Ok(v) => v,
             Err(e) => {
                 use $crate::response::Response;
-                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                $response.send(Response::InternalError(e.into())).unwrap();
+                $response
+                    .send(Response::InternalError(e.into()))
+                    .expect("Expected receiver.");
                 return;
             }
         }
@@ -34,8 +35,9 @@ macro_rules! handle_seq_error_ok {
             Ok(v) => v,
             Err(e) => {
                 use $crate::response::Response;
-                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                $response.send(Response::InternalError(e.into())).unwrap();
+                $response
+                    .send(Response::InternalError(e.into()))
+                    .expect("Expected receiver.");
                 return Ok(());
             }
         }
@@ -50,8 +52,9 @@ macro_rules! handle_seq_error_stateaware {
             Err(e) => {
                 use $crate::response::Response;
                 use $crate::sequence::SequenceState;
-                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                $seq.responder().send(Response::InternalError(e.into())).unwrap();
+                $seq.responder()
+                    .send(Response::InternalError(e.into()))
+                    .expect("Expected receiver.");
                 $seq.set_state(SequenceState::Error);
                 return;
             }
@@ -67,8 +70,9 @@ macro_rules! handle_seq_error_stateaware_ok {
             Err(e) => {
                 use $crate::response::Response;
                 use $crate::sequence::SequenceState;
-                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                $seq.responder().send(Response::InternalError(e.into())).unwrap();
+                $seq.responder()
+                    .send(Response::InternalError(e.into()))
+                    .expect("Expected receiver.");
                 $seq.set_state(SequenceState::Error);
                 return Ok(());
             }

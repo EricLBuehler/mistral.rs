@@ -383,12 +383,12 @@ impl Engine {
             for seq in &mut *seqs {
                 let seq_cache = &*seq.cache();
                 let cache = seq_cache.get(layer).unwrap();
-                // Note(EricLBuehler): Unwrap reasoning: We are handling completions seqs so unwrap is OK.
-                let cache = cache.as_ref().unwrap();
+                let cache = cache
+                    .as_ref()
+                    .expect("Not handling completions in `clone_in_cache`.");
                 k_vec.push(cache.0.clone());
                 v_vec.push(cache.1.clone());
             }
-            // NOTE(EricLBuehler): Unwrap reasoning: We have the correct dims
             new_cache.push(Some((
                 if k_vec.len() > 1 {
                     Tensor::cat(&k_vec, 0).unwrap()
@@ -410,12 +410,12 @@ impl Engine {
                 for seq in &mut *seqs {
                     let seq_cache = &*seq.xlora_cache();
                     let cache = seq_cache.get(layer).unwrap();
-                    // Note(EricLBuehler): Unwrap reasoning: We are handling completions seqs so unwrap is OK.
-                    let cache = cache.as_ref().unwrap();
+                    let cache = cache
+                        .as_ref()
+                        .expect("Not handling completions in `clone_in_cache`.");
                     k_vec.push(cache.0.clone());
                     v_vec.push(cache.1.clone());
                 }
-                // NOTE(EricLBuehler): Unwrap reasoning: We have the correct dims
                 new_cache.push(Some((
                     if k_vec.len() > 1 {
                         Tensor::cat(&k_vec, 0).unwrap()
@@ -465,7 +465,7 @@ impl Engine {
 
             for (seq_i, seq) in seqs.iter_mut().enumerate() {
                 let seq_cache = seq.cache();
-                let seq_cache = seq_cache.get_mut(layer).unwrap();
+                let seq_cache = &mut seq_cache[layer];
                 let k = k_caches.get(seq_i).unwrap().clone();
                 let v = v_caches.get(seq_i).unwrap().clone();
                 *seq_cache = Some((k, v));
@@ -483,7 +483,7 @@ impl Engine {
 
                 for (seq_i, seq) in seqs.iter_mut().enumerate() {
                     let seq_cache = seq.xlora_cache();
-                    let seq_cache = seq_cache.get_mut(layer).unwrap();
+                    let seq_cache = &mut seq_cache[layer];
                     let k = k_caches.get(seq_i).unwrap().clone();
                     let v = v_caches.get(seq_i).unwrap().clone();
                     *seq_cache = Some((k, v));
@@ -542,12 +542,11 @@ impl Engine {
                 .get_chat_template()
                 .has_chat_template()
         {
-            // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
             request
                     .response
                     .send(Response::ValidationError(
                         "Received messages for a model which does not have a chat template. Either use a different model or pass a single string as the prompt".into(),
-                    )).unwrap();
+                    )).expect("Expected receiver.");
             return;
         }
 
@@ -570,13 +569,12 @@ impl Engine {
             }
         };
         if formatted_prompt.is_empty() {
-            // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
             request
                 .response
                 .send(Response::ValidationError(
                     "Received an empty prompt.".into(),
                 ))
-                .unwrap();
+                .expect("Expected receiver.");
             return;
         }
         let mut prompt = match force_tokens {
@@ -589,13 +587,11 @@ impl Engine {
 
         if prompt.len() > get_mut_arcmutex!(self.pipeline).get_max_seq_len() {
             if !self.truncate_sequence {
-                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
                 request
                     .response
                     .send(Response::ValidationError(
                         format!("Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?", get_mut_arcmutex!(self.pipeline).get_max_seq_len()).into(),
-                    ))
-                    .unwrap();
+                    )).expect("Expected receiver.");
                 return;
             } else {
                 let prompt_len = prompt.len();
@@ -640,7 +636,7 @@ impl Engine {
                             .send(Response::ValidationError(
                                 format!("Stop token {:?} is also a prefix of other tokens and cannot be used as a stop token.", tok_trie.token_str(*id)).into(),
                             ))
-                            .unwrap();
+                            .expect("Expected receiver.");
                         return;
                     }
                 }
@@ -694,7 +690,7 @@ impl Engine {
                     .send(Response::ValidationError(
                         format!("Failed creation of logits bias. {}", err).into(),
                     ))
-                    .unwrap();
+                    .expect("Expected receiver.");
                 return;
             }
         };
@@ -719,7 +715,7 @@ impl Engine {
                     .send(Response::ValidationError(
                         format!("Invalid grammar. {}", err).into(),
                     ))
-                    .unwrap();
+                    .expect("Expected receiver.");
                 return;
             }
         };

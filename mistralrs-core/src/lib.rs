@@ -206,7 +206,7 @@ impl MistralRs {
                 .open(file)
                 .expect("Unable to open file");
             let time = chrono::offset::Local::now();
-            let repr = serde_json::to_string(resp).unwrap();
+            let repr = serde_json::to_string(resp).expect("Serialization of response failed.");
             f.write_all(format!("Response at {time}: {repr}\n\n").as_bytes())
                 .expect("Unable to write data");
         }

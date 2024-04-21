@@ -259,7 +259,7 @@ fn apply_chat_template_to(
 pub trait Pipeline: Send + Sync {
     fn forward(
         &mut self,
-        input_toks: &[&mut Sequence],
+        input_seqs: &[&mut Sequence],
         is_prompt: bool,
     ) -> Result<Tensor, candle_core::Error>;
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
@@ -379,22 +379,24 @@ struct InputMetadata {
     context_lens: Vec<usize>,
 }
 
-fn get_prompt_input(input_toks: &[&mut Sequence], device: &Device) -> Result<InputMetadata> {
-    // NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
-    let max_len = input_toks.iter().map(|seq| seq.len()).max().unwrap();
+fn get_prompt_input(input_seqs: &[&mut Sequence], device: &Device) -> Result<InputMetadata> {
+    let max_len = input_seqs
+        .iter()
+        .map(|seq| seq.len())
+        .max()
+        .expect("No sequences");
     let padding_tok = 0;
     // Pad each sequence by the padding token to the max len.
     let mut seqs_tensors = Vec::new();
     let mut seqlen_offsets = Vec::new();
     let mut context_lens = Vec::new();
-    for seq in input_toks.iter() {
+    for seq in input_seqs.iter() {
         let mut ctxt = seq.get_toks().to_vec();
         seqlen_offsets.push(0);
 
         ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
         context_lens.push(seq.len() - 1);
 
-        // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
     }
 
@@ -406,7 +408,6 @@ fn get_prompt_input(input_toks: &[&mut Sequence], device: &Device) -> Result<Inp
         tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
     }
     let positions_kernel = Tensor::cat(&tmp, 0)?;
-    // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
     Ok(InputMetadata {
         input: Tensor::cat(&seqs_tensors, 0).unwrap(),
         positions: seqlen_offsets,
@@ -416,27 +417,25 @@ fn get_prompt_input(input_toks: &[&mut Sequence], device: &Device) -> Result<Inp
 }
 
 fn get_completion_input(
-    input_toks: &[&mut Sequence],
+    input_seqs: &[&mut Sequence],
     device: &Device,
     no_kv_cache: bool,
 ) -> Result<InputMetadata> {
     if no_kv_cache {
-        return get_prompt_input(input_toks, device);
+        return get_prompt_input(input_seqs, device);
     }
     // Pad each sequence by the padding token to the max len.
     let mut seqs_tensors = Vec::new();
     let mut seqlen_offsets = Vec::new();
     let mut context_lens = Vec::new();
-    for seq in input_toks.iter() {
+    for seq in input_seqs.iter() {
         let start_pos = seq.get_toks().len().saturating_sub(1);
         let ctxt = seq.get_toks()[start_pos..].to_vec();
         seqlen_offsets.push(start_pos);
         context_lens.push(0);
 
-        // NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
     }
-    // NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
     let mut tmp = Vec::new();
     for pos in (0..seqs_tensors.len())
         .map(|i| vec![*seqlen_offsets.get(i).unwrap() as i64])
@@ -464,7 +463,7 @@ struct ModelInputs {
 }
 
 fn calculate_inputs(
-    input_toks: &[&mut Sequence],
+    input_seqs: &[&mut Sequence],
     is_prompt: bool,
     is_xlora: bool,
     device: &Device,
@@ -476,13 +475,13 @@ fn calculate_inputs(
             positions: seqlen_offsets_full,
             positions_kernel: seqlen_offsets_kernel_full,
             context_lens: _,
-        } = get_prompt_input(input_toks, device)?;
+        } = get_prompt_input(input_seqs, device)?;
         let InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
-        } = get_completion_input(input_toks, device, no_kv_cache)?;
+        } = get_completion_input(input_seqs, device, no_kv_cache)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: Some(input_ids_full),
@@ -498,7 +497,7 @@ fn calculate_inputs(
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
-        } = get_prompt_input(input_toks, device)?;
+        } = get_prompt_input(input_seqs, device)?;
         Ok(ModelInputs {
             input_ids: input_ids.clone(),
             input_ids_full: Some(input_ids),
@@ -514,7 +513,7 @@ fn calculate_inputs(
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
-        } = get_prompt_input(input_toks, device)?;
+        } = get_prompt_input(input_seqs, device)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: None,
@@ -530,7 +529,7 @@ fn calculate_inputs(
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
-        } = get_completion_input(input_toks, device, no_kv_cache)?;
+        } = get_completion_input(input_seqs, device, no_kv_cache)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: None,
@@ -810,7 +809,7 @@ macro_rules! deserialize_chat_template {
                         );
                     }
                 };
-                let ser = serde_json::to_string_pretty(&deser).unwrap();
+                let ser = serde_json::to_string_pretty(&deser).expect("Serialization of modified chat template failed.");
                 serde_json::from_str(&ser).unwrap()
             }
         }

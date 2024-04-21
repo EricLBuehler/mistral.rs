@@ -39,7 +39,7 @@ pub fn forward(
 The model struct should contain a `Cache`, found at `mistralrs_core::models`. A `Cache` mangages the KV cache. When initializing it,
 be sure to set the `is_xlora` state to false as this is a non X-LoRA model: `Cache::new(cfg.num_hidden_layers, false)`.
 
-In the model struct's forward method, the normal model cache should be accessed with the `.lock()` method: `self.cache.lock()`. Then, caches for each layer should be passed by accessing the locked cache with `cache.get_mut(layer).unwrap()`. In the attention block, the KV cache is updated. See the following code for reference:
+In the model struct's forward method, the normal model cache should be accessed with the `.lock()` method: `self.cache.lock()`. Then, caches for each layer should be passed by accessing the locked cache with `cache[layer]`. In the attention block, the KV cache is updated. See the following code for reference:
 
 ```rust
 let (k, v) = match &*kv_cache {

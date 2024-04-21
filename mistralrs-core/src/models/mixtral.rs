@@ -430,7 +430,7 @@ impl Model {
                 attention_mask.as_ref(),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
-                cache.get_mut(i).unwrap(),
+                &mut cache[i],
             )?
         }
         extract_logits(&xs.apply(&self.norm)?.apply(&self.lm_head)?, context_lens)
