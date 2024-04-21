@@ -1,28 +1,27 @@
 # mistral.rs PyO3 Bindings: `mistralrs`
 
-`mistralrs` is a Python package which provides an API for `mistral.rs`.
+`mistralrs` is a Python package which provides an API for `mistral.rs`. We build `mistralrs` with the `maturin` build manager.
 
 ## Installation
 1) `cd` into mistralrs-pyo3.
 
-2) Activate a Python environment. For example:
+2) Activate a Python environment if it is not already. For example:
 
     ```bash
     python3 -m venv myenv
     source myenv/bin/activate
-    pip install maturin[patchelf]
     ```
 
 3) Install `maturin` with `pip install maturin[patchelf]`.
 
 4) Install `mistralrs`
-    Install `mistralrs` by executing the following in this directory where [features](../README.md#building-for-gpu-metal-or-enabling-other-features) such as `cuda` or `flash-attn` may be specified with the `--features` argument.
+    Install `mistralrs` by executing the following in this directory where [features](../README.md#supported-accelerators) such as `cuda` or `flash-attn` may be specified with the `--features` argument just like they would be for `cargo run`.
 
     ```bash
     maturin develop -r --features ...
     ```
 
-Please find [API docs here](API.md). We also provide type stubs [here](mistralrs.pyi), which can serve as another form of documentation.
+Please find [API docs here](API.md) and the type stubs [here](mistralrs.pyi), which are another great form of documentation.
 
 We also provide [a cookbook here](../examples/python/cookbook.ipynb)!
 
@@ -54,15 +53,3 @@ res = runner.send_chat_completion_request(
 )
 print(res)
 ```
-
-The API consists of the following loader classes:
-- `MistralLoader`
-- `MixtralLoader`
-- `GemmaLoader`
-- `LlamaLoader`
-- `NormalLoader`
-- `XLoraLoader`
-- `QuantizedLoader`
-- `XLoraQuantizedLoader`
-
-These should be instantiatd to begin setup process. Calling the `load` method will load the model, attempting to download the model.

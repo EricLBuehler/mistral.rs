@@ -1,24 +1,25 @@
-from mistralrs import GemmaLoader, XLoraLoader, ChatCompletionRequest
+from mistralrs import Runner, Which, ChatCompletionRequest, Message, Role
 
-loader = XLoraLoader(
-    GemmaLoader,
-    model_id="google/gemma-7b-it",
-    no_kv_cache=False,
-    repeat_last_n=64,
-    xlora_model_id="lamm-mit/x-lora-gemma-7b",
-    order_file="gemma-ordering.json",
+runner = Runner(
+    which=Which.XLoraGemma(
+        model_id="google/gemma-7b-it",
+        tokenizer_json=None,
+        repeat_last_n=64,
+        xlora_model_id="lamm-mit/x-lora-gemma-7b",
+        order="orderings/xlora-gemma-paper-ordering.json",
+        tgt_non_granular_index=None,
+    )
 )
-runner = loader.load()
+
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
         model="mistral",
-        messages=[
-            {"role": "user", "content": "Tell me a story about the Rust type system."}
-        ],
+        messages=[Message(Role.User, "Tell me a story about the Rust type system.")],
         max_tokens=256,
         presence_penalty=1.0,
         top_p=0.1,
-        temperature=0.1,
+        temperature=0.5,
     )
 )
-print(res)
+print(res.choices[0].message.content)
+print(res.usage)

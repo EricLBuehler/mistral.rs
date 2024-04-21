@@ -58,8 +58,8 @@ pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
                         assistant_output.push_str(&choice.delta.content);
                         print!("{}", choice.delta.content);
                         io::stdout().flush().unwrap();
-                        if choice.stopreason.is_some() {
-                            if matches!(choice.stopreason.as_ref().unwrap().as_str(), "length") {
+                        if choice.finish_reason.is_some() {
+                            if matches!(choice.finish_reason.as_ref().unwrap().as_str(), "length") {
                                 print!("...");
                             }
                             break;

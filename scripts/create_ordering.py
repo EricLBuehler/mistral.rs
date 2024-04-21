@@ -3,7 +3,7 @@ from transformers import AutoModelForCausalLM  # type: ignore
 import json
 from peft.tuners.lora.config import LoraConfig
 
-model_id = input("Enter the model ID: ")
+model_id = input("Enter the base model ID: ")
 target_modules_in = input("Enter the target modules as a comma delimited list: ")
 target_modules = target_modules_in.split(",")
 target_modules = [x for x in target_modules if len(x) > 0]
@@ -34,7 +34,7 @@ adapters = adapters_in.split(",")
 adapters = [x for x in adapters if len(x) > 0]
 adapters = [x.strip() for x in adapters]
 
-out = {"order": adapters, "layers": loras}
+out = {"order": adapters, "layers": loras, "base_model_id": model_id}
 
 outfile = input("Enter output file: ")
 with open(outfile, "w") as f:

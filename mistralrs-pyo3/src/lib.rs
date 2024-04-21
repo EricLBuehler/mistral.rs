@@ -1,59 +1,36 @@
+#![allow(clippy::too_many_arguments)]
+
 use candle_core::Result;
 use either::Either;
 use indexmap::IndexMap;
+use message::{Message, Role};
 use std::{
     cell::RefCell,
     collections::HashMap,
     fmt::Debug,
+    str::FromStr,
     sync::{mpsc::channel, Arc, Mutex},
 };
 use stream::ChatCompletionStreamer;
 
-use ::mistralrs::{
-    Constraint, MistralRs, Request as _Request, RequestMessage, Response, SamplingParams,
-    StopTokens,
-};
 use candle_core::Device;
-use loaders::{
-    gemma::GemmaLoader, llama::LlamaLoader, mistral::MistralLoader, mixtral::MixtralLoader,
-    NormalLoader, QuantizedLoader, XLoraLoader, XLoraQuantizedLoader,
+use mistralrs_core::{
+    ChatCompletionResponse, CompletionResponse, Constraint, GemmaLoader, GemmaSpecificConfig,
+    LlamaLoader, LlamaSpecificConfig, Loader, MistralLoader, MistralRs, MistralRsBuilder,
+    MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind, Phi2Loader,
+    Phi2SpecificConfig, Request as _Request, RequestMessage, Response, SamplingParams,
+    SchedulerMethod, StopTokens, TokenSource,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
     prelude::*,
-    types::{PyDict, PyList, PyString},
+    types::{PyList, PyString},
 };
-mod loaders;
+use std::fs::File;
 mod stream;
-
-#[pyclass]
-enum ModelKind {
-    Normal,
-    XLoraNormal,
-    XLoraGGUF,
-    XLoraGGML,
-    QuantizedGGUF,
-    QuantizedGGML,
-}
-
-#[pyclass]
-#[derive(Clone)]
-enum DType {
-    // Unsigned 8 bits integer.
-    U8,
-    // Unsigned 32 bits integer.
-    U32,
-    // Signed 64 bits integer.
-    I64,
-    // Brain floating-point using half precision (16 bits).
-    BF16,
-    // Floating-point using half precision (16 bits).
-    F16,
-    // Floating-point using single precision (32 bits).
-    F32,
-    // Floating-point using double precision (64 bits).
-    F64,
-}
+mod which;
+use which::Which;
+mod message;
 
 #[cfg(not(feature = "metal"))]
 static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
@@ -91,11 +68,785 @@ static NEXT_REQUEST_ID: Mutex<RefCell<usize>> = Mutex::new(RefCell::new(0));
 
 #[pymethods]
 impl Runner {
-    /// Send an OpenAI API compatible request, returning raw JSON.
+    #[new]
+    #[pyo3(signature = (which, max_seqs = 16, no_kv_cache = false, prefix_cache_n = 16, token_source = "cache", chat_template = None))]
+    fn new(
+        which: Which,
+        max_seqs: usize,
+        no_kv_cache: bool,
+        prefix_cache_n: usize,
+        token_source: &str,
+        chat_template: Option<String>,
+    ) -> PyResult<Self> {
+        const REPEAT_LAST_N_DEFAULT: usize = 64;
+        const GQA_DEFAULT: usize = 1;
+
+        #[cfg(not(feature = "flash-attn"))]
+        let use_flash_attn = false;
+        #[cfg(feature = "flash-attn")]
+        let use_flash_attn = true;
+
+        let tgt_non_granular_index = match which {
+            Which::Gemma { .. }
+            | Which::Llama { .. }
+            | Which::LlamaGGML { .. }
+            | Which::LlamaGGUF { .. }
+            | Which::Mistral { .. }
+            | Which::MistralGGUF { .. }
+            | Which::Mixtral { .. }
+            | Which::MixtralGGUF { .. }
+            | Which::Phi2 { .. }
+            | Which::XLoraPhi2 { .. }
+            | Which::LoraMistralGGUF { .. }
+            | Which::LoraMistral { .. }
+            | Which::LoraLlama { .. }
+            | Which::LoraLlamaGGML { .. }
+            | Which::LoraLlamaGGUF { .. }
+            | Which::LoraMixtral { .. }
+            | Which::LoraMixtralGGUF { .. } => None,
+            Which::XLoraGemma {
+                tgt_non_granular_index,
+                ..
+            }
+            | Which::XLoraLlama {
+                tgt_non_granular_index,
+                ..
+            }
+            | Which::XLoraLlamaGGML {
+                tgt_non_granular_index,
+                ..
+            }
+            | Which::XLoraLlamaGGUF {
+                tgt_non_granular_index,
+                ..
+            }
+            | Which::XLoraMistral {
+                tgt_non_granular_index,
+                ..
+            }
+            | Which::XLoraMistralGGUF {
+                tgt_non_granular_index,
+                ..
+            }
+            | Which::XLoraMixtral {
+                tgt_non_granular_index,
+                ..
+            }
+            | Which::XLoraMixtralGGUF {
+                tgt_non_granular_index,
+                ..
+            } => tgt_non_granular_index,
+        };
+        let max_seqs = if tgt_non_granular_index.is_some() {
+            1
+        } else {
+            max_seqs
+        };
+
+        let loader: Box<dyn Loader> = match which {
+            Which::Mistral {
+                model_id,
+                repeat_last_n,
+                tokenizer_json,
+            } => Box::new(MistralLoader::new(
+                model_id,
+                MistralSpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                },
+                None,
+                None,
+                None,
+                ModelKind::Normal,
+                None,
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                None,
+            )),
+            Which::MistralGGUF {
+                tok_model_id,
+                quantized_model_id,
+                quantized_filename,
+                repeat_last_n,
+                tokenizer_json,
+            } => Box::new(MistralLoader::new(
+                tok_model_id,
+                MistralSpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                },
+                Some(quantized_model_id),
+                Some(quantized_filename),
+                None,
+                ModelKind::QuantizedGGUF,
+                None,
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                None,
+            )),
+            Which::XLoraMistral {
+                model_id,
+                xlora_model_id,
+                repeat_last_n,
+                order,
+                tokenizer_json,
+                tgt_non_granular_index,
+            } => Box::new(MistralLoader::new(
+                model_id,
+                MistralSpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                },
+                None,
+                None,
+                Some(xlora_model_id),
+                ModelKind::XLoraNormal,
+                Some(
+                    serde_json::from_reader(
+                        File::open(order.clone())
+                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+                    )
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                ),
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                tgt_non_granular_index,
+            )),
+            Which::Gemma {
+                model_id,
+                repeat_last_n,
+                tokenizer_json,
+            } => Box::new(GemmaLoader::new(
+                model_id,
+                GemmaSpecificConfig {
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                },
+                None,
+                None,
+                None,
+                ModelKind::Normal,
+                None,
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                None,
+            )),
+            Which::XLoraGemma {
+                model_id,
+                xlora_model_id,
+                repeat_last_n,
+                order,
+                tokenizer_json,
+                tgt_non_granular_index,
+            } => Box::new(GemmaLoader::new(
+                model_id,
+                GemmaSpecificConfig {
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                },
+                None,
+                None,
+                Some(xlora_model_id),
+                ModelKind::Normal,
+                Some(
+                    serde_json::from_reader(
+                        File::open(order.clone())
+                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+                    )
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                ),
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                tgt_non_granular_index,
+            )),
+            Which::Llama {
+                model_id,
+                repeat_last_n,
+                tokenizer_json,
+            } => Box::new(LlamaLoader::new(
+                model_id,
+                LlamaSpecificConfig {
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                    use_flash_attn,
+                    gqa: 0,
+                },
+                None,
+                None,
+                None,
+                ModelKind::Normal,
+                None,
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                None,
+            )),
+            Which::LlamaGGUF {
+                tok_model_id,
+                quantized_model_id,
+                quantized_filename,
+                repeat_last_n,
+                tokenizer_json,
+            } => Box::new(LlamaLoader::new(
+                tok_model_id,
+                LlamaSpecificConfig {
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                    use_flash_attn,
+                    gqa: 0,
+                },
+                Some(quantized_model_id),
+                Some(quantized_filename),
+                None,
+                ModelKind::QuantizedGGUF,
+                None,
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                None,
+            )),
+            Which::LlamaGGML {
+                tok_model_id,
+                quantized_model_id,
+                quantized_filename,
+                repeat_last_n,
+                gqa,
+                tokenizer_json,
+            } => Box::new(LlamaLoader::new(
+                tok_model_id,
+                LlamaSpecificConfig {
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                    use_flash_attn,
+                    gqa: gqa.unwrap_or(GQA_DEFAULT),
+                },
+                Some(quantized_model_id),
+                Some(quantized_filename),
+                None,
+                ModelKind::QuantizedGGML,
+                None,
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                None,
+            )),
+            Which::XLoraLlama {
+                model_id,
+                xlora_model_id,
+                repeat_last_n,
+                order,
+                tokenizer_json,
+                tgt_non_granular_index,
+            } => Box::new(LlamaLoader::new(
+                model_id,
+                LlamaSpecificConfig {
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                    use_flash_attn,
+                    gqa: 0,
+                },
+                None,
+                None,
+                Some(xlora_model_id),
+                ModelKind::QuantizedGGML,
+                Some(
+                    serde_json::from_reader(
+                        File::open(order.clone())
+                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+                    )
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                ),
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                tgt_non_granular_index,
+            )),
+            Which::Mixtral {
+                model_id,
+                repeat_last_n,
+                tokenizer_json,
+            } => Box::new(MixtralLoader::new(
+                model_id,
+                MixtralSpecificConfig {
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                    use_flash_attn,
+                },
+                None,
+                None,
+                None,
+                ModelKind::Normal,
+                None,
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                None,
+            )),
+            Which::MixtralGGUF {
+                tok_model_id,
+                quantized_model_id,
+                quantized_filename,
+                repeat_last_n,
+                tokenizer_json,
+            } => Box::new(MixtralLoader::new(
+                tok_model_id,
+                MixtralSpecificConfig {
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                    use_flash_attn,
+                },
+                Some(quantized_model_id),
+                Some(quantized_filename),
+                None,
+                ModelKind::QuantizedGGUF,
+                None,
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                None,
+            )),
+            Which::XLoraMixtral {
+                model_id,
+                xlora_model_id,
+                repeat_last_n,
+                order,
+                tokenizer_json,
+                tgt_non_granular_index,
+            } => Box::new(MixtralLoader::new(
+                model_id,
+                MixtralSpecificConfig {
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                    use_flash_attn,
+                },
+                None,
+                None,
+                Some(xlora_model_id),
+                ModelKind::XLoraNormal,
+                Some(
+                    serde_json::from_reader(
+                        File::open(order.clone())
+                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+                    )
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                ),
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                tgt_non_granular_index,
+            )),
+            Which::XLoraMistralGGUF {
+                tok_model_id,
+                quantized_model_id,
+                quantized_filename,
+                repeat_last_n,
+                xlora_model_id,
+                order,
+                tokenizer_json,
+                tgt_non_granular_index,
+            } => Box::new(MistralLoader::new(
+                tok_model_id,
+                MistralSpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                },
+                Some(quantized_model_id),
+                Some(quantized_filename),
+                Some(xlora_model_id),
+                ModelKind::XLoraGGUF,
+                Some(
+                    serde_json::from_reader(
+                        File::open(order.clone())
+                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+                    )
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                ),
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                tgt_non_granular_index,
+            )),
+            Which::XLoraMixtralGGUF {
+                tok_model_id,
+                quantized_model_id,
+                quantized_filename,
+                repeat_last_n,
+                xlora_model_id,
+                order,
+                tokenizer_json,
+                tgt_non_granular_index,
+            } => Box::new(MixtralLoader::new(
+                tok_model_id,
+                MixtralSpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                },
+                Some(quantized_model_id),
+                Some(quantized_filename),
+                Some(xlora_model_id),
+                ModelKind::XLoraGGUF,
+                Some(
+                    serde_json::from_reader(
+                        File::open(order.clone())
+                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+                    )
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                ),
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                tgt_non_granular_index,
+            )),
+            Which::XLoraLlamaGGUF {
+                tok_model_id,
+                quantized_model_id,
+                quantized_filename,
+                repeat_last_n,
+                xlora_model_id,
+                order,
+                tokenizer_json,
+                tgt_non_granular_index,
+            } => Box::new(LlamaLoader::new(
+                tok_model_id,
+                LlamaSpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                    gqa: 0,
+                },
+                Some(quantized_model_id),
+                Some(quantized_filename),
+                Some(xlora_model_id),
+                ModelKind::XLoraGGUF,
+                Some(
+                    serde_json::from_reader(
+                        File::open(order.clone())
+                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+                    )
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                ),
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                tgt_non_granular_index,
+            )),
+            Which::XLoraLlamaGGML {
+                tok_model_id,
+                quantized_model_id,
+                quantized_filename,
+                repeat_last_n,
+                xlora_model_id,
+                order,
+                gqa,
+                tokenizer_json,
+                tgt_non_granular_index,
+            } => Box::new(LlamaLoader::new(
+                tok_model_id,
+                LlamaSpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                    gqa: gqa.unwrap_or(GQA_DEFAULT),
+                },
+                Some(quantized_model_id),
+                Some(quantized_filename),
+                Some(xlora_model_id),
+                ModelKind::XLoraGGML,
+                Some(
+                    serde_json::from_reader(
+                        File::open(order.clone())
+                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+                    )
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                ),
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                tgt_non_granular_index,
+            )),
+            Which::Phi2 {
+                model_id,
+                repeat_last_n,
+                tokenizer_json,
+            } => Box::new(Phi2Loader::new(
+                model_id,
+                Phi2SpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                },
+                None,
+                None,
+                None,
+                ModelKind::Normal,
+                None,
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                None,
+            )),
+            Which::XLoraPhi2 {
+                model_id,
+                tokenizer_json,
+                xlora_model_id,
+                repeat_last_n,
+                order,
+                tgt_non_granular_index,
+            } => Box::new(Phi2Loader::new(
+                model_id,
+                Phi2SpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                },
+                None,
+                None,
+                Some(xlora_model_id),
+                ModelKind::XLoraNormal,
+                Some(
+                    serde_json::from_reader(
+                        File::open(order.clone())
+                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+                    )
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                ),
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                tgt_non_granular_index,
+            )),
+            Which::LoraMistralGGUF {
+                tok_model_id,
+                tokenizer_json,
+                quantized_model_id,
+                quantized_filename,
+                adapters_model_id,
+                repeat_last_n,
+                order,
+            } => Box::new(MistralLoader::new(
+                tok_model_id,
+                MistralSpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                },
+                Some(quantized_model_id),
+                Some(quantized_filename),
+                Some(adapters_model_id),
+                ModelKind::LoraGGUF,
+                Some(
+                    serde_json::from_reader(
+                        File::open(order.clone())
+                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+                    )
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                ),
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                tgt_non_granular_index,
+            )),
+            Which::LoraMistral {
+                model_id,
+                tokenizer_json,
+                adapters_model_id,
+                repeat_last_n,
+                order,
+            } => Box::new(MistralLoader::new(
+                model_id,
+                MistralSpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                },
+                None,
+                None,
+                Some(adapters_model_id),
+                ModelKind::LoraNormal,
+                Some(
+                    serde_json::from_reader(
+                        File::open(order.clone())
+                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+                    )
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                ),
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                tgt_non_granular_index,
+            )),
+            Which::LoraMixtral {
+                model_id,
+                tokenizer_json,
+                adapters_model_id,
+                repeat_last_n,
+                order,
+            } => Box::new(MistralLoader::new(
+                model_id,
+                MistralSpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                },
+                None,
+                None,
+                Some(adapters_model_id),
+                ModelKind::LoraNormal,
+                Some(
+                    serde_json::from_reader(
+                        File::open(order.clone())
+                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+                    )
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                ),
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                tgt_non_granular_index,
+            )),
+            Which::LoraMixtralGGUF {
+                tok_model_id,
+                tokenizer_json,
+                quantized_model_id,
+                quantized_filename,
+                adapters_model_id,
+                repeat_last_n,
+                order,
+            } => Box::new(MistralLoader::new(
+                tok_model_id,
+                MistralSpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                },
+                Some(quantized_model_id),
+                Some(quantized_filename),
+                Some(adapters_model_id),
+                ModelKind::LoraGGUF,
+                Some(
+                    serde_json::from_reader(
+                        File::open(order.clone())
+                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+                    )
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                ),
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                tgt_non_granular_index,
+            )),
+            Which::LoraLlama {
+                model_id,
+                tokenizer_json,
+                adapters_model_id,
+                repeat_last_n,
+                order,
+            } => Box::new(MistralLoader::new(
+                model_id,
+                MistralSpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                },
+                None,
+                None,
+                Some(adapters_model_id),
+                ModelKind::LoraNormal,
+                Some(
+                    serde_json::from_reader(
+                        File::open(order.clone())
+                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+                    )
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                ),
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                tgt_non_granular_index,
+            )),
+            Which::LoraLlamaGGUF {
+                tok_model_id,
+                tokenizer_json,
+                quantized_model_id,
+                quantized_filename,
+                adapters_model_id,
+                repeat_last_n,
+                order,
+            } => Box::new(LlamaLoader::new(
+                tok_model_id,
+                LlamaSpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                    gqa: 0,
+                },
+                Some(quantized_model_id),
+                Some(quantized_filename),
+                Some(adapters_model_id),
+                ModelKind::LoraGGUF,
+                Some(
+                    serde_json::from_reader(
+                        File::open(order.clone())
+                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+                    )
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                ),
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                tgt_non_granular_index,
+            )),
+            Which::LoraLlamaGGML {
+                tok_model_id,
+                tokenizer_json,
+                quantized_model_id,
+                quantized_filename,
+                adapters_model_id,
+                repeat_last_n,
+                order,
+                gqa,
+            } => Box::new(LlamaLoader::new(
+                tok_model_id,
+                LlamaSpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                    gqa: gqa.unwrap_or(GQA_DEFAULT),
+                },
+                Some(quantized_model_id),
+                Some(quantized_filename),
+                Some(adapters_model_id),
+                ModelKind::LoraGGML,
+                Some(
+                    serde_json::from_reader(
+                        File::open(order.clone())
+                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+                    )
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                ),
+                no_kv_cache,
+                chat_template,
+                tokenizer_json,
+                tgt_non_granular_index,
+            )),
+        };
+
+        let device = get_device().map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let pipeline = loader
+            .load_model(
+                None,
+                TokenSource::from_str(token_source)
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                None,
+                &device,
+            )
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        let mistralrs = MistralRsBuilder::new(
+            pipeline,
+            SchedulerMethod::Fixed(
+                max_seqs
+                    .try_into()
+                    .map_err(|e| PyValueError::new_err(format!("{e:?}")))?,
+            ),
+        )
+        .with_no_kv_cache(no_kv_cache)
+        .with_prefix_cache_n(prefix_cache_n)
+        .build();
+
+        Ok(Self { runner: mistralrs })
+    }
+
+    /// Send an OpenAI API compatible request, returning the result.
     fn send_chat_completion_request(
         &mut self,
         request: Py<ChatCompletionRequest>,
-    ) -> PyResult<Either<String, ChatCompletionStreamer>> {
+    ) -> PyResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
         let (tx, rx) = channel();
         Python::with_gil(|py| {
             let request = request.bind(py).borrow();
@@ -133,7 +884,20 @@ impl Runner {
                     last_v
                 },
                 messages: match request.messages {
-                    Either::Left(ref messages) => RequestMessage::Chat(messages.clone()),
+                    Either::Left(ref messages) => {
+                        let mut messages_vec = Vec::new();
+                        for message in messages {
+                            let mut message_map = IndexMap::new();
+                            let role = match message.role {
+                                Role::Assistant => "assistant",
+                                Role::User => "user",
+                            };
+                            message_map.insert("role".to_string(), role.to_string());
+                            message_map.insert("content".to_string(), message.content.clone());
+                            messages_vec.push(message_map);
+                        }
+                        RequestMessage::Chat(messages_vec)
+                    }
                     Either::Right(ref prompt) => {
                         let mut messages = Vec::new();
                         let mut message_map = IndexMap::new();
@@ -175,10 +939,7 @@ impl Runner {
                     Response::ValidationError(e) | Response::InternalError(e) => {
                         Err(PyValueError::new_err(e.to_string()))
                     }
-                    Response::Done(response) => {
-                        MistralRs::maybe_log_response(self.runner.clone(), &response);
-                        Ok(Either::Left(serde_json::to_string(&response).unwrap()))
-                    }
+                    Response::Done(response) => Ok(Either::Left(response)),
                     Response::ModelError(msg, _) => Err(PyValueError::new_err(msg.to_string())),
                     Response::Chunk(_) => unreachable!(),
                     Response::CompletionDone(_) => unreachable!(),
@@ -188,8 +949,11 @@ impl Runner {
         })
     }
 
-    /// Send an OpenAI API compatible request, returning raw JSON.
-    fn send_completion_request(&mut self, request: Py<CompletionRequest>) -> PyResult<String> {
+    /// Send an OpenAI API compatible request, returning the result.
+    fn send_completion_request(
+        &mut self,
+        request: Py<CompletionRequest>,
+    ) -> PyResult<CompletionResponse> {
         let (tx, rx) = channel();
         Python::with_gil(|py| {
             let request = request.bind(py).borrow();
@@ -259,14 +1023,13 @@ impl Runner {
                 Response::ValidationError(e) | Response::InternalError(e) => {
                     Err(PyValueError::new_err(e.to_string()))
                 }
-                Response::Done(response) => {
-                    MistralRs::maybe_log_response(self.runner.clone(), &response);
-                    Ok(serde_json::to_string(&response).unwrap())
+                Response::CompletionDone(response) => Ok(response),
+                Response::CompletionModelError(msg, _) => {
+                    Err(PyValueError::new_err(msg.to_string()))
                 }
-                Response::ModelError(msg, _) => Err(PyValueError::new_err(msg.to_string())),
                 Response::Chunk(_) => unreachable!(),
-                Response::CompletionDone(_) => unreachable!(),
-                Response::CompletionModelError(_, _) => unreachable!(),
+                Response::Done(_) => unreachable!(),
+                Response::ModelError(_, _) => unreachable!(),
             }
         })
     }
@@ -297,8 +1060,24 @@ struct CompletionRequest {
 #[pymethods]
 impl CompletionRequest {
     #[new]
-    #[pyo3(signature = (prompt, model, best_of = 1, echo_prompt = false, presence_penalty=None,frequency_penalty=None,logit_bias=None,max_tokens=None,n_choices=1,stop_seqs=None,temperature=None,top_p=None,suffix=None,top_k=None, grammar = None, grammar_type = None))]
-    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        prompt,
+        model,
+        best_of = 1,
+        echo_prompt = false,
+        presence_penalty=None,
+        frequency_penalty=None,
+        logit_bias=None,
+        max_tokens=None,
+        n_choices=1,
+        stop_seqs=None,
+        temperature=None,
+        top_p=None,
+        suffix=None,
+        top_k=None,
+        grammar = None,
+        grammar_type = None
+    ))]
     fn new(
         prompt: String,
         model: String,
@@ -342,7 +1121,7 @@ impl CompletionRequest {
 #[derive(Debug)]
 /// An OpenAI API compatible chat completion request.
 struct ChatCompletionRequest {
-    messages: Either<Vec<IndexMap<String, String>>, String>,
+    messages: Either<Vec<Message>, String>,
     _model: String,
     logit_bias: Option<HashMap<u32, f32>>,
     logprobs: bool,
@@ -363,8 +1142,24 @@ struct ChatCompletionRequest {
 #[pymethods]
 impl ChatCompletionRequest {
     #[new]
-    #[pyo3(signature = (messages, model, logprobs = false, n_choices = 1, logit_bias = None, top_logprobs = None, max_tokens = None, presence_penalty = None, frequency_penalty = None, stop_seqs = None, temperature = None, top_p = None, top_k = None, stream=false, grammar = None, grammar_type = None))]
-    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        messages,
+        model,
+        logprobs = false,
+        n_choices = 1,
+        logit_bias = None,
+        top_logprobs = None,
+        max_tokens = None,
+        presence_penalty = None,
+        frequency_penalty = None,
+        stop_seqs = None,
+        temperature = None,
+        top_p = None,
+        top_k = None,
+        stream=false,
+        grammar = None,
+        grammar_type = None
+    ))]
     fn new(
         messages: Py<PyAny>,
         model: String,
@@ -387,29 +1182,12 @@ impl ChatCompletionRequest {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
                 let mut messages_vec = Vec::new();
                 for message in messages {
-                    let mapping = message.downcast::<PyDict>()?.as_mapping();
-                    let mut messages_map = IndexMap::new();
-                    for i in 0..mapping.len()? {
-                        let k = mapping
-                            .keys()?
-                            .get_item(i)?
-                            .downcast::<PyString>()?
-                            .extract::<String>()?;
-                        let v = mapping
-                            .values()?
-                            .get_item(i)?
-                            .downcast::<PyString>()?
-                            .extract::<String>()?;
-                        messages_map.insert(k, v);
-                    }
-                    messages_vec.push(messages_map);
+                    messages_vec.push(message.extract::<Message>()?);
                 }
-                Ok::<Either<Vec<IndexMap<String, String>>, String>, PyErr>(Either::Left(
-                    messages_vec,
-                ))
+                Ok::<Either<Vec<Message>, String>, PyErr>(Either::Left(messages_vec))
             } else if let Ok(messages) = messages.bind(py).downcast_exact::<PyString>() {
                 let prompt = messages.extract::<String>()?;
-                Ok::<Either<Vec<IndexMap<String, String>>, String>, PyErr>(Either::Right(prompt))
+                Ok::<Either<Vec<Message>, String>, PyErr>(Either::Right(prompt))
             } else {
                 return Err(PyTypeError::new_err("Expected a string or list of dicts."));
             }
@@ -438,16 +1216,10 @@ impl ChatCompletionRequest {
 #[pymodule]
 fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Runner>()?;
-    m.add_class::<MistralLoader>()?;
-    m.add_class::<MixtralLoader>()?;
-    m.add_class::<GemmaLoader>()?;
-    m.add_class::<LlamaLoader>()?;
-    m.add_class::<ModelKind>()?;
+    m.add_class::<Which>()?;
     m.add_class::<ChatCompletionRequest>()?;
-    m.add_class::<NormalLoader>()?;
-    m.add_class::<XLoraLoader>()?;
-    m.add_class::<QuantizedLoader>()?;
-    m.add_class::<XLoraQuantizedLoader>()?;
-    m.add_class::<DType>()?;
+    m.add_class::<CompletionRequest>()?;
+    m.add_class::<Message>()?;
+    m.add_class::<Role>()?;
     Ok(())
 }

@@ -44,6 +44,7 @@ galil-seiferas = "0.1.5"
 clap.workspace = true
 radix_trie = "0.2.1"
 bytemuck = "1.15.0"
+pyo3.workspace = true
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
