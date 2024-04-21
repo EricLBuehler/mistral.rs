@@ -350,7 +350,7 @@
     Ids(Vec&lt;u32&gt;),
 }
 
-<span class="attr">#[derive(Clone, Debug)]
+<span class="attr">#[derive(Clone, Debug, Default)]
 </span><span class="kw">pub struct </span>SamplingParams {
     <span class="kw">pub </span>temperature: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     <span class="kw">pub </span>top_k: <span class="prelude-ty">Option</span>&lt;usize&gt;,
