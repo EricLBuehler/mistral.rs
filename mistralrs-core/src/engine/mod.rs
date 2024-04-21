@@ -94,7 +94,14 @@ impl Engine {
                     Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
                 }
                 let logits = pipeline.forward(&scheduled.completion, false);
-                let logits = handle_pipeline_forward_error!("completion", logits, &mut scheduled.completion, pipeline, 'lp);
+                let logits = handle_pipeline_forward_error!(
+                    "completion",
+                    logits,
+                    &mut scheduled.completion,
+                    pipeline,
+                    'lp,
+                    self.prefix_cacher
+                );
 
                 if !self.no_kv_cache {
                     Self::clone_out_cache(&mut *pipeline, &mut scheduled.completion);
@@ -107,7 +114,8 @@ impl Engine {
                     Self::sample_seqs(&mut *pipeline, &mut scheduled.completion, logits, &mut self.prefix_cacher, self.disable_eos_stop),
                     &mut scheduled.completion,
                     pipeline,
-                    'lp
+                    'lp,
+                    self.prefix_cacher
                 );
             }
 
@@ -115,7 +123,14 @@ impl Engine {
                 // Run the prompt seqs
                 Self::set_none_cache(&mut *pipeline);
                 let logits = pipeline.forward(&scheduled.prompt, true);
-                let logits = handle_pipeline_forward_error!("prompt", logits, &mut scheduled.prompt, pipeline, 'lp);
+                let logits = handle_pipeline_forward_error!(
+                    "prompt",
+                    logits,
+                    &mut scheduled.prompt,
+                    pipeline,
+                    'lp,
+                    self.prefix_cacher
+                );
 
                 if !self.no_kv_cache {
                     Self::clone_out_cache(&mut *pipeline, &mut scheduled.prompt);
@@ -128,7 +143,8 @@ impl Engine {
                     Self::sample_seqs(&mut *pipeline, &mut scheduled.prompt, logits, &mut self.prefix_cacher,self.disable_eos_stop,),
                     &mut scheduled.prompt,
                     pipeline,
-                    'lp
+                    'lp,
+                    self.prefix_cacher
                 );
 
                 for seq in scheduled.prompt.iter_mut() {
