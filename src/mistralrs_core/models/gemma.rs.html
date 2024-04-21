@@ -714,7 +714,7 @@
                 attention_mask.as_ref(),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
-                cache.get_mut(i).unwrap(),
+                <span class="kw-2">&amp;mut </span>cache[i],
             )<span class="question-mark">?
         </span>}
         extract_logits(<span class="kw-2">&amp;</span>xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.norm)<span class="question-mark">?</span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>, context_lens)

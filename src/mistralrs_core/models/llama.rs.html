@@ -351,6 +351,9 @@
 <a href="#349" id="349">349</a>
 <a href="#350" id="350">350</a>
 <a href="#351" id="351">351</a>
+<a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a>
+<a href="#354" id="354">354</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -688,7 +691,10 @@
         <span class="kw">let </span>lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp(<span class="string">"lm_head"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp(<span class="string">"model.norm"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>blocks: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..cfg.num_hidden_layers)
-            .map(|i| Block::load(vb.pp(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"model.layers.{i}"</span>)), cfg).unwrap())
+            .map(|i| {
+                Block::load(vb.pp(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"model.layers.{i}"</span>)), cfg)
+                    .expect(<span class="string">"Failed to load block."</span>)
+            })
             .collect();
 
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{

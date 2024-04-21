@@ -760,10 +760,6 @@
 <a href="#758" id="758">758</a>
 <a href="#759" id="759">759</a>
 <a href="#760" id="760">760</a>
-<a href="#761" id="761">761</a>
-<a href="#762" id="762">762</a>
-<a href="#763" id="763">763</a>
-<a href="#764" id="764">764</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
@@ -1149,13 +1145,13 @@
             <span class="kw">for </span>seq <span class="kw">in </span><span class="kw-2">&amp;mut *</span>seqs {
                 <span class="kw">let </span>seq_cache = <span class="kw-2">&amp;*</span>seq.cache();
                 <span class="kw">let </span>cache = seq_cache.get(layer).unwrap();
-                <span class="comment">// Note(EricLBuehler): Unwrap reasoning: We are handling completions seqs so unwrap is OK.
-                </span><span class="kw">let </span>cache = cache.as_ref().unwrap();
+                <span class="kw">let </span>cache = cache
+                    .as_ref()
+                    .expect(<span class="string">"Not handling completions in `clone_in_cache`."</span>);
                 k_vec.push(cache.<span class="number">0</span>.clone());
                 v_vec.push(cache.<span class="number">1</span>.clone());
             }
-            <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: We have the correct dims
-            </span>new_cache.push(<span class="prelude-val">Some</span>((
+            new_cache.push(<span class="prelude-val">Some</span>((
                 <span class="kw">if </span>k_vec.len() &gt; <span class="number">1 </span>{
                     Tensor::cat(<span class="kw-2">&amp;</span>k_vec, <span class="number">0</span>).unwrap()
                 } <span class="kw">else </span>{
@@ -1176,13 +1172,13 @@
                 <span class="kw">for </span>seq <span class="kw">in </span><span class="kw-2">&amp;mut *</span>seqs {
                     <span class="kw">let </span>seq_cache = <span class="kw-2">&amp;*</span>seq.xlora_cache();
                     <span class="kw">let </span>cache = seq_cache.get(layer).unwrap();
-                    <span class="comment">// Note(EricLBuehler): Unwrap reasoning: We are handling completions seqs so unwrap is OK.
-                    </span><span class="kw">let </span>cache = cache.as_ref().unwrap();
+                    <span class="kw">let </span>cache = cache
+                        .as_ref()
+                        .expect(<span class="string">"Not handling completions in `clone_in_cache`."</span>);
                     k_vec.push(cache.<span class="number">0</span>.clone());
                     v_vec.push(cache.<span class="number">1</span>.clone());
                 }
-                <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: We have the correct dims
-                </span>new_cache.push(<span class="prelude-val">Some</span>((
+                new_cache.push(<span class="prelude-val">Some</span>((
                     <span class="kw">if </span>k_vec.len() &gt; <span class="number">1 </span>{
                         Tensor::cat(<span class="kw-2">&amp;</span>k_vec, <span class="number">0</span>).unwrap()
                     } <span class="kw">else </span>{
@@ -1231,7 +1227,7 @@
 
             <span class="kw">for </span>(seq_i, seq) <span class="kw">in </span>seqs.iter_mut().enumerate() {
                 <span class="kw">let </span>seq_cache = seq.cache();
-                <span class="kw">let </span>seq_cache = seq_cache.get_mut(layer).unwrap();
+                <span class="kw">let </span>seq_cache = <span class="kw-2">&amp;mut </span>seq_cache[layer];
                 <span class="kw">let </span>k = k_caches.get(seq_i).unwrap().clone();
                 <span class="kw">let </span>v = v_caches.get(seq_i).unwrap().clone();
                 <span class="kw-2">*</span>seq_cache = <span class="prelude-val">Some</span>((k, v));
@@ -1249,7 +1245,7 @@
 
                 <span class="kw">for </span>(seq_i, seq) <span class="kw">in </span>seqs.iter_mut().enumerate() {
                     <span class="kw">let </span>seq_cache = seq.xlora_cache();
-                    <span class="kw">let </span>seq_cache = seq_cache.get_mut(layer).unwrap();
+                    <span class="kw">let </span>seq_cache = <span class="kw-2">&amp;mut </span>seq_cache[layer];
                     <span class="kw">let </span>k = k_caches.get(seq_i).unwrap().clone();
                     <span class="kw">let </span>v = v_caches.get(seq_i).unwrap().clone();
                     <span class="kw-2">*</span>seq_cache = <span class="prelude-val">Some</span>((k, v));
@@ -1308,12 +1304,11 @@
                 .get_chat_template()
                 .has_chat_template()
         {
-            <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-            </span>request
+            request
                     .response
                     .send(Response::ValidationError(
                         <span class="string">"Received messages for a model which does not have a chat template. Either use a different model or pass a single string as the prompt"</span>.into(),
-                    )).unwrap();
+                    )).expect(<span class="string">"Expected receiver."</span>);
             <span class="kw">return</span>;
         }
 
@@ -1336,13 +1331,12 @@
             }
         };
         <span class="kw">if </span>formatted_prompt.is_empty() {
-            <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-            </span>request
+            request
                 .response
                 .send(Response::ValidationError(
                     <span class="string">"Received an empty prompt."</span>.into(),
                 ))
-                .unwrap();
+                .expect(<span class="string">"Expected receiver."</span>);
             <span class="kw">return</span>;
         }
         <span class="kw">let </span><span class="kw-2">mut </span>prompt = <span class="kw">match </span>force_tokens {
@@ -1355,13 +1349,11 @@
 
         <span class="kw">if </span>prompt.len() &gt; <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_max_seq_len() {
             <span class="kw">if </span>!<span class="self">self</span>.truncate_sequence {
-                <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                </span>request
+                request
                     .response
                     .send(Response::ValidationError(
                         <span class="macro">format!</span>(<span class="string">"Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?"</span>, <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_max_seq_len()).into(),
-                    ))
-                    .unwrap();
+                    )).expect(<span class="string">"Expected receiver."</span>);
                 <span class="kw">return</span>;
             } <span class="kw">else </span>{
                 <span class="kw">let </span>prompt_len = prompt.len();
@@ -1406,7 +1398,7 @@
                             .send(Response::ValidationError(
                                 <span class="macro">format!</span>(<span class="string">"Stop token {:?} is also a prefix of other tokens and cannot be used as a stop token."</span>, tok_trie.token_str(<span class="kw-2">*</span>id)).into(),
                             ))
-                            .unwrap();
+                            .expect(<span class="string">"Expected receiver."</span>);
                         <span class="kw">return</span>;
                     }
                 }
@@ -1460,7 +1452,7 @@
                     .send(Response::ValidationError(
                         <span class="macro">format!</span>(<span class="string">"Failed creation of logits bias. {}"</span>, err).into(),
                     ))
-                    .unwrap();
+                    .expect(<span class="string">"Expected receiver."</span>);
                 <span class="kw">return</span>;
             }
         };
@@ -1485,7 +1477,7 @@
                     .send(Response::ValidationError(
                         <span class="macro">format!</span>(<span class="string">"Invalid grammar. {}"</span>, err).into(),
                     ))
-                    .unwrap();
+                    .expect(<span class="string">"Expected receiver."</span>);
                 <span class="kw">return</span>;
             }
         };

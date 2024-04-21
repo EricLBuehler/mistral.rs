@@ -1041,7 +1041,7 @@
                 mask.as_ref(),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
-                cache.get_mut(i).unwrap(),
+                <span class="kw-2">&amp;mut </span>cache[i],
                 scalings.clone(),
                 <span class="self">self</span>.xlora_classifier
                     .as_ref()

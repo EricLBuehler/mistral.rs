@@ -332,7 +332,7 @@
         } <span class="kw">else </span>{
             <span class="comment">// Set the min seqs to be the running ones, and the rest to be waiting (but their states are not changed!)
             // Allow the min seqs to catch up.
-            </span><span class="kw">let </span>min = <span class="kw-2">*</span>seq_buckets.keys().min().unwrap();
+            </span><span class="kw">let </span>min = <span class="kw-2">*</span>seq_buckets.keys().min().expect(<span class="string">"No sequence buckets."</span>);
             <span class="kw">let </span>min_seqs = seq_buckets.remove(<span class="kw-2">&amp;</span>min).unwrap();
             <span class="kw">for </span>(<span class="kw">_</span>, seqs) <span class="kw">in </span>seq_buckets {
                 <span class="kw">for </span>seq <span class="kw">in </span>seqs {

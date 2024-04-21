@@ -331,6 +331,8 @@
 <a href="#329" id="329">329</a>
 <a href="#330" id="330">330</a>
 <a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, iter::zip, sync::Arc};
@@ -434,7 +436,8 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;TopLogprob&gt;&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>argsort_indices_sorted = argsort_indices.to_vec();
         <span class="comment">// Sort by descending prob
-        </span>argsort_indices_sorted.sort_by(|a, b| probs[<span class="kw-2">*</span>b].partial_cmp(<span class="kw-2">&amp;</span>probs[<span class="kw-2">*</span>a]).unwrap());
+        </span>argsort_indices_sorted
+            .sort_by(|a, b| probs[<span class="kw-2">*</span>b].partial_cmp(<span class="kw-2">&amp;</span>probs[<span class="kw-2">*</span>a]).expect(<span class="string">"No ordering."</span>));
         <span class="comment">// These are where the top n are
         </span><span class="kw">let </span>top_n_toks_range = <span class="number">0</span>..<span class="self">self</span>.top_n_logprobs;
         <span class="comment">// The top n's values
@@ -527,7 +530,8 @@
         <span class="kw">let </span><span class="kw-2">mut </span>argsort_indices = (<span class="number">0</span>..probs.len()).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 
         <span class="comment">// Sort by descending probability.
-        </span>argsort_indices.sort_unstable_by(|<span class="kw-2">&amp;</span>i, <span class="kw-2">&amp;</span>j| probs[j].partial_cmp(<span class="kw-2">&amp;</span>probs[i]).unwrap());
+        </span>argsort_indices
+            .sort_unstable_by(|<span class="kw-2">&amp;</span>i, <span class="kw-2">&amp;</span>j| probs[j].partial_cmp(<span class="kw-2">&amp;</span>probs[i]).expect(<span class="string">"No ordering."</span>));
 
         <span class="kw">if </span>top_k &gt; <span class="number">0 </span>{
             <span class="comment">// Clamp smaller probabilities to zero.

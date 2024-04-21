@@ -904,7 +904,6 @@
 <a href="#902" id="902">902</a>
 <a href="#903" id="903">903</a>
 <a href="#904" id="904">904</a>
-<a href="#905" id="905">905</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>gemma;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
@@ -1166,7 +1165,7 @@
 <span class="kw">pub trait </span>Pipeline: Send + Sync {
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-        input_toks: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
+        input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
         is_prompt: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor, candle_core::Error&gt;;
     <span class="kw">fn </span>tokenize_prompt(<span class="kw-2">&amp;</span><span class="self">self</span>, prompt: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u32&gt;&gt; {
@@ -1286,23 +1285,25 @@
     </span>context_lens: Vec&lt;usize&gt;,
 }
 
-<span class="kw">fn </span>get_prompt_input(input_toks: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence], device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
-    <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: Get the maximum sequence length.
-    </span><span class="kw">let </span>max_len = input_toks.iter().map(|seq| seq.len()).max().unwrap();
+<span class="kw">fn </span>get_prompt_input(input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence], device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
+    <span class="kw">let </span>max_len = input_seqs
+        .iter()
+        .map(|seq| seq.len())
+        .max()
+        .expect(<span class="string">"No sequences"</span>);
     <span class="kw">let </span>padding_tok = <span class="number">0</span>;
     <span class="comment">// Pad each sequence by the padding token to the max len.
     </span><span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
     <span class="kw">let </span><span class="kw-2">mut </span>seqlen_offsets = Vec::new();
     <span class="kw">let </span><span class="kw-2">mut </span>context_lens = Vec::new();
-    <span class="kw">for </span>seq <span class="kw">in </span>input_toks.iter() {
+    <span class="kw">for </span>seq <span class="kw">in </span>input_seqs.iter() {
         <span class="kw">let </span><span class="kw-2">mut </span>ctxt = seq.get_toks().to_vec();
         seqlen_offsets.push(<span class="number">0</span>);
 
         ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
         context_lens.push(seq.len() - <span class="number">1</span>);
 
-        <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
-        </span>seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
+        seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
     }
 
     <span class="kw">let </span><span class="kw-2">mut </span>tmp = Vec::new();
@@ -1313,8 +1314,7 @@
         tmp.push(Tensor::from_slice(<span class="kw-2">&amp;</span>pos, pos.len(), device)<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>);
     }
     <span class="kw">let </span>positions_kernel = Tensor::cat(<span class="kw-2">&amp;</span>tmp, <span class="number">0</span>)<span class="question-mark">?</span>;
-    <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
-    </span><span class="prelude-val">Ok</span>(InputMetadata {
+    <span class="prelude-val">Ok</span>(InputMetadata {
         input: Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap(),
         positions: seqlen_offsets,
         positions_kernel,
@@ -1323,28 +1323,26 @@
 }
 
 <span class="kw">fn </span>get_completion_input(
-    input_toks: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
+    input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
     device: <span class="kw-2">&amp;</span>Device,
     no_kv_cache: bool,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
     <span class="kw">if </span>no_kv_cache {
-        <span class="kw">return </span>get_prompt_input(input_toks, device);
+        <span class="kw">return </span>get_prompt_input(input_seqs, device);
     }
     <span class="comment">// Pad each sequence by the padding token to the max len.
     </span><span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
     <span class="kw">let </span><span class="kw-2">mut </span>seqlen_offsets = Vec::new();
     <span class="kw">let </span><span class="kw-2">mut </span>context_lens = Vec::new();
-    <span class="kw">for </span>seq <span class="kw">in </span>input_toks.iter() {
+    <span class="kw">for </span>seq <span class="kw">in </span>input_seqs.iter() {
         <span class="kw">let </span>start_pos = seq.get_toks().len().saturating_sub(<span class="number">1</span>);
         <span class="kw">let </span>ctxt = seq.get_toks()[start_pos..].to_vec();
         seqlen_offsets.push(start_pos);
         context_lens.push(<span class="number">0</span>);
 
-        <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The dimensions must match.
-        </span>seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
+        seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
     }
-    <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: Correct dimensions are provided.
-    </span><span class="kw">let </span><span class="kw-2">mut </span>tmp = Vec::new();
+    <span class="kw">let </span><span class="kw-2">mut </span>tmp = Vec::new();
     <span class="kw">for </span>pos <span class="kw">in </span>(<span class="number">0</span>..seqs_tensors.len())
         .map(|i| <span class="macro">vec!</span>[<span class="kw-2">*</span>seqlen_offsets.get(i).unwrap() <span class="kw">as </span>i64])
         .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
@@ -1371,7 +1369,7 @@
 }
 
 <span class="kw">fn </span>calculate_inputs(
-    input_toks: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
+    input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
     is_prompt: bool,
     is_xlora: bool,
     device: <span class="kw-2">&amp;</span>Device,
@@ -1383,13 +1381,13 @@
             positions: seqlen_offsets_full,
             positions_kernel: seqlen_offsets_kernel_full,
             context_lens: <span class="kw">_</span>,
-        } = get_prompt_input(input_toks, device)<span class="question-mark">?</span>;
+        } = get_prompt_input(input_seqs, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
-        } = get_completion_input(input_toks, device, no_kv_cache)<span class="question-mark">?</span>;
+        } = get_completion_input(input_seqs, device, no_kv_cache)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(ModelInputs {
             input_ids,
             input_ids_full: <span class="prelude-val">Some</span>(input_ids_full),
@@ -1405,7 +1403,7 @@
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
-        } = get_prompt_input(input_toks, device)<span class="question-mark">?</span>;
+        } = get_prompt_input(input_seqs, device)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(ModelInputs {
             input_ids: input_ids.clone(),
             input_ids_full: <span class="prelude-val">Some</span>(input_ids),
@@ -1421,7 +1419,7 @@
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
-        } = get_prompt_input(input_toks, device)<span class="question-mark">?</span>;
+        } = get_prompt_input(input_seqs, device)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(ModelInputs {
             input_ids,
             input_ids_full: <span class="prelude-val">None</span>,
@@ -1437,7 +1435,7 @@
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
-        } = get_completion_input(input_toks, device, no_kv_cache)<span class="question-mark">?</span>;
+        } = get_completion_input(input_seqs, device, no_kv_cache)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(ModelInputs {
             input_ids,
             input_ids_full: <span class="prelude-val">None</span>,
@@ -1717,7 +1715,7 @@
                         );
                     }
                 };
-                <span class="kw">let </span>ser = serde_json::to_string_pretty(<span class="kw-2">&amp;</span>deser).unwrap();
+                <span class="kw">let </span>ser = serde_json::to_string_pretty(<span class="kw-2">&amp;</span>deser).expect(<span class="string">"Serialization of modified chat template failed."</span>);
                 serde_json::from_str(<span class="kw-2">&amp;</span>ser).unwrap()
             }
         }

@@ -508,6 +508,8 @@
 <a href="#506" id="506">506</a>
 <a href="#507" id="507">507</a>
 <a href="#508" id="508">508</a>
+<a href="#509" id="509">509</a>
+<a href="#510" id="510">510</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
@@ -725,7 +727,7 @@
     }
 
     <span class="kw">pub fn </span>xlora_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt; {
-        <span class="self">self</span>.xlora_cache.as_mut().unwrap()
+        <span class="self">self</span>.xlora_cache.as_mut().expect(<span class="string">"No X-LoRA cache."</span>)
     }
 
     <span class="kw">pub fn </span>scaling_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;Tensor&gt; {
@@ -949,7 +951,7 @@
     </span><span class="kw">pub fn </span>get_completion_choices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;CompletionChoice&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>choices = <span class="self">self</span>.completion_choices.clone();
         <span class="comment">// Sort by descending logprobs
-        </span>choices.sort_by(|a, b| b.<span class="number">0</span>.partial_cmp(<span class="kw-2">&amp;</span>a.<span class="number">0</span>).unwrap());
+        </span>choices.sort_by(|a, b| b.<span class="number">0</span>.partial_cmp(<span class="kw-2">&amp;</span>a.<span class="number">0</span>).expect(<span class="string">"No ordering."</span>));
         choices
             .into_iter()
             .take(<span class="self">self</span>.best_of)
@@ -981,8 +983,9 @@
         sender: Sender&lt;Response&gt;,
     ) {
         <span class="kw">if </span><span class="self">self</span>.choices.len() == <span class="self">self</span>.n_choices {
-            <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-            </span>sender.send(Response::Done(response)).unwrap();
+            sender
+                .send(Response::Done(response))
+                .expect(<span class="string">"Expected receiver."</span>);
         }
     }
 
@@ -1001,7 +1004,7 @@
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: <span class="string">"chat.completion.chunk"</span>.to_string(),
                 }))
-                .unwrap();
+                .expect(<span class="string">"Expected receiver."</span>);
         }
     }
 
@@ -1011,8 +1014,9 @@
         sender: Sender&lt;Response&gt;,
     ) {
         <span class="kw">if </span><span class="self">self</span>.completion_choices.len() == <span class="self">self</span>.n_choices {
-            <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-            </span>sender.send(Response::CompletionDone(response)).unwrap();
+            sender
+                .send(Response::CompletionDone(response))
+                .expect(<span class="string">"Expected receiver."</span>);
         }
     }
 }

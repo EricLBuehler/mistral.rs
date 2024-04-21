@@ -198,6 +198,10 @@
 <a href="#196" id="196">196</a>
 <a href="#197" id="197">197</a>
 <a href="#198" id="198">198</a>
+<a href="#199" id="199">199</a>
+<a href="#200" id="200">200</a>
+<a href="#201" id="201">201</a>
+<a href="#202" id="202">202</a>
 </pre></div><pre class="rust"><code><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>tokens;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>varbuilder_utils;
 
@@ -219,8 +223,9 @@
             <span class="prelude-val">Ok</span>(v) =&gt; v,
             <span class="prelude-val">Err</span>(e) =&gt; {
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::response::Response</span>;
-                <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                </span><span class="macro-nonterminal">$response</span>.send(Response::InternalError(e.into())).unwrap();
+                <span class="macro-nonterminal">$response
+                    </span>.send(Response::InternalError(e.into()))
+                    .expect(<span class="string">"Expected receiver."</span>);
                 <span class="kw">return</span>;
             }
         }
@@ -234,8 +239,9 @@
             <span class="prelude-val">Ok</span>(v) =&gt; v,
             <span class="prelude-val">Err</span>(e) =&gt; {
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::response::Response</span>;
-                <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                </span><span class="macro-nonterminal">$response</span>.send(Response::InternalError(e.into())).unwrap();
+                <span class="macro-nonterminal">$response
+                    </span>.send(Response::InternalError(e.into()))
+                    .expect(<span class="string">"Expected receiver."</span>);
                 <span class="kw">return </span><span class="prelude-val">Ok</span>(());
             }
         }
@@ -250,8 +256,9 @@
             <span class="prelude-val">Err</span>(e) =&gt; {
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::response::Response</span>;
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::sequence::SequenceState</span>;
-                <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                </span><span class="macro-nonterminal">$seq</span>.responder().send(Response::InternalError(e.into())).unwrap();
+                <span class="macro-nonterminal">$seq</span>.responder()
+                    .send(Response::InternalError(e.into()))
+                    .expect(<span class="string">"Expected receiver."</span>);
                 <span class="macro-nonterminal">$seq</span>.set_state(SequenceState::Error);
                 <span class="kw">return</span>;
             }
@@ -267,8 +274,9 @@
             <span class="prelude-val">Err</span>(e) =&gt; {
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::response::Response</span>;
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::sequence::SequenceState</span>;
-                <span class="comment">// NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                </span><span class="macro-nonterminal">$seq</span>.responder().send(Response::InternalError(e.into())).unwrap();
+                <span class="macro-nonterminal">$seq</span>.responder()
+                    .send(Response::InternalError(e.into()))
+                    .expect(<span class="string">"Expected receiver."</span>);
                 <span class="macro-nonterminal">$seq</span>.set_state(SequenceState::Error);
                 <span class="kw">return </span><span class="prelude-val">Ok</span>(());
             }

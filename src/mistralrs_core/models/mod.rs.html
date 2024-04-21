@@ -131,6 +131,9 @@
 <a href="#129" id="129">129</a>
 <a href="#130" id="130">130</a>
 <a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
 
 <span class="kw">use </span>candle_core::{quantized::QTensor, <span class="prelude-ty">Result</span>, Tensor};
@@ -182,13 +185,16 @@
     <span class="doccomment">/// # Panics
     /// If there is no xlora cache
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>xlora_lock(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; MutexGuard&lt;<span class="lifetime">'_</span>, LayerCaches&gt; {
-        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.xlora_cache.as_ref().unwrap())
+        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.xlora_cache.as_ref().expect(<span class="string">"No X-LoRA cache."</span>))
     }
 
     <span class="doccomment">/// # Panics
     /// If there is no xlora cache
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_scalings_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; MutexGuard&lt;<span class="lifetime">'_</span>, <span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
-        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.scalings_cache.as_ref().unwrap())
+        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self
+            </span>.scalings_cache
+            .as_ref()
+            .expect(<span class="string">"No X-LoRA scalings cache."</span>))
     }
 
     <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {

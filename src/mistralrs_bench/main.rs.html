@@ -407,7 +407,7 @@
 
     <span class="kw">for _ in </span><span class="number">0</span>..repetitions {
         <span class="kw">for _ in </span><span class="number">0</span>..concurrency {
-            sender.send(req.clone()).unwrap();
+            sender.send(req.clone()).expect(<span class="string">"Expected receiver."</span>);
         }
         <span class="kw">for _ in </span><span class="number">0</span>..concurrency {
             <span class="kw">match </span>rx.recv() {

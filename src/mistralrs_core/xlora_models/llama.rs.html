@@ -1019,7 +1019,7 @@
                     <span class="kw-2">&amp;mut </span>count,
                     <span class="kw-2">&amp;</span>xlora_ordering,
                 )
-                .unwrap()
+                .expect(<span class="string">"Failed to load block."</span>)
             })
             .collect();
 

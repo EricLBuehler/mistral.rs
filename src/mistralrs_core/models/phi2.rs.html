@@ -689,7 +689,7 @@
                 mask.as_ref(),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
-                cache.get_mut(i).unwrap(),
+                <span class="kw-2">&amp;mut </span>cache[i],
             )<span class="question-mark">?</span>;
         }
         extract_logits(

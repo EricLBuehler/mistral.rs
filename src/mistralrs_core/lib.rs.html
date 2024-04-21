@@ -435,7 +435,7 @@
                 </span>.open(file)
                 .expect(<span class="string">"Unable to open file"</span>);
             <span class="kw">let </span>time = chrono::offset::Local::now();
-            <span class="kw">let </span>repr = serde_json::to_string(resp).unwrap();
+            <span class="kw">let </span>repr = serde_json::to_string(resp).expect(<span class="string">"Serialization of response failed."</span>);
             f.write_all(<span class="macro">format!</span>(<span class="string">"Response at {time}: {repr}\n\n"</span>).as_bytes())
                 .expect(<span class="string">"Unable to write data"</span>);
         }

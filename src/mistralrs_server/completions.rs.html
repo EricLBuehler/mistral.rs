@@ -288,7 +288,7 @@
     state: Arc&lt;MistralRs&gt;,
     tx: Sender&lt;Response&gt;,
 ) -&gt; Request {
-    <span class="kw">let </span>repr = serde_json::to_string(<span class="kw-2">&amp;</span>oairequest).unwrap();
+    <span class="kw">let </span>repr = serde_json::to_string(<span class="kw-2">&amp;</span>oairequest).expect(<span class="string">"Serialization of request failed."</span>);
     MistralRs::maybe_log_request(state.clone(), repr);
 
     <span class="kw">let </span>stop_toks = <span class="kw">match </span>oairequest.stop_seqs {
