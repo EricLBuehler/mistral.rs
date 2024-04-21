@@ -98,7 +98,7 @@ impl Engine {
                     "completion",
                     logits,
                     &mut scheduled.completion,
-                    pipeline, 
+                    pipeline,
                     'lp,
                     self.prefix_cacher
                 );
@@ -127,7 +127,7 @@ impl Engine {
                     "prompt",
                     logits,
                     &mut scheduled.prompt,
-                    pipeline, 
+                    pipeline,
                     'lp,
                     self.prefix_cacher
                 );
