@@ -166,7 +166,15 @@ impl Sequence {
 
     /// This is the number of tokens. If the KV cache is Some, then it will use that.
     pub fn len(&self) -> usize {
-        if let Some((_, x)) = &self.cache[0] {
+        // Use xlora cache first because of non granular
+        if self.xlora_cache.as_ref().is_some_and(|c| c[0].is_some()) {
+            self.xlora_cache.as_ref().unwrap()[0]
+                .as_ref()
+                .unwrap()
+                .0
+                .dims()[2]
+                + 1
+        } else if let Some((_, x)) = &self.cache[0] {
             x.dims()[2] + 1
         } else {
             if let Some(toks) = &self.prefill_prompt_toks {
