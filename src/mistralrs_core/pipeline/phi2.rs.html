@@ -477,6 +477,23 @@
 <a href="#475" id="475">475</a>
 <a href="#476" id="476">476</a>
 <a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
+<a href="#479" id="479">479</a>
+<a href="#480" id="480">480</a>
+<a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a>
+<a href="#491" id="491">491</a>
+<a href="#492" id="492">492</a>
+<a href="#493" id="493">493</a>
+<a href="#494" id="494">494</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -488,12 +505,16 @@
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{calculate_eos_tok, ChatTemplate};
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::{NonGranularState, XLoraConfig};
 <span class="kw">use crate</span>::{
-    models::phi2::{Config, Model <span class="kw">as </span>NormalModel},
+    models::{
+        phi2::{Config, Model <span class="kw">as </span>NormalModel},
+        quantized_phi2::ModelWeights <span class="kw">as </span>QModelWeights,
+    },
     sequence::Sequence,
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
     xlora_models::XLoraPhi2,
 };
 <span class="kw">use </span>anyhow::Result;
+<span class="kw">use </span>candle_core::quantized::gguf_file;
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
 <span class="kw">use </span>candle_nn::Activation;
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -513,6 +534,7 @@
 <span class="kw">enum </span>Model {
     Normal(NormalModel),
     XLoraNormal(XLoraPhi2),
+    Quantized(QModelWeights),
 }
 <span class="kw">pub const </span>PHI2_IS_GPTX: bool = <span class="bool-val">true</span>;
 
@@ -742,7 +764,13 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>is_lora = <span class="bool-val">false</span>;
         <span class="kw">let </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
-            ModelKind::QuantizedGGUF =&gt; <span class="macro">unreachable!</span>(),
+            ModelKind::QuantizedGGUF =&gt; {
+                <span class="kw">let </span><span class="kw-2">mut </span>file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())<span class="question-mark">?</span>;
+                <span class="kw">let </span>model = gguf_file::Content::read(<span class="kw-2">&amp;mut </span>file)
+                    .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))<span class="question-mark">?</span>;
+                <span class="kw">let </span>model = QModelWeights::from_gguf(model, <span class="kw-2">&amp;mut </span>file, device)<span class="question-mark">?</span>;
+                Model::Quantized(model)
+            }
             ModelKind::QuantizedGGML =&gt; <span class="macro">unreachable!</span>(),
             ModelKind::Normal =&gt; {
                 <span class="kw">let </span>vb = from_mmaped_safetensors(
@@ -900,12 +928,16 @@
                 <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state,
                 context_lens,
             ),
+            Model::Quantized(<span class="kw-2">ref mut </span>model) =&gt; {
+                model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets, context_lens)
+            }
         }
     }
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {
         <span class="kw">match </span><span class="self">self</span>.model {
             Model::Normal(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.device,
             Model::XLoraNormal(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.device,
+            Model::Quantized(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.device,
         }
     }
     <span class="kw">fn </span>num_hidden_layers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
@@ -915,6 +947,7 @@
         <span class="kw">match </span><span class="self">self</span>.model {
             Model::Normal(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
             Model::XLoraNormal(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
+            Model::Quantized(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
         }
     }
     <span class="kw">fn </span>get_repeat_last_n(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
@@ -933,11 +966,12 @@
         <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.model {
             Model::Normal(<span class="kw-2">ref </span>model) =&gt; model.max_seq_len,
             Model::XLoraNormal(<span class="kw-2">ref </span>model) =&gt; model.max_seq_len,
+            Model::Quantized(<span class="kw-2">ref </span>model) =&gt; model.max_seq_len,
         }
     }
     <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.model {
-            Model::Normal(<span class="kw">_</span>) =&gt; <span class="bool-val">false</span>,
+            Model::Normal(<span class="kw">_</span>) | Model::Quantized(<span class="kw">_</span>) =&gt; <span class="bool-val">false</span>,
             Model::XLoraNormal(<span class="kw">_</span>) =&gt; !<span class="self">self</span>.is_lora,
         }
     }

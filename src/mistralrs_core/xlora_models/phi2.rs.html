@@ -583,19 +583,6 @@
 <a href="#581" id="581">581</a>
 <a href="#582" id="582">582</a>
 <a href="#583" id="583">583</a>
-<a href="#584" id="584">584</a>
-<a href="#585" id="585">585</a>
-<a href="#586" id="586">586</a>
-<a href="#587" id="587">587</a>
-<a href="#588" id="588">588</a>
-<a href="#589" id="589">589</a>
-<a href="#590" id="590">590</a>
-<a href="#591" id="591">591</a>
-<a href="#592" id="592">592</a>
-<a href="#593" id="593">593</a>
-<a href="#594" id="594">594</a>
-<a href="#595" id="595">595</a>
-<a href="#596" id="596">596</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
@@ -612,7 +599,7 @@
 <span class="kw">use </span>mistralrs_lora::{linear, LinearLayerLike, LoraConfig, Ordering};
 
 <span class="kw">use crate</span>::{
-    models::{flash_attn, phi2::Config},
+    models::{flash_attn, phi2::Config, repeat_kv},
     pipeline::{extract_logits, PHI2_IS_GPTX},
 };
 
@@ -785,18 +772,6 @@
         })
     }
 
-    <span class="kw">fn </span>repeat_kv(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>n_rep = <span class="self">self</span>.num_heads / <span class="self">self</span>.num_kv_heads;
-        <span class="kw">if </span>n_rep == <span class="number">1 </span>{
-            <span class="prelude-val">Ok</span>(xs)
-        } <span class="kw">else </span>{
-            <span class="kw">let </span>(b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()<span class="question-mark">?</span>;
-            xs.unsqueeze(<span class="number">2</span>)<span class="question-mark">?
-                </span>.expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))<span class="question-mark">?
-                </span>.reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
-        }
-    }
-
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
@@ -873,9 +848,8 @@
         };
         <span class="kw-2">*</span>kv_cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
 
-        <span class="comment">// Repeat kv.
-        </span><span class="kw">let </span>k = <span class="self">self</span>.repeat_kv(k)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = <span class="self">self</span>.repeat_kv(v)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_heads / <span class="self">self</span>.num_kv_heads)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_heads / <span class="self">self</span>.num_kv_heads)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
 
         <span class="kw">let </span>attn_output = <span class="kw">if </span><span class="self">self</span>.use_flash_attn {
             <span class="comment">// flash-attn expects (b_sz, seq_len, nheads, head_dim)

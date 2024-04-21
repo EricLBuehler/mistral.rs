@@ -856,17 +856,6 @@
 <a href="#854" id="854">854</a>
 <a href="#855" id="855">855</a>
 <a href="#856" id="856">856</a>
-<a href="#857" id="857">857</a>
-<a href="#858" id="858">858</a>
-<a href="#859" id="859">859</a>
-<a href="#860" id="860">860</a>
-<a href="#861" id="861">861</a>
-<a href="#862" id="862">862</a>
-<a href="#863" id="863">863</a>
-<a href="#864" id="864">864</a>
-<a href="#865" id="865">865</a>
-<a href="#866" id="866">866</a>
-<a href="#867" id="867">867</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -877,7 +866,7 @@
 <span class="kw">use </span>candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear};
 
-<span class="kw">use </span><span class="kw">crate</span>::models::{verify_sanity_gguf, Cache, QRmsNorm};
+<span class="kw">use </span><span class="kw">crate</span>::models::{repeat_kv, verify_sanity_gguf, Cache, QRmsNorm};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::extract_logits;
 
 <span class="kw">use </span><span class="kw">super</span>::classifier::XLoraClassifier;
@@ -1107,9 +1096,8 @@
         };
         <span class="kw-2">*</span>kv_cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
 
-        <span class="comment">// Support for MQA, useful for 70B models.
-        </span><span class="kw">let </span>k = <span class="self">self</span>.repeat_kv(k)<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = <span class="self">self</span>.repeat_kv(v)<span class="question-mark">?</span>;
+        <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
 
         <span class="kw">let </span>att = (q.contiguous()<span class="question-mark">?</span>.matmul(<span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>)<span class="question-mark">? </span>/ (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
         <span class="kw">let </span>att = <span class="kw">match </span>mask {
@@ -1130,16 +1118,6 @@
             is_scaling_pass,
         )<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(y)
-    }
-
-    <span class="kw">fn </span>repeat_kv(<span class="kw-2">&amp;</span><span class="self">self</span>, x: Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>n_rep = <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head;
-        <span class="kw">if </span>n_rep == <span class="number">1 </span>{
-            <span class="prelude-val">Ok</span>(x)
-        } <span class="kw">else </span>{
-            <span class="kw">let </span>(b_sz, n_kv_head, seq_len, head_dim) = x.dims4()<span class="question-mark">?</span>;
-            Tensor::cat(<span class="kw-2">&amp;</span><span class="macro">vec!</span>[<span class="kw-2">&amp;</span>x; n_rep], <span class="number">2</span>)<span class="question-mark">?</span>.reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))
-        }
     }
 }
 

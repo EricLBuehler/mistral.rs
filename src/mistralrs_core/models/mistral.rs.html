@@ -353,16 +353,6 @@
 <a href="#351" id="351">351</a>
 <a href="#352" id="352">352</a>
 <a href="#353" id="353">353</a>
-<a href="#354" id="354">354</a>
-<a href="#355" id="355">355</a>
-<a href="#356" id="356">356</a>
-<a href="#357" id="357">357</a>
-<a href="#358" id="358">358</a>
-<a href="#359" id="359">359</a>
-<a href="#360" id="360">360</a>
-<a href="#361" id="361">361</a>
-<a href="#362" id="362">362</a>
-<a href="#363" id="363">363</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -373,7 +363,7 @@
 
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, MISTRAL_IS_GPTX};
 
-<span class="kw">use super</span>::{flash_attn, Cache, RmsNorm};
+<span class="kw">use super</span>::{flash_attn, repeat_kv, Cache, RmsNorm};
 
 <span class="attr">#[derive(Debug, Clone, PartialEq)]
 </span><span class="kw">pub struct </span>Config {
@@ -465,16 +455,6 @@
         })
     }
 
-    <span class="kw">fn </span>repeat_kv(<span class="kw-2">&amp;</span><span class="self">self</span>, x: Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>n_rep = <span class="self">self</span>.num_kv_groups;
-        <span class="kw">if </span>n_rep == <span class="number">1 </span>{
-            <span class="prelude-val">Ok</span>(x)
-        } <span class="kw">else </span>{
-            <span class="kw">let </span>(b_sz, n_kv_head, seq_len, head_dim) = x.dims4()<span class="question-mark">?</span>;
-            Tensor::cat(<span class="kw-2">&amp;</span><span class="macro">vec!</span>[<span class="kw-2">&amp;</span>x; n_rep], <span class="number">2</span>)<span class="question-mark">?</span>.reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))
-        }
-    }
-
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         xs: <span class="kw-2">&amp;</span>Tensor,
@@ -519,8 +499,8 @@
         };
         <span class="kw-2">*</span>kv_cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
 
-        <span class="kw">let </span>k = <span class="self">self</span>.repeat_kv(k)<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = <span class="self">self</span>.repeat_kv(v)<span class="question-mark">?</span>;
+        <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
 
         <span class="kw">let </span>attn_output = <span class="kw">if </span><span class="self">self</span>.use_flash_attn {
             <span class="comment">// flash-attn expects (b_sz, seq_len, nheads, head_dim)

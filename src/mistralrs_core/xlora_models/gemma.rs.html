@@ -633,18 +633,6 @@
 <a href="#631" id="631">631</a>
 <a href="#632" id="632">632</a>
 <a href="#633" id="633">633</a>
-<a href="#634" id="634">634</a>
-<a href="#635" id="635">635</a>
-<a href="#636" id="636">636</a>
-<a href="#637" id="637">637</a>
-<a href="#638" id="638">638</a>
-<a href="#639" id="639">639</a>
-<a href="#640" id="640">640</a>
-<a href="#641" id="641">641</a>
-<a href="#642" id="642">642</a>
-<a href="#643" id="643">643</a>
-<a href="#644" id="644">644</a>
-<a href="#645" id="645">645</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
@@ -654,7 +642,7 @@
 <span class="kw">use </span>mistralrs_lora::{linear_b <span class="kw">as </span>linear, LinearLayerLike, LoraConfig, Ordering};
 
 <span class="kw">use crate</span>::{
-    models::{gemma::Config, Cache},
+    models::{gemma::Config, repeat_kv, Cache},
     pipeline::{extract_logits, GEMMA_IS_GPTX},
 };
 
@@ -851,18 +839,6 @@
         })
     }
 
-    <span class="kw">fn </span>repeat_kv(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>n_rep = <span class="self">self</span>.num_kv_groups;
-        <span class="kw">if </span>n_rep == <span class="number">1 </span>{
-            <span class="prelude-val">Ok</span>(xs)
-        } <span class="kw">else </span>{
-            <span class="kw">let </span>(b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()<span class="question-mark">?</span>;
-            xs.unsqueeze(<span class="number">2</span>)<span class="question-mark">?
-                </span>.expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))<span class="question-mark">?
-                </span>.reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
-        }
-    }
-
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
@@ -926,8 +902,8 @@
         };
         <span class="kw-2">*</span>kv_cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
 
-        <span class="kw">let </span>k = <span class="self">self</span>.repeat_kv(k)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = <span class="self">self</span>.repeat_kv(v)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
 
         <span class="kw">let </span>attn_output = {
             <span class="kw">let </span>scale = <span class="number">1f64 </span>/ f64::sqrt(<span class="self">self</span>.head_dim <span class="kw">as </span>f64);

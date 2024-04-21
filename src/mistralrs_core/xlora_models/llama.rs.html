@@ -535,20 +535,6 @@
 <a href="#533" id="533">533</a>
 <a href="#534" id="534">534</a>
 <a href="#535" id="535">535</a>
-<a href="#536" id="536">536</a>
-<a href="#537" id="537">537</a>
-<a href="#538" id="538">538</a>
-<a href="#539" id="539">539</a>
-<a href="#540" id="540">540</a>
-<a href="#541" id="541">541</a>
-<a href="#542" id="542">542</a>
-<a href="#543" id="543">543</a>
-<a href="#544" id="544">544</a>
-<a href="#545" id="545">545</a>
-<a href="#546" id="546">546</a>
-<a href="#547" id="547">547</a>
-<a href="#548" id="548">548</a>
-<a href="#549" id="549">549</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -560,7 +546,7 @@
     models::{
         <span class="self">self</span>, flash_attn,
         llama::{Config, MAX_SEQ_LEN},
-        LayerCaches, RmsNorm,
+        repeat_kv, LayerCaches, RmsNorm,
     },
     pipeline::{extract_logits, LLAMA_IS_GPTX},
 };
@@ -680,8 +666,8 @@
         }
         kv_cache[block_idx] = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
 
-        <span class="kw">let </span>k = <span class="self">self</span>.repeat_kv(k)<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = <span class="self">self</span>.repeat_kv(v)<span class="question-mark">?</span>;
+        <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_attention_heads / <span class="self">self</span>.num_key_value_heads)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_attention_heads / <span class="self">self</span>.num_key_value_heads)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
 
         <span class="kw">let </span>y = <span class="kw">if </span><span class="self">self</span>.use_flash_attn {
             <span class="comment">// flash-attn expects (b_sz, seq_len, nheads, head_dim)
@@ -710,20 +696,6 @@
             is_scaling_pass,
         )<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(y)
-    }
-
-    <span class="kw">fn </span>repeat_kv(<span class="kw-2">&amp;</span><span class="self">self</span>, x: Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>n_rep = <span class="self">self</span>.num_attention_heads / <span class="self">self</span>.num_key_value_heads;
-        <span class="kw">if </span>n_rep == <span class="number">1 </span>{
-            <span class="prelude-val">Ok</span>(x)
-        } <span class="kw">else </span>{
-            <span class="kw">let </span>(b_sz, n_kv_head, seq_len, head_dim) = x.dims4()<span class="question-mark">?</span>;
-            <span class="kw">let </span>x = x
-                .unsqueeze(<span class="number">2</span>)<span class="question-mark">?
-                </span>.expand((b_sz, n_kv_head, n_rep, seq_len, head_dim))<span class="question-mark">?
-                </span>.reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))<span class="question-mark">?</span>;
-            <span class="prelude-val">Ok</span>(x)
-        }
     }
 
     <span class="kw">fn </span>load(

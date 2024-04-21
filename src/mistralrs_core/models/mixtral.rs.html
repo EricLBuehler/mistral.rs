@@ -438,18 +438,6 @@
 <a href="#436" id="436">436</a>
 <a href="#437" id="437">437</a>
 <a href="#438" id="438">438</a>
-<a href="#439" id="439">439</a>
-<a href="#440" id="440">440</a>
-<a href="#441" id="441">441</a>
-<a href="#442" id="442">442</a>
-<a href="#443" id="443">443</a>
-<a href="#444" id="444">444</a>
-<a href="#445" id="445">445</a>
-<a href="#446" id="446">446</a>
-<a href="#447" id="447">447</a>
-<a href="#448" id="448">448</a>
-<a href="#449" id="449">449</a>
-<a href="#450" id="450">450</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
@@ -463,7 +451,7 @@
 
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, MIXTRAL_IS_GPTX};
 
-<span class="kw">use super</span>::{flash_attn, Cache, RmsNorm};
+<span class="kw">use super</span>::{flash_attn, repeat_kv, Cache, RmsNorm};
 
 <span class="doccomment">/// https://github.com/huggingface/transformers/blob/1a585c1222a56bcaecc070966d558d4a9d862e83/src/transformers/models/mixtral/configuration_mixtral.py#L113
 </span><span class="attr">#[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -525,18 +513,6 @@
         })
     }
 
-    <span class="kw">fn </span>repeat_kv(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>n_rep = <span class="self">self</span>.num_kv_groups;
-        <span class="kw">if </span>n_rep == <span class="number">1 </span>{
-            <span class="prelude-val">Ok</span>(xs)
-        } <span class="kw">else </span>{
-            <span class="kw">let </span>(b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()<span class="question-mark">?</span>;
-            xs.unsqueeze(<span class="number">2</span>)<span class="question-mark">?
-                </span>.expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))<span class="question-mark">?
-                </span>.reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
-        }
-    }
-
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         xs: <span class="kw-2">&amp;</span>Tensor,
@@ -581,8 +557,8 @@
         };
         <span class="kw-2">*</span>kv_cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
 
-        <span class="kw">let </span>k = <span class="self">self</span>.repeat_kv(k)<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = <span class="self">self</span>.repeat_kv(v)<span class="question-mark">?</span>;
+        <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
 
         <span class="kw">let </span>attn_output = <span class="kw">if </span><span class="self">self</span>.use_flash_attn {
             <span class="comment">// flash-attn expects (b_sz, seq_len, nheads, head_dim)
