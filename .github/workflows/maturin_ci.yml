@@ -25,8 +25,8 @@ jobs:
         with:
           python-version: '3.10'
       - name: Build wheels
-        working-directory: ./mistralrs-pyo3
         uses: PyO3/maturin-action@v1
+        working-directory: ./mistralrs-pyo3
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
@@ -45,8 +45,8 @@ jobs:
           python-version: '3.10'
           architecture: ${{ matrix.target }}
       - name: Build wheels
-        working-directory: ./mistralrs-pyo3
         uses: PyO3/maturin-action@v1
+        working-directory: ./mistralrs-pyo3
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
@@ -62,12 +62,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - name: cd mistralrs-pyo3
-        run: |
-          cd mistralrs-pyo3
       - name: Build wheels
-        working-directory: ./mistralrs-pyo3
         uses: PyO3/maturin-action@v1
+        working-directory: ./mistralrs-pyo3
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
