@@ -220,4 +220,12 @@ pub enum Which {
         adapters_model_id: String,
         order: String,
     },
+
+    Phi2GGUF {
+        tok_model_id: String,
+        tokenizer_json: Option<String>,
+        quantized_model_id: String,
+        quantized_filename: String,
+        repeat_last_n: Option<usize>,
+    },
 }

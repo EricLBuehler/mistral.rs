@@ -52,7 +52,6 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
         | ModelSelected::Mixtral { .. }
         | ModelSelected::MixtralGGUF { .. }
         | ModelSelected::Phi2 { .. }
-        | ModelSelected::XLoraPhi2 { .. }
         | ModelSelected::LoraMistralGGUF { .. }
         | ModelSelected::LoraMistral { .. }
         | ModelSelected::LoraLlama { .. }
@@ -90,6 +89,10 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
             ..
         }
         | ModelSelected::XLoraMixtralGGUF {
+            tgt_non_granular_index,
+            ..
+        }
+        | ModelSelected::XLoraPhi2 {
             tgt_non_granular_index,
             ..
         } => *tgt_non_granular_index,
