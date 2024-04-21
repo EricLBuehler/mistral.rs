@@ -24,21 +24,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - name: cd mistralrs-pyo3
-        run: |
-          cd mistralrs-pyo3
       - name: Build wheels
+        working-directory: ./mistralrs-pyo3
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
           sccache: 'true'
           manylinux: auto
-      - name: Upload wheels
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-linux-${{ matrix.target }}
-          path: dist
 
   windows:
     runs-on: windows-latest
@@ -51,20 +44,13 @@ jobs:
         with:
           python-version: '3.10'
           architecture: ${{ matrix.target }}
-      - name: cd mistralrs-pyo3
-        run: |
-          cd mistralrs-pyo3
       - name: Build wheels
+        working-directory: ./mistralrs-pyo3
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
           sccache: 'true'
-      - name: Upload wheels
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-windows-${{ matrix.target }}
-          path: dist
 
   macos:
     runs-on: macos-latest
@@ -80,13 +66,9 @@ jobs:
         run: |
           cd mistralrs-pyo3
       - name: Build wheels
+        working-directory: ./mistralrs-pyo3
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
           sccache: 'true'
-      - name: Upload wheels
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-macos-${{ matrix.target }}
-          path: dist
