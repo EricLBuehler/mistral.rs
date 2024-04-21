@@ -1300,7 +1300,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>ctxt = seq.get_toks().to_vec();
         seqlen_offsets.push(<span class="number">0</span>);
 
-        ctxt.extend(repeat(padding_tok).take(max_len - ctxt.len()));
+        ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));
         context_lens.push(seq.len() - <span class="number">1</span>);
 
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
