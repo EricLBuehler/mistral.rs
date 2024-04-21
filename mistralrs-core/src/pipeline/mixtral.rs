@@ -156,7 +156,10 @@ impl MixtralLoader {
         let model_id = if let Some(id) = model_id {
             id
         } else {
-            info!("Using adapter base model ID: `{}`", xlora_order.as_ref().unwrap().base_model_id);
+            info!(
+                "Using adapter base model ID: `{}`",
+                xlora_order.as_ref().unwrap().base_model_id
+            );
             xlora_order.as_ref().unwrap().base_model_id.clone()
         };
         Self {
@@ -443,7 +446,7 @@ impl Loader for MixtralLoader {
     fn get_id(&self) -> &str {
         self.xlora_model_id.as_deref().unwrap_or(&self.model_id)
     }
-    
+
     fn get_kind(&self) -> ModelKind {
         self.kind
     }
