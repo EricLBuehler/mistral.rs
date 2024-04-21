@@ -26,12 +26,12 @@ jobs:
           python-version: '3.10'
       - name: Build wheels
         uses: PyO3/maturin-action@v1
-        working-directory: ./mistralrs-pyo3
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
           sccache: 'true'
           manylinux: auto
+          working-directory: ./mistralrs-pyo3
 
   windows:
     runs-on: windows-latest
@@ -46,11 +46,11 @@ jobs:
           architecture: ${{ matrix.target }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
-        working-directory: ./mistralrs-pyo3
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
           sccache: 'true'
+          working-directory: ./mistralrs-pyo3
 
   macos:
     runs-on: macos-latest
@@ -64,8 +64,8 @@ jobs:
           python-version: '3.10'
       - name: Build wheels
         uses: PyO3/maturin-action@v1
-        working-directory: ./mistralrs-pyo3
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
           sccache: 'true'
+          working-directory: ./mistralrs-pyo3
