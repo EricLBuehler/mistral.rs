@@ -29,6 +29,8 @@ jobs:
           rm -rf ./docs
           echo "<meta http-equiv=\"refresh\" content=\"0; url=mistralrs\">" > target/doc/index.html
           cp -r target/doc ./docs
+          pip install pdoc
+          pdoc mistralrs-pyo3/mistralrs.pyi -o docs/pdoc
       - name: Deploy
         uses: JamesIves/github-pages-deploy-action@v4
         with:
