@@ -510,6 +510,14 @@
 <a href="#508" id="508">508</a>
 <a href="#509" id="509">509</a>
 <a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a>
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
@@ -678,7 +686,15 @@
 
     <span class="doccomment">/// This is the number of tokens. If the KV cache is Some, then it will use that.
     </span><span class="kw">pub fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>((<span class="kw">_</span>, x)) = <span class="kw-2">&amp;</span><span class="self">self</span>.cache[<span class="number">0</span>] {
+        <span class="comment">// Use xlora cache first because of non granular
+        </span><span class="kw">if </span><span class="self">self</span>.xlora_cache.as_ref().is_some_and(|c| c[<span class="number">0</span>].is_some()) {
+            <span class="self">self</span>.xlora_cache.as_ref().unwrap()[<span class="number">0</span>]
+                .as_ref()
+                .unwrap()
+                .<span class="number">0
+                </span>.dims()[<span class="number">2</span>]
+                + <span class="number">1
+        </span>} <span class="kw">else if let </span><span class="prelude-val">Some</span>((<span class="kw">_</span>, x)) = <span class="kw-2">&amp;</span><span class="self">self</span>.cache[<span class="number">0</span>] {
             x.dims()[<span class="number">2</span>] + <span class="number">1
         </span>} <span class="kw">else </span>{
             <span class="kw">if let </span><span class="prelude-val">Some</span>(toks) = <span class="kw-2">&amp;</span><span class="self">self</span>.prefill_prompt_toks {
