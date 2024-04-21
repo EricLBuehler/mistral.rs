@@ -143,6 +143,8 @@ More benchmarks coming!
 ### Installation and Build
 To install mistral.rs, one should ensure they have Rust installed by following [this](https://rustup.rs/) link. Additionally, the Huggingface token should be provided in `~/.cache/huggingface/token` when using the server to enable automatic download of gated models.
 
+Detailed installation guide: [here](INSTALLATION.md).
+
 **Easy quickstart**
 For an easy quickstart on a `*nix` system, the script below will 
 download an setup Rust and then build mistral.rs to run with CUDA.
@@ -160,9 +162,6 @@ touch ~/.cache/huggingface/token
 echo <HF_TOKEN_HERE> > ~/.cache/huggingface/token
 cargo build --release --features cuda
 ```
-
-**Detailed guide**
-Please see the [detailed guide here](INSTALLATION.md).
 
 ### Run
 
@@ -187,13 +186,16 @@ You can launch interactive mode, a simple chat application running in the termin
 
 To start an X-LoRA server with the exactly as presented in [the paper](https://arxiv.org/abs/2402.07148):
 
-`./mistralrs-server --port 1234 x-lora-mistral -o orderings/xlora-paper-ordering.json -m HuggingFaceH4/zephyr-7b-beta -x lamm-mit/x-lora`
-
+```
+./mistralrs-server --port 1234 x-lora-mistral -o orderings/xlora-paper-ordering.json -m HuggingFaceH4/zephyr-7b-beta -x lamm-mit/x-lora
+```
 - LoRA with a model from GGUF
 
 To start an LoRA server with adapters from the X-LoRA paper (you should modify the ordering file to use only one adapter, as the adapter static scalings are all 1 and so the signal will become distorted):
 
-`./mistralrs-server --port 1234 lora-mistral-gguf -o orderings/xlora-paper-ordering.json -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q8_0.gguf -a lamm-mit/x-lora`
+```
+./mistralrs-server --port 1234 lora-mistral-gguf -o orderings/xlora-paper-ordering.json -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q8_0.gguf -a lamm-mit/x-lora
+```
 
 Normally with a LoRA model you would use a custom ordering file. However, for this example we use the ordering from the X-LoRA paper because we are using the adapters from the X-LoRA paper.
 
@@ -201,21 +203,28 @@ Normally with a LoRA model you would use a custom ordering file. However, for th
 
 To start a server running Llama from GGUF:
 
-`./mistralrs-server --port 1234 llama-gguf -t meta-llama/Llama-2-13b-chat-hf -m TheBloke/Llama-2-13B-chat-GGUF -f llama-2-13b-chat.Q4_K_M.gguf`
+```
+./mistralrs-server --port 1234 llama-gguf -t meta-llama/Llama-2-13b-chat-hf -m TheBloke/Llama-2-13B-chat-GGUF -f llama-2-13b-chat.Q4_K_M.gguf
+```
 
 - With a model from GGML
 
 To start a server running Llama from GGML:
 
-`./mistralrs-server --port 1234 llama-ggml -t meta-llama/Llama-2-13b-chat-hf -m TheBloke/Llama-2-13B-chat-GGML -f llama-2-13b-chat.ggmlv3.q4_K_M.bin`
+```
+./mistralrs-server --port 1234 llama-ggml -t meta-llama/Llama-2-13b-chat-hf -m TheBloke/Llama-2-13B-chat-GGML -f llama-2-13b-chat.ggmlv3.q4_K_M.bin
+```
 
 - Single prompt inference
 
 To run a single prompt and then shut down:
 
-`./mistralrs-server --prompt "Hello!" mistral-gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf`
+```
+./mistralrs-server --prompt "Hello!" mistral-gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
+```
 
 **Command line docs**
+
 Command line docs [here](docs/CMD_LINE_DOCS.md)
 
 ---
