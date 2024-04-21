@@ -62,6 +62,7 @@ Please see [this section](README#supported-models) for details on quantization a
 Rust multithreaded API for easy integration into any application.
 
 - [Docs](https://ericlbuehler.github.io/mistral.rs/mistralrs/)
+- [Examples](mistralrs/examples/)
 - To install: Add `mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }`
 
 **Python API**
