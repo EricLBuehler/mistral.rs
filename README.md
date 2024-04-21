@@ -51,47 +51,13 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95
 **Supported models:**
 - Mistral 7B (v0.1 and v0.2)
 - Gemma
-- Llama
+- Llama, including Llama 3
 - Mixtral 8x7B
 - Phi 2
 
-**Quantization support**
-|Model|GGUF|GGML|
-|--|--|--|
-|Mistral 7B |✅| |
-|Gemma| | |
-|Llama|✅|✅|
-|Mixtral 8x7B|✅| |
-|Phi 2| | |
+Please see [this section](README#supported-models) for details on quantization and LoRA support.
 
-**X-LoRA and LoRA support**
-|Model|X-LoRA|X-LoRA+GGUF|X-LoRA+GGML|
-|--|--|--|--|
-|Mistral 7B |✅|✅| |
-|Gemma|✅| | |
-|Llama|✅|✅|✅|
-|Mixtral 8x7B|✅|✅| |
-|Phi 2|✅| | |
-
-**Using derivative models**
-
-To use a derivative model, select the model architecture using the correct subcommand. To see what can be passed for the architecture, pass `--help` after the subcommand. For example, when using a different model than the default, specify the following for the following types of models:
-
-- **Normal**: Model id
-- **Quantized**: Quantized model id, quantized filename, and tokenizer id
-- **X-LoRA**: Model id, X-LoRA ordering
-- **X-LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and X-LoRA ordering
-- **LoRA**: Model id, LoRA ordering
-- **LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and LoRA ordering
-
-See [this](#adapter-ordering-file) section to determine if it is necessary to prepare an X-LoRA/LoRA ordering file, it is always necessary if the target modules or architecture changed, or if the adapter order changed.
-
-It is also important to check the chat template style of the model. If the HF hub repo has a `tokenizer_config.json` file, it is not necessary to specify. Otherwise, templates can be found in `chat_templates` and should be passed before the subcommand. If the model is not instruction tuned, no chat template will be found and the APIs will only accept a prompt, no messages.
-
-For example, when using a Zephyr model:
-
-`./mistralrs-server --port 1234 --log output.txt mistral-gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf`
-
+## APIs and Integrations
 **Rust Library API**
 
 Rust multithreaded API for easy integration into any application.
@@ -108,7 +74,7 @@ Python API for mistral.rs.
 - [Cookbook](examples/python/cookbook.ipynb)
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest
+from mistralrs import Runner, Which, ChatCompletionRequest, Message, Role
 
 runner = Runner(
     which=Which.MistralGGUF(
@@ -123,16 +89,15 @@ runner = Runner(
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
         model="mistral",
-        messages=[
-            {"role": "user", "content": "Tell me a story about the Rust type system."}
-        ],
+        messages=[Message(Role.User, "Tell me a story about the Rust type system.")],
         max_tokens=256,
         presence_penalty=1.0,
         top_p=0.1,
         temperature=0.1,
     )
 )
-print(res)
+print(res.choices[0].message.content)
+print(res.usage)
 ```
 
 **HTTP Server**
@@ -147,6 +112,8 @@ OpenAI API compatible API server
 
 - [Source](integrations/llama_index_integration.py).
 - [Example](examples/llama_index/xlora_gguf.py)
+
+---
 
 ## Supported accelerators
 - CUDA:
@@ -403,6 +370,44 @@ Options:
 ```
 
 ---
+
+## Supported models
+**Quantization support**
+|Model|GGUF|GGML|
+|--|--|--|
+|Mistral 7B |✅| |
+|Gemma| | |
+|Llama|✅|✅|
+|Mixtral 8x7B|✅| |
+|Phi 2| | |
+
+**X-LoRA and LoRA support**
+|Model|X-LoRA|X-LoRA+GGUF|X-LoRA+GGML|
+|--|--|--|--|
+|Mistral 7B |✅|✅| |
+|Gemma|✅| | |
+|Llama|✅|✅|✅|
+|Mixtral 8x7B|✅|✅| |
+|Phi 2|✅| | |
+
+**Using derivative models**
+
+To use a derivative model, select the model architecture using the correct subcommand. To see what can be passed for the architecture, pass `--help` after the subcommand. For example, when using a different model than the default, specify the following for the following types of models:
+
+- **Normal**: Model id
+- **Quantized**: Quantized model id, quantized filename, and tokenizer id
+- **X-LoRA**: Model id, X-LoRA ordering
+- **X-LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and X-LoRA ordering
+- **LoRA**: Model id, LoRA ordering
+- **LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and LoRA ordering
+
+See [this](#adapter-ordering-file) section to determine if it is necessary to prepare an X-LoRA/LoRA ordering file, it is always necessary if the target modules or architecture changed, or if the adapter order changed.
+
+It is also important to check the chat template style of the model. If the HF hub repo has a `tokenizer_config.json` file, it is not necessary to specify. Otherwise, templates can be found in `chat_templates` and should be passed before the subcommand. If the model is not instruction tuned, no chat template will be found and the APIs will only accept a prompt, no messages.
+
+For example, when using a Zephyr model:
+
+`./mistralrs-server --port 1234 --log output.txt mistral-gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf`
 
 ### Adapter model support: X-LoRA and LoRA
 
