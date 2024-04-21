@@ -116,7 +116,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
         } else {
             // Set the min seqs to be the running ones, and the rest to be waiting (but their states are not changed!)
             // Allow the min seqs to catch up.
-            let min = *seq_buckets.keys().min().unwrap();
+            let min = *seq_buckets.keys().min().expect("No sequence buckets.");
             let min_seqs = seq_buckets.remove(&min).unwrap();
             for (_, seqs) in seq_buckets {
                 for seq in seqs {

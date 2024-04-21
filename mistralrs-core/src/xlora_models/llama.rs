@@ -496,7 +496,7 @@ impl XLoraLlama {
                     &mut count,
                     &xlora_ordering,
                 )
-                .unwrap()
+                .expect("Failed to load block.")
             })
             .collect();
 

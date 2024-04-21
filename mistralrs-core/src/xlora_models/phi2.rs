@@ -469,7 +469,7 @@ impl Model {
                 mask.as_ref(),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
-                cache.get_mut(i).unwrap(),
+                &mut cache[i],
                 scalings.clone(),
                 self.xlora_classifier
                     .as_ref()

@@ -19,7 +19,9 @@ macro_rules! handle_seq_error {
             Ok(v) => v,
             Err(e) => {
                 use $crate::response::Response;
-                $response.send(Response::InternalError(e.into())).expect("Expected receiver.");
+                $response
+                    .send(Response::InternalError(e.into()))
+                    .expect("Expected receiver.");
                 return;
             }
         }
@@ -33,7 +35,9 @@ macro_rules! handle_seq_error_ok {
             Ok(v) => v,
             Err(e) => {
                 use $crate::response::Response;
-                $response.send(Response::InternalError(e.into())).expect("Expected receiver.");
+                $response
+                    .send(Response::InternalError(e.into()))
+                    .expect("Expected receiver.");
                 return Ok(());
             }
         }
@@ -48,7 +52,9 @@ macro_rules! handle_seq_error_stateaware {
             Err(e) => {
                 use $crate::response::Response;
                 use $crate::sequence::SequenceState;
-                $seq.responder().send(Response::InternalError(e.into())).expect("Expected receiver.");
+                $seq.responder()
+                    .send(Response::InternalError(e.into()))
+                    .expect("Expected receiver.");
                 $seq.set_state(SequenceState::Error);
                 return;
             }
@@ -64,7 +70,9 @@ macro_rules! handle_seq_error_stateaware_ok {
             Err(e) => {
                 use $crate::response::Response;
                 use $crate::sequence::SequenceState;
-                $seq.responder().send(Response::InternalError(e.into())).expect("Expected receiver.");
+                $seq.responder()
+                    .send(Response::InternalError(e.into()))
+                    .expect("Expected receiver.");
                 $seq.set_state(SequenceState::Error);
                 return Ok(());
             }

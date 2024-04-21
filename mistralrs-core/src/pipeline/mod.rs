@@ -380,7 +380,11 @@ struct InputMetadata {
 }
 
 fn get_prompt_input(input_seqs: &[&mut Sequence], device: &Device) -> Result<InputMetadata> {
-    let max_len = input_seqs.iter().map(|seq| seq.len()).max().expect("No sequences");
+    let max_len = input_seqs
+        .iter()
+        .map(|seq| seq.len())
+        .max()
+        .expect("No sequences");
     let padding_tok = 0;
     // Pad each sequence by the padding token to the max len.
     let mut seqs_tensors = Vec::new();
@@ -805,7 +809,7 @@ macro_rules! deserialize_chat_template {
                         );
                     }
                 };
-                let ser = serde_json::to_string_pretty(&deser).unwrap();
+                let ser = serde_json::to_string_pretty(&deser).expect("Serialization of modified chat template failed.");
                 serde_json::from_str(&ser).unwrap()
             }
         }

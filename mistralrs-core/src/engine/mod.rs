@@ -367,7 +367,9 @@ impl Engine {
             for seq in &mut *seqs {
                 let seq_cache = &*seq.cache();
                 let cache = seq_cache.get(layer).unwrap();
-                let cache = cache.as_ref().expect("Not handling completions in `clone_in_cache`.");
+                let cache = cache
+                    .as_ref()
+                    .expect("Not handling completions in `clone_in_cache`.");
                 k_vec.push(cache.0.clone());
                 v_vec.push(cache.1.clone());
             }
@@ -392,7 +394,9 @@ impl Engine {
                 for seq in &mut *seqs {
                     let seq_cache = &*seq.xlora_cache();
                     let cache = seq_cache.get(layer).unwrap();
-                    let cache = cache.as_ref().expect("Not handling completions in `clone_in_cache`.");
+                    let cache = cache
+                        .as_ref()
+                        .expect("Not handling completions in `clone_in_cache`.");
                     k_vec.push(cache.0.clone());
                     v_vec.push(cache.1.clone());
                 }
@@ -445,7 +449,7 @@ impl Engine {
 
             for (seq_i, seq) in seqs.iter_mut().enumerate() {
                 let seq_cache = seq.cache();
-                let seq_cache = seq_cache.get_mut(layer).unwrap();
+                let seq_cache = &mut seq_cache[layer];
                 let k = k_caches.get(seq_i).unwrap().clone();
                 let v = v_caches.get(seq_i).unwrap().clone();
                 *seq_cache = Some((k, v));
@@ -463,7 +467,7 @@ impl Engine {
 
                 for (seq_i, seq) in seqs.iter_mut().enumerate() {
                     let seq_cache = seq.xlora_cache();
-                    let seq_cache = seq_cache.get_mut(layer).unwrap();
+                    let seq_cache = &mut seq_cache[layer];
                     let k = k_caches.get(seq_i).unwrap().clone();
                     let v = v_caches.get(seq_i).unwrap().clone();
                     *seq_cache = Some((k, v));
@@ -553,7 +557,8 @@ impl Engine {
                 .response
                 .send(Response::ValidationError(
                     "Received an empty prompt.".into(),
-                )).expect("Expected receiver.");
+                ))
+                .expect("Expected receiver.");
             return;
         }
         let mut prompt = match force_tokens {
@@ -615,7 +620,7 @@ impl Engine {
                             .send(Response::ValidationError(
                                 format!("Stop token {:?} is also a prefix of other tokens and cannot be used as a stop token.", tok_trie.token_str(*id)).into(),
                             ))
-                            .unwrap();
+                            .expect("Expected receiver.");
                         return;
                     }
                 }
@@ -669,7 +674,7 @@ impl Engine {
                     .send(Response::ValidationError(
                         format!("Failed creation of logits bias. {}", err).into(),
                     ))
-                    .unwrap();
+                    .expect("Expected receiver.");
                 return;
             }
         };
@@ -694,7 +699,7 @@ impl Engine {
                     .send(Response::ValidationError(
                         format!("Invalid grammar. {}", err).into(),
                     ))
-                    .unwrap();
+                    .expect("Expected receiver.");
                 return;
             }
         };

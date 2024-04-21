@@ -79,7 +79,7 @@ fn run_bench(
 
     for _ in 0..repetitions {
         for _ in 0..concurrency {
-            sender.send(req.clone()).unwrap();
+            sender.send(req.clone()).expect("Expected receiver.");
         }
         for _ in 0..concurrency {
             match rx.recv() {
