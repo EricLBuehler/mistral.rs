@@ -159,13 +159,13 @@ class Runner:
 
     def send_chat_completion_request(
         self, request: ChatCompletionRequest
-    ) -> str | Iterator[str]:
+    ) -> ChatCompletionResponse | Iterator[ChatCompletionChunkResponse]:
         """
         Send a chat completion request to the mistral.rs engine, returning the response object or a generator
         over chunk objects.
         """
 
-    def send_completion_request(self, request: CompletionRequest) -> str:
+    def send_completion_request(self, request: CompletionRequest) -> CompletionResponse:
         """
         Send a chat completion request to the mistral.rs engine, returning the response object.
         """
@@ -185,3 +185,80 @@ class Message:
 
     role: Role
     content: str
+
+class Usage:
+    completion_tokens: int
+    prompt_tokens: int
+    total_tokens: int
+    avg_tok_per_sec: float
+    avg_prompt_tok_per_sec: float
+    avg_compl_tok_per_sec: float
+    total_time_sec: float
+    total_prompt_time_sec: float
+    total_completion_time_sec: float
+
+class ResponseMessage:
+    content: str
+    role: str
+
+class TopLogprob:
+    token: int
+    logprob: float
+    bytes: str
+
+class ResponseLogprob:
+    token: str
+    logprob: float
+    bytes: list[int]
+    top_logprobs: list[TopLogprob]
+
+class Logprobs:
+    content: list[ResponseLogprob] | None
+
+class Choice:
+    finish_reason: str
+    index: int
+    message: ResponseMessage
+    logprobs: Logprobs
+
+class ChatCompletionResponse:
+    id: str
+    choices: list[Choice]
+    created: int
+    model: str
+    system_fingerprint: str
+    object: str
+    usage: Usage
+
+class Delta:
+    content: str
+    role: str
+
+class ChunkChoice:
+    finish_reason: str | None
+    index: int
+    delta: Delta
+    logprobs: ResponseLogprob | None
+
+class ChatCompletionChunkResponse:
+    id: str
+    choices: list[ChunkChoice]
+    created: int
+    model: str
+    system_fingerprint: str
+    object: str
+
+class CompletionChoice:
+    finish_reason: str
+    index: int
+    text: str
+    # NOTE(EricLBuehler): `logprobs` in undocumented
+
+class CompletionResponse:
+    id: str
+    choices: list[CompletionChoice]
+    created: int
+    model: str
+    system_fingerprint: str
+    object: str
+    usage: Usage
