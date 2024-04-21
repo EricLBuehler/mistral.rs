@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::collections::HashMap;
 
 use candle_core::quantized::gguf_file;
@@ -71,14 +73,19 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Ten
 }
 
 impl LayerWeights {
-    fn apply_rotary_emb(&self, xs: &Tensor, index_pos: usize) -> Result<Tensor> {
+    fn apply_rotary_emb(&self, xs: &Tensor, start_offsets: &[usize]) -> Result<Tensor> {
         let (_b_sz, _n_head, seq_len, _n_embd) = xs.dims4()?;
         let xs_rot = xs.i((.., .., .., ..self.rope_dim))?;
         let xs_pass = xs.i((.., .., .., self.rope_dim..))?;
-        let cos = self.cos.narrow(0, index_pos, seq_len)?;
-        let sin = self.sin.narrow(0, index_pos, seq_len)?;
-        let xs_rot = candle_nn::rotary_emb::rope(&xs_rot.contiguous()?, &cos, &sin)?;
-        Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)
+        let mut chunks = Vec::new();
+        for (b, offset) in (0..xs.dim(0)?).zip(start_offsets) {
+            let cos = self.cos.narrow(0, *offset, seq_len)?;
+            let sin = self.sin.narrow(0, *offset, seq_len)?;
+            let xs_rot =
+                candle_nn::rotary_emb::rope(&xs_rot.i(b)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+            chunks.push(Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?);
+        }
+        Tensor::cat(&chunks, 0)
     }
 
     fn forward_attn(
@@ -102,14 +109,14 @@ impl LayerWeights {
         // impact on performance.
         let v = v.contiguous()?;
 
-        let q = self.apply_rotary_emb(&q, seqlen_offsets[0])?.contiguous()?;
-        let k = self.apply_rotary_emb(&k, seqlen_offsets[0])?;
+        let q = self.apply_rotary_emb(&q, seqlen_offsets)?.contiguous()?;
+        let k = self.apply_rotary_emb(&k, seqlen_offsets)?;
 
         let (k, v) = match &*kv_cache {
             None => (k, v),
             Some((prev_k, prev_v)) => {
-                let k = candle_nn::ops::kvconcat(prev_k, &k, 2)?;
-                let v = candle_nn::ops::kvconcat(prev_v, &v, 2)?;
+                let k = Tensor::cat(&[prev_k, &k], 2)?;
+                let v = Tensor::cat(&[prev_v, &v], 2)?;
                 (k, v)
             }
         };

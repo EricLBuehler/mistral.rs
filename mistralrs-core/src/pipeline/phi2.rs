@@ -432,11 +432,9 @@ impl Pipeline for Phi2Pipeline {
                 &self.non_granular_state,
                 context_lens,
             ),
-            Model::Quantized(ref mut model) => model.forward(
-                &input_ids,
-                &seqlen_offsets,
-                context_lens,
-            ),
+            Model::Quantized(ref mut model) => {
+                model.forward(&input_ids, &seqlen_offsets, context_lens)
+            }
         }
     }
     fn device(&self) -> &Device {
