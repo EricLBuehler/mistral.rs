@@ -94,6 +94,11 @@ pub struct Sequence {
     group: Rc<RefCell<SequenceGroup>>,
     state: Cell<SequenceState>,
 }
+
+/// SAFETY: The scheduler only gives out mutable refs, and the `sample_seqs` function only modifies 
+/// one sequence at a time so there cannot be aliasing issues.
+unsafe impl Send for Sequence {}
+
 impl Sequence {
     #[allow(clippy::too_many_arguments)]
     pub fn new_waiting(

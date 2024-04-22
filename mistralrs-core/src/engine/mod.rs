@@ -1,7 +1,6 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
-    iter::zip,
     rc::Rc,
     sync::{mpsc::Receiver, Mutex},
     time::{Instant, SystemTime, UNIX_EPOCH},
@@ -14,6 +13,7 @@ use crate::{
     CompletionResponse, RequestMessage,
 };
 use candle_core::{Result, Tensor};
+use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use tracing::warn;
 
 use crate::{
@@ -224,9 +224,9 @@ impl Engine {
         }
     }
 
-    fn sample_seqs(
+    fn sample_seqs<'p>(
         pipeline: &dyn Pipeline,
-        seqs: &mut [&mut Sequence],
+        seqs: &'p mut [&mut Sequence],
         logits: Tensor,
         disable_eos_stop: bool,
     ) -> Result<()> {
@@ -234,65 +234,83 @@ impl Engine {
         let logits_seq = logits.chunk(seqs_len, 0).unwrap();
         debug_assert_eq!(logits_seq.len(), seqs_len);
         let eos_tok = pipeline.eos_tok().to_vec();
-        for (logits_per_seq, seq) in zip(logits_seq, seqs.iter_mut()) {
-            // Sample and extract next token
-            let return_logprobs = seq.return_logprobs();
-            let sampled = pipeline.sample(logits_per_seq, seq, return_logprobs);
-            let next_token = handle_seq_error_stateaware_ok!(sampled, seq);
-            let next_token_id = next_token.token;
-
-            let eos_tok = if disable_eos_stop {
-                None
-            } else {
-                Some(eos_tok.as_ref())
-            };
-            let is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
-            seq.add_token(
-                next_token.clone(),
-                pipeline.tok_trie().decode(&[next_token_id]),
-                &is_done,
-            );
-            // Handle streaming requests
-            if seq.get_mut_group().is_streaming && seq.get_mut_group().is_chat {
-                let token_index = seq.get_toks().len();
-                let rate_limit_allowed = is_done.is_some() || token_index % 3 == 0;
-
-                if rate_limit_allowed {
-                    if let Some(delta) = handle_seq_error_ok!(seq.get_delta(), seq.responder()) {
-                        seq.add_streaming_chunk_choice_to_group(ChunkChoice {
-                            delta: Delta {
-                                content: delta.clone(),
-                                role: "assistant".to_string(),
-                            },
-                            index: seq.get_response_index(),
-                            finish_reason: is_done.map(|x| x.to_string()),
-                            logprobs: if seq.return_logprobs() {
-                                Some(ResponseLogprob {
-                                    token: delta,
-                                    bytes: next_token.bytes.clone().into_bytes(),
-                                    logprob: next_token.logprob,
-                                    top_logprobs: next_token.top_logprobs.unwrap().clone(),
-                                })
-                            } else {
-                                None
-                            },
-                        });
-
-                        if let Some(reason) = is_done {
-                            seq.set_state(SequenceState::Done(reason));
-                            pipeline.reset_non_granular_state();
-                        }
-
-                        seq.get_mut_group()
-                            .maybe_send_streaming_response(seq, pipeline.name());
-                    }
-                }
-            } else if let Some(reason) = is_done {
-                Self::finish_seq(pipeline, seq, reason)?;
-                pipeline.reset_non_granular_state();
-            }
+        struct Item<'a> {
+            logits: Tensor,
+            seq: &'a mut Sequence,
         }
+        let mut pairs: Vec<Item<'p>> = logits_seq
+            .iter()
+            .zip(seqs)
+            .map(|(l, s)| Item {
+                logits: l.clone(),
+                seq: s,
+            })
+            .collect::<Vec<_>>();
+        pairs.par_iter_mut().try_for_each(
+            |Item {
+                 logits: logits_per_seq,
+                 seq,
+             }| {
+                // Sample and extract next token
+                let return_logprobs = seq.return_logprobs();
+                let sampled = pipeline.sample(logits_per_seq.clone(), seq, return_logprobs);
+                let next_token = handle_seq_error_stateaware_ok!(sampled, seq);
+                let next_token_id = next_token.token;
 
+                let eos_tok = if disable_eos_stop {
+                    None
+                } else {
+                    Some(eos_tok.as_ref())
+                };
+                let is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
+                seq.add_token(
+                    next_token.clone(),
+                    pipeline.tok_trie().decode(&[next_token_id]),
+                    &is_done,
+                );
+                // Handle streaming requests
+                if seq.get_mut_group().is_streaming && seq.get_mut_group().is_chat {
+                    let token_index = seq.get_toks().len();
+                    let rate_limit_allowed = is_done.is_some() || token_index % 3 == 0;
+
+                    if rate_limit_allowed {
+                        if let Some(delta) = handle_seq_error_ok!(seq.get_delta(), seq.responder())
+                        {
+                            seq.add_streaming_chunk_choice_to_group(ChunkChoice {
+                                delta: Delta {
+                                    content: delta.clone(),
+                                    role: "assistant".to_string(),
+                                },
+                                index: seq.get_response_index(),
+                                finish_reason: is_done.map(|x| x.to_string()),
+                                logprobs: if seq.return_logprobs() {
+                                    Some(ResponseLogprob {
+                                        token: delta,
+                                        bytes: next_token.bytes.clone().into_bytes(),
+                                        logprob: next_token.logprob,
+                                        top_logprobs: next_token.top_logprobs.unwrap().clone(),
+                                    })
+                                } else {
+                                    None
+                                },
+                            });
+
+                            if let Some(reason) = is_done {
+                                seq.set_state(SequenceState::Done(reason));
+                                pipeline.reset_non_granular_state();
+                            }
+
+                            seq.get_mut_group()
+                                .maybe_send_streaming_response(seq, pipeline.name());
+                        }
+                    }
+                } else if let Some(reason) = is_done {
+                    Self::finish_seq(pipeline, seq, reason)?;
+                    pipeline.reset_non_granular_state();
+                }
+                Result::<()>::Ok(())
+            },
+        )?;
         Ok(())
     }
 
