@@ -320,7 +320,7 @@ pub trait Pipeline: Send + Sync {
     }
     fn get_repeat_last_n(&self) -> usize;
     fn sample(
-        &mut self,
+        &self,
         logits: Tensor,
         seq: &mut Sequence,
         return_logprobs: bool,

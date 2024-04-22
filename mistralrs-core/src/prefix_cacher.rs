@@ -88,7 +88,7 @@ impl PrefixCacheManager {
 
     /// Evict the caches to CPU. This will evict the first k seqs such that the number of sequences on device after the copy is
     /// the maximum allowed. Returns the number of evicted sequences.
-    pub fn evict_to_cpu(&mut self) -> Result<usize> {
+    pub fn evict_to_cpu(&self) -> Result<usize> {
         if self.no_prefix_cache {
             return Ok(0);
         }

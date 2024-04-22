@@ -111,7 +111,19 @@ impl Engine {
 
                 handle_pipeline_forward_error!(
                     "sampling",
-                    Self::sample_seqs(&mut *pipeline, &mut scheduled.completion, logits, &mut self.prefix_cacher, self.disable_eos_stop),
+                    Self::sample_seqs(&*pipeline, &mut scheduled.completion, logits, self.disable_eos_stop),
+                    &mut scheduled.completion,
+                    pipeline,
+                    'lp,
+                    self.prefix_cacher
+                );
+
+                for seq in scheduled.completion.iter_mut() {
+                    self.prefix_cacher.add_sequence(seq);
+                }
+                handle_pipeline_forward_error!(
+                    "evict",
+                    self.prefix_cacher.evict_to_cpu(),
                     &mut scheduled.completion,
                     pipeline,
                     'lp,
@@ -140,7 +152,7 @@ impl Engine {
 
                 handle_pipeline_forward_error!(
                     "sampling",
-                    Self::sample_seqs(&mut *pipeline, &mut scheduled.prompt, logits, &mut self.prefix_cacher,self.disable_eos_stop,),
+                    Self::sample_seqs(&*pipeline, &mut scheduled.prompt, logits, self.disable_eos_stop),
                     &mut scheduled.prompt,
                     pipeline,
                     'lp,
@@ -158,6 +170,18 @@ impl Engine {
                     seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
                     seq.prompt_timestamp = Some(now);
                 }
+
+                for seq in scheduled.prompt.iter_mut() {
+                    self.prefix_cacher.add_sequence(seq);
+                }
+                handle_pipeline_forward_error!(
+                    "evict",
+                    self.prefix_cacher.evict_to_cpu(),
+                    &mut scheduled.prompt,
+                    pipeline,
+                    'lp,
+                    self.prefix_cacher
+                );
             }
 
             if self.is_debug {
@@ -201,10 +225,9 @@ impl Engine {
     }
 
     fn sample_seqs(
-        pipeline: &mut dyn Pipeline,
+        pipeline: &dyn Pipeline,
         seqs: &mut [&mut Sequence],
         logits: Tensor,
-        prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
     ) -> Result<()> {
         let seqs_len = seqs.len();
@@ -256,8 +279,6 @@ impl Engine {
                         });
 
                         if let Some(reason) = is_done {
-                            prefix_cacher.add_sequence(seq);
-                            prefix_cacher.evict_to_cpu()?;
                             seq.set_state(SequenceState::Done(reason));
                             pipeline.reset_non_granular_state();
                         }
@@ -267,7 +288,7 @@ impl Engine {
                     }
                 }
             } else if let Some(reason) = is_done {
-                Self::finish_seq(pipeline, seq, reason, prefix_cacher)?;
+                Self::finish_seq(pipeline, seq, reason)?;
                 pipeline.reset_non_granular_state();
             }
         }
@@ -275,12 +296,7 @@ impl Engine {
         Ok(())
     }
 
-    fn finish_seq(
-        pipeline: &mut dyn Pipeline,
-        seq: &mut Sequence,
-        reason: StopReason,
-        prefix_cacher: &mut PrefixCacheManager,
-    ) -> Result<()> {
+    fn finish_seq(pipeline: &dyn Pipeline, seq: &mut Sequence, reason: StopReason) -> Result<()> {
         seq.set_state(SequenceState::Done(reason));
 
         let logprobs = if seq.return_logprobs() {
@@ -339,9 +355,6 @@ impl Engine {
             };
             seq.add_completion_choice_to_group(choice);
         }
-
-        prefix_cacher.add_sequence(seq);
-        prefix_cacher.evict_to_cpu()?;
 
         let group = seq.get_mut_group();
         if group.is_chat {
