@@ -159,8 +159,8 @@ class MistralRS(CustomLLM):
         )
 
         super().__init__(
-            model_path=None,
-            model_url=None,
+            model_path="local",
+            model_url="local",
             temperature=temperature,
             context_window=context_window,
             max_new_tokens=max_new_tokens,
@@ -215,7 +215,6 @@ class MistralRS(CustomLLM):
             model="",
             logit_bias=None,
             logprobs=False,
-            top_logprobs=None,
             **self.generate_kwargs,
         )
 
@@ -226,7 +225,7 @@ class MistralRS(CustomLLM):
             for response in streamer:
                 delta = response.choices[0].text
                 text += delta
-                yield CompletionResponse(delta=delta, text=text, raw=response)
+                yield CompletionResponse(delta=delta, text=text)
 
         return gen()
 
@@ -243,15 +242,10 @@ class MistralRS(CustomLLM):
             model="",
             logit_bias=None,
             logprobs=False,
-            top_logprobs=None,
             **self.generate_kwargs,
         )
         completion_response = self._runner.send_chat_completion_request(request)
-        json_resp = json.loads(completion_response)
-        return CompletionResponse(
-            text=json_resp.choices[0].message.content,
-            raw=json_resp,
-        )
+        return CompletionResponse(text=completion_response.choices[0].message.content)
 
     @llm_completion_callback()
     def stream_complete(
@@ -266,7 +260,6 @@ class MistralRS(CustomLLM):
             model="",
             logit_bias=None,
             logprobs=False,
-            top_logprobs=None,
             **self.generate_kwargs,
         )
 
@@ -277,6 +270,6 @@ class MistralRS(CustomLLM):
             for response in streamer:
                 delta = response.choices[0].text
                 text += delta
-                yield CompletionResponse(delta=delta, text=text, raw=response)
+                yield CompletionResponse(delta=delta, text=text)
 
         return gen()
