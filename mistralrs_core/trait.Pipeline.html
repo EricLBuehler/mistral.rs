@@ -29,7 +29,7 @@
     ) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.82/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.77.2/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>&gt; { ... }
 <span class="item-spacer"></span>    fn <a href="#method.reset_non_granular_state" class="fn">reset_non_granular_state</a>(&amp;self) { ... }
 <span class="item-spacer"></span>    fn <a href="#method.sample" class="fn">sample</a>(
-        &amp;self,
+        &amp;mut self,
         logits: Tensor,
         seq: &amp;mut Sequence,
         return_logprobs: <a class="primitive" href="https://doc.rust-lang.org/1.77.2/std/primitive.bool.html">bool</a>
@@ -43,7 +43,7 @@
     messages: <a class="struct" href="https://doc.rust-lang.org/1.77.2/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;IndexMap&lt;<a class="struct" href="https://doc.rust-lang.org/1.77.2/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>, <a class="struct" href="https://doc.rust-lang.org/1.77.2/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>&gt;&gt;,
     add_generation_prompt: <a class="primitive" href="https://doc.rust-lang.org/1.77.2/std/primitive.bool.html">bool</a>
 ) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.82/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.77.2/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>&gt;</h4></section><section id="method.reset_non_granular_state" class="method"><a class="src rightside" href="../src/mistralrs_core/pipeline/mod.rs.html#315-320">source</a><h4 class="code-header">fn <a href="#method.reset_non_granular_state" class="fn">reset_non_granular_state</a>(&amp;self)</h4></section><section id="method.sample" class="method"><a class="src rightside" href="../src/mistralrs_core/pipeline/mod.rs.html#322-372">source</a><h4 class="code-header">fn <a href="#method.sample" class="fn">sample</a>(
-    &amp;self,
+    &amp;mut self,
     logits: Tensor,
     seq: &amp;mut Sequence,
     return_logprobs: <a class="primitive" href="https://doc.rust-lang.org/1.77.2/std/primitive.bool.html">bool</a>

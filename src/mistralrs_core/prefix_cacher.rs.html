@@ -274,7 +274,7 @@
 
     <span class="doccomment">/// Evict the caches to CPU. This will evict the first k seqs such that the number of sequences on device after the copy is
     /// the maximum allowed. Returns the number of evicted sequences.
-    </span><span class="kw">pub fn </span>evict_to_cpu(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+    </span><span class="kw">pub fn </span>evict_to_cpu(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">if </span><span class="self">self</span>.no_prefix_cache {
             <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="number">0</span>);
         }
