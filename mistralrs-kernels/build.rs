@@ -32,13 +32,13 @@ fn main() -> Result<()> {
 
     println!("cargo:rerun-if-changed=build.rs");
     for kernel_file in KERNEL_FILES.iter() {
-        println!("cargo:rerun-if-changed=kernels/{kernel_file}");
+        println!("cargo:rerun-if-changed=src/{kernel_file}");
     }
-    println!("cargo:rerun-if-changed=kernels/**.cu");
-    println!("cargo:rerun-if-changed=kernels/ln_fwd_kernels.cuh");
-    println!("cargo:rerun-if-changed=kernels/ln_kernel_traits.h");
-    println!("cargo:rerun-if-changed=kernels/ln_utils.cuh");
-    println!("cargo:rerun-if-changed=kernels/static_switch.h");
+    println!("cargo:rerun-if-changed=src/**.cu");
+    println!("cargo:rerun-if-changed=src/ln_fwd_kernels.cuh");
+    println!("cargo:rerun-if-changed=src/ln_kernel_traits.h");
+    println!("cargo:rerun-if-changed=src/ln_utils.cuh");
+    println!("cargo:rerun-if-changed=src/static_switch.h");
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").context("OUT_DIR not set")?);
     let build_dir = match std::env::var("CANDLE_LAYER_NORM_BUILD_DIR") {
         Err(_) =>
