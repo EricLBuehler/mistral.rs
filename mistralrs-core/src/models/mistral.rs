@@ -2,11 +2,14 @@
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
+use candle_nn::{Activation, VarBuilder};
 use candle_transformers::models::with_tracing::{linear_no_bias, Linear};
 use std::sync::Arc;
 
-use crate::pipeline::{extract_logits, MISTRAL_IS_GPTX};
+use crate::{
+    layers::RotaryEmbedding,
+    pipeline::{extract_logits, MISTRAL_IS_GPTX},
+};
 
 use super::{flash_attn, repeat_kv, Cache, RmsNorm};
 
@@ -137,8 +140,8 @@ impl Attention {
         let (k, v) = match &*kv_cache {
             None => (k, v),
             Some((prev_k, prev_v)) => {
-                let k = candle_nn::ops::kvconcat(prev_k, &k, 2)?;
-                let v = candle_nn::ops::kvconcat(prev_v, &v, 2)?;
+                let k = Tensor::cat(&[prev_k, &k], 2)?;
+                let v = Tensor::cat(&[prev_v, &v], 2)?;
                 (k, v)
             }
         };

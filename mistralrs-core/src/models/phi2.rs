@@ -2,17 +2,16 @@
 
 /// Phi model.
 /// https://huggingface.co/microsoft/phi-2
-/// There is an alternative implementation of the phi model in mixformers.rs.
-/// This corresponds to the model update made with the following commit:
-/// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
 use candle_core::{DType, Device, Module, Result, Tensor};
 use candle_nn::{
-    embedding, layer_norm, linear, Activation, Embedding, LayerNorm, Linear, RotaryEmbedding,
-    VarBuilder,
+    embedding, layer_norm, linear, Activation, Embedding, LayerNorm, Linear, VarBuilder,
 };
 use serde::Deserialize;
 
-use crate::pipeline::{extract_logits, PHI2_IS_GPTX};
+use crate::{
+    layers::RotaryEmbedding,
+    pipeline::{extract_logits, PHI2_IS_GPTX},
+};
 
 use super::{flash_attn, repeat_kv, Cache};
 
@@ -196,8 +195,8 @@ impl Attention {
         let (k, v) = match &*kv_cache {
             None => (k, v),
             Some((prev_k, prev_v)) => {
-                let k = candle_nn::ops::kvconcat(prev_k, &k, 2)?;
-                let v = candle_nn::ops::kvconcat(prev_v, &v, 2)?;
+                let k = Tensor::cat(&[prev_k, &k], 2)?;
+                let v = Tensor::cat(&[prev_v, &v], 2)?;
                 (k, v)
             }
         };

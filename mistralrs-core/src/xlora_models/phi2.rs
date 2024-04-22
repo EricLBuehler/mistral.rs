@@ -4,16 +4,12 @@ use std::sync::Arc;
 
 /// Phi model.
 /// https://huggingface.co/microsoft/phi-2
-/// There is an alternative implementation of the phi model in mixformers.rs.
-/// This corresponds to the model update made with the following commit:
-/// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{
-    embedding, layer_norm, Activation, Embedding, LayerNorm, Linear, RotaryEmbedding, VarBuilder,
-};
+use candle_nn::{embedding, layer_norm, Activation, Embedding, LayerNorm, Linear, VarBuilder};
 use mistralrs_lora::{linear, LinearLayerLike, LoraConfig, Ordering};
 
 use crate::{
+    layers::RotaryEmbedding,
     models::{flash_attn, phi2::Config, repeat_kv},
     pipeline::{extract_logits, PHI2_IS_GPTX},
 };
@@ -256,8 +252,8 @@ impl Attention {
         let (k, v) = match &*kv_cache {
             None => (k, v),
             Some((prev_k, prev_v)) => {
-                let k = candle_nn::ops::kvconcat(prev_k, &k, 2)?;
-                let v = candle_nn::ops::kvconcat(prev_v, &v, 2)?;
+                let k = Tensor::cat(&[prev_k, &k], 2)?;
+                let v = Tensor::cat(&[prev_v, &v], 2)?;
                 (k, v)
             }
         };

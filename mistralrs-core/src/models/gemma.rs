@@ -3,9 +3,12 @@
 use std::sync::Arc;
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{linear_b as linear, Activation, Linear, RotaryEmbedding, VarBuilder};
+use candle_nn::{linear_b as linear, Activation, Linear, VarBuilder};
 
-use crate::pipeline::{extract_logits, GEMMA_IS_GPTX};
+use crate::{
+    layers::RotaryEmbedding,
+    pipeline::{extract_logits, GEMMA_IS_GPTX},
+};
 
 use super::{repeat_kv, Cache};
 
@@ -183,8 +186,8 @@ impl Attention {
         let (k, v) = match &*kv_cache {
             None => (k, v),
             Some((prev_k, prev_v)) => {
-                let k = candle_nn::ops::kvconcat(prev_k, &k, 2)?;
-                let v = candle_nn::ops::kvconcat(prev_v, &v, 2)?;
+                let k = Tensor::cat(&[prev_k, &k], 2)?;
+                let v = Tensor::cat(&[prev_v, &v], 2)?;
                 (k, v)
             }
         };

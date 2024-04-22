@@ -24,6 +24,7 @@ pub use model_loader::{get_tgt_non_granular_index, LoaderBuilder};
 mod model_selected;
 pub use model_selected::ModelSelected;
 
+mod layers;
 mod models;
 mod pipeline;
 mod prefix_cacher;

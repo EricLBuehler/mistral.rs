@@ -1,11 +1,14 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
+use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use candle_transformers::models::with_tracing::{linear_no_bias as linear, Linear};
 use std::{collections::HashMap, sync::Arc};
 
-use crate::pipeline::{extract_logits, LLAMA_IS_GPTX};
+use crate::{
+    layers::RotaryEmbedding,
+    pipeline::{extract_logits, LLAMA_IS_GPTX},
+};
 
 use super::{flash_attn, repeat_kv, RmsNorm};
 
@@ -134,8 +137,8 @@ impl CausalSelfAttention {
         }
 
         if let Some((cache_k, cache_v)) = &kv_cache[block_idx] {
-            k = candle_nn::ops::kvconcat(cache_k, &k, 2)?.contiguous()?;
-            v = candle_nn::ops::kvconcat(cache_v, &v, 2)?.contiguous()?;
+            k = Tensor::cat(&[cache_k, &k], 2)?.contiguous()?;
+            v = Tensor::cat(&[cache_v, &v], 2)?.contiguous()?;
             let k_seq_len = k.dims()[1];
             if k_seq_len > MAX_SEQ_LEN {
                 k = k

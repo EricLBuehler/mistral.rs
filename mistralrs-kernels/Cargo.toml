@@ -1,0 +1,22 @@
+[package]
+name = "mistralrs-kernels"
+readme = "README.md"
+authors = ["Eric Buehler"]
+version = "0.1.0"
+edition = "2021"
+description = "Fast and easy LLM serving."
+homepage = "https://github.com/EricLBuehler/mistral.rs"
+repository = "https://github.com/EricLBuehler/mistral.rs"
+keywords = ["machine-learning"]
+categories = ["science"]
+license = "MIT"
+
+[dependencies]
+candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.5.0", features = ["cuda"] }
+half = { version = "2.3.1", features = ["num-traits"] }
+
+[build-dependencies]
+bindgen_cuda = "0.1.1"
+anyhow = { version = "1", features = ["backtrace"] }
+num_cpus = "1.15.0"
+rayon = "1.7.0"
