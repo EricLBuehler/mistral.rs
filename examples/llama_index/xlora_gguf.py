@@ -8,7 +8,6 @@ documents = SimpleDirectoryReader("data").load_data()
 # bge embedding model
 Settings.embed_model = resolve_embed_model("local:BAAI/bge-small-en-v1.5")
 
-# ollama
 Settings.llm = MistralRS(
     which=Which.XLoraMistralGGUF(
         tok_model_id=None,  # Automatically determine from ordering file
