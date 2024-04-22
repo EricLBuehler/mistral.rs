@@ -132,12 +132,13 @@ Enabling features is done by passing `--features ...` to the build system. When 
 - To enable multiple features, specify them in quotes: `cargo build --release --features "cuda flash-attn cudnn"`.
 
 ## Benchmarks
-|Device|Mistral.rs Completion T/s|Llama.cpp Completion T/s|
-|-|-|-|
-|A10 GPU, CUDA|76.11|79.24|
-|Intel Xeon 8358 CPU|6.22|18.14|
+|Device|Mistral.rs Completion T/s|Llama.cpp Completion T/s|Model|Quant|
+|-|-|-|-|-|
+|A10 GPU, CUDA|78|78|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|Intel Xeon 8358 CPU, AVX|6|19|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|Raspberry Pi 5 (8GB), Neon|2|*segfault*|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|2_K|
 
-More benchmarks coming!
+Please submit more benchmarks via raising an issue!
 
 ## Usage
 ### Installation and Build
