@@ -761,6 +761,19 @@
 <a href="#759" id="759">759</a>
 <a href="#760" id="760">760</a>
 <a href="#761" id="761">761</a>
+<a href="#762" id="762">762</a>
+<a href="#763" id="763">763</a>
+<a href="#764" id="764">764</a>
+<a href="#765" id="765">765</a>
+<a href="#766" id="766">766</a>
+<a href="#767" id="767">767</a>
+<a href="#768" id="768">768</a>
+<a href="#769" id="769">769</a>
+<a href="#770" id="770">770</a>
+<a href="#771" id="771">771</a>
+<a href="#772" id="772">772</a>
+<a href="#773" id="773">773</a>
+<a href="#774" id="774">774</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
@@ -874,7 +887,19 @@
 
                 <span class="macro">handle_pipeline_forward_error!</span>(
                     <span class="string">"sampling"</span>,
-                    <span class="self">Self</span>::sample_seqs(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.completion, logits, <span class="kw-2">&amp;mut </span><span class="self">self</span>.prefix_cacher, <span class="self">self</span>.disable_eos_stop),
+                    <span class="self">Self</span>::sample_seqs(<span class="kw-2">&amp;*</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.completion, logits, <span class="self">self</span>.disable_eos_stop),
+                    <span class="kw-2">&amp;mut </span>scheduled.completion,
+                    pipeline,
+                    <span class="lifetime">'lp</span>,
+                    <span class="self">self</span>.prefix_cacher
+                );
+
+                <span class="kw">for </span>seq <span class="kw">in </span>scheduled.completion.iter_mut() {
+                    <span class="self">self</span>.prefix_cacher.add_sequence(seq);
+                }
+                <span class="macro">handle_pipeline_forward_error!</span>(
+                    <span class="string">"evict"</span>,
+                    <span class="self">self</span>.prefix_cacher.evict_to_cpu(),
                     <span class="kw-2">&amp;mut </span>scheduled.completion,
                     pipeline,
                     <span class="lifetime">'lp</span>,
@@ -903,7 +928,7 @@
 
                 <span class="macro">handle_pipeline_forward_error!</span>(
                     <span class="string">"sampling"</span>,
-                    <span class="self">Self</span>::sample_seqs(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.prompt, logits, <span class="kw-2">&amp;mut </span><span class="self">self</span>.prefix_cacher,<span class="self">self</span>.disable_eos_stop,),
+                    <span class="self">Self</span>::sample_seqs(<span class="kw-2">&amp;*</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.prompt, logits, <span class="self">self</span>.disable_eos_stop),
                     <span class="kw-2">&amp;mut </span>scheduled.prompt,
                     pipeline,
                     <span class="lifetime">'lp</span>,
@@ -921,6 +946,18 @@
                     seq.prompt_tok_per_sec = prompt_tok_per_sec * <span class="number">1000.</span>;
                     seq.prompt_timestamp = <span class="prelude-val">Some</span>(now);
                 }
+
+                <span class="kw">for </span>seq <span class="kw">in </span>scheduled.prompt.iter_mut() {
+                    <span class="self">self</span>.prefix_cacher.add_sequence(seq);
+                }
+                <span class="macro">handle_pipeline_forward_error!</span>(
+                    <span class="string">"evict"</span>,
+                    <span class="self">self</span>.prefix_cacher.evict_to_cpu(),
+                    <span class="kw-2">&amp;mut </span>scheduled.prompt,
+                    pipeline,
+                    <span class="lifetime">'lp</span>,
+                    <span class="self">self</span>.prefix_cacher
+                );
             }
 
             <span class="kw">if </span><span class="self">self</span>.is_debug {
@@ -964,10 +1001,9 @@
     }
 
     <span class="kw">fn </span>sample_seqs(
-        pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline,
+        pipeline: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline,
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         logits: Tensor,
-        prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
         disable_eos_stop: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span>seqs_len = seqs.len();
@@ -1019,8 +1055,6 @@
                         });
 
                         <span class="kw">if let </span><span class="prelude-val">Some</span>(reason) = is_done {
-                            prefix_cacher.add_sequence(seq);
-                            prefix_cacher.evict_to_cpu()<span class="question-mark">?</span>;
                             seq.set_state(SequenceState::Done(reason));
                             pipeline.reset_non_granular_state();
                         }
@@ -1030,7 +1064,7 @@
                     }
                 }
             } <span class="kw">else if let </span><span class="prelude-val">Some</span>(reason) = is_done {
-                <span class="self">Self</span>::finish_seq(pipeline, seq, reason, prefix_cacher)<span class="question-mark">?</span>;
+                <span class="self">Self</span>::finish_seq(pipeline, seq, reason)<span class="question-mark">?</span>;
                 pipeline.reset_non_granular_state();
             }
         }
@@ -1038,12 +1072,7 @@
         <span class="prelude-val">Ok</span>(())
     }
 
-    <span class="kw">fn </span>finish_seq(
-        pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline,
-        seq: <span class="kw-2">&amp;mut </span>Sequence,
-        reason: StopReason,
-        prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    <span class="kw">fn </span>finish_seq(pipeline: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline, seq: <span class="kw-2">&amp;mut </span>Sequence, reason: StopReason) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         seq.set_state(SequenceState::Done(reason));
 
         <span class="kw">let </span>logprobs = <span class="kw">if </span>seq.return_logprobs() {
@@ -1102,9 +1131,6 @@
             };
             seq.add_completion_choice_to_group(choice);
         }
-
-        prefix_cacher.add_sequence(seq);
-        prefix_cacher.evict_to_cpu()<span class="question-mark">?</span>;
 
         <span class="kw">let </span>group = seq.get_mut_group();
         <span class="kw">if </span>group.is_chat {
