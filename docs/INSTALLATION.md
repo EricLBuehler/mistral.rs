@@ -36,3 +36,6 @@
     ```
     cp ./target/release/mistralrs-server .
     ```
+
+7) Installing Python support
+    You can install Python support by following the guide [here](../mistralrs-pyo3/README.md).
