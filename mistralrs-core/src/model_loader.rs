@@ -1,6 +1,7 @@
 use std::fs::File;
 
 use crate::{
+    pipeline::{GgmlLoader, GgmlSpecificConfig, GgufLoader, GgufSpecificConfig},
     GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader, MistralLoader,
     MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind, ModelSelected,
     Phi2Loader, Phi2SpecificConfig,
@@ -45,24 +46,21 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
     match model {
         ModelSelected::Gemma { .. }
         | ModelSelected::Llama { .. }
-        | ModelSelected::LlamaGGML { .. }
         | ModelSelected::Mistral { .. }
         | ModelSelected::Mixtral { .. }
         | ModelSelected::Phi2 { .. }
         | ModelSelected::LoraMistral { .. }
         | ModelSelected::LoraLlama { .. }
-        | ModelSelected::LoraLlamaGGML { .. }
         | ModelSelected::LoraMixtral { .. }
-        | ModelSelected::GGUF { .. } => None,
+        | ModelSelected::GGUF { .. }
+        | ModelSelected::LoraGGUF { .. }
+        | ModelSelected::GGML { .. }
+        | ModelSelected::LoraGGML { .. } => None,
         ModelSelected::XLoraGemma {
             tgt_non_granular_index,
             ..
         }
         | ModelSelected::XLoraLlama {
-            tgt_non_granular_index,
-            ..
-        }
-        | ModelSelected::XLoraLlamaGGML {
             tgt_non_granular_index,
             ..
         }
@@ -79,6 +77,10 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
             ..
         }
         | ModelSelected::XLoraGGUF {
+            tgt_non_granular_index,
+            ..
+        }
+        | ModelSelected::XLoraGGML {
             tgt_non_granular_index,
             ..
         } => *tgt_non_granular_index,
@@ -196,30 +198,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tokenizer_json,
             None,
         )),
-        ModelSelected::LlamaGGML {
-            tok_model_id,
-            quantized_model_id,
-            quantized_filename,
-            repeat_last_n,
-            gqa,
-            tokenizer_json,
-        } => Box::new(LlamaLoader::new(
-            Some(tok_model_id),
-            LlamaSpecificConfig {
-                repeat_last_n,
-                use_flash_attn,
-                gqa,
-            },
-            quantized_model_id,
-            quantized_filename,
-            None,
-            ModelKind::QuantizedGGML,
-            None,
-            args.no_kv_cache,
-            args.chat_template,
-            tokenizer_json,
-            None,
-        )),
         ModelSelected::XLoraLlama {
             model_id,
             xlora_model_id,
@@ -284,36 +262,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             None,
             Some(xlora_model_id),
             ModelKind::XLoraNormal,
-            Some(serde_json::from_reader(
-                File::open(order.clone())
-                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )?),
-            args.no_kv_cache,
-            args.chat_template,
-            tokenizer_json,
-            tgt_non_granular_index,
-        )),
-        ModelSelected::XLoraLlamaGGML {
-            tok_model_id,
-            quantized_model_id,
-            quantized_filename,
-            repeat_last_n,
-            xlora_model_id,
-            order,
-            gqa,
-            tokenizer_json,
-            tgt_non_granular_index,
-        } => Box::new(LlamaLoader::new(
-            tok_model_id,
-            LlamaSpecificConfig {
-                use_flash_attn,
-                repeat_last_n,
-                gqa,
-            },
-            quantized_model_id,
-            quantized_filename,
-            Some(xlora_model_id),
-            ModelKind::XLoraGGML,
             Some(serde_json::from_reader(
                 File::open(order.clone())
                     .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
@@ -444,47 +392,15 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tokenizer_json,
             tgt_non_granular_index,
         )),
-        ModelSelected::LoraLlamaGGML {
-            tok_model_id,
-            tokenizer_json,
-            quantized_model_id,
-            quantized_filename,
-            adapters_model_id,
-            repeat_last_n,
-            order,
-            gqa,
-        } => Box::new(LlamaLoader::new(
-            tok_model_id,
-            LlamaSpecificConfig {
-                use_flash_attn,
-                repeat_last_n,
-                gqa,
-            },
-            quantized_model_id,
-            quantized_filename,
-            Some(adapters_model_id),
-            ModelKind::LoraGGML,
-            Some(serde_json::from_reader(
-                File::open(order.clone())
-                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )?),
-            args.no_kv_cache,
-            args.chat_template,
-            tokenizer_json,
-            tgt_non_granular_index,
-        )),
         ModelSelected::GGUF {
             tok_model_id,
             tokenizer_json,
             quantized_model_id,
             quantized_filename,
             repeat_last_n,
-        } => Box::new(Phi2Loader::new(
+        } => Box::new(GgufLoader::new(
             Some(tok_model_id),
-            Phi2SpecificConfig {
-                use_flash_attn,
-                repeat_last_n,
-            },
+            GgufSpecificConfig { repeat_last_n },
             quantized_model_id,
             quantized_filename,
             None,
@@ -504,16 +420,110 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             xlora_model_id,
             order,
             tgt_non_granular_index,
-        } => Box::new(Phi2Loader::new(
+        } => Box::new(GgufLoader::new(
             Some(tok_model_id),
-            Phi2SpecificConfig {
-                use_flash_attn,
-                repeat_last_n,
-            },
+            GgufSpecificConfig { repeat_last_n },
             quantized_model_id,
             quantized_filename,
             Some(xlora_model_id),
             ModelKind::XLoraGGUF,
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
+            args.no_kv_cache,
+            args.chat_template,
+            tokenizer_json,
+            tgt_non_granular_index,
+        )),
+        ModelSelected::LoraGGUF {
+            tok_model_id,
+            tokenizer_json,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+            adapters_model_id,
+            order,
+            tgt_non_granular_index,
+        } => Box::new(GgufLoader::new(
+            Some(tok_model_id),
+            GgufSpecificConfig { repeat_last_n },
+            quantized_model_id,
+            quantized_filename,
+            Some(adapters_model_id),
+            ModelKind::LoraGGUF,
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
+            args.no_kv_cache,
+            args.chat_template,
+            tokenizer_json,
+            tgt_non_granular_index,
+        )),
+        ModelSelected::GGML {
+            tok_model_id,
+            tokenizer_json,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+            gqa,
+        } => Box::new(GgmlLoader::new(
+            Some(tok_model_id),
+            GgmlSpecificConfig { repeat_last_n, gqa },
+            quantized_model_id,
+            quantized_filename,
+            None,
+            ModelKind::QuantizedGGUF,
+            None,
+            args.no_kv_cache,
+            args.chat_template,
+            tokenizer_json,
+            None,
+        )),
+        ModelSelected::XLoraGGML {
+            tok_model_id,
+            tokenizer_json,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+            xlora_model_id,
+            order,
+            tgt_non_granular_index,
+            gqa,
+        } => Box::new(GgmlLoader::new(
+            Some(tok_model_id),
+            GgmlSpecificConfig { repeat_last_n, gqa },
+            quantized_model_id,
+            quantized_filename,
+            Some(xlora_model_id),
+            ModelKind::XLoraGGUF,
+            Some(serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?),
+            args.no_kv_cache,
+            args.chat_template,
+            tokenizer_json,
+            tgt_non_granular_index,
+        )),
+        ModelSelected::LoraGGML {
+            tok_model_id,
+            tokenizer_json,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+            adapters_model_id,
+            order,
+            tgt_non_granular_index,
+            gqa,
+        } => Box::new(GgmlLoader::new(
+            Some(tok_model_id),
+            GgmlSpecificConfig { repeat_last_n, gqa },
+            quantized_model_id,
+            quantized_filename,
+            Some(adapters_model_id),
+            ModelKind::LoraGGUF,
             Some(serde_json::from_reader(
                 File::open(order.clone())
                     .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),

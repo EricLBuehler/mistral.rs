@@ -1,4 +1,5 @@
 mod gemma;
+mod ggml;
 mod gguf;
 mod llama;
 mod mistral;
@@ -9,6 +10,7 @@ use crate::{get_bias_if_not_allowed, sampler::Logprobs, sequence::SequenceRecogn
 use core::fmt;
 use either::Either;
 pub use gemma::{GemmaLoader, GemmaSpecificConfig, GEMMA_IS_GPTX};
+pub use ggml::{GgmlLoader, GgmlSpecificConfig};
 pub use gguf::{GgufLoader, GgufSpecificConfig};
 use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
