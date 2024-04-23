@@ -69,7 +69,8 @@ Rust multithreaded API for easy integration into any application.
 
 Python API for mistral.rs.
 
-- [Docs and installation](mistralrs-pyo3/README.md)
+- [Installation](mistralrs-pyo3/README.md)
+- [Docs](mistralrs-pyo3/API.md)
 - [Example](examples/python/python_api.py)
 - [Cookbook](examples/python/cookbook.ipynb)
 
