@@ -63,7 +63,7 @@ class Which(Enum):
     Which model to select. See the docs for the `Which` enum in API.md for more details.
     Usage:
     ```python
-    >>> Which.Mistral(...)
+    >>> Which.Plain(...)
     ```
     """
     @dataclass
