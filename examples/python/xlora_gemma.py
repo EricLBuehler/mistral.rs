@@ -1,13 +1,14 @@
-from mistralrs import Runner, Which, ChatCompletionRequest, Message, Role
+from mistralrs import Runner, Which, ChatCompletionRequest, Message, Role, Architecture
 
 runner = Runner(
-    which=Which.XLoraGemma(
+    which=Which.XLora(
         model_id=None,  # Automatically determine from ordering file
         tokenizer_json=None,
         repeat_last_n=64,
         xlora_model_id="lamm-mit/x-lora-gemma-7b",
         order="orderings/xlora-gemma-paper-ordering.json",
         tgt_non_granular_index=None,
+        arch=Architecture.Mistral,
     )
 )
 

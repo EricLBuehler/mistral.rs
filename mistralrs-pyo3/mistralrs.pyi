@@ -56,8 +56,17 @@ class _Base:
     repeat_last_n: int | None
 
 @dataclass
+class Architecture(Enum):
+    Mistral = 1
+    Gemma = 2
+    Mixtral = 3
+    Llama = 4
+    Phi2 = 5
+
+@dataclass
 class _Normal(_Base):
     model_id: str
+    arch: Architecture
 
 @dataclass
 class _Quantized(_Base):
@@ -77,36 +86,22 @@ class _XLoraNormal(_Normal):
     order: str
     tgt_non_granular_index: int | None
 
+@dataclass
+class _LoraNormal(_Normal):
+    adapter_model_id: str
+    order: str
+    tgt_non_granular_index: int | None
+
 class Which(Enum):
     """
     Which model to select.
     """
     @dataclass
-    class Mistral(_Normal): ...
+    class Plain(_Normal): ...
     @dataclass
-    class XLoraMistral(_XLoraNormal): ...
+    class XLora(_XLoraNormal): ...
     @dataclass
-    class Gemma(_Normal): ...
-    @dataclass
-    class XLoraGemma(_XLoraNormal): ...
-    @dataclass
-    class Llama(_Normal): ...
-    @dataclass
-    class XLoraLlama(_XLoraNormal): ...
-    @dataclass
-    class Mixtral(_Normal): ...
-    @dataclass
-    class XLoraMixtral(_XLoraNormal): ...
-    @dataclass
-    class Phi2(_Normal): ...
-    @dataclass
-    class XLoraPhi2(_XLoraNormal): ...
-    @dataclass
-    class LoraMistral(_XLoraNormal): ...
-    @dataclass
-    class LoraMixtral(_XLoraNormal): ...
-    @dataclass
-    class LoraLlama(_XLoraNormal): ...
+    class Lora(_LoraNormal): ...
     @dataclass
     class GGUF(_Quantized): ...
     @dataclass

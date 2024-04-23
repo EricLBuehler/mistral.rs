@@ -77,7 +77,7 @@ Python API for mistral.rs.
 from mistralrs import Runner, Which, ChatCompletionRequest, Message, Role
 
 runner = Runner(
-    which=Which.MistralGGUF(
+    which=Which.GGUF(
         tok_model_id="mistralai/Mistral-7B-Instruct-v0.1",
         quantized_model_id="TheBloke/Mistral-7B-Instruct-v0.1-GGUF",
         quantized_filename="mistral-7b-instruct-v0.1.Q4_K_M.gguf",
