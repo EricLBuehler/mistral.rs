@@ -330,7 +330,8 @@ impl Llama {
         extract_logits(&logits.to_dtype(DType::F32)?, context_lens)
     }
 
-    pub fn load(vb: VarBuilder, cfg: &Config, device: &Device) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let device = vb.device();
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;

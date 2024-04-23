@@ -7,7 +7,7 @@ use crate::aici::toktree::TokTrie;
 use crate::models::Cache;
 use crate::pipeline::{calculate_eos_tok, ChatTemplate};
 use crate::xlora_models::{NonGranularState, XLoraConfig, XLoraMistral};
-use crate::{deserialize_chat_template, get_paths};
+use crate::{deserialize_chat_template, get_paths, normal_model, xlora_model};
 use crate::{
     models::mistral::{Config, Model as NormalModel},
     sequence::Sequence,
@@ -215,75 +215,36 @@ impl Loader for MistralLoader {
         let model = match self.kind {
             ModelKind::QuantizedGGUF => unreachable!(),
             ModelKind::QuantizedGGML => unreachable!(),
-            ModelKind::Normal => {
-                let vb = from_mmaped_safetensors(
-                    paths.get_weight_filenames().to_vec(),
-                    Vec::new(),
-                    dtype.unwrap_or(default_dtype),
+            ModelKind::Normal => Model::Normal(normal_model!(
+                paths,
+                dtype,
+                default_dtype,
+                device,
+                config,
+                NormalModel
+            )),
+            ModelKind::XLoraNormal => Model::XLoraNormal(xlora_model!(
+                paths,
+                dtype,
+                default_dtype,
+                device,
+                config,
+                XLoraMistral
+            )),
+            ModelKind::LoraNormal => {
+                is_lora = true;
+                Model::XLoraNormal(xlora_model!(
+                    paths,
+                    dtype,
+                    default_dtype,
                     device,
-                    false,
-                )?;
-
-                let model = NormalModel::new(&config, vb)?;
-                Model::Normal(model)
-            }
-            ModelKind::XLoraNormal => {
-                let mut safetensors_paths = paths.get_weight_filenames().iter().collect::<Vec<_>>();
-                safetensors_paths.push(paths.get_classifier_path().as_ref().unwrap());
-                let vb = from_mmaped_safetensors(
-                    safetensors_paths
-                        .iter()
-                        .map(|x| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    paths
-                        .get_adapter_filenames()
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(|(_, x)| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    dtype.unwrap_or(default_dtype),
-                    device,
-                    false,
-                )?;
-
-                let model = XLoraMistral::new(
-                    &config,
-                    vb,
-                    paths.get_adapter_configs().as_ref().unwrap(),
-                    Some(paths.get_classifier_config().as_ref().unwrap().clone()),
-                    paths.get_ordering().as_ref().unwrap().clone(),
-                )?;
-                Model::XLoraNormal(model)
+                    config,
+                    XLoraMistral
+                ))
             }
             ModelKind::XLoraGGUF => unreachable!(),
             ModelKind::XLoraGGML => unreachable!(),
             ModelKind::LoraGGUF => unreachable!(),
-            ModelKind::LoraNormal => {
-                let vb = from_mmaped_safetensors(
-                    paths.get_weight_filenames().to_vec(),
-                    paths
-                        .get_adapter_filenames()
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(|(_, x)| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    dtype.unwrap_or(default_dtype),
-                    device,
-                    false,
-                )?;
-
-                let model = XLoraMistral::new(
-                    &config,
-                    vb,
-                    paths.get_adapter_configs().as_ref().unwrap(),
-                    None,
-                    paths.get_ordering().as_ref().unwrap().clone(),
-                )?;
-                is_lora = true;
-                Model::XLoraNormal(model)
-            }
             ModelKind::LoraGGML => unreachable!(),
         };
 

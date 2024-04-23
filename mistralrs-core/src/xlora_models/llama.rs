@@ -460,15 +460,15 @@ impl XLoraLlama {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn load(
-        vb: VarBuilder,
+    pub fn new(
         cfg: &Config,
-        dtype: DType,
-        device: &Device,
+        vb: VarBuilder,
         lora_config: &Vec<(String, LoraConfig)>,
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
     ) -> Result<Self> {
+        let device = vb.device();
+        let dtype = vb.dtype();
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let lm_head = candle_nn::linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
