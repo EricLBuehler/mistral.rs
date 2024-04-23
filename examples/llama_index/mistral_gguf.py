@@ -9,7 +9,7 @@ documents = SimpleDirectoryReader("data").load_data()
 Settings.embed_model = resolve_embed_model("local:BAAI/bge-small-en-v1.5")
 
 Settings.llm = MistralRS(
-    which=Which.MistralGGUF(
+    which=Which.GGUF(
         tok_model_id="mistralai/Mistral-7B-Instruct-v0.1",
         quantized_model_id="TheBloke/Mistral-7B-Instruct-v0.1-GGUF",
         quantized_filename="mistral-7b-instruct-v0.1.Q4_K_M.gguf",

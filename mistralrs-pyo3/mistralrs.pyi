@@ -51,88 +51,99 @@ class CompletionRequest:
     grammar_type: str | None = None
 
 @dataclass
-class _Base:
-    tokenizer_json: str | None
-    repeat_last_n: int | None
-
-@dataclass
-class _Normal(_Base):
-    model_id: str
-
-@dataclass
-class _Quantized(_Base):
-    tok_model_id: str
-    quantized_model_id: str
-    quantized_filename: str
-
-@dataclass
-class _XLoraQuantized(_Quantized):
-    xlora_model_id: str
-    order: str
-    tgt_non_granular_index: int | None
-
-@dataclass
-class _XLoraNormal(_Normal):
-    xlora_model_id: str
-    order: str
-    tgt_non_granular_index: int | None
+class Architecture(Enum):
+    Mistral = "mistral"
+    Gemma = "gemma"
+    Mixtral = "mixtral"
+    Llama = "llama"
+    Phi2 = "phi2"
 
 class Which(Enum):
     """
-    Which model to select.
+    Which model to select. See the docs for the `Which` enum in API.md for more details.
+    Usage:
+    ```python
+    >>> Which.Mistral(...)
+    ```
     """
     @dataclass
-    class Mistral(_Normal): ...
+    class Plain:
+        model_id: str
+        arch: Architecture
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
     @dataclass
-    class MistralGGUF(_Quantized): ...
+    class XLora:
+        arch: Architecture
+        xlora_model_id: str
+        order: str
+        tgt_non_granular_index: int | None = None
+        model_id: str | None = None
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
     @dataclass
-    class XLoraMistral(_XLoraNormal): ...
+    class Lora:
+        arch: Architecture
+        adapters_model_id: str
+        order: str
+        tgt_non_granular_index: int | None = None
+        model_id: str | None = None
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
     @dataclass
-    class Gemma(_Normal): ...
+    class GGUF:
+        tok_model_id: str
+        quantized_model_id: str
+        quantized_filename: str
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
     @dataclass
-    class XLoraGemma(_XLoraNormal): ...
+    class XLoraGGUF:
+        tok_model_id: str
+        quantized_model_id: str
+        quantized_filename: str
+        xlora_model_id: str
+        order: str
+        tgt_non_granular_index: int | None = None
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
     @dataclass
-    class Llama(_Normal): ...
+    class LoraGGUF:
+        tok_model_id: str
+        quantized_model_id: str
+        quantized_filename: str
+        adapters_model_id: str
+        order: str
+        tgt_non_granular_index: int | None = None
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
     @dataclass
-    class LlamaGGUF(_Quantized): ...
+    class GGML:
+        tok_model_id: str
+        quantized_model_id: str
+        quantized_filename: str
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
     @dataclass
-    class LlamaGGML(_Quantized): ...
+    class XLoraGGML:
+        tok_model_id: str
+        quantized_model_id: str
+        quantized_filename: str
+        xlora_model_id: str
+        order: str
+        tgt_non_granular_index: int | None = None
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
     @dataclass
-    class XLoraLlama(_XLoraNormal): ...
-    @dataclass
-    class Mixtral(_Normal): ...
-    @dataclass
-    class MixtralGGUF(_Quantized): ...
-    @dataclass
-    class XLoraMixtral(_XLoraNormal): ...
-    @dataclass
-    class XLoraMistralGGUF(_XLoraQuantized): ...
-    @dataclass
-    class XLoraLlamaGGUF(_XLoraQuantized): ...
-    @dataclass
-    class XLoraLlamaGGML(_XLoraQuantized): ...
-    @dataclass
-    class XLoraMixtralGGUF(_XLoraQuantized): ...
-    @dataclass
-    class Phi2(_Normal): ...
-    @dataclass
-    class XLoraPhi2(_XLoraNormal): ...
-    @dataclass
-    class LoraMistralGGUF(_XLoraQuantized): ...
-    @dataclass
-    class LoraMistral(_XLoraNormal): ...
-    @dataclass
-    class LoraMixtral(_XLoraNormal): ...
-    @dataclass
-    class LoraLlama(_XLoraNormal): ...
-    @dataclass
-    class LoraLlamaGGUF(_XLoraQuantized): ...
-    @dataclass
-    class LoraLlamaGGML(_XLoraQuantized): ...
-    @dataclass
-    class LoraMixtralGGUF(_XLoraQuantized): ...
-    @dataclass
-    class Phi2GGUF(_Quantized): ...
+    class LoraGGML:
+        tok_model_id: str
+        quantized_model_id: str
+        quantized_filename: str
+        adapters_model_id: str
+        order: str
+        tgt_non_granular_index: int | None = None
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
 
 class Runner:
     def __init__(

@@ -1,7 +1,7 @@
 pub use mistralrs_core::{
-    ChatCompletionResponse, CompletionResponse, Constraint, GemmaLoader, GemmaSpecificConfig,
-    LlamaLoader, LlamaSpecificConfig, Loader, LoaderBuilder, MistralLoader, MistralSpecificConfig,
-    MixtralLoader, MixtralSpecificConfig, ModelKind, ModelSelected, Phi2Loader, Phi2SpecificConfig,
-    Request, RequestMessage, Response, SamplingParams, SchedulerMethod, StopTokens, TokenSource,
-    Usage,
+    ChatCompletionResponse, CompletionResponse, Constraint, GemmaLoader, GgmlLoaderBuilder,
+    GgmlSpecificConfig, GgufLoaderBuilder, GgufSpecificConfig, LlamaLoader, Loader, LoaderBuilder,
+    MistralLoader, MistralRs, MistralRsBuilder, MixtralLoader, ModelKind, ModelSelected,
+    NormalLoader, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Request,
+    RequestMessage, Response, SamplingParams, SchedulerMethod, StopTokens, TokenSource, Usage,
 };

@@ -11,15 +11,15 @@ Mistral.rs is a fast LLM inference platform supporting inference on a variety of
 
 **Running the new Llama 3 model on CUDA**
 
-`cargo run --release --features cuda -- -i llama -m meta-llama/Meta-Llama-3-8B-Instruct`
+`cargo run --release --features cuda -- -i plain -m meta-llama/Meta-Llama-3-8B-Instruct -a llama`
 
 **Running the new Llama 3 model on Metal**
 
-`cargo run --release --features metal -- -i llama -m meta-llama/Meta-Llama-3-8B-Instruct`
+`cargo run --release --features metal -- -i plain -m meta-llama/Meta-Llama-3-8B-Instruct -a llama`
 
 **Running the new Llama 3 model on CPU**
 
-`cargo run --release -- -i llama -m meta-llama/Meta-Llama-3-8B-Instruct`
+`cargo run --release -- -i plain -m meta-llama/Meta-Llama-3-8B-Instruct -a llama`
 
 ## Description
 **Fast**:
@@ -77,7 +77,7 @@ Python API for mistral.rs.
 from mistralrs import Runner, Which, ChatCompletionRequest, Message, Role
 
 runner = Runner(
-    which=Which.MistralGGUF(
+    which=Which.GGUF(
         tok_model_id="mistralai/Mistral-7B-Instruct-v0.1",
         quantized_model_id="TheBloke/Mistral-7B-Instruct-v0.1-GGUF",
         quantized_filename="mistral-7b-instruct-v0.1.Q4_K_M.gguf",
@@ -168,20 +168,20 @@ cargo build --release --features cuda
 
 To start a server serving Mistral on `localhost:1234`, 
 ```bash
-./mistralrs-server --port 1234 --log output.log mistral
+./mistralrs-server --port 1234 --log output.log plain -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF
 ```
 
-Mistral.rs uses subcommands to control the model type. They are of format `<XLORA/LORA>-<ARCHITECTURE>-<QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
+Mistral.rs uses subcommands to control the model type. They are generally of format `<XLORA/LORA>-<ARCHITECTURE/QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
 
 **Interactive mode:**
 
 You can launch interactive mode, a simple chat application running in the terminal, by passing `-i`:
 
 ```bash
-./mistralrs-server -i mistral-gguf
+./mistralrs-server -i gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
 ```
 
-**Quick examples:**
+### Quick examples:
 
 - X-LoRA with no quantization
 
@@ -195,17 +195,17 @@ To start an X-LoRA server with the exactly as presented in [the paper](https://a
 To start an LoRA server with adapters from the X-LoRA paper (you should modify the ordering file to use only one adapter, as the adapter static scalings are all 1 and so the signal will become distorted):
 
 ```
-./mistralrs-server --port 1234 lora-mistral-gguf -o orderings/xlora-paper-ordering.json -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q8_0.gguf -a lamm-mit/x-lora
+./mistralrs-server --port 1234 lora-gguf -o orderings/xlora-paper-ordering.json -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q8_0.gguf -x lamm-mit/x-lora
 ```
 
 Normally with a LoRA model you would use a custom ordering file. However, for this example we use the ordering from the X-LoRA paper because we are using the adapters from the X-LoRA paper.
 
 - With a model from GGUF
 
-To start a server running Llama from GGUF:
+To start a server running Mistral from GGUF:
 
 ```
-./mistralrs-server --port 1234 llama-gguf -t meta-llama/Llama-2-13b-chat-hf -m TheBloke/Llama-2-13B-chat-GGUF -f llama-2-13b-chat.Q4_K_M.gguf
+./mistralrs-server --port 1234 gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
 ```
 
 - With a model from GGML
@@ -213,7 +213,15 @@ To start a server running Llama from GGUF:
 To start a server running Llama from GGML:
 
 ```
-./mistralrs-server --port 1234 llama-ggml -t meta-llama/Llama-2-13b-chat-hf -m TheBloke/Llama-2-13B-chat-GGML -f llama-2-13b-chat.ggmlv3.q4_K_M.bin
+./mistralrs-server --port 1234 ggml -t meta-llama/Llama-2-13b-chat-hf -m TheBloke/Llama-2-13B-chat-GGML -f llama-2-13b-chat.ggmlv3.q4_K_M.bin
+```
+
+- Plain model from safetensors
+
+To start a server running Mistral from safetensors.
+
+```
+./mistralrs-server --port 1234 gguf -m mistralai/Mistral-7B-Instruct-v0.1
 ```
 
 - Single prompt inference
@@ -221,7 +229,7 @@ To start a server running Llama from GGML:
 To run a single prompt and then shut down:
 
 ```
-./mistralrs-server --prompt "Hello!" mistral-gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
+./mistralrs-server --prompt "Hello!" gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
 ```
 
 **Command line docs**
@@ -266,7 +274,7 @@ It is also important to check the chat template style of the model. If the HF hu
 
 For example, when using a Zephyr model:
 
-`./mistralrs-server --port 1234 --log output.txt mistral-gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf`
+`./mistralrs-server --port 1234 --log output.txt gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf`
 
 ### Adapter model support: X-LoRA and LoRA
 

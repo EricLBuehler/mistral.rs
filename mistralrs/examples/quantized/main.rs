@@ -2,23 +2,21 @@ use std::sync::{mpsc::channel, Arc};
 
 use candle_core::Device;
 use mistralrs::{
-    Constraint, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, Request, RequestMessage, Response, SamplingParams, SchedulerMethod,
-    TokenSource,
+    Constraint, GgufLoaderBuilder, GgufSpecificConfig, MistralRs, MistralRsBuilder, Request,
+    RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
 };
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {
     // Select a Mistral model
-    let loader = NormalLoaderBuilder::new(
-        NormalSpecificConfig {
-            use_flash_attn: false,
-            repeat_last_n: 64,
-        },
+    let loader = GgufLoaderBuilder::new(
+        GgufSpecificConfig { repeat_last_n: 64 },
         None,
         None,
         Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
+        "TheBloke/Mistral-7B-Instruct-v0.1-GGUF".to_string(),
+        "mistral-7b-instruct-v0.1.Q4_K_M.gguf".to_string(),
     )
-    .build(NormalLoaderType::Mistral);
+    .build();
     // Load, into a Pipeline
     let pipeline = loader.load_model(
         None,

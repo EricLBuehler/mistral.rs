@@ -1,25 +1,27 @@
-mod gemma;
-mod llama;
-mod mistral;
-mod mixtral;
-mod phi2;
+mod chat_template;
+mod ggml;
+mod gguf;
+mod loaders;
+mod macros;
+mod normal;
 use crate::aici::toktree::TokTrie;
 use crate::{get_bias_if_not_allowed, sampler::Logprobs, sequence::SequenceRecognizer};
+use candle_nn::VarBuilder;
+use chat_template::{apply_chat_template_to, ChatTemplate};
 use core::fmt;
 use either::Either;
-pub use gemma::{GemmaLoader, GemmaSpecificConfig, GEMMA_IS_GPTX};
+pub use ggml::{GgmlLoader, GgmlLoaderBuilder, GgmlSpecificConfig};
+pub use gguf::{GgufLoader, GgufLoaderBuilder, GgufSpecificConfig};
 use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
     Repo, RepoType,
 };
 use indexmap::IndexMap;
-pub use llama::{LlamaLoader, LlamaSpecificConfig, LLAMA_IS_GPTX};
-use minijinja::{context, Environment, ErrorKind};
-pub use mistral::{MistralLoader, MistralSpecificConfig, MISTRAL_IS_GPTX};
+pub use loaders::{
+    GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
+};
 use mistralrs_lora::{LoraConfig, Ordering};
-pub use mixtral::{MixtralLoader, MixtralSpecificConfig, MIXTRAL_IS_GPTX};
-pub use phi2::{Phi2Loader, Phi2SpecificConfig, PHI2_IS_GPTX};
-use serde::Deserialize;
+pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 use std::sync::Arc;
 use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
 use tokenizers::Tokenizer;
@@ -46,73 +48,6 @@ pub trait ModelPaths {
     fn get_classifier_path(&self) -> &Option<PathBuf>;
     fn get_classifier_config(&self) -> &Option<XLoraConfig>;
     fn get_ordering(&self) -> &Option<Ordering>;
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-pub struct AddedTokensDecoder {
-    __type: Option<String>,
-    content: String,
-    lstrip: bool,
-    normalized: bool,
-    rstrip: bool,
-    single_word: bool,
-    special: Option<bool>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Unk(#[serde(with = "either::serde_untagged")] Either<String, AddedTokensDecoder>);
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-pub struct ChatTemplate {
-    add_bos_token: Option<bool>,
-    add_eos_token: Option<bool>,
-    added_tokens_decoder: Option<HashMap<String, AddedTokensDecoder>>,
-    additional_special_tokens: Option<Vec<String>>,
-    #[serde(with = "either::serde_untagged")]
-    bos_token: Either<String, AddedTokensDecoder>,
-    chat_template: Option<String>,
-    clean_up_tokenization_spaces: Option<bool>,
-    device_map: Option<String>,
-    #[serde(with = "either::serde_untagged")]
-    eos_token: Either<String, AddedTokensDecoder>,
-    legacy: Option<bool>,
-    model_max_length: f64,
-    pad_token: Option<String>,
-    sp_model_kwargs: Option<HashMap<String, String>>,
-    spaces_between_special_tokens: Option<bool>,
-    tokenizer_class: String,
-    truncation_size: Option<String>,
-    unk_token: Option<Unk>,
-    use_default_system_prompt: Option<bool>,
-}
-
-impl ChatTemplate {
-    pub fn has_chat_template(&self) -> bool {
-        self.chat_template.is_some()
-    }
-
-    pub fn eos_tok(&self) -> String {
-        match self.eos_token {
-            Either::Left(ref lit) => lit.clone(),
-            Either::Right(ref added) => added.content.clone(),
-        }
-    }
-
-    pub fn bos_tok(&self) -> String {
-        match self.bos_token {
-            Either::Left(ref lit) => lit.clone(),
-            Either::Right(ref added) => added.content.clone(),
-        }
-    }
-
-    pub fn unk_tok(&self) -> Option<String> {
-        match self.unk_token.as_ref()?.0 {
-            Either::Left(ref lit) => Some(lit.clone()),
-            Either::Right(ref added) => Some(added.content.clone()),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -163,8 +98,9 @@ impl fmt::Display for TokenSource {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub enum ModelKind {
+    #[default]
     Normal,
     XLoraNormal,
     XLoraGGUF,
@@ -224,36 +160,6 @@ pub trait Loader {
 
     fn get_id(&self) -> &str;
     fn get_kind(&self) -> ModelKind;
-}
-
-fn raise_exception(msg: String) -> Result<String, minijinja::Error> {
-    Err(minijinja::Error::new(ErrorKind::InvalidOperation, msg))
-}
-
-fn apply_chat_template_to(
-    messages: Vec<IndexMap<String, String>>,
-    add_generation_prompt: bool,
-    template: &str,
-    bos_tok: &str,
-    eos_tok: &str,
-    unk_tok: Option<String>,
-) -> Result<String> {
-    let mut env = Environment::new();
-    // https://github.com/huggingface/transformers/blob/76a33a10923ccc1074917f6b6a1e719e626b7dc9/src/transformers/tokenization_utils_base.py#L1842
-    env.set_lstrip_blocks(true);
-    env.set_trim_blocks(true);
-
-    let template = template.replace(".strip()", "|trim");
-    env.add_template("chat_template", template.as_str())?;
-    env.add_function("raise_exception", raise_exception);
-    let tmpl = env.get_template("chat_template").unwrap();
-    Ok(tmpl.render(context! {
-        messages => messages,
-        add_generation_prompt => add_generation_prompt,
-        bos_token => bos_tok,
-        eos_token => eos_tok,
-        unk_token => unk_tok,
-    })?)
 }
 
 pub trait Pipeline: Send + Sync {
@@ -370,6 +276,54 @@ pub trait Pipeline: Send + Sync {
         }
         Ok(second_logprobs_response)
     }
+}
+
+pub trait ConfigMarker {}
+
+pub trait NormalModelLoader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>>;
+    fn load_xlora(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        lora_config: &[(String, LoraConfig)],
+        xlora_config: Option<XLoraConfig>,
+        xlora_ordering: Ordering,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>>;
+    fn is_gptx(&self) -> bool;
+}
+
+pub trait NormalModel {
+    fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<usize>,
+    ) -> candle_core::Result<Tensor>;
+    #[allow(clippy::too_many_arguments)]
+    fn xlora_forward(
+        &mut self,
+        input_ids: &Tensor,
+        input_ids_full: &Tensor,
+        seqlen_offsets: &[usize],
+        seqlen_offsets_full: &[usize],
+        start_offsets_kernel: Tensor,
+        start_offsets_kernel_full: Tensor,
+        no_kv_cache: bool,
+        non_granular_state: &Option<NonGranularState>,
+        context_lens: Vec<usize>,
+    ) -> candle_core::Result<Tensor>;
+    fn is_xlora(&self) -> bool;
+    fn device(&self) -> &Device;
+    fn cache(&self) -> &Cache;
+    fn max_seq_len(&self) -> usize;
 }
 
 struct InputMetadata {
@@ -750,72 +704,6 @@ fn get_model_paths(
     }
 }
 
-#[macro_export]
-macro_rules! deserialize_chat_template {
-    ($paths:expr, $this:ident) => {{
-        use tracing::info;
-
-        let template: ChatTemplate = serde_json::from_str(&fs::read_to_string(
-            $paths.get_template_filename(),
-        )?).unwrap();
-        #[derive(Debug, serde::Deserialize)]
-        struct SpecifiedTemplate {
-            chat_template: String,
-            bos_token: Option<String>,
-            eos_token: Option<String>,
-        }
-        match template.chat_template {
-            Some(_) => template,
-            None => {
-                info!("`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
-                let mut deser: HashMap<String, Value> =
-                    serde_json::from_str(&fs::read_to_string($paths.get_template_filename())?)
-                        .unwrap();
-                match $this.chat_template.clone() {
-                    Some(t) => {
-                        if t.ends_with(".json") {
-                            info!("Loading specified loading chat template file at `{t}`.");
-                            let templ: SpecifiedTemplate = serde_json::from_str(&fs::read_to_string(t.clone())?).unwrap();
-                            deser.insert(
-                                "chat_template".to_string(),
-                                Value::String(templ.chat_template),
-                            );
-                            if templ.bos_token.is_some() {
-                                deser.insert(
-                                    "bos_token".to_string(),
-                                    Value::String(templ.bos_token.unwrap()),
-                                );
-                            }
-                            if templ.eos_token.is_some() {
-                                deser.insert(
-                                    "eos_token".to_string(),
-                                    Value::String(templ.eos_token.unwrap()),
-                                );
-                            }
-                            info!("Loaded chat template file.");
-                        } else {
-                            deser.insert(
-                                "chat_template".to_string(),
-                                Value::String(t),
-                            );
-                            info!("Loaded specified literal chat template.");
-                        }
-                    },
-                    None => {
-                        info!("No specified chat template. No chat template will be used. Only prompts will be accepted, not messages.");
-                        deser.insert(
-                            "chat_template".to_string(),
-                            Value::Null,
-                        );
-                    }
-                };
-                let ser = serde_json::to_string_pretty(&deser).expect("Serialization of modified chat template failed.");
-                serde_json::from_str(&ser).unwrap()
-            }
-        }
-    }};
-}
-
 mod tests {
     #[test]
     /// Generating these cases:
@@ -888,17 +776,4 @@ mod tests {
             assert_eq!(output, expected, "Template number {i}");
         }
     }
-}
-fn calculate_eos_tok(tokens: Vec<String>, tokenizer: &Tokenizer) -> Vec<u32> {
-    let mut eos_toks = Vec::new();
-    for eos_tok in tokens {
-        eos_toks.push(
-            tokenizer
-                .get_vocab(true)
-                .get(&eos_tok)
-                .copied()
-                .unwrap_or_else(|| panic!("Unable to extract `{eos_tok}` EOS token.")),
-        )
-    }
-    eos_toks
 }
