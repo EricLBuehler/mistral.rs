@@ -401,8 +401,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         } => Box::new(GgufLoader::new(
             Some(tok_model_id),
             GgufSpecificConfig { repeat_last_n },
-            quantized_model_id,
-            quantized_filename,
+            Some(quantized_model_id),
+            Some(quantized_filename),
             None,
             ModelKind::QuantizedGGUF,
             None,
@@ -423,8 +423,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         } => Box::new(GgufLoader::new(
             Some(tok_model_id),
             GgufSpecificConfig { repeat_last_n },
-            quantized_model_id,
-            quantized_filename,
+            Some(quantized_model_id),
+            Some(quantized_filename),
             Some(xlora_model_id),
             ModelKind::XLoraGGUF,
             Some(serde_json::from_reader(
@@ -448,8 +448,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         } => Box::new(GgufLoader::new(
             Some(tok_model_id),
             GgufSpecificConfig { repeat_last_n },
-            quantized_model_id,
-            quantized_filename,
+            Some(quantized_model_id),
+            Some(quantized_filename),
             Some(adapters_model_id),
             ModelKind::LoraGGUF,
             Some(serde_json::from_reader(
@@ -471,8 +471,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         } => Box::new(GgmlLoader::new(
             Some(tok_model_id),
             GgmlSpecificConfig { repeat_last_n, gqa },
-            quantized_model_id,
-            quantized_filename,
+            Some(quantized_model_id),
+            Some(quantized_filename),
             None,
             ModelKind::QuantizedGGUF,
             None,
@@ -494,8 +494,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         } => Box::new(GgmlLoader::new(
             Some(tok_model_id),
             GgmlSpecificConfig { repeat_last_n, gqa },
-            quantized_model_id,
-            quantized_filename,
+            Some(quantized_model_id),
+            Some(quantized_filename),
             Some(xlora_model_id),
             ModelKind::XLoraGGUF,
             Some(serde_json::from_reader(
@@ -520,8 +520,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         } => Box::new(GgmlLoader::new(
             Some(tok_model_id),
             GgmlSpecificConfig { repeat_last_n, gqa },
-            quantized_model_id,
-            quantized_filename,
+            Some(quantized_model_id),
+            Some(quantized_filename),
             Some(adapters_model_id),
             ModelKind::LoraGGUF,
             Some(serde_json::from_reader(

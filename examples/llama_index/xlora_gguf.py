@@ -9,7 +9,7 @@ documents = SimpleDirectoryReader("data").load_data()
 Settings.embed_model = resolve_embed_model("local:BAAI/bge-small-en-v1.5")
 
 Settings.llm = MistralRS(
-    which=Which.XLoraMistralGGUF(
+    which=Which.XLoraGGUF(
         tok_model_id=None,  # Automatically determine from ordering file
         quantized_model_id="TheBloke/zephyr-7B-beta-GGUF",
         quantized_filename="zephyr-7b-beta.Q4_0.gguf",

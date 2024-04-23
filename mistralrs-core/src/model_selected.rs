@@ -299,11 +299,11 @@ pub enum ModelSelected {
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
         /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         #[arg(short = 'm', long)]
-        quantized_model_id: Option<String>,
+        quantized_model_id: String,
 
         /// Quantized filename, only applicable if `quantized` is set.
         #[arg(short = 'f', long)]
-        quantized_filename: Option<String>,
+        quantized_filename: String,
 
         /// Control the application of repeat penalty for the last n tokens
         #[arg(long, default_value_t = 64)]
@@ -323,11 +323,11 @@ pub enum ModelSelected {
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
         /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         #[arg(short = 'm', long)]
-        quantized_model_id: Option<String>,
+        quantized_model_id: String,
 
         /// Quantized filename, only applicable if `quantized` is set.
         #[arg(short = 'f', long)]
-        quantized_filename: Option<String>,
+        quantized_filename: String,
 
         /// Control the application of repeat penalty for the last n tokens
         #[arg(long, default_value_t = 64)]
@@ -360,11 +360,11 @@ pub enum ModelSelected {
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
         /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         #[arg(short = 'm', long)]
-        quantized_model_id: Option<String>,
+        quantized_model_id: String,
 
         /// Quantized filename, only applicable if `quantized` is set.
         #[arg(short = 'f', long)]
-        quantized_filename: Option<String>,
+        quantized_filename: String,
 
         /// Control the application of repeat penalty for the last n tokens
         #[arg(long, default_value_t = 64)]
@@ -397,11 +397,11 @@ pub enum ModelSelected {
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
         /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         #[arg(short = 'm', long)]
-        quantized_model_id: Option<String>,
+        quantized_model_id: String,
 
         /// Quantized filename, only applicable if `quantized` is set.
         #[arg(short = 'f', long)]
-        quantized_filename: Option<String>,
+        quantized_filename: String,
 
         /// Control the application of repeat penalty for the last n tokens
         #[arg(long, default_value_t = 64)]
@@ -425,11 +425,11 @@ pub enum ModelSelected {
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
         /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         #[arg(short = 'm', long)]
-        quantized_model_id: Option<String>,
+        quantized_model_id: String,
 
         /// Quantized filename, only applicable if `quantized` is set.
         #[arg(short = 'f', long)]
-        quantized_filename: Option<String>,
+        quantized_filename: String,
 
         /// Control the application of repeat penalty for the last n tokens
         #[arg(long, default_value_t = 64)]
@@ -466,11 +466,11 @@ pub enum ModelSelected {
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
         /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         #[arg(short = 'm', long)]
-        quantized_model_id: Option<String>,
+        quantized_model_id: String,
 
         /// Quantized filename, only applicable if `quantized` is set.
         #[arg(short = 'f', long)]
-        quantized_filename: Option<String>,
+        quantized_filename: String,
 
         /// Control the application of repeat penalty for the last n tokens
         #[arg(long, default_value_t = 64)]
