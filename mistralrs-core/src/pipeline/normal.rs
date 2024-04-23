@@ -8,7 +8,8 @@ use super::{
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::models::Cache;
-use crate::pipeline::{calculate_eos_tok, ChatTemplate};
+use crate::pipeline::chat_template::calculate_eos_tokens;
+use crate::pipeline::ChatTemplate;
 use crate::xlora_models::{NonGranularState, XLoraConfig};
 use crate::{deserialize_chat_template, get_paths, normal_model_loader, xlora_model_loader};
 use crate::{
@@ -279,23 +280,10 @@ impl Loader for NormalLoader {
             Tokenizer::from_file(paths.get_tokenizer_filename()).map_err(anyhow::Error::msg)?;
 
         let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
-        let mut eos_toks = vec![chat_template.eos_tok()];
-
-        // Handle Llama3 chat case
-        if tokenizer.get_vocab(true).get("<|eot_id|>").is_some() {
-            eos_toks.push("<|eot_id|>".to_string())
-        }
-
-        info!(
-            "bos_tok = {}, eos_tok = {:?}, unk_tok = {}",
-            chat_template.bos_tok(),
-            eos_toks,
-            chat_template.eos_tok()
-        );
 
         Ok(Box::new(Mutex::new(NormalPipeline {
             model,
-            eos_tok: calculate_eos_tok(eos_toks, &tokenizer),
+            eos_tok: calculate_eos_tokens(&chat_template, &tokenizer),
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer: tokenizer.into(),
             config: self.config,
