@@ -25,7 +25,6 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
-use thiserror::Error;
 use tokenizers::Tokenizer;
 use tracing::info;
 
@@ -103,16 +102,118 @@ pub struct GgmlLoader {
     tgt_non_granular_index: Option<usize>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct GgmlSpecificConfig {
     pub repeat_last_n: usize,
     pub gqa: usize,
 }
 
-#[derive(Error, Debug)]
-enum TokenizerError {
-    #[error("`{0}`")]
-    Error(String),
+#[derive(Default)]
+pub struct GgmlLoaderBuilder {
+    model_id: Option<String>,
+    config: GgmlSpecificConfig,
+    quantized_model_id: String,
+    quantized_filename: String,
+    xlora_model_id: Option<String>,
+    kind: ModelKind,
+    xlora_order: Option<Ordering>,
+    no_kv_cache: bool,
+    chat_template: Option<String>,
+    tokenizer_json: Option<String>,
+    tgt_non_granular_index: Option<usize>,
+}
+
+impl GgmlLoaderBuilder {
+    pub fn new(
+        config: GgmlSpecificConfig,
+        chat_template: Option<String>,
+        tokenizer_json: Option<String>,
+        model_id: Option<String>,
+        quantized_model_id: String,
+        quantized_filename: String,
+    ) -> Self {
+        Self {
+            config,
+            chat_template,
+            tokenizer_json,
+            model_id,
+            kind: ModelKind::Normal,
+            quantized_filename,
+            quantized_model_id,
+            ..Default::default()
+        }
+    }
+
+    fn with_adapter(
+        mut self,
+        xlora_model_id: String,
+        xlora_order: Ordering,
+        no_kv_cache: bool,
+        tgt_non_granular_index: Option<usize>,
+    ) -> Self {
+        self.xlora_model_id = Some(xlora_model_id);
+        self.xlora_order = Some(xlora_order);
+        self.no_kv_cache = no_kv_cache;
+        self.tgt_non_granular_index = tgt_non_granular_index;
+        self.model_id = if let Some(id) = self.model_id {
+            Some(id)
+        } else {
+            info!(
+                "Using adapter base model ID: `{}`",
+                self.xlora_order.as_ref().unwrap().base_model_id
+            );
+            Some(self.xlora_order.as_ref().unwrap().base_model_id.clone())
+        };
+        self
+    }
+
+    pub fn with_xlora(
+        mut self,
+        xlora_model_id: String,
+        xlora_order: Ordering,
+        no_kv_cache: bool,
+        tgt_non_granular_index: Option<usize>,
+    ) -> Self {
+        self.kind = ModelKind::XLoraGGUF;
+        self.with_adapter(
+            xlora_model_id,
+            xlora_order,
+            no_kv_cache,
+            tgt_non_granular_index,
+        )
+    }
+
+    pub fn with_lora(
+        mut self,
+        xlora_model_id: String,
+        xlora_order: Ordering,
+        no_kv_cache: bool,
+        tgt_non_granular_index: Option<usize>,
+    ) -> Self {
+        self.kind = ModelKind::LoraGGUF;
+        self.with_adapter(
+            xlora_model_id,
+            xlora_order,
+            no_kv_cache,
+            tgt_non_granular_index,
+        )
+    }
+
+    pub fn build(self) -> Box<dyn Loader> {
+        Box::new(GgmlLoader {
+            model_id: self.model_id.unwrap(),
+            config: self.config,
+            xlora_model_id: self.xlora_model_id,
+            kind: self.kind,
+            xlora_order: self.xlora_order,
+            no_kv_cache: self.no_kv_cache,
+            chat_template: self.chat_template,
+            tokenizer_json: self.tokenizer_json,
+            tgt_non_granular_index: self.tgt_non_granular_index,
+            quantized_filename: Some(self.quantized_filename),
+            quantized_model_id: Some(self.quantized_model_id),
+        })
+    }
 }
 
 impl GgmlLoader {
@@ -242,8 +343,8 @@ impl Loader for GgmlLoader {
             _ => unreachable!(),
         };
 
-        let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
-            .map_err(|e| TokenizerError::Error(e.to_string()))?;
+        let tokenizer =
+            Tokenizer::from_file(paths.get_tokenizer_filename()).map_err(anyhow::Error::msg)?;
 
         let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
         let mut eos_toks = vec![chat_template.eos_tok()];

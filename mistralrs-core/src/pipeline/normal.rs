@@ -188,7 +188,7 @@ impl NormalLoaderBuilder {
         )
     }
 
-    pub fn build(self, loader: NormalLoaderType) -> NormalLoader {
+    pub fn build(self, loader: NormalLoaderType) -> Box<dyn Loader> {
         let loader: Box<dyn NormalModelLoader> = match loader {
             NormalLoaderType::Mistral => Box::new(MistralLoader),
             NormalLoaderType::Gemma => Box::new(GemmaLoader),
@@ -196,7 +196,7 @@ impl NormalLoaderBuilder {
             NormalLoaderType::Mixtral => Box::new(MixtralLoader),
             NormalLoaderType::Phi2 => Box::new(Phi2Loader),
         };
-        NormalLoader {
+        Box::new(NormalLoader {
             inner: loader,
             model_id: self.model_id.unwrap(),
             config: self.config,
@@ -207,7 +207,7 @@ impl NormalLoaderBuilder {
             chat_template: self.chat_template,
             tokenizer_json: self.tokenizer_json,
             tgt_non_granular_index: self.tgt_non_granular_index,
-        }
+        })
     }
 }
 

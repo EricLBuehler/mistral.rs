@@ -94,7 +94,6 @@ pub enum ModelSelected {
         tokenizer_json: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
@@ -111,14 +110,13 @@ pub enum ModelSelected {
     XLoraGGUF {
         /// Model ID to load the tokenizer from
         #[arg(short, long)]
-        tok_model_id: String,
+        tok_model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(long)]
         tokenizer_json: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
@@ -148,14 +146,13 @@ pub enum ModelSelected {
     LoraGGUF {
         /// Model ID to load the tokenizer from
         #[arg(short, long)]
-        tok_model_id: String,
+        tok_model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(long)]
         tokenizer_json: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
@@ -192,7 +189,6 @@ pub enum ModelSelected {
         tokenizer_json: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
@@ -213,14 +209,13 @@ pub enum ModelSelected {
     XLoraGGML {
         /// Model ID to load the tokenizer from
         #[arg(short, long)]
-        tok_model_id: String,
+        tok_model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(long)]
         tokenizer_json: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
@@ -254,14 +249,13 @@ pub enum ModelSelected {
     LoraGGML {
         /// Model ID to load the tokenizer from
         #[arg(short, long)]
-        tok_model_id: String,
+        tok_model_id: Option<String>,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(long)]
         tokenizer_json: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 

@@ -36,9 +36,9 @@ mod utils;
 mod xlora_models;
 
 pub use pipeline::{
-    GemmaLoader, GgmlLoader, GgmlSpecificConfig, GgufLoader, GgufSpecificConfig, LlamaLoader,
-    Loader, MistralLoader, MixtralLoader, ModelKind, NormalLoader, NormalLoaderBuilder,
-    NormalLoaderType, NormalSpecificConfig, Phi2Loader, TokenSource,
+    GemmaLoader, GgmlLoader, GgmlLoaderBuilder, GgmlSpecificConfig, GgufLoader, GgufLoaderBuilder,
+    GgufSpecificConfig, LlamaLoader, Loader, MistralLoader, MixtralLoader, ModelKind, NormalLoader,
+    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, TokenSource,
 };
 pub use request::{Constraint, Request, RequestMessage};
 pub use response::Response;

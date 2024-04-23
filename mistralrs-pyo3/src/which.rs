@@ -7,7 +7,7 @@ pub enum Which {
     Plain {
         model_id: String,
         tokenizer_json: Option<String>,
-        repeat_last_n: usize,
+        repeat_last_n: Option<usize>,
         arch: NormalLoaderType,
     },
 
@@ -15,7 +15,7 @@ pub enum Which {
         model_id: Option<String>,
         tokenizer_json: Option<String>,
         xlora_model_id: String,
-        repeat_last_n: usize,
+        repeat_last_n: Option<usize>,
         order: String,
         tgt_non_granular_index: Option<usize>,
         arch: NormalLoaderType,
@@ -25,7 +25,7 @@ pub enum Which {
         model_id: Option<String>,
         tokenizer_json: Option<String>,
         adapters_model_id: String,
-        repeat_last_n: usize,
+        repeat_last_n: Option<usize>,
         order: String,
         arch: NormalLoaderType,
     },
@@ -39,7 +39,7 @@ pub enum Which {
     },
 
     XLoraGGUF {
-        tok_model_id: String,
+        tok_model_id: Option<String>,
         tokenizer_json: Option<String>,
         quantized_model_id: String,
         quantized_filename: String,
@@ -50,7 +50,7 @@ pub enum Which {
     },
 
     LoraGGUF {
-        tok_model_id: String,
+        tok_model_id: Option<String>,
         tokenizer_json: Option<String>,
         quantized_model_id: String,
         quantized_filename: String,
@@ -70,7 +70,7 @@ pub enum Which {
     },
 
     XLoraGGML {
-        tok_model_id: String,
+        tok_model_id: Option<String>,
         tokenizer_json: Option<String>,
         quantized_model_id: String,
         quantized_filename: String,
@@ -82,7 +82,7 @@ pub enum Which {
     },
 
     LoraGGML {
-        tok_model_id: String,
+        tok_model_id: Option<String>,
         tokenizer_json: Option<String>,
         quantized_model_id: String,
         quantized_filename: String,

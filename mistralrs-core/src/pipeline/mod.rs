@@ -7,8 +7,8 @@ use crate::{get_bias_if_not_allowed, sampler::Logprobs, sequence::SequenceRecogn
 use candle_nn::VarBuilder;
 use core::fmt;
 use either::Either;
-pub use ggml::{GgmlLoader, GgmlSpecificConfig};
-pub use gguf::{GgufLoader, GgufSpecificConfig};
+pub use ggml::{GgmlLoader, GgmlLoaderBuilder, GgmlSpecificConfig};
+pub use gguf::{GgufLoader, GgufLoaderBuilder, GgufSpecificConfig};
 use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
     Repo, RepoType,
