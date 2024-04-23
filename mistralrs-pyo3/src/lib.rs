@@ -28,7 +28,7 @@ use pyo3::{
 use std::fs::File;
 mod stream;
 mod which;
-use which::Which;
+use which::{Architecture, Which};
 mod message;
 
 #[cfg(not(feature = "metal"))]
@@ -126,7 +126,7 @@ impl Runner {
                 tokenizer_json,
                 Some(model_id),
             )
-            .build(arch),
+            .build(arch.into()),
             Which::XLora {
                 model_id,
                 xlora_model_id,
@@ -154,7 +154,7 @@ impl Runner {
                 no_kv_cache,
                 tgt_non_granular_index,
             )
-            .build(arch),
+            .build(arch.into()),
             Which::Lora {
                 model_id,
                 tokenizer_json,
@@ -181,7 +181,7 @@ impl Runner {
                 no_kv_cache,
                 tgt_non_granular_index,
             )
-            .build(arch),
+            .build(arch.into()),
             Which::Gguf {
                 tok_model_id,
                 tokenizer_json,
@@ -749,5 +749,19 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<CompletionRequest>()?;
     m.add_class::<Message>()?;
     m.add_class::<Role>()?;
+    m.add_class::<Architecture>()?;
+
+    m.add_class::<mistralrs_core::ResponseMessage>()?;
+    m.add_class::<mistralrs_core::Delta>()?;
+    m.add_class::<mistralrs_core::ResponseLogprob>()?;
+    m.add_class::<mistralrs_core::Logprobs>()?;
+    m.add_class::<mistralrs_core::Choice>()?;
+    m.add_class::<mistralrs_core::ChunkChoice>()?;
+    m.add_class::<mistralrs_core::Usage>()?;
+    m.add_class::<mistralrs_core::ChatCompletionResponse>()?;
+    m.add_class::<mistralrs_core::ChatCompletionChunkResponse>()?;
+    m.add_class::<mistralrs_core::CompletionChoice>()?;
+    m.add_class::<mistralrs_core::CompletionResponse>()?;
+    m.add_class::<mistralrs_core::TopLogprob>()?;
     Ok(())
 }

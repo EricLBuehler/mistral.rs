@@ -102,7 +102,7 @@ This is an example which is roughly the same for all adapter + quantized models.
 ```bash
 Select a GGUF model with X-LoRA
 
-Usage: mistralrs-server x-lora-gguf [OPTIONS] --tok-model-id <TOK_MODEL_ID> --quantized-model-id <QUANTIZED_MODEL_ID> --quantized-filename <QUANTIZED_FILENAME> --xlora-model-id <XLORA_MODEL_ID> --order <ORDER>
+Usage: mistralrs-server x-lora-gguf [OPTIONS] --quantized-model-id <QUANTIZED_MODEL_ID> --quantized-filename <QUANTIZED_FILENAME> --xlora-model-id <XLORA_MODEL_ID> --order <ORDER>
 
 Options:
   -t, --tok-model-id <TOK_MODEL_ID>
@@ -110,7 +110,7 @@ Options:
       --tokenizer-json <TOKENIZER_JSON>
           Path to local tokenizer.json file. If this is specified it is used over any remote file
   -m, --quantized-model-id <QUANTIZED_MODEL_ID>
-          Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set. If it is set to an empty string then the quantized filename will be used as a path to the GGUF file
+          Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set
   -f, --quantized-filename <QUANTIZED_FILENAME>
           Quantized filename, only applicable if `quantized` is set
       --repeat-last-n <REPEAT_LAST_N>
