@@ -1,11 +1,17 @@
 use clap::Subcommand;
 
+use crate::pipeline::NormalLoaderType;
+
+fn parse_arch(x: &str) -> Result<NormalLoaderType, String> {
+    x.parse()
+}
+
 #[derive(Debug, Subcommand)]
 pub enum ModelSelected {
-    /// Select the mistral model.
-    Mistral {
+    /// Select a plain model
+    Plain {
         /// Model ID to load from
-        #[arg(short, long, default_value = "mistralai/Mistral-7B-Instruct-v0.1")]
+        #[arg(short, long)]
         model_id: String,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
@@ -15,96 +21,13 @@ pub enum ModelSelected {
         /// Control the application of repeat penalty for the last n tokens
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
+
+        #[arg(short, long, value_parser = parse_arch)]
+        arch: NormalLoaderType,
     },
 
-    /// Select the mistral model, with X-LoRA.
-    XLoraMistral {
-        /// Force a base model ID to load from instead of using the ordering file.
-        #[arg(short, long)]
-        model_id: Option<String>,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Model ID to load X-LoRA from.
-        #[arg(short, long, default_value = "lamm-mit/x-lora")]
-        xlora_model_id: String,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
-
-        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        /// This makes the maximum running sequences 1.
-        #[arg(long)]
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    /// Select the gemma model.
-    Gemma {
-        /// Model ID to load from
-        #[arg(short, long, default_value = "google/gemma-7b-it")]
-        model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-    },
-
-    /// Select the gemma model, with X-LoRA.
-    XLoraGemma {
-        /// Force a base model ID to load from instead of using the ordering file.
-        #[arg(short, long)]
-        model_id: Option<String>,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Model ID to load X-LoRA from.
-        #[arg(short, long, default_value = "lamm-mit/x-lora-gemma-7b")]
-        xlora_model_id: String,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
-
-        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        /// This makes the maximum running sequences 1.
-        #[arg(long)]
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    /// Select the llama model.
-    Llama {
-        /// Model ID to load from
-        #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
-        model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-    },
-
-    /// Select the llama model, with X-LoRA.
-    XLoraLlama {
+    /// Select an X-LoRA architecture
+    XLora {
         /// Force a base model ID to load from instead of using the ordering file.
         #[arg(short, long)]
         model_id: Option<String>,
@@ -129,119 +52,13 @@ pub enum ModelSelected {
         /// This makes the maximum running sequences 1.
         #[arg(long)]
         tgt_non_granular_index: Option<usize>,
+
+        #[arg(short, long, value_parser = parse_arch)]
+        arch: NormalLoaderType,
     },
 
-    /// Select the mixtral model.
-    Mixtral {
-        /// Model ID to load from
-        #[arg(short, long, default_value = "mistralai/Mixtral-8x7B-Instruct-v0.1")]
-        model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-    },
-
-    /// Select the mixtral model, with X-LoRA.
-    XLoraMixtral {
-        /// Force a base model ID to load from instead of using the ordering file.
-        #[arg(short, long)]
-        model_id: Option<String>,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Model ID to load X-LoRA from.
-        #[arg(short, long)]
-        xlora_model_id: String,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
-
-        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        /// This makes the maximum running sequences 1.
-        #[arg(long)]
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    /// Select the phi2 model.
-    Phi2 {
-        /// Model ID to load from
-        #[arg(short, long, default_value = "microsoft/phi-2")]
-        model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-    },
-
-    /// Select the phi2 model, with X-LoRA.
-    XLoraPhi2 {
-        /// Force a base model ID to load from instead of using the ordering file.
-        #[arg(short, long)]
-        model_id: Option<String>,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Model ID to load X-LoRA from.
-        #[arg(short, long)]
-        xlora_model_id: String,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
-
-        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        /// This makes the maximum running sequences 1.
-        #[arg(long)]
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    /// Select the mistral model, with LoRA.
-    LoraMistral {
-        /// Force a base model ID to load from instead of using the ordering file.
-        #[arg(short, long)]
-        model_id: Option<String>,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Model ID to load X-LoRA from.
-        #[arg(short, long, default_value = "lamm-mit/x-lora")]
-        adapters_model_id: String,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
-    },
-
-    /// Select the mixtral model, with LoRA.
-    LoraMixtral {
+    /// Select a LoRA architecture
+    Lora {
         /// Force a base model ID to load from instead of using the ordering file.
         #[arg(short, long)]
         model_id: Option<String>,
@@ -261,29 +78,9 @@ pub enum ModelSelected {
         /// Ordering JSON file
         #[arg(short, long)]
         order: String,
-    },
 
-    /// Select the llama model, with LoRA.
-    LoraLlama {
-        /// Force a base model ID to load from instead of using the ordering file.
-        #[arg(short, long)]
-        model_id: Option<String>,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Model ID to load X-LoRA from.
-        #[arg(short, long)]
-        adapters_model_id: String,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
+        #[arg(short, long, value_parser = parse_arch)]
+        arch: NormalLoaderType,
     },
 
     /// Select a GGUF model.

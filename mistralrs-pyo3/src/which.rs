@@ -1,105 +1,33 @@
+use mistralrs_core::NormalLoaderType;
 use pyo3::pyclass;
 
 #[pyclass]
 #[derive(Clone)]
 pub enum Which {
-    Mistral {
+    Plain {
         model_id: String,
         tokenizer_json: Option<String>,
-        repeat_last_n: Option<usize>,
+        repeat_last_n: usize,
+        arch: NormalLoaderType,
     },
 
-    XLoraMistral {
+    XLora {
         model_id: Option<String>,
         tokenizer_json: Option<String>,
         xlora_model_id: String,
-        repeat_last_n: Option<usize>,
+        repeat_last_n: usize,
         order: String,
         tgt_non_granular_index: Option<usize>,
+        arch: NormalLoaderType,
     },
 
-    Gemma {
-        model_id: String,
-        tokenizer_json: Option<String>,
-        repeat_last_n: Option<usize>,
-    },
-
-    XLoraGemma {
-        model_id: Option<String>,
-        tokenizer_json: Option<String>,
-        xlora_model_id: String,
-        repeat_last_n: Option<usize>,
-        order: String,
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    Llama {
-        model_id: String,
-        tokenizer_json: Option<String>,
-        repeat_last_n: Option<usize>,
-    },
-
-    XLoraLlama {
-        model_id: Option<String>,
-        tokenizer_json: Option<String>,
-        xlora_model_id: String,
-        repeat_last_n: Option<usize>,
-        order: String,
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    Mixtral {
-        model_id: String,
-        tokenizer_json: Option<String>,
-        repeat_last_n: Option<usize>,
-    },
-
-    XLoraMixtral {
-        model_id: Option<String>,
-        tokenizer_json: Option<String>,
-        xlora_model_id: String,
-        repeat_last_n: Option<usize>,
-        order: String,
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    Phi2 {
-        model_id: String,
-        tokenizer_json: Option<String>,
-        repeat_last_n: Option<usize>,
-    },
-
-    XLoraPhi2 {
-        model_id: Option<String>,
-        tokenizer_json: Option<String>,
-        xlora_model_id: String,
-        repeat_last_n: Option<usize>,
-        order: String,
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    LoraMistral {
+    Lora {
         model_id: Option<String>,
         tokenizer_json: Option<String>,
         adapters_model_id: String,
-        repeat_last_n: Option<usize>,
+        repeat_last_n: usize,
         order: String,
-    },
-
-    LoraMixtral {
-        model_id: Option<String>,
-        tokenizer_json: Option<String>,
-        adapters_model_id: String,
-        repeat_last_n: Option<usize>,
-        order: String,
-    },
-
-    LoraLlama {
-        model_id: Option<String>,
-        tokenizer_json: Option<String>,
-        adapters_model_id: String,
-        repeat_last_n: Option<usize>,
-        order: String,
+        arch: NormalLoaderType,
     },
 
     Gguf {

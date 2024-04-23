@@ -168,10 +168,10 @@ cargo build --release --features cuda
 
 To start a server serving Mistral on `localhost:1234`, 
 ```bash
-./mistralrs-server --port 1234 --log output.log mistral
+./mistralrs-server --port 1234 --log output.log plain -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF
 ```
 
-Mistral.rs uses subcommands to control the model type. They are of format `<XLORA/LORA>-<ARCHITECTURE>-<QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
+Mistral.rs uses subcommands to control the model type. They are generally of format `<XLORA/LORA>-<ARCHITECTURE/QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
 
 **Interactive mode:**
 
@@ -214,6 +214,14 @@ To start a server running Llama from GGML:
 
 ```
 ./mistralrs-server --port 1234 ggml -t meta-llama/Llama-2-13b-chat-hf -m TheBloke/Llama-2-13B-chat-GGML -f llama-2-13b-chat.ggmlv3.q4_K_M.bin
+```
+
+- Plain model from safetensors
+
+To start a server running Mistral from safetensors.
+
+```
+./mistralrs-server --port 1234 gguf -m mistralai/Mistral-7B-Instruct-v0.1
 ```
 
 - Single prompt inference

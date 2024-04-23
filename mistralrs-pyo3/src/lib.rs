@@ -15,12 +15,10 @@ use stream::ChatCompletionStreamer;
 
 use candle_core::Device;
 use mistralrs_core::{
-    ChatCompletionResponse, CompletionResponse, Constraint, GemmaLoader, GemmaSpecificConfig,
-    GgmlLoader, GgmlSpecificConfig, GgufLoader, GgufSpecificConfig, LlamaLoader,
-    LlamaSpecificConfig, Loader, MistralLoader, MistralRs, MistralRsBuilder, MistralSpecificConfig,
-    MixtralLoader, MixtralSpecificConfig, ModelKind, Phi2Loader, Phi2SpecificConfig,
-    Request as _Request, RequestMessage, Response, SamplingParams, SchedulerMethod, StopTokens,
-    TokenSource,
+    ChatCompletionResponse, CompletionResponse, Constraint, GgmlLoader, GgmlSpecificConfig,
+    GgufLoader, GgufSpecificConfig, Loader, MistralRs, MistralRsBuilder, ModelKind,
+    NormalLoaderBuilder, NormalSpecificConfig, Request as _Request, RequestMessage, Response,
+    SamplingParams, SchedulerMethod, StopTokens, TokenSource,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
@@ -88,35 +86,13 @@ impl Runner {
         let use_flash_attn = true;
 
         let tgt_non_granular_index = match which {
-            Which::Gemma { .. }
-            | Which::Llama { .. }
-            | Which::Mistral { .. }
-            | Which::Mixtral { .. }
-            | Which::Phi2 { .. }
-            | Which::LoraMistral { .. }
-            | Which::LoraLlama { .. }
-            | Which::LoraMixtral { .. }
+            Which::Plain { .. }
+            | Which::Lora { .. }
             | Which::Gguf { .. }
             | Which::LoraGGUF { .. }
             | Which::Ggml { .. }
             | Which::LoraGGML { .. } => None,
-            Which::XLoraGemma {
-                tgt_non_granular_index,
-                ..
-            }
-            | Which::XLoraLlama {
-                tgt_non_granular_index,
-                ..
-            }
-            | Which::XLoraMistral {
-                tgt_non_granular_index,
-                ..
-            }
-            | Which::XLoraMixtral {
-                tgt_non_granular_index,
-                ..
-            }
-            | Which::XLoraPhi2 {
+            Which::XLora {
                 tgt_non_granular_index,
                 ..
             }
@@ -136,335 +112,82 @@ impl Runner {
         };
 
         let loader: Box<dyn Loader> = match which {
-            Which::Mistral {
+            Which::Plain {
                 model_id,
                 repeat_last_n,
                 tokenizer_json,
-            } => Box::new(MistralLoader::new(
-                Some(model_id),
-                MistralSpecificConfig {
-                    use_flash_attn,
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                },
-                None,
-                None,
-                None,
-                ModelKind::Normal,
-                None,
-                no_kv_cache,
-                chat_template,
-                tokenizer_json,
-                None,
-            )),
-            Which::XLoraMistral {
+                arch,
+            } => Box::new(
+                NormalLoaderBuilder::new(
+                    NormalSpecificConfig {
+                        use_flash_attn,
+                        repeat_last_n,
+                    },
+                    chat_template,
+                    tokenizer_json,
+                    Some(model_id),
+                )
+                .build(arch),
+            ),
+            Which::XLora {
                 model_id,
                 xlora_model_id,
                 repeat_last_n,
                 order,
                 tokenizer_json,
                 tgt_non_granular_index,
-            } => Box::new(MistralLoader::new(
-                model_id,
-                MistralSpecificConfig {
-                    use_flash_attn,
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                },
-                None,
-                None,
-                Some(xlora_model_id),
-                ModelKind::XLoraNormal,
-                Some(
+                arch,
+            } => Box::new(
+                NormalLoaderBuilder::new(
+                    NormalSpecificConfig {
+                        use_flash_attn,
+                        repeat_last_n,
+                    },
+                    chat_template,
+                    tokenizer_json,
+                    model_id,
+                )
+                .with_xlora(
+                    xlora_model_id,
                     serde_json::from_reader(
                         File::open(order.clone())
                             .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
                     )
                     .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                ),
-                no_kv_cache,
-                chat_template,
-                tokenizer_json,
-                tgt_non_granular_index,
-            )),
-            Which::Gemma {
-                model_id,
-                repeat_last_n,
-                tokenizer_json,
-            } => Box::new(GemmaLoader::new(
-                Some(model_id),
-                GemmaSpecificConfig {
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                },
-                None,
-                None,
-                None,
-                ModelKind::Normal,
-                None,
-                no_kv_cache,
-                chat_template,
-                tokenizer_json,
-                None,
-            )),
-            Which::XLoraGemma {
-                model_id,
-                xlora_model_id,
-                repeat_last_n,
-                order,
-                tokenizer_json,
-                tgt_non_granular_index,
-            } => Box::new(GemmaLoader::new(
-                model_id,
-                GemmaSpecificConfig {
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                },
-                None,
-                None,
-                Some(xlora_model_id),
-                ModelKind::Normal,
-                Some(
-                    serde_json::from_reader(
-                        File::open(order.clone())
-                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-                    )
-                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                ),
-                no_kv_cache,
-                chat_template,
-                tokenizer_json,
-                tgt_non_granular_index,
-            )),
-            Which::Llama {
-                model_id,
-                repeat_last_n,
-                tokenizer_json,
-            } => Box::new(LlamaLoader::new(
-                Some(model_id),
-                LlamaSpecificConfig {
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                    use_flash_attn,
-                    gqa: 0,
-                },
-                None,
-                None,
-                None,
-                ModelKind::Normal,
-                None,
-                no_kv_cache,
-                chat_template,
-                tokenizer_json,
-                None,
-            )),
-            Which::XLoraLlama {
-                model_id,
-                xlora_model_id,
-                repeat_last_n,
-                order,
-                tokenizer_json,
-                tgt_non_granular_index,
-            } => Box::new(LlamaLoader::new(
-                model_id,
-                LlamaSpecificConfig {
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                    use_flash_attn,
-                    gqa: 0,
-                },
-                None,
-                None,
-                Some(xlora_model_id),
-                ModelKind::QuantizedGGML,
-                Some(
-                    serde_json::from_reader(
-                        File::open(order.clone())
-                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-                    )
-                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                ),
-                no_kv_cache,
-                chat_template,
-                tokenizer_json,
-                tgt_non_granular_index,
-            )),
-            Which::Mixtral {
-                model_id,
-                repeat_last_n,
-                tokenizer_json,
-            } => Box::new(MixtralLoader::new(
-                Some(model_id),
-                MixtralSpecificConfig {
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                    use_flash_attn,
-                },
-                None,
-                None,
-                None,
-                ModelKind::Normal,
-                None,
-                no_kv_cache,
-                chat_template,
-                tokenizer_json,
-                None,
-            )),
-            Which::XLoraMixtral {
-                model_id,
-                xlora_model_id,
-                repeat_last_n,
-                order,
-                tokenizer_json,
-                tgt_non_granular_index,
-            } => Box::new(MixtralLoader::new(
-                model_id,
-                MixtralSpecificConfig {
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                    use_flash_attn,
-                },
-                None,
-                None,
-                Some(xlora_model_id),
-                ModelKind::XLoraNormal,
-                Some(
-                    serde_json::from_reader(
-                        File::open(order.clone())
-                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-                    )
-                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                ),
-                no_kv_cache,
-                chat_template,
-                tokenizer_json,
-                tgt_non_granular_index,
-            )),
-            Which::Phi2 {
-                model_id,
-                repeat_last_n,
-                tokenizer_json,
-            } => Box::new(Phi2Loader::new(
-                Some(model_id),
-                Phi2SpecificConfig {
-                    use_flash_attn,
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                },
-                None,
-                None,
-                None,
-                ModelKind::Normal,
-                None,
-                no_kv_cache,
-                chat_template,
-                tokenizer_json,
-                None,
-            )),
-            Which::XLoraPhi2 {
-                model_id,
-                tokenizer_json,
-                xlora_model_id,
-                repeat_last_n,
-                order,
-                tgt_non_granular_index,
-            } => Box::new(Phi2Loader::new(
-                model_id,
-                Phi2SpecificConfig {
-                    use_flash_attn,
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                },
-                None,
-                None,
-                Some(xlora_model_id),
-                ModelKind::XLoraNormal,
-                Some(
-                    serde_json::from_reader(
-                        File::open(order.clone())
-                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-                    )
-                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                ),
-                no_kv_cache,
-                chat_template,
-                tokenizer_json,
-                tgt_non_granular_index,
-            )),
-            Which::LoraMistral {
+                    no_kv_cache,
+                    tgt_non_granular_index,
+                )
+                .build(arch),
+            ),
+            Which::Lora {
                 model_id,
                 tokenizer_json,
                 adapters_model_id,
                 repeat_last_n,
                 order,
-            } => Box::new(MistralLoader::new(
-                model_id,
-                MistralSpecificConfig {
-                    use_flash_attn,
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                },
-                None,
-                None,
-                Some(adapters_model_id),
-                ModelKind::LoraNormal,
-                Some(
+                arch,
+            } => Box::new(
+                NormalLoaderBuilder::new(
+                    NormalSpecificConfig {
+                        use_flash_attn,
+                        repeat_last_n,
+                    },
+                    chat_template,
+                    tokenizer_json,
+                    model_id,
+                )
+                .with_xlora(
+                    adapters_model_id,
                     serde_json::from_reader(
                         File::open(order.clone())
                             .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
                     )
                     .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                ),
-                no_kv_cache,
-                chat_template,
-                tokenizer_json,
-                tgt_non_granular_index,
-            )),
-            Which::LoraMixtral {
-                model_id,
-                tokenizer_json,
-                adapters_model_id,
-                repeat_last_n,
-                order,
-            } => Box::new(MistralLoader::new(
-                model_id,
-                MistralSpecificConfig {
-                    use_flash_attn,
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                },
-                None,
-                None,
-                Some(adapters_model_id),
-                ModelKind::LoraNormal,
-                Some(
-                    serde_json::from_reader(
-                        File::open(order.clone())
-                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-                    )
-                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                ),
-                no_kv_cache,
-                chat_template,
-                tokenizer_json,
-                tgt_non_granular_index,
-            )),
-            Which::LoraLlama {
-                model_id,
-                tokenizer_json,
-                adapters_model_id,
-                repeat_last_n,
-                order,
-            } => Box::new(MistralLoader::new(
-                model_id,
-                MistralSpecificConfig {
-                    use_flash_attn,
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                },
-                None,
-                None,
-                Some(adapters_model_id),
-                ModelKind::LoraNormal,
-                Some(
-                    serde_json::from_reader(
-                        File::open(order.clone())
-                            .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-                    )
-                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                ),
-                no_kv_cache,
-                chat_template,
-                tokenizer_json,
-                tgt_non_granular_index,
-            )),
+                    no_kv_cache,
+                    tgt_non_granular_index,
+                )
+                .build(arch),
+            ),
             Which::Gguf {
                 tok_model_id,
                 tokenizer_json,

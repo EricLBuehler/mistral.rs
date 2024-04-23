@@ -5,7 +5,7 @@ use std::sync::Arc;
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{linear_b as linear, Activation, Linear, RotaryEmbedding, VarBuilder};
 
-use crate::pipeline::{extract_logits, GEMMA_IS_GPTX};
+use crate::pipeline::{extract_logits, NormalModel};
 
 use super::{repeat_kv, Cache};
 
@@ -276,7 +276,7 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder, is_gptx: bool) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
@@ -285,7 +285,7 @@ impl Model {
             cfg.head_dim,
             cfg.max_position_embeddings,
             vb.device(),
-            GEMMA_IS_GPTX,
+            is_gptx,
             vb.dtype(),
         )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
@@ -356,5 +356,48 @@ impl Model {
             )?
         }
         extract_logits(&xs.apply(&self.norm)?.apply(&self.lm_head)?, context_lens)
+    }
+}
+
+impl NormalModel for Model {
+    fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        self.forward(
+            input_ids,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+        )
+    }
+    fn xlora_forward(
+        &mut self,
+        _input_ids: &Tensor,
+        _input_ids_full: &Tensor,
+        _seqlen_offsets: &[usize],
+        _seqlen_offsets_full: &[usize],
+        _start_offsets_kernel: Tensor,
+        _start_offsets_kernel_full: Tensor,
+        _no_kv_cache: bool,
+        _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        _context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        unimplemented!()
+    }
+    fn cache(&self) -> &Cache {
+        &self.cache
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn is_xlora(&self) -> bool {
+        false
+    }
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
     }
 }

@@ -11,7 +11,7 @@ use crate::{
         llama::{Config, MAX_SEQ_LEN},
         repeat_kv, LayerCaches, RmsNorm,
     },
-    pipeline::{extract_logits, LLAMA_IS_GPTX},
+    pipeline::{extract_logits, NormalModel},
 };
 
 use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -164,9 +164,10 @@ impl CausalSelfAttention {
     fn load(
         vb: VarBuilder,
         cfg: &Config,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
+        is_gptx: bool,
     ) -> Result<Self> {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
@@ -181,7 +182,7 @@ impl CausalSelfAttention {
             head_dim,
             MAX_SEQ_LEN,
             vb.device(),
-            LLAMA_IS_GPTX,
+            is_gptx,
             vb.dtype(),
         )?);
         Ok(Self {
@@ -238,7 +239,7 @@ impl Mlp {
     fn load(
         vb: VarBuilder,
         cfg: &Config,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
     ) -> Result<Self> {
@@ -303,11 +304,13 @@ impl Block {
     fn load(
         vb: VarBuilder,
         cfg: &Config,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
+        is_gptx: bool,
     ) -> Result<Self> {
-        let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg, lora_config, count, ord)?;
+        let attn =
+            CausalSelfAttention::load(vb.pp("self_attn"), cfg, lora_config, count, ord, is_gptx)?;
         let mlp = Mlp::load(vb.pp("mlp"), cfg, lora_config, count, ord)?;
         let rms_1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let rms_2 = RmsNorm::new(
@@ -463,9 +466,10 @@ impl XLoraLlama {
     pub fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
+        is_gptx: bool,
     ) -> Result<Self> {
         let device = vb.device();
         let dtype = vb.dtype();
@@ -481,6 +485,7 @@ impl XLoraLlama {
                     lora_config,
                     &mut count,
                     &xlora_ordering,
+                    is_gptx,
                 )
                 .expect("Failed to load block.")
             })
@@ -499,6 +504,54 @@ impl XLoraLlama {
             }),
             dtype,
         })
+    }
+}
+
+impl NormalModel for XLoraLlama {
+    fn forward(
+        &mut self,
+        _input_ids: &Tensor,
+        _seqlen_offsets: &[usize],
+        _start_offsets_kernel: Tensor,
+        _context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        unreachable!()
+    }
+    fn xlora_forward(
+        &mut self,
+        input_ids: &Tensor,
+        input_ids_full: &Tensor,
+        seqlen_offsets: &[usize],
+        seqlen_offsets_full: &[usize],
+        start_offsets_kernel: Tensor,
+        start_offsets_kernel_full: Tensor,
+        no_kv_cache: bool,
+        non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        self.forward(
+            input_ids,
+            input_ids_full,
+            seqlen_offsets,
+            seqlen_offsets_full,
+            start_offsets_kernel,
+            start_offsets_kernel_full,
+            no_kv_cache,
+            non_granular_state,
+            context_lens,
+        )
+    }
+    fn cache(&self) -> &super::Cache {
+        &self.kv_cache
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn is_xlora(&self) -> bool {
+        true
+    }
+    fn max_seq_len(&self) -> usize {
+        MAX_SEQ_LEN
     }
 }
 

@@ -3,48 +3,16 @@
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
 use candle_transformers::models::with_tracing::{linear_no_bias as linear, Linear};
+use serde::Deserialize;
 use std::{collections::HashMap, sync::Arc};
 
-use crate::pipeline::{extract_logits, LLAMA_IS_GPTX};
+use crate::pipeline::{extract_logits, NormalModel};
 
 use super::{flash_attn, repeat_kv, RmsNorm};
 
 pub const MAX_SEQ_LEN: usize = 4096;
 
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct LlamaConfig {
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub vocab_size: usize,
-    pub num_hidden_layers: usize,
-    pub num_attention_heads: usize,
-    pub num_key_value_heads: Option<usize>,
-    pub rms_norm_eps: f64,
-    #[serde(default = "default_rope")]
-    pub rope_theta: f32,
-}
-
-fn default_rope() -> f32 {
-    10_000.0
-}
-
-impl LlamaConfig {
-    pub fn into_config(self, use_flash_attn: bool) -> Config {
-        Config {
-            hidden_size: self.hidden_size,
-            intermediate_size: self.intermediate_size,
-            vocab_size: self.vocab_size,
-            num_hidden_layers: self.num_hidden_layers,
-            num_attention_heads: self.num_attention_heads,
-            num_key_value_heads: self.num_key_value_heads.unwrap_or(self.num_attention_heads),
-            rms_norm_eps: self.rms_norm_eps,
-            rope_theta: self.rope_theta,
-            use_flash_attn,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub hidden_size: usize,
     pub intermediate_size: usize,
@@ -178,7 +146,7 @@ impl CausalSelfAttention {
         Ok(y)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder, cfg: &Config, is_gptx: bool) -> Result<Self> {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
@@ -192,7 +160,7 @@ impl CausalSelfAttention {
             head_dim,
             MAX_SEQ_LEN,
             vb.device(),
-            LLAMA_IS_GPTX,
+            is_gptx,
             vb.dtype(),
         )?);
         Ok(Self {
@@ -276,8 +244,8 @@ impl Block {
         Ok(x)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
-        let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg)?;
+    fn load(vb: VarBuilder, cfg: &Config, is_gptx: bool) -> Result<Self> {
+        let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg, is_gptx)?;
         let mlp = Mlp::load(vb.pp("mlp"), cfg)?;
         let rms_1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let rms_2 = RmsNorm::new(
@@ -330,14 +298,14 @@ impl Llama {
         extract_logits(&logits.to_dtype(DType::F32)?, context_lens)
     }
 
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder, is_gptx: bool) -> Result<Self> {
         let device = vb.device();
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)
             .map(|i| {
-                Block::load(vb.pp(&format!("model.layers.{i}")), cfg)
+                Block::load(vb.pp(&format!("model.layers.{i}")), cfg, is_gptx)
                     .expect("Failed to load block.")
             })
             .collect();
@@ -351,5 +319,48 @@ impl Llama {
             kv_cache: super::Cache::new(cfg.num_hidden_layers, false),
             device: device.clone(),
         })
+    }
+}
+
+impl NormalModel for Llama {
+    fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        self.forward(
+            input_ids,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+        )
+    }
+    fn xlora_forward(
+        &mut self,
+        _input_ids: &Tensor,
+        _input_ids_full: &Tensor,
+        _seqlen_offsets: &[usize],
+        _seqlen_offsets_full: &[usize],
+        _start_offsets_kernel: Tensor,
+        _start_offsets_kernel_full: Tensor,
+        _no_kv_cache: bool,
+        _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        _context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        unimplemented!()
+    }
+    fn cache(&self) -> &super::Cache {
+        &self.kv_cache
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn is_xlora(&self) -> bool {
+        false
+    }
+    fn max_seq_len(&self) -> usize {
+        MAX_SEQ_LEN
     }
 }

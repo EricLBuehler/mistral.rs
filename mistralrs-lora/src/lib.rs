@@ -115,7 +115,7 @@ pub fn linear(
     d1: usize,
     d2: usize,
     vb: VarBuilder,
-    lora_config: &Vec<(String, LoraConfig)>,
+    lora_config: &[(String, LoraConfig)],
     count: &mut usize,
     ord: &Ordering,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
@@ -147,7 +147,7 @@ pub fn linear_no_bias(
     d1: usize,
     d2: usize,
     vb: VarBuilder,
-    lora_config: &Vec<(String, LoraConfig)>,
+    lora_config: &[(String, LoraConfig)],
     count: &mut usize,
     ord: &Ordering,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
@@ -184,7 +184,7 @@ pub fn linear_b(
     out_dim: usize,
     bias: bool,
     vb: crate::VarBuilder,
-    lora_config: &Vec<(String, LoraConfig)>,
+    lora_config: &[(String, LoraConfig)],
     count: &mut usize,
     ord: &Ordering,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {

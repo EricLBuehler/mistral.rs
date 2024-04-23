@@ -7,26 +7,16 @@ Fast and easy LLM serving.
 Usage: mistralrs-server [OPTIONS] <COMMAND>
 
 Commands:
-  mistral         Select the mistral model
-  x-lora-mistral  Select the mistral model, with X-LoRA
-  gemma           Select the gemma model
-  x-lora-gemma    Select the gemma model, with X-LoRA
-  llama           Select the llama model
-  x-lora-llama    Select the llama model, with X-LoRA
-  mixtral         Select the mixtral model
-  x-lora-mixtral  Select the mixtral model, with X-LoRA
-  phi2            Select the phi2 model
-  x-lora-phi2     Select the phi2 model, with X-LoRA
-  lora-mistral    Select the mistral model, with LoRA
-  lora-mixtral    Select the mixtral model, with LoRA
-  lora-llama      Select the llama model, with LoRA
-  gguf            Select a GGUF model
-  x-lora-gguf     Select a GGUF model with X-LoRA
-  lora-gguf       Select a GGUF model with LoRA
-  ggml            Select a GGML model
-  x-lora-ggml     Select a GGML model with X-LoRA
-  lora-ggml       Select a GGML model with LoRA
-  help            Print this message or the help of the given subcommand(s)
+  plain        Select a plain model
+  x-lora       Select an X-LoRA architecture
+  lora         Select a LoRA architecture
+  gguf         Select a GGUF model
+  x-lora-gguf  Select a GGUF model with X-LoRA
+  lora-gguf    Select a GGUF model with LoRA
+  ggml         Select a GGML model
+  x-lora-ggml  Select a GGML model with X-LoRA
+  lora-ggml    Select a GGML model with LoRA
+  help         Print this message or the help of the given subcommand(s)
 
 Options:
       --serve-ip <SERVE_IP>
@@ -61,8 +51,29 @@ Options:
           Print version
 ```
 
+## For plain models
+This is an example for a plain model. This can be seen by: `./mistralrs plain --help`
+
+```bash
+Select a plain model
+
+Usage: mistralrs-server plain [OPTIONS] --model-id <MODEL_ID> --arch <ARCH>
+
+Options:
+  -m, --model-id <MODEL_ID>
+          Model ID to load from
+  -t, --tokenizer-json <TOKENIZER_JSON>
+          Path to local tokenizer.json file. If this is specified it is used over any remote file
+      --repeat-last-n <REPEAT_LAST_N>
+          Control the application of repeat penalty for the last n tokens [default: 64]
+  -a, --arch <ARCH>
+          
+  -h, --help
+          Print help
+```
+
 ## For quantized models
-This is an example for all quantized models. This is specifically for: `./mistralrs gguf --help`
+This is an example for quantized models. This is specifically for: `./mistralrs gguf --help`
 
 ```bash
 Select a GGUF model

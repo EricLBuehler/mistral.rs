@@ -1,24 +1,24 @@
+use super::loaders::{
+    GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
+};
 use super::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
-    Pipeline, TokenSource, XLoraPaths,
+    NormalModel, NormalModelLoader, Pipeline, TokenSource, XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::models::Cache;
 use crate::pipeline::{calculate_eos_tok, ChatTemplate};
-use crate::xlora_models::{NonGranularState, XLoraConfig, XLoraMistral};
-use crate::{deserialize_chat_template, get_paths, normal_model, xlora_model};
+use crate::xlora_models::{NonGranularState, XLoraConfig};
+use crate::{deserialize_chat_template, get_paths, normal_model_loader, xlora_model_loader};
 use crate::{
-    models::mistral::{Config, Model as NormalModel},
     sequence::Sequence,
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
 };
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
-use candle_nn::Activation;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
-use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -26,17 +26,10 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
-use thiserror::Error;
 use tokenizers::Tokenizer;
 use tracing::info;
 
-enum Model {
-    Normal(NormalModel),
-    XLoraNormal(XLoraMistral),
-}
-pub const MISTRAL_IS_GPTX: bool = true;
-
-pub struct MistralModelPaths<P> {
+pub struct NormalModelPaths<P> {
     tokenizer_filename: P,
     config_filename: P,
     template_filename: P,
@@ -48,7 +41,7 @@ pub struct MistralModelPaths<P> {
     xlora_ordering: Option<Ordering>,
 }
 
-impl ModelPaths for MistralModelPaths<PathBuf> {
+impl ModelPaths for NormalModelPaths<PathBuf> {
     fn get_config_filename(&self) -> &PathBuf {
         &self.config_filename
     }
@@ -78,11 +71,11 @@ impl ModelPaths for MistralModelPaths<PathBuf> {
     }
 }
 
-pub struct MistralPipeline {
-    model: Model,
+pub struct NormalPipeline {
+    model: Box<dyn NormalModel + Send + Sync>,
     tokenizer: Arc<Tokenizer>,
     tok_trie: TokTrie,
-    config: MistralSpecificConfig,
+    config: NormalSpecificConfig,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
     non_granular_state: Option<NonGranularState>,
@@ -91,11 +84,10 @@ pub struct MistralPipeline {
     eos_tok: Vec<u32>,
 }
 
-pub struct MistralLoader {
+pub struct NormalLoader {
+    inner: Box<dyn NormalModelLoader>,
     model_id: String,
-    config: MistralSpecificConfig,
-    quantized_model_id: Option<String>,
-    quantized_filename: Option<String>,
+    config: NormalSpecificConfig,
     xlora_model_id: Option<String>,
     kind: ModelKind,
     xlora_order: Option<Ordering>,
@@ -105,80 +97,127 @@ pub struct MistralLoader {
     tgt_non_granular_index: Option<usize>,
 }
 
-#[derive(Clone, Copy)]
-pub struct MistralSpecificConfig {
+#[derive(Default)]
+pub struct NormalLoaderBuilder {
+    model_id: Option<String>,
+    config: NormalSpecificConfig,
+    xlora_model_id: Option<String>,
+    kind: ModelKind,
+    xlora_order: Option<Ordering>,
+    no_kv_cache: bool,
+    chat_template: Option<String>,
+    tokenizer_json: Option<String>,
+    tgt_non_granular_index: Option<usize>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct NormalSpecificConfig {
     pub use_flash_attn: bool,
     pub repeat_last_n: usize,
 }
 
-#[derive(Deserialize)]
-pub struct BasicConfig {
-    vocab_size: usize,
-    hidden_size: usize,
-    intermediate_size: usize,
-    num_hidden_layers: usize,
-    num_attention_heads: usize,
-    num_key_value_heads: usize,
-    hidden_act: Activation,
-    max_position_embeddings: usize,
-    rms_norm_eps: f64,
-    rope_theta: f64,
-    sliding_window: Option<usize>,
-}
-
-#[derive(Error, Debug)]
-enum TokenizerError {
-    #[error("`{0}`")]
-    Error(String),
-}
-
-impl MistralLoader {
-    #[allow(clippy::too_many_arguments)]
+impl NormalLoaderBuilder {
     pub fn new(
-        model_id: Option<String>,
-        config: MistralSpecificConfig,
-        quantized_model_id: Option<String>,
-        quantized_filename: Option<String>,
-        xlora_model_id: Option<String>,
-        kind: ModelKind,
-        xlora_order: Option<Ordering>,
-        no_kv_cache: bool,
+        config: NormalSpecificConfig,
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
+        model_id: Option<String>,
+    ) -> Self {
+        Self {
+            config,
+            chat_template,
+            tokenizer_json,
+            model_id,
+            kind: ModelKind::Normal,
+            ..Default::default()
+        }
+    }
+
+    fn with_adapter(
+        mut self,
+        xlora_model_id: String,
+        xlora_order: Ordering,
+        no_kv_cache: bool,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
-        let model_id = if let Some(id) = model_id {
-            id
+        self.xlora_model_id = Some(xlora_model_id);
+        self.xlora_order = Some(xlora_order);
+        self.no_kv_cache = no_kv_cache;
+        self.tgt_non_granular_index = tgt_non_granular_index;
+        self.model_id = if let Some(id) = self.model_id {
+            Some(id)
         } else {
             info!(
                 "Using adapter base model ID: `{}`",
-                xlora_order.as_ref().unwrap().base_model_id
+                self.xlora_order.as_ref().unwrap().base_model_id
             );
-            xlora_order.as_ref().unwrap().base_model_id.clone()
+            Some(self.xlora_order.as_ref().unwrap().base_model_id.clone())
         };
-        Self {
-            model_id,
-            config,
-            quantized_model_id,
-            quantized_filename,
+        self
+    }
+
+    pub fn with_xlora(
+        mut self,
+        xlora_model_id: String,
+        xlora_order: Ordering,
+        no_kv_cache: bool,
+        tgt_non_granular_index: Option<usize>,
+    ) -> Self {
+        self.kind = ModelKind::XLoraNormal;
+        self.with_adapter(
             xlora_model_id,
-            kind,
             xlora_order,
             no_kv_cache,
-            chat_template,
-            tokenizer_json,
             tgt_non_granular_index,
+        )
+    }
+
+    pub fn with_lora(
+        mut self,
+        xlora_model_id: String,
+        xlora_order: Ordering,
+        no_kv_cache: bool,
+        tgt_non_granular_index: Option<usize>,
+    ) -> Self {
+        self.kind = ModelKind::LoraNormal;
+        self.with_adapter(
+            xlora_model_id,
+            xlora_order,
+            no_kv_cache,
+            tgt_non_granular_index,
+        )
+    }
+
+    pub fn build(self, loader: NormalLoaderType) -> NormalLoader {
+        let loader: Box<dyn NormalModelLoader> = match loader {
+            NormalLoaderType::Mistral => Box::new(MistralLoader),
+            NormalLoaderType::Gemma => Box::new(GemmaLoader),
+            NormalLoaderType::Llama => Box::new(LlamaLoader),
+            NormalLoaderType::Mixtral => Box::new(MixtralLoader),
+            NormalLoaderType::Phi2 => Box::new(Phi2Loader),
+        };
+        NormalLoader {
+            inner: loader,
+            model_id: self.model_id.unwrap(),
+            config: self.config,
+            xlora_model_id: self.xlora_model_id,
+            kind: self.kind,
+            xlora_order: self.xlora_order,
+            no_kv_cache: self.no_kv_cache,
+            chat_template: self.chat_template,
+            tokenizer_json: self.tokenizer_json,
+            tgt_non_granular_index: self.tgt_non_granular_index,
         }
     }
 }
 
-impl Loader for MistralLoader {
+impl Loader for NormalLoader {
     fn download_model(
         &self,
         revision: Option<String>,
         token_source: TokenSource,
     ) -> Result<Box<dyn ModelPaths>> {
-        get_paths!(MistralModelPaths, &token_source, revision, self)
+        get_paths!(NormalModelPaths, &token_source, revision, self, None, None)
     }
 
     fn _setup_model(
@@ -187,22 +226,7 @@ impl Loader for MistralLoader {
         dtype: Option<DType>,
         device: &Device,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
-        let basic_config: BasicConfig =
-            serde_json::from_slice(&std::fs::read(paths.get_config_filename())?)?;
-        let config = Config {
-            vocab_size: basic_config.vocab_size,
-            hidden_size: basic_config.hidden_size,
-            intermediate_size: basic_config.intermediate_size,
-            num_hidden_layers: basic_config.num_hidden_layers,
-            num_attention_heads: basic_config.num_attention_heads,
-            num_key_value_heads: basic_config.num_key_value_heads,
-            hidden_act: basic_config.hidden_act,
-            max_position_embeddings: basic_config.max_position_embeddings,
-            rms_norm_eps: basic_config.rms_norm_eps,
-            rope_theta: basic_config.rope_theta,
-            sliding_window: basic_config.sliding_window,
-            use_flash_attn: self.config.use_flash_attn,
-        };
+        let config = std::fs::read_to_string(paths.get_config_filename())?;
         let default_dtype = if device.is_cuda() {
             DType::BF16
         } else {
@@ -215,32 +239,35 @@ impl Loader for MistralLoader {
         let model = match self.kind {
             ModelKind::QuantizedGGUF => unreachable!(),
             ModelKind::QuantizedGGML => unreachable!(),
-            ModelKind::Normal => Model::Normal(normal_model!(
+            ModelKind::Normal => normal_model_loader!(
                 paths,
                 dtype,
                 default_dtype,
                 device,
                 config,
-                NormalModel
-            )),
-            ModelKind::XLoraNormal => Model::XLoraNormal(xlora_model!(
+                self.inner,
+                self.config.use_flash_attn
+            ),
+            ModelKind::XLoraNormal => xlora_model_loader!(
                 paths,
                 dtype,
                 default_dtype,
                 device,
                 config,
-                XLoraMistral
-            )),
+                self.inner,
+                self.config.use_flash_attn
+            ),
             ModelKind::LoraNormal => {
                 is_lora = true;
-                Model::XLoraNormal(xlora_model!(
+                xlora_model_loader!(
                     paths,
                     dtype,
                     default_dtype,
                     device,
                     config,
-                    XLoraMistral
-                ))
+                    self.inner,
+                    self.config.use_flash_attn
+                )
             }
             ModelKind::XLoraGGUF => unreachable!(),
             ModelKind::XLoraGGML => unreachable!(),
@@ -248,21 +275,27 @@ impl Loader for MistralLoader {
             ModelKind::LoraGGML => unreachable!(),
         };
 
-        let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
-            .map_err(|e| TokenizerError::Error(e.to_string()))?;
+        let tokenizer =
+            Tokenizer::from_file(paths.get_tokenizer_filename()).map_err(anyhow::Error::msg)?;
 
         let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
+        let mut eos_toks = vec![chat_template.eos_tok()];
+
+        // Handle Llama3 chat case
+        if tokenizer.encode("<|eot_id|>", true).is_ok() {
+            eos_toks.push("<|eot_id|>".to_string())
+        }
 
         info!(
-            "bos_tok = {}, eos_tok = {}, unk_tok = {}",
+            "bos_tok = {}, eos_tok = {:?}, unk_tok = {}",
             chat_template.bos_tok(),
-            chat_template.eos_tok(),
+            eos_toks,
             chat_template.eos_tok()
         );
 
-        Ok(Box::new(Mutex::new(MistralPipeline {
+        Ok(Box::new(Mutex::new(NormalPipeline {
             model,
-            eos_tok: calculate_eos_tok(vec![chat_template.eos_tok()], &tokenizer),
+            eos_tok: calculate_eos_tok(eos_toks, &tokenizer),
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer: tokenizer.into(),
             config: self.config,
@@ -288,7 +321,7 @@ impl Loader for MistralLoader {
     }
 }
 
-impl Pipeline for MistralPipeline {
+impl Pipeline for NormalPipeline {
     fn forward(
         &mut self,
         input_toks: &[&mut Sequence],
@@ -310,14 +343,14 @@ impl Pipeline for MistralPipeline {
             self.no_kv_cache,
         )
         .unwrap();
-        match self.model {
-            Model::Normal(ref mut model) => model.forward(
+        match self.model.is_xlora() {
+            false => self.model.forward(
                 &input_ids,
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
             ),
-            Model::XLoraNormal(ref mut model) => model.forward(
+            true => self.model.xlora_forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,
@@ -331,19 +364,13 @@ impl Pipeline for MistralPipeline {
         }
     }
     fn device(&self) -> &Device {
-        match self.model {
-            Model::Normal(ref model) => &model.device,
-            Model::XLoraNormal(ref model) => &model.device,
-        }
+        self.model.device()
     }
     fn num_hidden_layers(&self) -> usize {
         self.cache().lock().len()
     }
     fn cache(&self) -> &Cache {
-        match self.model {
-            Model::Normal(ref model) => &model.cache,
-            Model::XLoraNormal(ref model) => &model.cache,
-        }
+        self.model.cache()
     }
     fn get_repeat_last_n(&self) -> usize {
         self.config.repeat_last_n
@@ -358,16 +385,10 @@ impl Pipeline for MistralPipeline {
         self.model_id.clone()
     }
     fn get_max_seq_len(&self) -> usize {
-        match &self.model {
-            Model::Normal(model) => model.max_seq_len,
-            Model::XLoraNormal(model) => model.max_seq_len,
-        }
+        self.model.max_seq_len()
     }
     fn is_xlora(&self) -> bool {
-        match &self.model {
-            Model::Normal(_) => false,
-            Model::XLoraNormal(_) => !self.is_lora,
-        }
+        self.model.is_xlora() && !self.is_lora
     }
     fn has_no_kv_cache(&self) -> bool {
         self.no_kv_cache

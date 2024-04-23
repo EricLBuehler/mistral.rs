@@ -1,15 +1,12 @@
-mod gemma;
 mod ggml;
 mod gguf;
-mod llama;
-mod mistral;
-mod mixtral;
-mod phi2;
+mod loaders;
+mod normal;
 use crate::aici::toktree::TokTrie;
 use crate::{get_bias_if_not_allowed, sampler::Logprobs, sequence::SequenceRecognizer};
+use candle_nn::VarBuilder;
 use core::fmt;
 use either::Either;
-pub use gemma::{GemmaLoader, GemmaSpecificConfig, GEMMA_IS_GPTX};
 pub use ggml::{GgmlLoader, GgmlSpecificConfig};
 pub use gguf::{GgufLoader, GgufSpecificConfig};
 use hf_hub::{
@@ -17,12 +14,12 @@ use hf_hub::{
     Repo, RepoType,
 };
 use indexmap::IndexMap;
-pub use llama::{LlamaLoader, LlamaSpecificConfig, LLAMA_IS_GPTX};
+pub use loaders::{
+    GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
+};
 use minijinja::{context, Environment, ErrorKind};
-pub use mistral::{MistralLoader, MistralSpecificConfig, MISTRAL_IS_GPTX};
 use mistralrs_lora::{LoraConfig, Ordering};
-pub use mixtral::{MixtralLoader, MixtralSpecificConfig, MIXTRAL_IS_GPTX};
-pub use phi2::{Phi2Loader, Phi2SpecificConfig, PHI2_IS_GPTX};
+pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 use serde::Deserialize;
 use std::sync::Arc;
 use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
@@ -167,8 +164,9 @@ impl fmt::Display for TokenSource {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub enum ModelKind {
+    #[default]
     Normal,
     XLoraNormal,
     XLoraGGUF,
@@ -374,6 +372,54 @@ pub trait Pipeline: Send + Sync {
         }
         Ok(second_logprobs_response)
     }
+}
+
+pub trait ConfigMarker {}
+
+pub trait NormalModelLoader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>>;
+    fn load_xlora(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        lora_config: &[(String, LoraConfig)],
+        xlora_config: Option<XLoraConfig>,
+        xlora_ordering: Ordering,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>>;
+    fn is_gptx(&self) -> bool;
+}
+
+pub trait NormalModel {
+    fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<usize>,
+    ) -> candle_core::Result<Tensor>;
+    #[allow(clippy::too_many_arguments)]
+    fn xlora_forward(
+        &mut self,
+        input_ids: &Tensor,
+        input_ids_full: &Tensor,
+        seqlen_offsets: &[usize],
+        seqlen_offsets_full: &[usize],
+        start_offsets_kernel: Tensor,
+        start_offsets_kernel_full: Tensor,
+        no_kv_cache: bool,
+        non_granular_state: &Option<NonGranularState>,
+        context_lens: Vec<usize>,
+    ) -> candle_core::Result<Tensor>;
+    fn is_xlora(&self) -> bool;
+    fn device(&self) -> &Device;
+    fn cache(&self) -> &Cache;
+    fn max_seq_len(&self) -> usize;
 }
 
 struct InputMetadata {
@@ -822,7 +868,7 @@ macro_rules! deserialize_chat_template {
 
 #[macro_export]
 macro_rules! get_paths {
-    ($path_name:ident, $token_source:expr, $revision:expr, $this:expr) => {{
+    ($path_name:ident, $token_source:expr, $revision:expr, $this:expr, $quantized_model_id:expr, $quantized_filename:expr) => {{
         let api = ApiBuilder::new()
             .with_progress(true)
             .with_token(Some(get_token($token_source)?))
@@ -846,8 +892,8 @@ macro_rules! get_paths {
         let filenames = get_model_paths(
             revision.clone(),
             &$token_source,
-            &$this.quantized_model_id,
-            &$this.quantized_filename,
+            &$quantized_model_id,
+            &$quantized_filename,
             &api,
         )?;
 
@@ -878,6 +924,54 @@ macro_rules! get_paths {
             xlora_ordering: xlora_order,
             template_filename,
         }))
+    }};
+}
+
+#[macro_export]
+macro_rules! normal_model_loader {
+    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr) => {{
+        let vb = from_mmaped_safetensors(
+            $paths.get_weight_filenames().to_vec(),
+            Vec::new(),
+            $dtype.unwrap_or($default_dtype),
+            $device,
+            false,
+        )?;
+
+        $loader.load(&$config, $use_flash_attn, vb)?
+    }};
+}
+
+#[macro_export]
+macro_rules! xlora_model_loader {
+    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr) => {{
+        let mut safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
+        safetensors_paths.push($paths.get_classifier_path().as_ref().unwrap());
+        let vb = from_mmaped_safetensors(
+            safetensors_paths
+                .iter()
+                .map(|x| (*x).to_owned())
+                .collect::<Vec<_>>(),
+            $paths
+                .get_adapter_filenames()
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|(_, x)| (*x).to_owned())
+                .collect::<Vec<_>>(),
+            $dtype.unwrap_or($default_dtype),
+            $device,
+            false,
+        )?;
+
+        $loader.load_xlora(
+            &$config,
+            $use_flash_attn,
+            vb,
+            $paths.get_adapter_configs().as_ref().unwrap(),
+            Some($paths.get_classifier_config().as_ref().unwrap().clone()),
+            $paths.get_ordering().as_ref().unwrap().clone(),
+        )?
     }};
 }
 

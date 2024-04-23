@@ -161,7 +161,14 @@ impl Loader for GgmlLoader {
         revision: Option<String>,
         token_source: TokenSource,
     ) -> Result<Box<dyn ModelPaths>> {
-        get_paths!(MistralModelPaths, &token_source, revision, self)
+        get_paths!(
+            MistralModelPaths,
+            &token_source,
+            revision,
+            self,
+            self.quantized_model_id,
+            self.quantized_filename
+        )
     }
 
     fn _setup_model(
@@ -239,18 +246,24 @@ impl Loader for GgmlLoader {
             .map_err(|e| TokenizerError::Error(e.to_string()))?;
 
         let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
+        let mut eos_toks = vec![chat_template.eos_tok()];
+
+        // Handle Llama3 chat case
+        if tokenizer.encode("<|eot_id|>", true).is_ok() {
+            eos_toks.push("<|eot_id|>".to_string())
+        }
 
         info!(
-            "bos_tok = {}, eos_tok = {}, unk_tok = {}",
+            "bos_tok = {}, eos_tok = {:?}, unk_tok = {}",
             chat_template.bos_tok(),
-            chat_template.eos_tok(),
+            eos_toks,
             chat_template.eos_tok()
         );
 
         Ok(Box::new(Mutex::new(GgmlPipeline {
             model,
             config: self.config,
-            eos_tok: calculate_eos_tok(vec![chat_template.eos_tok()], &tokenizer),
+            eos_tok: calculate_eos_tok(eos_toks, &tokenizer),
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer: tokenizer.into(),
             no_kv_cache: self.no_kv_cache,
