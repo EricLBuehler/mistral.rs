@@ -217,7 +217,7 @@ impl Loader for GgufLoader {
             .to_string()
             .unwrap()
             .parse()
-            .map_err(|e| anyhow::Error::msg(e))?;
+            .map_err(anyhow::Error::msg)?;
 
         let mut is_lora = false;
         let model = match self.kind {

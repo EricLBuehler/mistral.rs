@@ -102,7 +102,7 @@ pub enum Which {
         order: String,
     },
 
-    GGUF {
+    Gguf {
         tok_model_id: String,
         tokenizer_json: Option<String>,
         quantized_model_id: String,
@@ -132,7 +132,7 @@ pub enum Which {
         tgt_non_granular_index: Option<usize>,
     },
 
-    GGML {
+    Ggml {
         tok_model_id: String,
         tokenizer_json: Option<String>,
         quantized_model_id: String,
