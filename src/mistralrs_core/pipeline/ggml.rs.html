@@ -473,6 +473,8 @@
 <a href="#471" id="471">471</a>
 <a href="#472" id="472">472</a>
 <a href="#473" id="473">473</a>
+<a href="#474" id="474">474</a>
+<a href="#475" id="475">475</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -579,12 +581,14 @@
 }
 
 <span class="attr">#[derive(Clone, Copy, Default)]
+</span><span class="doccomment">/// Config for a GGML loader.
 </span><span class="kw">pub struct </span>GgmlSpecificConfig {
     <span class="kw">pub </span>repeat_last_n: usize,
     <span class="kw">pub </span>gqa: usize,
 }
 
 <span class="attr">#[derive(Default)]
+</span><span class="doccomment">/// A builder for a GGML loader.
 </span><span class="kw">pub struct </span>GgmlLoaderBuilder {
     model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     config: GgmlSpecificConfig,

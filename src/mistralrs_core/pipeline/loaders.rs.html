@@ -431,6 +431,7 @@
 <a href="#429" id="429">429</a>
 <a href="#430" id="430">430</a>
 <a href="#431" id="431">431</a>
+<a href="#432" id="432">432</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::str::FromStr;
 
 <span class="kw">use </span>anyhow::Result;
@@ -447,6 +448,7 @@
 
 <span class="attr">#[pyclass]
 #[derive(Clone, Debug)]
+</span><span class="doccomment">/// The architecture to load the normal model as.
 </span><span class="kw">pub enum </span>NormalLoaderType {
     Mistral,
     Gemma,

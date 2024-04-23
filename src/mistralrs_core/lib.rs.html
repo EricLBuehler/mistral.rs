@@ -225,6 +225,13 @@
 <a href="#223" id="223">223</a>
 <a href="#224" id="224">224</a>
 <a href="#225" id="225">225</a>
+<a href="#226" id="226">226</a>
+<a href="#227" id="227">227</a>
+<a href="#228" id="228">228</a>
+<a href="#229" id="229">229</a>
+<a href="#230" id="230">230</a>
+<a href="#231" id="231">231</a>
+<a href="#232" id="232">232</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -274,7 +281,11 @@
 <span class="kw">pub use </span>scheduler::SchedulerMethod;
 <span class="kw">use </span>serde::Serialize;
 
-<span class="kw">pub struct </span>MistralRs {
+<span class="doccomment">/// The MistralRs struct handles sending requests to the engine.
+/// It is the core multi-threaded component of mistral.rs, and uses `mspc`
+/// `Sender` and `Receiver` primitives to send and receive requests to the
+/// engine.
+</span><span class="kw">pub struct </span>MistralRs {
     sender: Sender&lt;Request&gt;,
     log: <span class="prelude-ty">Option</span>&lt;String&gt;,
     id: String,
@@ -282,7 +293,10 @@
     next_request_id: Mutex&lt;RefCell&lt;usize&gt;&gt;,
 }
 
-<span class="kw">pub struct </span>MistralRsBuilder {
+<span class="doccomment">/// The MistralRsBuilder takes the pipeline and a scheduler method and constructs
+/// an Engine and a MistralRs instance. The Engine runs on a separate thread, and the MistralRs
+/// instance stays on the calling thread.
+</span><span class="kw">pub struct </span>MistralRsBuilder {
     pipeline: Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
     method: SchedulerMethod,
     log: <span class="prelude-ty">Option</span>&lt;String&gt;,

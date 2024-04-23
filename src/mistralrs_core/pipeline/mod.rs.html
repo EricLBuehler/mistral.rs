@@ -779,6 +779,20 @@
 <a href="#777" id="777">777</a>
 <a href="#778" id="778">778</a>
 <a href="#779" id="779">779</a>
+<a href="#780" id="780">780</a>
+<a href="#781" id="781">781</a>
+<a href="#782" id="782">782</a>
+<a href="#783" id="783">783</a>
+<a href="#784" id="784">784</a>
+<a href="#785" id="785">785</a>
+<a href="#786" id="786">786</a>
+<a href="#787" id="787">787</a>
+<a href="#788" id="788">788</a>
+<a href="#789" id="789">789</a>
+<a href="#790" id="790">790</a>
+<a href="#791" id="791">791</a>
+<a href="#792" id="792">792</a>
+<a href="#793" id="793">793</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>chat_template;
 <span class="kw">mod </span>ggml;
 <span class="kw">mod </span>gguf;
@@ -832,6 +846,7 @@
 }
 
 <span class="attr">#[derive(Debug, Clone)]
+</span><span class="doccomment">/// The source of the HF token.
 </span><span class="kw">pub enum </span>TokenSource {
     Literal(String),
     EnvVar(String),
@@ -880,6 +895,7 @@
 }
 
 <span class="attr">#[derive(Copy, Clone, Default)]
+</span><span class="doccomment">/// The kind of model to build.
 </span><span class="kw">pub enum </span>ModelKind {
     <span class="attr">#[default]
     </span>Normal,
@@ -909,7 +925,19 @@
     }
 }
 
-<span class="doccomment">/// Encapsulate downloading and setting up the model. The `load_model` method is used to create the pipeline.
+<span class="doccomment">/// The `Loader` trait abstracts the loading process. The primary entrypoint is the
+/// `load_model` method.
+///
+/// # Example
+/// ```rust,no_run
+/// let loader: Box&lt;dyn Loader&gt; = ...;
+/// let pipeline = loader.load_model(
+///     None,
+///     TokenSource::CacheToken,
+///     None,
+///     &amp;Device::cuda_if_available(0)?,
+/// )?;
+/// ```
 </span><span class="kw">pub trait </span>Loader {
     <span class="kw">fn </span>download_model(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -926,7 +954,7 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt;;
 
     <span class="doccomment">/// If `revision` is None, then it defaults to `main`.
-    /// If `dtype` is None, then it defaults to the model default (usually F32).
+    /// If `dtype` is None, then it defaults to the model default (usually BF16).
     </span><span class="attr">#[allow(clippy::type_complexity)]
     </span><span class="kw">fn </span>load_model(
         <span class="kw-2">&amp;</span><span class="self">self</span>,

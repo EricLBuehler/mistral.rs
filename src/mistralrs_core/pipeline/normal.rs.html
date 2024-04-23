@@ -393,6 +393,9 @@
 <a href="#391" id="391">391</a>
 <a href="#392" id="392">392</a>
 <a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
+<a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
 };
@@ -480,7 +483,8 @@
     eos_tok: Vec&lt;u32&gt;,
 }
 
-<span class="kw">pub struct </span>NormalLoader {
+<span class="doccomment">/// A loader for a "normal" (non-quantized) model.
+</span><span class="kw">pub struct </span>NormalLoader {
     inner: Box&lt;<span class="kw">dyn </span>NormalModelLoader&gt;,
     model_id: String,
     config: NormalSpecificConfig,
@@ -494,6 +498,7 @@
 }
 
 <span class="attr">#[derive(Default)]
+</span><span class="doccomment">/// A builder for a loader for a "normal" (non-quantized) model.
 </span><span class="kw">pub struct </span>NormalLoaderBuilder {
     model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     config: NormalSpecificConfig,
@@ -507,6 +512,7 @@
 }
 
 <span class="attr">#[derive(Clone, Copy, Default)]
+</span><span class="doccomment">/// Config specific to loading a normal model.
 </span><span class="kw">pub struct </span>NormalSpecificConfig {
     <span class="kw">pub </span>use_flash_attn: bool,
     <span class="kw">pub </span>repeat_last_n: usize,

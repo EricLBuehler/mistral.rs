@@ -530,6 +530,8 @@
 <a href="#528" id="528">528</a>
 <a href="#529" id="529">529</a>
 <a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -671,11 +673,13 @@
 }
 
 <span class="attr">#[derive(Clone, Copy, Default)]
+</span><span class="doccomment">/// A config for a GGUF loader.
 </span><span class="kw">pub struct </span>GgufSpecificConfig {
     <span class="kw">pub </span>repeat_last_n: usize,
 }
 
 <span class="attr">#[derive(Default)]
+</span><span class="doccomment">/// A builder for a GGUF loader.
 </span><span class="kw">pub struct </span>GgufLoaderBuilder {
     model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     config: GgufSpecificConfig,

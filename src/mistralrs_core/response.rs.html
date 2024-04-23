@@ -169,6 +169,13 @@
 <a href="#167" id="167">167</a>
 <a href="#168" id="168">168</a>
 <a href="#169" id="169">169</a>
+<a href="#170" id="170">170</a>
+<a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
+<a href="#175" id="175">175</a>
+<a href="#176" id="176">176</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::error::Error;
 
 <span class="kw">use </span>pyo3::{pyclass, pymethods};
@@ -257,6 +264,7 @@
 <span class="attr">#[pyclass]
 #[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
+</span><span class="doccomment">/// OpenAI compatible (superset) usage during a request.
 </span><span class="kw">pub struct </span>Usage {
     <span class="kw">pub </span>completion_tokens: usize,
     <span class="kw">pub </span>prompt_tokens: usize,
@@ -274,6 +282,7 @@
 <span class="attr">#[pyclass]
 #[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
+</span><span class="doccomment">/// An OpenAI compatible chat completion response.
 </span><span class="kw">pub struct </span>ChatCompletionResponse {
     <span class="kw">pub </span>id: String,
     <span class="kw">pub </span>choices: Vec&lt;Choice&gt;,
@@ -315,6 +324,7 @@
 <span class="attr">#[pyclass]
 #[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
+</span><span class="doccomment">/// An OpenAI compatible completion response.
 </span><span class="kw">pub struct </span>CompletionResponse {
     <span class="kw">pub </span>id: String,
     <span class="kw">pub </span>choices: Vec&lt;CompletionChoice&gt;,
@@ -327,12 +337,16 @@
 
 <span class="macro">generate_repr!</span>(CompletionResponse);
 
-<span class="kw">pub enum </span>Response {
+<span class="doccomment">/// The response enum contains 3 types of variants:
+/// - Error (-Error suffix)
+/// - Chat (no suffix or prefix)
+/// - Completion (Completion- prefix)
+</span><span class="kw">pub enum </span>Response {
     InternalError(Box&lt;<span class="kw">dyn </span>Error + Send + Sync&gt;),
     ValidationError(Box&lt;<span class="kw">dyn </span>Error + Send + Sync&gt;),
+    ModelError(String, ChatCompletionResponse),
     <span class="comment">// Chat
-    </span>ModelError(String, ChatCompletionResponse),
-    Done(ChatCompletionResponse),
+    </span>Done(ChatCompletionResponse),
     Chunk(ChatCompletionChunkResponse),
     <span class="comment">// Completion
     </span>CompletionModelError(String, CompletionResponse),

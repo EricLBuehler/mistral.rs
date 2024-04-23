@@ -44,12 +44,17 @@
 <a href="#42" id="42">42</a>
 <a href="#43" id="43">43</a>
 <a href="#44" id="44">44</a>
+<a href="#45" id="45">45</a>
+<a href="#46" id="46">46</a>
+<a href="#47" id="47">47</a>
+<a href="#48" id="48">48</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>indexmap::IndexMap;
 
 <span class="kw">use crate</span>::{response::Response, sampler::SamplingParams};
 <span class="kw">use </span>std::{fmt::Debug, sync::mpsc::Sender};
 
 <span class="attr">#[derive(Clone)]
+</span><span class="doccomment">/// Control the constraint with Regex or Yacc.
 </span><span class="kw">pub enum </span>Constraint {
     Regex(String),
     Yacc(String),
@@ -57,6 +62,7 @@
 }
 
 <span class="attr">#[derive(Clone, Debug)]
+</span><span class="doccomment">/// Message or messages for a [`Request`].
 </span><span class="kw">pub enum </span>RequestMessage {
     Chat(Vec&lt;IndexMap&lt;String, String&gt;&gt;),
     Completion {
@@ -68,6 +74,8 @@
 }
 
 <span class="attr">#[derive(Clone)]
+</span><span class="doccomment">/// A request to the Engine, encapsulating the various parameters as well as
+/// the `mspc` response `Sender` used to return the [`Response`].
 </span><span class="kw">pub struct </span>Request {
     <span class="kw">pub </span>messages: RequestMessage,
     <span class="kw">pub </span>sampling_params: SamplingParams,
