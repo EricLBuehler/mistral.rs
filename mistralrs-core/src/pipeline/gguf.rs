@@ -133,7 +133,7 @@ impl FromStr for GgufArchitecture {
             "mamba" => Ok(GgufArchitecture::Mamba),
             "rwkv" => Ok(GgufArchitecture::Rwkv),
             "phi2" => Ok(GgufArchitecture::Phi2),
-            a => Err(format!("Unknown GGUF arcitecture `{a}`")),
+            a => Err(format!("Unknown GGUF architecture `{a}`")),
         }
     }
 }
