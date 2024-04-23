@@ -48,6 +48,7 @@ pub use response::{
 pub use sampler::{SamplingParams, StopTokens, TopLogprob};
 pub use scheduler::SchedulerMethod;
 use serde::Serialize;
+use tokio::runtime::Runtime;
 
 pub struct MistralRs {
     sender: Sender<Request>,
@@ -147,19 +148,21 @@ impl MistralRs {
                 .as_secs(),
             next_request_id: Mutex::new(RefCell::new(0)),
         });
-
         thread::spawn(move || {
-            let mut engine = Engine::new(
-                rx,
-                pipeline,
-                method,
-                truncate_sequence,
-                no_kv_cache,
-                no_prefix_cache,
-                prefix_cache_n,
-                disable_eos_stop,
-            );
-            engine.run();
+            let rt = Runtime::new().unwrap();
+            rt.block_on(async move {
+                let mut engine = Engine::new(
+                    rx,
+                    pipeline,
+                    method,
+                    truncate_sequence,
+                    no_kv_cache,
+                    no_prefix_cache,
+                    prefix_cache_n,
+                    disable_eos_stop,
+                );
+                engine.run().await;
+            });
         });
 
         this

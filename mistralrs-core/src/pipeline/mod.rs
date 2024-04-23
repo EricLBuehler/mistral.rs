@@ -19,6 +19,7 @@ pub use mistral::{MistralLoader, MistralSpecificConfig, MISTRAL_IS_GPTX};
 use mistralrs_lora::{LoraConfig, Ordering};
 pub use mixtral::{MixtralLoader, MixtralSpecificConfig, MIXTRAL_IS_GPTX};
 pub use phi2::{Phi2Loader, Phi2SpecificConfig, PHI2_IS_GPTX};
+use rand_isaac::Isaac64Rng;
 use serde::Deserialize;
 use std::sync::Arc;
 use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
@@ -319,59 +320,62 @@ pub trait Pipeline: Send + Sync {
         }
     }
     fn get_repeat_last_n(&self) -> usize;
-    fn sample(
-        &mut self,
-        logits: Tensor,
-        seq: &mut Sequence,
-        return_logprobs: bool,
-    ) -> Result<Logprobs> {
-        let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
-        let start_at = seq
-            .get_toks()
-            .len()
-            .saturating_sub(self.get_repeat_last_n());
-        let ctxt = seq.get_toks()[start_at..].to_vec();
-
-        let first_lobprobs_response =
-            seq.sampler()
-                .sample(logits.clone(), Some(&ctxt), return_logprobs)?;
-
-        let bias_if_not_allowed = match &mut seq.recognizer {
-            SequenceRecognizer::Regex(ref mut rx) => {
-                get_bias_if_not_allowed!(self, rx.as_mut(), first_lobprobs_response.token)
-            }
-            SequenceRecognizer::Cfg(ref mut cfg) => {
-                get_bias_if_not_allowed!(self, cfg.as_mut(), first_lobprobs_response.token)
-            }
-            SequenceRecognizer::None => None,
-        };
-        let second_logprobs_response = match bias_if_not_allowed {
-            Some(token_set) => {
-                let mut acc = vec![-f32::INFINITY; self.tok_trie().vocab_size()];
-                token_set.apply_to(&mut acc);
-                let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), self.device())?)?;
-
-                seq.sampler()
-                    .sample(new_logits, Some(&ctxt), return_logprobs)?
-            }
-            None => first_lobprobs_response,
-        };
-
-        match seq.recognizer {
-            SequenceRecognizer::Regex(ref mut rx) => {
-                self.tok_trie()
-                    .append_token(rx.as_mut(), second_logprobs_response.token);
-            }
-            SequenceRecognizer::Cfg(ref mut cfg) => {
-                self.tok_trie()
-                    .append_token(cfg.as_mut(), second_logprobs_response.token);
-            }
-            SequenceRecognizer::None => {}
-        }
-        Ok(second_logprobs_response)
-    }
 }
 
+pub(crate) async fn pipeline_sample(
+    logits: Tensor,
+    seq: &mut Sequence,
+    return_logprobs: bool,
+    repeat_last_n: usize,
+    device: &Device,
+    tok_trie: &TokTrie,
+    rng: Arc<Mutex<Isaac64Rng>>,
+) -> Result<Logprobs> {
+    let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
+    let start_at = seq.get_toks().len().saturating_sub(repeat_last_n);
+
+    let sampler = seq.sampler();
+    let logits_clone = logits.clone();
+    let ctx_clone = seq.get_toks()[start_at..].to_vec();
+    let rng_clone = rng.clone();
+    let first_lobprobs_response = tokio_rayon::spawn(move || {
+        sampler.sample(logits_clone, Some(&ctx_clone), return_logprobs, rng_clone)
+    })
+    .await?;
+
+    let bias_if_not_allowed = match &mut seq.recognizer {
+        SequenceRecognizer::Regex(ref mut rx) => {
+            get_bias_if_not_allowed!(tok_trie, rx.as_mut(), first_lobprobs_response.token)
+        }
+        SequenceRecognizer::Cfg(ref mut cfg) => {
+            get_bias_if_not_allowed!(tok_trie, cfg.as_mut(), first_lobprobs_response.token)
+        }
+        SequenceRecognizer::None => None,
+    };
+    let second_logprobs_response = match bias_if_not_allowed {
+        Some(token_set) => {
+            let mut acc = vec![-f32::INFINITY; tok_trie.vocab_size()];
+            token_set.apply_to(&mut acc);
+            let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), device)?)?;
+            let ctxt = seq.get_toks()[start_at..].to_vec();
+
+            seq.sampler()
+                .sample(new_logits, Some(&ctxt), return_logprobs, rng)?
+        }
+        None => first_lobprobs_response,
+    };
+
+    match seq.recognizer {
+        SequenceRecognizer::Regex(ref mut rx) => {
+            tok_trie.append_token(rx.as_mut(), second_logprobs_response.token);
+        }
+        SequenceRecognizer::Cfg(ref mut cfg) => {
+            tok_trie.append_token(cfg.as_mut(), second_logprobs_response.token);
+        }
+        SequenceRecognizer::None => {}
+    }
+    Ok(second_logprobs_response)
+}
 struct InputMetadata {
     input: Tensor,
     positions: Vec<usize>,

@@ -45,6 +45,11 @@ clap.workspace = true
 radix_trie = "0.2.1"
 bytemuck = "1.15.0"
 pyo3.workspace = true
+rayon = "1.10.0"
+tokio = { version = "1.36.0", features = ["rt-multi-thread"] }
+tokio-rayon = "2.1.0"
+rand_isaac = "0.3.0"
+futures.workspace = true
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]

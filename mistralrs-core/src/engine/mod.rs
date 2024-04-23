@@ -3,17 +3,20 @@ use std::{
     collections::{HashMap, VecDeque},
     iter::zip,
     rc::Rc,
-    sync::{mpsc::Receiver, Mutex},
+    sync::{mpsc::Receiver, Arc, Mutex},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
     handle_seq_error_ok, handle_seq_error_stateaware_ok,
+    pipeline::pipeline_sample,
     response::CompletionChoice,
     CompletionResponse, RequestMessage,
 };
 use candle_core::{Result, Tensor};
+use rand::SeedableRng;
+use rand_isaac::Isaac64Rng;
 use tracing::warn;
 
 use crate::{
@@ -79,8 +82,9 @@ impl Engine {
         }
     }
 
-    pub fn run(&mut self) {
+    pub async fn run(&mut self) {
         let mut last_run = Instant::now();
+        let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
         'lp: loop {
             while let Ok(request) = self.rx.try_recv() {
                 self.add_request(request);
@@ -111,7 +115,7 @@ impl Engine {
 
                 handle_pipeline_forward_error!(
                     "sampling",
-                    Self::sample_seqs(&mut *pipeline, &mut scheduled.completion, logits, &mut self.prefix_cacher, self.disable_eos_stop),
+                    Self::sample_seqs(&mut *pipeline, &mut scheduled.completion, logits, &mut self.prefix_cacher, self.disable_eos_stop, rng.clone()).await,
                     &mut scheduled.completion,
                     pipeline,
                     'lp,
@@ -140,7 +144,7 @@ impl Engine {
 
                 handle_pipeline_forward_error!(
                     "sampling",
-                    Self::sample_seqs(&mut *pipeline, &mut scheduled.prompt, logits, &mut self.prefix_cacher,self.disable_eos_stop,),
+                    Self::sample_seqs(&mut *pipeline, &mut scheduled.prompt, logits, &mut self.prefix_cacher,self.disable_eos_stop, rng.clone()).await,
                     &mut scheduled.prompt,
                     pipeline,
                     'lp,
@@ -200,21 +204,38 @@ impl Engine {
         }
     }
 
-    fn sample_seqs(
+    async fn sample_seqs(
         pipeline: &mut dyn Pipeline,
         seqs: &mut [&mut Sequence],
         logits: Tensor,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
+        rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<()> {
         let seqs_len = seqs.len();
         let logits_seq = logits.chunk(seqs_len, 0).unwrap();
         debug_assert_eq!(logits_seq.len(), seqs_len);
         let eos_tok = pipeline.eos_tok().to_vec();
-        for (logits_per_seq, seq) in zip(logits_seq, seqs.iter_mut()) {
-            // Sample and extract next token
-            let return_logprobs = seq.return_logprobs();
-            let sampled = pipeline.sample(logits_per_seq, seq, return_logprobs);
+        let sampled_tasks: Vec<_> = zip(logits_seq, seqs.iter_mut())
+            .map(|(logits_per_seq, seq)| {
+                let return_logprobs = seq.return_logprobs();
+                pipeline_sample(
+                    logits_per_seq,
+                    seq,
+                    return_logprobs,
+                    pipeline.get_repeat_last_n(),
+                    pipeline.device(),
+                    pipeline.tok_trie(),
+                    rng.clone(),
+                )
+            })
+            .collect();
+
+        use futures::future;
+
+        let sampleds = future::join_all(sampled_tasks).await;
+
+        for (sampled, seq) in zip(sampleds, seqs.iter_mut()) {
             let next_token = handle_seq_error_stateaware_ok!(sampled, seq);
             let next_token_id = next_token.token;
 
@@ -698,7 +719,6 @@ impl Engine {
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
 
         let sampler = Sampler::new(
-            SEED,
             Some(request.sampling_params.temperature.unwrap_or(1.0)),
             request.sampling_params.top_n_logprobs,
             tokenizer,
