@@ -51,6 +51,7 @@ pub trait ModelPaths {
 }
 
 #[derive(Debug, Clone)]
+/// The source of the HF token.
 pub enum TokenSource {
     Literal(String),
     EnvVar(String),
@@ -99,6 +100,7 @@ impl fmt::Display for TokenSource {
 }
 
 #[derive(Copy, Clone, Default)]
+/// The kind of model to build.
 pub enum ModelKind {
     #[default]
     Normal,
@@ -128,7 +130,19 @@ impl AsRef<str> for ModelKind {
     }
 }
 
-/// Encapsulate downloading and setting up the model. The `load_model` method is used to create the pipeline.
+/// The `Loader` trait abstracts the loading process. The primary entrypoint is the
+/// `load_model` method.
+///
+/// # Example
+/// ```rust,no_run
+/// let loader: Box<dyn Loader> = ...;
+/// let pipeline = loader.load_model(
+///     None,
+///     TokenSource::CacheToken,
+///     None,
+///     &Device::cuda_if_available(0)?,
+/// )?;
+/// ```
 pub trait Loader {
     fn download_model(
         &self,
@@ -145,7 +159,7 @@ pub trait Loader {
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>>;
 
     /// If `revision` is None, then it defaults to `main`.
-    /// If `dtype` is None, then it defaults to the model default (usually F32).
+    /// If `dtype` is None, then it defaults to the model default (usually BF16).
     #[allow(clippy::type_complexity)]
     fn load_model(
         &self,

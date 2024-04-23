@@ -104,12 +104,14 @@ pub struct GgmlLoader {
 }
 
 #[derive(Clone, Copy, Default)]
+/// Config for a GGML loader.
 pub struct GgmlSpecificConfig {
     pub repeat_last_n: usize,
     pub gqa: usize,
 }
 
 #[derive(Default)]
+/// A builder for a GGML loader.
 pub struct GgmlLoaderBuilder {
     model_id: Option<String>,
     config: GgmlSpecificConfig,

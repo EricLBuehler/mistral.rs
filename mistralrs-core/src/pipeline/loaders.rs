@@ -14,6 +14,7 @@ use crate::{
 
 #[pyclass]
 #[derive(Clone, Debug)]
+/// The architecture to load the normal model as.
 pub enum NormalLoaderType {
     Mistral,
     Gemma,

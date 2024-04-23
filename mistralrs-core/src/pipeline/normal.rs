@@ -85,6 +85,7 @@ pub struct NormalPipeline {
     eos_tok: Vec<u32>,
 }
 
+/// A loader for a "normal" (non-quantized) model.
 pub struct NormalLoader {
     inner: Box<dyn NormalModelLoader>,
     model_id: String,
@@ -99,6 +100,7 @@ pub struct NormalLoader {
 }
 
 #[derive(Default)]
+/// A builder for a loader for a "normal" (non-quantized) model.
 pub struct NormalLoaderBuilder {
     model_id: Option<String>,
     config: NormalSpecificConfig,
@@ -112,6 +114,7 @@ pub struct NormalLoaderBuilder {
 }
 
 #[derive(Clone, Copy, Default)]
+/// Config specific to loading a normal model.
 pub struct NormalSpecificConfig {
     pub use_flash_attn: bool,
     pub repeat_last_n: usize,

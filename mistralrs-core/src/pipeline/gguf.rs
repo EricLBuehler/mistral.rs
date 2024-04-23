@@ -139,11 +139,13 @@ impl FromStr for GgufArchitecture {
 }
 
 #[derive(Clone, Copy, Default)]
+/// A config for a GGUF loader.
 pub struct GgufSpecificConfig {
     pub repeat_last_n: usize,
 }
 
 #[derive(Default)]
+/// A builder for a GGUF loader.
 pub struct GgufLoaderBuilder {
     model_id: Option<String>,
     config: GgufSpecificConfig,
