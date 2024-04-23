@@ -282,7 +282,7 @@ impl Loader for NormalLoader {
         let mut eos_toks = vec![chat_template.eos_tok()];
 
         // Handle Llama3 chat case
-        if tokenizer.encode("<|eot_id|>", true).is_ok() {
+        if tokenizer.get_vocab(true).get("<|eot_id|>").is_some() {
             eos_toks.push("<|eot_id|>".to_string())
         }
 
