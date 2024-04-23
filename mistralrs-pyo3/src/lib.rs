@@ -96,9 +96,9 @@ impl Runner {
             | Which::LoraMistral { .. }
             | Which::LoraLlama { .. }
             | Which::LoraMixtral { .. }
-            | Which::GGUF { .. }
+            | Which::Gguf { .. }
             | Which::LoraGGUF { .. }
-            | Which::GGML { .. }
+            | Which::Ggml { .. }
             | Which::LoraGGML { .. } => None,
             Which::XLoraGemma {
                 tgt_non_granular_index,
@@ -465,7 +465,7 @@ impl Runner {
                 tokenizer_json,
                 tgt_non_granular_index,
             )),
-            Which::GGUF {
+            Which::Gguf {
                 tok_model_id,
                 tokenizer_json,
                 quantized_model_id,
@@ -546,7 +546,7 @@ impl Runner {
                 tokenizer_json,
                 tgt_non_granular_index,
             )),
-            Which::GGML {
+            Which::Ggml {
                 tok_model_id,
                 tokenizer_json,
                 quantized_model_id,
