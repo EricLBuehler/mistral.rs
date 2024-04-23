@@ -205,7 +205,7 @@ Normally with a LoRA model you would use a custom ordering file. However, for th
 To start a server running Mistral from GGUF:
 
 ```
-./mistralrs-server --port 1234 gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF/tree/main -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
+./mistralrs-server --port 1234 gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
 ```
 
 - With a model from GGML
