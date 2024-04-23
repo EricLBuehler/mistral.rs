@@ -11,15 +11,15 @@ Mistral.rs is a fast LLM inference platform supporting inference on a variety of
 
 **Running the new Llama 3 model on CUDA**
 
-`cargo run --release --features cuda -- -i llama -m meta-llama/Meta-Llama-3-8B-Instruct`
+`cargo run --release --features cuda -- -i plain -m meta-llama/Meta-Llama-3-8B-Instruct -a llama`
 
 **Running the new Llama 3 model on Metal**
 
-`cargo run --release --features metal -- -i llama -m meta-llama/Meta-Llama-3-8B-Instruct`
+`cargo run --release --features metal -- -i plain -m meta-llama/Meta-Llama-3-8B-Instruct -a llama`
 
 **Running the new Llama 3 model on CPU**
 
-`cargo run --release -- -i llama -m meta-llama/Meta-Llama-3-8B-Instruct`
+`cargo run --release -- -i plain -m meta-llama/Meta-Llama-3-8B-Instruct -a llama`
 
 ## Description
 **Fast**:
