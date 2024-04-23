@@ -317,7 +317,7 @@
     d1: usize,
     d2: usize,
     vb: VarBuilder,
-    lora_config: <span class="kw-2">&amp;</span>Vec&lt;(String, LoraConfig)&gt;,
+    lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
     count: <span class="kw-2">&amp;mut </span>usize,
     ord: <span class="kw-2">&amp;</span>Ordering,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;&gt; {
@@ -349,7 +349,7 @@
     d1: usize,
     d2: usize,
     vb: VarBuilder,
-    lora_config: <span class="kw-2">&amp;</span>Vec&lt;(String, LoraConfig)&gt;,
+    lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
     count: <span class="kw-2">&amp;mut </span>usize,
     ord: <span class="kw-2">&amp;</span>Ordering,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;&gt; {
@@ -386,7 +386,7 @@
     out_dim: usize,
     bias: bool,
     vb: <span class="kw">crate</span>::VarBuilder,
-    lora_config: <span class="kw-2">&amp;</span>Vec&lt;(String, LoraConfig)&gt;,
+    lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
     count: <span class="kw-2">&amp;mut </span>usize,
     ord: <span class="kw-2">&amp;</span>Ordering,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;&gt; {

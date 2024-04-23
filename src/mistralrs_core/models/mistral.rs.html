@@ -353,6 +353,49 @@
 <a href="#351" id="351">351</a>
 <a href="#352" id="352">352</a>
 <a href="#353" id="353">353</a>
+<a href="#354" id="354">354</a>
+<a href="#355" id="355">355</a>
+<a href="#356" id="356">356</a>
+<a href="#357" id="357">357</a>
+<a href="#358" id="358">358</a>
+<a href="#359" id="359">359</a>
+<a href="#360" id="360">360</a>
+<a href="#361" id="361">361</a>
+<a href="#362" id="362">362</a>
+<a href="#363" id="363">363</a>
+<a href="#364" id="364">364</a>
+<a href="#365" id="365">365</a>
+<a href="#366" id="366">366</a>
+<a href="#367" id="367">367</a>
+<a href="#368" id="368">368</a>
+<a href="#369" id="369">369</a>
+<a href="#370" id="370">370</a>
+<a href="#371" id="371">371</a>
+<a href="#372" id="372">372</a>
+<a href="#373" id="373">373</a>
+<a href="#374" id="374">374</a>
+<a href="#375" id="375">375</a>
+<a href="#376" id="376">376</a>
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a>
+<a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a>
+<a href="#382" id="382">382</a>
+<a href="#383" id="383">383</a>
+<a href="#384" id="384">384</a>
+<a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a>
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
+<a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
+<a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -361,7 +404,7 @@
 <span class="kw">use </span>candle_transformers::models::with_tracing::{linear_no_bias, Linear};
 <span class="kw">use </span>std::sync::Arc;
 
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, MISTRAL_IS_GPTX};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, NormalModel};
 
 <span class="kw">use super</span>::{flash_attn, repeat_kv, Cache, RmsNorm};
 
@@ -592,7 +635,7 @@
 }
 
 <span class="kw">impl </span>Model {
-    <span class="kw">pub fn </span>new(cfg: <span class="kw-2">&amp;</span>Config, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">pub fn </span>new(cfg: <span class="kw-2">&amp;</span>Config, vb: VarBuilder, is_gptx: bool) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
         <span class="kw">let </span>embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp(<span class="string">"embed_tokens"</span>))<span class="question-mark">?</span>;
@@ -602,7 +645,7 @@
             head_dim,
             cfg.max_position_embeddings,
             vb.device(),
-            MISTRAL_IS_GPTX,
+            is_gptx,
             vb.dtype(),
         )<span class="question-mark">?</span>);
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
@@ -704,6 +747,49 @@
             )<span class="question-mark">?
         </span>}
         extract_logits(<span class="kw-2">&amp;</span>xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.norm)<span class="question-mark">?</span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>, context_lens)
+    }
+}
+
+<span class="kw">impl </span>NormalModel <span class="kw">for </span>Model {
+    <span class="kw">fn </span>forward(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        input_ids: <span class="kw-2">&amp;</span>Tensor,
+        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec&lt;usize&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="self">self</span>.forward(
+            input_ids,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+        )
+    }
+    <span class="kw">fn </span>xlora_forward(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        _input_ids: <span class="kw-2">&amp;</span>Tensor,
+        _input_ids_full: <span class="kw-2">&amp;</span>Tensor,
+        _seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+        _seqlen_offsets_full: <span class="kw-2">&amp;</span>[usize],
+        _start_offsets_kernel: Tensor,
+        _start_offsets_kernel_full: Tensor,
+        _no_kv_cache: bool,
+        _non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::xlora_models::NonGranularState&gt;,
+        _context_lens: Vec&lt;usize&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="macro">unimplemented!</span>()
+    }
+    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.cache
+    }
+    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.device
+    }
+    <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="bool-val">false
+    </span>}
+    <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="self">self</span>.max_seq_len
     }
 }
 </code></pre></div></section></main></body></html>

@@ -715,6 +715,55 @@
 <a href="#713" id="713">713</a>
 <a href="#714" id="714">714</a>
 <a href="#715" id="715">715</a>
+<a href="#716" id="716">716</a>
+<a href="#717" id="717">717</a>
+<a href="#718" id="718">718</a>
+<a href="#719" id="719">719</a>
+<a href="#720" id="720">720</a>
+<a href="#721" id="721">721</a>
+<a href="#722" id="722">722</a>
+<a href="#723" id="723">723</a>
+<a href="#724" id="724">724</a>
+<a href="#725" id="725">725</a>
+<a href="#726" id="726">726</a>
+<a href="#727" id="727">727</a>
+<a href="#728" id="728">728</a>
+<a href="#729" id="729">729</a>
+<a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a>
+<a href="#733" id="733">733</a>
+<a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a>
+<a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a>
+<a href="#742" id="742">742</a>
+<a href="#743" id="743">743</a>
+<a href="#744" id="744">744</a>
+<a href="#745" id="745">745</a>
+<a href="#746" id="746">746</a>
+<a href="#747" id="747">747</a>
+<a href="#748" id="748">748</a>
+<a href="#749" id="749">749</a>
+<a href="#750" id="750">750</a>
+<a href="#751" id="751">751</a>
+<a href="#752" id="752">752</a>
+<a href="#753" id="753">753</a>
+<a href="#754" id="754">754</a>
+<a href="#755" id="755">755</a>
+<a href="#756" id="756">756</a>
+<a href="#757" id="757">757</a>
+<a href="#758" id="758">758</a>
+<a href="#759" id="759">759</a>
+<a href="#760" id="760">760</a>
+<a href="#761" id="761">761</a>
+<a href="#762" id="762">762</a>
+<a href="#763" id="763">763</a>
+<a href="#764" id="764">764</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
@@ -727,7 +776,7 @@
 
 <span class="kw">use crate</span>::{
     models::{flash_attn, mixtral::Config, repeat_kv, Cache, RmsNorm},
-    pipeline::{extract_logits, MIXTRAL_IS_GPTX},
+    pipeline::{extract_logits, NormalModel},
 };
 
 <span class="kw">use super</span>::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -752,7 +801,7 @@
         rotary_emb: Arc&lt;RotaryEmbedding&gt;,
         cfg: <span class="kw-2">&amp;</span>Config,
         vb: VarBuilder,
-        lora_config: <span class="kw-2">&amp;</span>Vec&lt;(String, LoraConfig)&gt;,
+        lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
         count: <span class="kw-2">&amp;mut </span>usize,
         ord: <span class="kw-2">&amp;</span>Ordering,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
@@ -915,7 +964,7 @@
     <span class="kw">fn </span>new(
         cfg: <span class="kw-2">&amp;</span>Config,
         vb: VarBuilder,
-        lora_config: <span class="kw-2">&amp;</span>Vec&lt;(String, LoraConfig)&gt;,
+        lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
         count: <span class="kw-2">&amp;mut </span>usize,
         ord: <span class="kw-2">&amp;</span>Ordering,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
@@ -987,7 +1036,7 @@
     <span class="kw">fn </span>new(
         cfg: <span class="kw-2">&amp;</span>Config,
         vb: VarBuilder,
-        lora_config: <span class="kw-2">&amp;</span>Vec&lt;(String, LoraConfig)&gt;,
+        lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
         count: <span class="kw-2">&amp;mut </span>usize,
         ord: <span class="kw-2">&amp;</span>Ordering,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
@@ -1099,7 +1148,7 @@
         rotary_emb: Arc&lt;RotaryEmbedding&gt;,
         cfg: <span class="kw-2">&amp;</span>Config,
         vb: VarBuilder,
-        lora_config: <span class="kw-2">&amp;</span>Vec&lt;(String, LoraConfig)&gt;,
+        lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
         count: <span class="kw-2">&amp;mut </span>usize,
         ord: <span class="kw-2">&amp;</span>Ordering,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
@@ -1175,9 +1224,10 @@
     <span class="kw">pub fn </span>new(
         cfg: <span class="kw-2">&amp;</span>Config,
         vb: VarBuilder,
-        lora_config: <span class="kw-2">&amp;</span>Vec&lt;(String, LoraConfig)&gt;,
+        lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         xlora_ordering: Ordering,
+        is_gptx: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
         <span class="kw">let </span>embed_tokens =
@@ -1188,7 +1238,7 @@
             head_dim,
             cfg.max_position_embeddings,
             vb_m.device(),
-            MIXTRAL_IS_GPTX,
+            is_gptx,
             vb.dtype(),
         )<span class="question-mark">?</span>);
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
@@ -1396,6 +1446,54 @@
                 context_lens,
             )
         }
+    }
+}
+
+<span class="kw">impl </span>NormalModel <span class="kw">for </span>XLoraModel {
+    <span class="kw">fn </span>forward(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        _input_ids: <span class="kw-2">&amp;</span>Tensor,
+        _seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+        _start_offsets_kernel: Tensor,
+        _context_lens: Vec&lt;usize&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="macro">unreachable!</span>()
+    }
+    <span class="kw">fn </span>xlora_forward(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        input_ids: <span class="kw-2">&amp;</span>Tensor,
+        input_ids_full: <span class="kw-2">&amp;</span>Tensor,
+        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+        seqlen_offsets_full: <span class="kw-2">&amp;</span>[usize],
+        start_offsets_kernel: Tensor,
+        start_offsets_kernel_full: Tensor,
+        no_kv_cache: bool,
+        non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::xlora_models::NonGranularState&gt;,
+        context_lens: Vec&lt;usize&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="self">self</span>.forward(
+            input_ids,
+            input_ids_full,
+            seqlen_offsets,
+            seqlen_offsets_full,
+            start_offsets_kernel,
+            start_offsets_kernel_full,
+            no_kv_cache,
+            non_granular_state,
+            context_lens,
+        )
+    }
+    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.cache
+    }
+    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.device
+    }
+    <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="bool-val">true
+    </span>}
+    <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="self">self</span>.max_seq_len
     }
 }
 
