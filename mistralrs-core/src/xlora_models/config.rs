@@ -30,8 +30,7 @@ fn default_0f64() -> f64 {
 #[derive(Clone, Debug, Deserialize)]
 pub struct XLoraConfig {
     pub hidden_size: usize,
-    #[serde(rename = "base_model_id")]
-    pub _base_model_id: Option<String>,
+    pub base_model_id: String,
     #[serde(rename = "adapters")]
     #[serde(with = "either::serde_untagged")]
     pub _adapters: Either<Vec<String>, HashMap<String, String>>,

@@ -20,23 +20,13 @@ from llama_index.core.llms.callbacks import llm_chat_callback, llm_completion_ca
 from llama_index.core.llms.custom import CustomLLM
 from llama_index.core.base.llms.generic_utils import (
     completion_response_to_chat_response,
-    stream_completion_response_to_chat_response,
 )
 from llama_index.core.types import BaseOutputParser, PydanticProgramMode
-from llama_index.core.utils import get_cache_dir
-from tqdm import tqdm
 
 from mistralrs import (
-    MistralLoader,
-    MixtralLoader,
-    GemmaLoader,
-    LlamaLoader,
     ChatCompletionRequest,
-    NormalLoader,
     Runner,
-    XLoraLoader,
-    QuantizedLoader,
-    XLoraQuantizedLoader,
+    Which,
 )
 
 DEFAULT_MISTRAL_RS_GGML_MODEL = (
@@ -51,7 +41,8 @@ DEFAULT_TOPK = 32
 DEFAULT_TOPP = 0.1
 DEFAULT_TOP_LOGPROBS = 10
 DEFAULT_REPEAT_LAST_N = 64
-DEFAULT_MAX_SEQS = 10
+DEFAULT_MAX_SEQS = 16
+DEFAULT_PREFIX_CACHE_N = 16
 
 
 class MistralRS(CustomLLM):
@@ -140,12 +131,7 @@ class MistralRS(CustomLLM):
 
     def __init__(
         self,
-        arch: str,
-        model_id: Optional[str] = None,
-        quantized_model_id: Optional[str] = None,
-        quantized_filename: Optional[str] = None,
-        xlora_order_file: Optional[str] = None,
-        xlora_model_id: Optional[str] = None,
+        which: Which,
         temperature: float = DEFAULT_TEMPERATURE,
         max_new_tokens: int = DEFAULT_NUM_OUTPUTS,
         context_window: int = DEFAULT_CONTEXT_WINDOW,
@@ -171,145 +157,10 @@ class MistralRS(CustomLLM):
                 "top_logprobs": top_logprobs,
             }
         )
-        splits = list(map(lambda x: x.lower(), arch.split("-")))
-        if splits[0:2] == ["x", "lora"]:
-            is_xlora = True
-        else:
-            is_xlora = False
-        if splits[-1] == "gguf":
-            is_gguf = True
-            is_ggml = False
-        elif splits[-1] == "ggml":
-            is_ggml = True
-            is_gguf = False
-        else:
-            is_gguf = False
-            is_ggml = False
-
-        if len(splits) == 1:
-            model = splits[0]
-        elif len(splits) == 2 and is_xlora:
-            model = splits[1]
-        elif len(splits) == 2 and not is_xlora and (is_ggml or is_gguf):
-            model = splits[0]
-        elif len(splits) == 2 and is_xlora and (is_ggml or is_gguf):
-            model = splits[1]
-
-        match model:
-            case "mistral":
-                model_loader = MistralLoader
-            case "mixtral":
-                model_loader = MixtralLoader
-            case "llama":
-                model_loader = LlamaLoader
-            case "gemma":
-                model_loader = GemmaLoader
-            case _:
-                raise ValueError(
-                    f"Unexpected model {model}, value values are one of mistral, mixtral, llama, gemma"
-                )
-
-        match (is_gguf, is_ggml, is_xlora):
-            case (False, False, False):
-                loader = NormalLoader(
-                    model_loader,
-                    model_id,
-                    no_kv_cache=model_kwargs.get("no_kv_cache", False),
-                    use_flash_attn=True,  # will be disabled by &
-                    repeat_last_n=model_kwargs.get(
-                        "repeat_last_n", DEFAULT_REPEAT_LAST_N
-                    ),
-                    gqa=model_kwargs.get("gqa", None),
-                    chat_template=model_kwargs.get("chat_template", None),
-                    tokenizer_json=model_kwargs.get("tokenizer_json", None),
-                )
-            case (True, False, False):
-                loader = QuantizedLoader(
-                    model_loader,
-                    model_id,
-                    is_gguf=True,
-                    no_kv_cache=model_kwargs.get("no_kv_cache", False),
-                    use_flash_attn=True,  # will be disabled by &
-                    repeat_last_n=model_kwargs.get(
-                        "repeat_last_n", DEFAULT_REPEAT_LAST_N
-                    ),
-                    gqa=model_kwargs.get("gqa", None),
-                    quantized_model_id=quantized_model_id,
-                    quantized_filename=quantized_filename,
-                    chat_template=model_kwargs.get("chat_template", None),
-                    tokenizer_json=model_kwargs.get("tokenizer_json", None),
-                )
-            case (False, True, False):
-                loader = QuantizedLoader(
-                    model_loader,
-                    model_id,
-                    is_gguf=False,
-                    no_kv_cache=model_kwargs.get("no_kv_cache", False),
-                    use_flash_attn=True,  # will be disabled by &
-                    repeat_last_n=model_kwargs.get(
-                        "repeat_last_n", DEFAULT_REPEAT_LAST_N
-                    ),
-                    gqa=model_kwargs.get("gqa", None),
-                    quantized_model_id=quantized_model_id,
-                    quantized_filename=quantized_filename,
-                    chat_template=model_kwargs.get("chat_template", None),
-                    tokenizer_json=model_kwargs.get("tokenizer_json", None),
-                )
-            case (False, False, True):
-                loader = XLoraLoader(
-                    model_loader,
-                    model_id,
-                    no_kv_cache=model_kwargs.get("no_kv_cache", False),
-                    use_flash_attn=True,  # will be disabled by &
-                    repeat_last_n=model_kwargs.get(
-                        "repeat_last_n", DEFAULT_REPEAT_LAST_N
-                    ),
-                    gqa=model_kwargs.get("gqa", None),
-                    order_file=xlora_order_file,
-                    xlora_model_id=xlora_model_id,
-                    chat_template=model_kwargs.get("chat_template", None),
-                    tokenizer_json=model_kwargs.get("tokenizer_json", None),
-                )
-            case (True, False, True):
-                loader = XLoraQuantizedLoader(
-                    model_loader,
-                    model_id,
-                    is_gguf=True,
-                    no_kv_cache=model_kwargs.get("no_kv_cache", False),
-                    use_flash_attn=True,  # will be disabled by &
-                    repeat_last_n=model_kwargs.get("repeat_last_n", None),
-                    gqa=model_kwargs.get("gqa", None),
-                    order_file=xlora_order_file,
-                    quantized_model_id=quantized_model_id,
-                    quantized_filename=quantized_filename,
-                    xlora_model_id=xlora_model_id,
-                    chat_template=model_kwargs.get("chat_template", None),
-                    tokenizer_json=model_kwargs.get("tokenizer_json", None),
-                )
-            case (False, True, True):
-                loader = XLoraQuantizedLoader(
-                    model_loader,
-                    model_id,
-                    is_gguf=False,
-                    no_kv_cache=model_kwargs.get("no_kv_cache", False),
-                    use_flash_attn=True,  # will be disabled by &
-                    repeat_last_n=model_kwargs.get("repeat_last_n", None),
-                    gqa=model_kwargs.get("gqa", None),
-                    order_file=xlora_order_file,
-                    quantized_model_id=quantized_model_id,
-                    quantized_filename=quantized_filename,
-                    xlora_model_id=xlora_model_id,
-                    chat_template=model_kwargs.get("chat_template", None),
-                    tokenizer_json=model_kwargs.get("tokenizer_json", None),
-                )
-            case _:
-                raise ValueError(
-                    f"Invalid model architecture {arch}. Expected <x-lora>-arch-<gguf | ggml>."
-                )
 
         super().__init__(
-            model_path=model_id,
-            model_url=model_id,
+            model_path="local",
+            model_url="local",
             temperature=temperature,
             context_window=context_window,
             max_new_tokens=max_new_tokens,
@@ -324,17 +175,13 @@ class MistralRS(CustomLLM):
             output_parser=output_parser,
         )
 
-        self._runner = loader.load(
-            token_source=model_kwargs.get("token_source", {"source": "cache"})[
-                "source"
-            ],  # default source is "cache"
+        self._runner = Runner(
+            which=which,
+            token_source=model_kwargs.get("token_source", "cache"),
             max_seqs=model_kwargs.get("max_seqs", DEFAULT_MAX_SEQS),
-            logfile=None,
-            revision=model_kwargs.get("revision", None),
-            token_source_value=model_kwargs.get("token_source", {"value": None})[
-                "value"
-            ],
-            dtype=None,
+            prefix_cache_n=model_kwargs.get("prefix_cache_n", DEFAULT_PREFIX_CACHE_N),
+            no_kv_cache=model_kwargs.get("no_kv_cache", False),
+            chat_template=model_kwargs.get("chat_template", None),
         )
 
     @classmethod
@@ -368,7 +215,6 @@ class MistralRS(CustomLLM):
             model="",
             logit_bias=None,
             logprobs=False,
-            top_logprobs=None,
             **self.generate_kwargs,
         )
 
@@ -377,9 +223,9 @@ class MistralRS(CustomLLM):
         def gen() -> CompletionResponseGen:
             text = ""
             for response in streamer:
-                delta = response["choices"][0]["text"]
+                delta = response.choices[0].text
                 text += delta
-                yield CompletionResponse(delta=delta, text=text, raw=response)
+                yield CompletionResponse(delta=delta, text=text)
 
         return gen()
 
@@ -396,20 +242,34 @@ class MistralRS(CustomLLM):
             model="",
             logit_bias=None,
             logprobs=False,
-            top_logprobs=None,
             **self.generate_kwargs,
         )
         completion_response = self._runner.send_chat_completion_request(request)
-        json_resp = json.loads(completion_response)
-        return CompletionResponse(
-            text=json_resp["choices"][0]["message"]["content"],
-            raw=json_resp,
-        )
+        return CompletionResponse(text=completion_response.choices[0].message.content)
 
     @llm_completion_callback()
     def stream_complete(
         self, prompt: str, formatted: bool = False, **kwargs: Any
     ) -> CompletionResponseGen:
-        raise NotImplementedError(
-            "Streaming completions requests are not implemented yet."
+        self.generate_kwargs.update({"stream": True})
+        if not formatted:
+            prompt = self.completion_to_prompt(prompt)
+
+        request = ChatCompletionRequest(
+            messages=prompt,
+            model="",
+            logit_bias=None,
+            logprobs=False,
+            **self.generate_kwargs,
         )
+
+        streamer = self._runner.send_chat_completion_request(request)
+
+        def gen() -> CompletionResponseGen:
+            text = ""
+            for response in streamer:
+                delta = response.choices[0].text
+                text += delta
+                yield CompletionResponse(delta=delta, text=text)
+
+        return gen()

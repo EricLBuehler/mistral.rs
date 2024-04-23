@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
+from typing import Iterator
 
 @dataclass
 class ChatCompletionRequest:
@@ -8,7 +9,7 @@ class ChatCompletionRequest:
     about input data, sampling, and how to return the response.
     """
 
-    messages: list[dict[str, str]] | str
+    messages: list[Message] | str
     model: str
     logit_bias: dict[int, float] | None = None
     logprobs: bool = False
@@ -49,205 +50,242 @@ class CompletionRequest:
     grammar: str | None = None
     grammar_type: str | None = None
 
+@dataclass
+class Architecture(Enum):
+    Mistral = "mistral"
+    Gemma = "gemma"
+    Mixtral = "mixtral"
+    Llama = "llama"
+    Phi2 = "phi2"
+
+class Which(Enum):
+    """
+    Which model to select. See the docs for the `Which` enum in API.md for more details.
+    Usage:
+    ```python
+    >>> Which.Plain(...)
+    ```
+    """
+    @dataclass
+    class Plain:
+        model_id: str
+        arch: Architecture
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
+    @dataclass
+    class XLora:
+        arch: Architecture
+        xlora_model_id: str
+        order: str
+        tgt_non_granular_index: int | None = None
+        model_id: str | None = None
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
+    @dataclass
+    class Lora:
+        arch: Architecture
+        adapters_model_id: str
+        order: str
+        tgt_non_granular_index: int | None = None
+        model_id: str | None = None
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
+    @dataclass
+    class GGUF:
+        tok_model_id: str
+        quantized_model_id: str
+        quantized_filename: str
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
+    @dataclass
+    class XLoraGGUF:
+        tok_model_id: str
+        quantized_model_id: str
+        quantized_filename: str
+        xlora_model_id: str
+        order: str
+        tgt_non_granular_index: int | None = None
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
+    @dataclass
+    class LoraGGUF:
+        tok_model_id: str
+        quantized_model_id: str
+        quantized_filename: str
+        adapters_model_id: str
+        order: str
+        tgt_non_granular_index: int | None = None
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
+    @dataclass
+    class GGML:
+        tok_model_id: str
+        quantized_model_id: str
+        quantized_filename: str
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
+    @dataclass
+    class XLoraGGML:
+        tok_model_id: str
+        quantized_model_id: str
+        quantized_filename: str
+        xlora_model_id: str
+        order: str
+        tgt_non_granular_index: int | None = None
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
+    @dataclass
+    class LoraGGML:
+        tok_model_id: str
+        quantized_model_id: str
+        quantized_filename: str
+        adapters_model_id: str
+        order: str
+        tgt_non_granular_index: int | None = None
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
+
 class Runner:
-    """
-    The Runner is a class with no constructor. It is only created via one of the loader classes.
-    """
-    def send_chat_completion_request(self, request: ChatCompletionRequest) -> str:
-        """
-        Send a chat completion request to the mistral.rs engine, returning the response as a string which
-        can be parsed as JSON or a generator returning chunks.
-        """
-
-    def send_completion_request(self, request: CompletionRequest) -> str:
-        """
-        Send a chat completion request to the mistral.rs engine, returning the response as a string.
-        This can be parsed as JSON.
-        """
-
-class ModelKind(Enum):
-    """
-    The model kind is passed to a loader and specifies the type of model to load.
-    """
-
-    Normal = 1
-    XLoraNormal = 2
-    XLoraGGUF = 3
-    XLoraGGML = 4
-    QuantizedGGUF = 5
-    QuantizedGGML = 6
-
-class DType(Enum):
-    """
-    The data type for a model.
-    """
-
-    U8 = 1
-    U32 = 2
-    I64 = 3
-    BF16 = 4
-    F16 = 5
-    F32 = 6
-    F64 = 7
-
-class LoaderMixin:
-    def load(
+    def __init__(
         self,
-        token_source: str = "cache",
+        which: Which,
         max_seqs: int = 16,
-        truncate_sequence: bool = False,
-        logfile: str | None = None,
-        revision: str | None = None,
-        token_source_value: str | None = None,
-        dtype: DType | None = None,
-    ) -> Runner:
+        no_kv_cache=False,
+        prefix_cache_n: int = 16,
+        token_source="cache",
+        chat_template=None,
+    ) -> None:
         """
-         Load a model.
+        Load a model.
 
-        - `token_source="cache"`
-        Specify token source and token source value as the following pairing:
-            - "cache" -> None
-            - "literal" -> str
-            - "envvar" -> str
-            - "path" -> str
-            - "none" -> None
+        - `which` specified which model to load.
+        - `max_seqs` specifies how many sequences may be running at any time.
+        - `no_kv_cache` disables the KV cache.
+        - `prefix_cache_n` sets the number of sequences to hold in the device prefix cache, others will be evicted to CPU.
+        - `token_source` specifies where to load the HF token from.
+            The token source follows the following format: "literal:<value>", "env:<value>", "path:<value>", "cache" to use a cached token or "none" to use no token.
+        - `chat_template` specifies an optional JINJA chat template.
+            The JINJA template should have `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
+            It is used if the automatic deserialization fails. If this ends with `.json` (ie., it is a file) then that template is loaded.
+        """
+        ...
 
-        - `max_seqs`: Maximum running sequences at any time.
-
-        - `truncate_sequence`:
-        If a sequence is larger than the maximum model length, truncate the number
-        of tokens such that the sequence will fit at most the maximum length.
-        If `max_tokens` is not specified in the request, space for 10 tokens will be reserved instead.
-
-        - `logfile`: Log all responses and requests to this file.
-
-        - `revision`: HF revision.
-
-        - `token_source_value`: Value of token source value for `token_source`
-
-        - `dtype`: Datatype to load the model into, only applicable for non-quantized models.
+    def send_chat_completion_request(
+        self, request: ChatCompletionRequest
+    ) -> ChatCompletionResponse | Iterator[ChatCompletionChunkResponse]:
+        """
+        Send a chat completion request to the mistral.rs engine, returning the response object or a generator
+        over chunk objects.
         """
 
-class NormalLoader(LoaderMixin):
+    def send_completion_request(self, request: CompletionRequest) -> CompletionResponse:
+        """
+        Send a chat completion request to the mistral.rs engine, returning the response object.
+        """
+
+@dataclass
+class Role(Enum):
     """
-    A loader to load "normal" models, those without X-LoRA or quantization.
+    The role for each `Message` of a chat completion request.
     """
-    def __init__(
-        self,
-        loader_class,
-        model_id: str,
-        no_kv_cache: bool = False,
-        use_flash_attn: bool = False,
-        repeat_last_n: int = 64,
-        gqa: int | None = None,
-        chat_template: str | None = None,
-        tokenizer_json: str | None = None,
-    ):
-        """
-        - `loader_class`: Loader class.
-        - `model_id`: Base model ID, or tokenizer ID if quantized model type.
-        - `no_kv_cache=False`: Disable kv cache.
-        - `use_flash_attn=None`: Use flash attn, only used if feature is enabled.
-        - `repeat_last_n=64`: Repeat last n context window.
-        - `gqa=None`: GQA, irrelevant if non quantized model type.
-        - `chat_template=None`: Chat template literal or file.
-        - `tokenizer_json=None`: Tokenizer json file.
-        """
 
-class XLoraLoader(LoaderMixin):
-    """
-    A loader to load X-LoRA models.
-    """
-    def __init__(
-        self,
-        loader_class,
-        model_id: str,
-        no_kv_cache: bool = False,
-        use_flash_attn: bool = False,
-        repeat_last_n: int = 64,
-        gqa: int | None = None,
-        order_file: str | None = None,
-        xlora_model_id: str | None = None,
-        chat_template: str | None = None,
-        tokenizer_json: str | None = None,
-    ):
-        """
-        - `loader_class`: Loader class.
-        - `model_id`: Base model ID, or tokenizer ID if quantized model type.
-        - `no_kv_cache=False`: Disable kv cache.
-        - `use_flash_attn=None`: Use flash attn, only used if feature is enabled.
-        - `repeat_last_n=64`: Repeat last n context window.
-        - `gqa=None`: GQA, irrelevant if non quantized model type.
-        - `order_file=None`: Ordering JSON file.
-        - `xlora_model_id=None`: X-LoRA model.
-        - `chat_template=None`: Chat template literal or file.
-        - `tokenizer_json=None`: Tokenizer json file.
-        """
+    User = 1
+    Assistant = 2
 
-class QuantizedLoader(LoaderMixin):
+@dataclass
+class Message:
     """
-    A loader to load quantized models.
+    A message for a chat completion request.
     """
-    def __init__(
-        self,
-        loader_class,
-        model_id: str,
-        is_gguf: bool,
-        no_kv_cache: bool = False,
-        use_flash_attn: bool = False,
-        repeat_last_n: int = 64,
-        gqa: int | None = None,
-        quantized_model_id: str | None = None,
-        quantized_filename: str | None = None,
-        chat_template: str | None = None,
-        tokenizer_json: str | None = None,
-    ):
-        """
-        - `loader_class`: Loader class.
-        - `model_id`: Base model ID, or tokenizer ID if quantized model type.
-        - `is_gguf`: Is the quantized model GGUF.
-        - `no_kv_cache=False`: Disable kv cache.
-        - `use_flash_attn=None`: Use flash attn, only used if feature is enabled.
-        - `repeat_last_n=64`: Repeat last n context window.
-        - `gqa=None`: GQA, irrelevant if non quantized model type.
-        - `quantized_model_id=None`: Ordering JSON file.
-        - `quantized_filename=None`: X-LoRA model.
-        - `chat_template=None`: Chat template literal or file.
-        - `tokenizer_json=None`: Tokenizer json file.
-        """
 
-class XLoraQuantizedLoader(LoaderMixin):
-    """
-    A loader to load X-LoRA models with quantization.
-    """
-    def __init__(
-        self,
-        loader_class,
-        model_id: str,
-        is_gguf: bool,
-        no_kv_cache: bool = False,
-        use_flash_attn: bool = False,
-        repeat_last_n: int = 64,
-        gqa: int | None = None,
-        order_file: str | None = None,
-        quantized_model_id: str | None = None,
-        quantized_filename: str | None = None,
-        xlora_model_id: str | None = None,
-        chat_template: str | None = None,
-        tokenizer_json: str | None = None,
-    ):
-        """
-        - `loader_class`: Loader class.
-        - `model_id`: Base model ID, or tokenizer ID if quantized model type.
-        - `is_gguf`: Is the quantized model GGUF.
-        - `no_kv_cache=False`: Disable kv cache.
-        - `use_flash_attn=None`: Use flash attn, only used if feature is enabled.
-        - `repeat_last_n=64`: Repeat last n context window.
-        - `gqa=None`: GQA, irrelevant if non quantized model type.
-        - `order_file=None`: Ordering JSON file.
-        - `quantized_model_id=None`: Ordering JSON file.
-        - `quantized_filename=None`: X-LoRA model.
-        - `xlora_model_id=None`: X-LoRA model.
-        - `chat_template=None`: Chat template literal or file.
-        - `tokenizer_json=None`: Tokenizer json file.
-        """
+    role: Role
+    content: str
+
+@dataclass
+class Usage:
+    completion_tokens: int
+    prompt_tokens: int
+    total_tokens: int
+    avg_tok_per_sec: float
+    avg_prompt_tok_per_sec: float
+    avg_compl_tok_per_sec: float
+    total_time_sec: float
+    total_prompt_time_sec: float
+    total_completion_time_sec: float
+
+@dataclass
+class ResponseMessage:
+    content: str
+    role: str
+
+@dataclass
+class TopLogprob:
+    token: int
+    logprob: float
+    bytes: str
+
+@dataclass
+class ResponseLogprob:
+    token: str
+    logprob: float
+    bytes: list[int]
+    top_logprobs: list[TopLogprob]
+
+@dataclass
+class Logprobs:
+    content: list[ResponseLogprob] | None
+
+@dataclass
+class Choice:
+    finish_reason: str
+    index: int
+    message: ResponseMessage
+    logprobs: Logprobs
+
+@dataclass
+class ChatCompletionResponse:
+    id: str
+    choices: list[Choice]
+    created: int
+    model: str
+    system_fingerprint: str
+    object: str
+    usage: Usage
+
+@dataclass
+class Delta:
+    content: str
+    role: str
+
+@dataclass
+class ChunkChoice:
+    finish_reason: str | None
+    index: int
+    delta: Delta
+    logprobs: ResponseLogprob | None
+
+@dataclass
+class ChatCompletionChunkResponse:
+    id: str
+    choices: list[ChunkChoice]
+    created: int
+    model: str
+    system_fingerprint: str
+    object: str
+
+@dataclass
+class CompletionChoice:
+    finish_reason: str
+    index: int
+    text: str
+    # NOTE(EricLBuehler): `logprobs` in undocumented
+
+@dataclass
+class CompletionResponse:
+    id: str
+    choices: list[CompletionChoice]
+    created: int
+    model: str
+    system_fingerprint: str
+    object: str
+    usage: Usage

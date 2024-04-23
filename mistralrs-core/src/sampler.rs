@@ -3,6 +3,7 @@
 use std::{collections::HashMap, iter::zip, sync::Arc};
 
 use candle_core::{bail, Device, Error, Result, Tensor, D};
+use pyo3::pyclass;
 use rand::{
     distributions::{Distribution, WeightedIndex},
     SeedableRng,
@@ -11,12 +12,14 @@ use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 
 #[derive(Clone, Debug)]
+/// Stop sequences or ids.
 pub enum StopTokens {
     Seqs(Vec<String>),
     Ids(Vec<u32>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
+/// Sampling params are used to control sampling.
 pub struct SamplingParams {
     pub temperature: Option<f64>,
     pub top_k: Option<usize>,
@@ -44,6 +47,8 @@ pub struct Sampler {
     topp: f64,
 }
 
+#[pyclass]
+#[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 // Top-n logprobs element
 pub struct TopLogprob {
@@ -98,7 +103,8 @@ impl Sampler {
     ) -> Result<Vec<TopLogprob>> {
         let mut argsort_indices_sorted = argsort_indices.to_vec();
         // Sort by descending prob
-        argsort_indices_sorted.sort_by(|a, b| probs[*b].partial_cmp(&probs[*a]).unwrap());
+        argsort_indices_sorted
+            .sort_by(|a, b| probs[*b].partial_cmp(&probs[*a]).expect("No ordering."));
         // These are where the top n are
         let top_n_toks_range = 0..self.top_n_logprobs;
         // The top n's values
@@ -191,7 +197,8 @@ impl Sampler {
         let mut argsort_indices = (0..probs.len()).collect::<Vec<_>>();
 
         // Sort by descending probability.
-        argsort_indices.sort_unstable_by(|&i, &j| probs[j].partial_cmp(&probs[i]).unwrap());
+        argsort_indices
+            .sort_unstable_by(|&i, &j| probs[j].partial_cmp(&probs[i]).expect("No ordering."));
 
         if top_k > 0 {
             // Clamp smaller probabilities to zero.

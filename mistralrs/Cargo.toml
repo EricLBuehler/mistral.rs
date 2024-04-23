@@ -13,6 +13,8 @@ homepage.workspace = true
 
 [dependencies]
 mistralrs-core = { version = "0.1.0", path = "../mistralrs-core" }
+anyhow.workspace = true
+candle-core.workspace = true
 
 [features]
 cuda = ["mistralrs-core/cuda"]
@@ -21,3 +23,15 @@ metal = ["mistralrs-core/metal"]
 flash-attn = ["cuda", "mistralrs-core/flash-attn"]
 accelerate = ["mistralrs-core/accelerate"]
 mkl = ["mistralrs-core/mkl"]
+
+[[example]]
+name = "simple"
+required-features = []
+
+[[example]]
+name = "grammar"
+required-features = []
+
+[[example]]
+name = "quantized"
+required-features = []

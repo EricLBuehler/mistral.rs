@@ -1,24 +1,27 @@
-from mistralrs import MistralLoader, XLoraLoader, ChatCompletionRequest
+from mistralrs import Runner, Which, ChatCompletionRequest, Message, Role
 
-loader = XLoraLoader(
-    MistralLoader,
-    model_id="HuggingFaceH4/zephyr-7b-beta",
-    no_kv_cache=False,
-    repeat_last_n=64,
-    xlora_model_id="lamm-mit/x-lora",
-    order_file="xlora-paper-ordering.json",
+runner = Runner(
+    which=Which.XLoraGGUF(
+        tok_model_id=None,  # Automatically determine from ordering file
+        quantized_model_id="TheBloke/zephyr-7B-beta-GGUF",
+        quantized_filename="zephyr-7b-beta.Q4_0.gguf",
+        tokenizer_json=None,
+        repeat_last_n=64,
+        xlora_model_id="lamm-mit/x-lora",
+        order="orderings/xlora-paper-ordering.json",
+        tgt_non_granular_index=None,
+    )
 )
-runner = loader.load()
+
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
         model="mistral",
-        messages=[
-            {"role": "user", "content": "Tell me a story about the Rust type system."}
-        ],
+        messages=[Message(Role.User, "Tell me a story about the Rust type system.")],
         max_tokens=256,
         presence_penalty=1.0,
         top_p=0.1,
-        temperature=0.1,
+        temperature=0.5,
     )
 )
-print(res)
+print(res.choices[0].message.content)
+print(res.usage)

@@ -46,6 +46,10 @@ pub struct SchedulerOutput<'a> {
     pub prompt: Box<[&'a mut Sequence]>,
 }
 
+/// The scheduler method controld how sequences are scheduled during each
+/// step of the engine. For each scheduling step, the scheduler method is used if there
+/// are not only running, only waiting sequences, or none. If is it used, then it
+/// is used to allow waiting sequences to run.
 pub enum SchedulerMethod {
     Fixed(UsizeBounded<1, { usize::MAX }, false>),
 }
@@ -116,7 +120,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
         } else {
             // Set the min seqs to be the running ones, and the rest to be waiting (but their states are not changed!)
             // Allow the min seqs to catch up.
-            let min = *seq_buckets.keys().min().unwrap();
+            let min = *seq_buckets.keys().min().expect("No sequence buckets.");
             let min_seqs = seq_buckets.remove(&min).unwrap();
             for (_, seqs) in seq_buckets {
                 for seq in seqs {

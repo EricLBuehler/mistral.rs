@@ -92,7 +92,7 @@ fn parse_request(
     state: Arc<MistralRs>,
     tx: Sender<Response>,
 ) -> Request {
-    let repr = serde_json::to_string(&oairequest).unwrap();
+    let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
     MistralRs::maybe_log_request(state.clone(), repr);
 
     let stop_toks = match oairequest.stop_seqs {

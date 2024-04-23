@@ -4,20 +4,21 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
-use crate::deserialize_chat_template;
 use crate::models::Cache;
-use crate::pipeline::{calculate_eos_tok, ChatTemplate};
-use crate::xlora_models::{NonGranularState, XLoraConfig, XLoraGemma};
+use crate::pipeline::chat_template::calculate_eos_tokens;
+use crate::pipeline::ChatTemplate;
+use crate::utils::varbuilder_utils::from_mmaped_safetensors;
+use crate::xlora_models::{NonGranularState, XLoraConfig};
+use crate::{deserialize_chat_template, get_paths};
 use crate::{
-    models::gemma::{Config, Model as NormalModel},
-    sequence::Sequence,
-    utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
+    models::quantized_llama::ModelWeights as QLlama, sequence::Sequence, utils::tokens::get_token,
+    xlora_models::XLoraModelWeights as XLoraQLlama,
 };
 use anyhow::Result;
+use candle_core::quantized::ggml_file;
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
-use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -25,18 +26,15 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
-use thiserror::Error;
 use tokenizers::Tokenizer;
 use tracing::info;
 
 enum Model {
-    Normal(NormalModel),
-    XLoraNormal(XLoraGemma),
+    Llama(QLlama),
+    XLoraLlama(XLoraQLlama),
 }
 
-pub const GEMMA_IS_GPTX: bool = true;
-
-pub struct GemmaModelPaths<P> {
+pub struct MistralModelPaths<P> {
     tokenizer_filename: P,
     config_filename: P,
     template_filename: P,
@@ -48,7 +46,7 @@ pub struct GemmaModelPaths<P> {
     xlora_ordering: Option<Ordering>,
 }
 
-impl ModelPaths for GemmaModelPaths<PathBuf> {
+impl ModelPaths for MistralModelPaths<PathBuf> {
     fn get_config_filename(&self) -> &PathBuf {
         &self.config_filename
     }
@@ -78,24 +76,47 @@ impl ModelPaths for GemmaModelPaths<PathBuf> {
     }
 }
 
-pub struct GemmaPipeline {
+pub struct GgmlPipeline {
     model: Model,
+    config: GgmlSpecificConfig,
     tokenizer: Arc<Tokenizer>,
     tok_trie: TokTrie,
-    config: GemmaSpecificConfig,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
-    non_granular_state: Option<NonGranularState>,
     model_id: String,
-    is_lora: bool,
     eos_tok: Vec<u32>,
+    non_granular_state: Option<NonGranularState>,
+    is_lora: bool,
 }
 
-pub struct GemmaLoader {
+pub struct GgmlLoader {
     model_id: String,
-    config: GemmaSpecificConfig,
+    config: GgmlSpecificConfig,
     quantized_model_id: Option<String>,
     quantized_filename: Option<String>,
+    xlora_model_id: Option<String>,
+    xlora_order: Option<Ordering>,
+    no_kv_cache: bool,
+    chat_template: Option<String>,
+    tokenizer_json: Option<String>,
+    kind: ModelKind,
+    tgt_non_granular_index: Option<usize>,
+}
+
+#[derive(Clone, Copy, Default)]
+/// Config for a GGML loader.
+pub struct GgmlSpecificConfig {
+    pub repeat_last_n: usize,
+    pub gqa: usize,
+}
+
+#[derive(Default)]
+/// A builder for a GGML loader.
+pub struct GgmlLoaderBuilder {
+    model_id: Option<String>,
+    config: GgmlSpecificConfig,
+    quantized_model_id: String,
+    quantized_filename: String,
     xlora_model_id: Option<String>,
     kind: ModelKind,
     xlora_order: Option<Ordering>,
@@ -105,44 +126,104 @@ pub struct GemmaLoader {
     tgt_non_granular_index: Option<usize>,
 }
 
-#[derive(Clone, Copy)]
-pub struct GemmaSpecificConfig {
-    pub repeat_last_n: usize,
+impl GgmlLoaderBuilder {
+    pub fn new(
+        config: GgmlSpecificConfig,
+        chat_template: Option<String>,
+        tokenizer_json: Option<String>,
+        model_id: Option<String>,
+        quantized_model_id: String,
+        quantized_filename: String,
+    ) -> Self {
+        Self {
+            config,
+            chat_template,
+            tokenizer_json,
+            model_id,
+            kind: ModelKind::Normal,
+            quantized_filename,
+            quantized_model_id,
+            ..Default::default()
+        }
+    }
+
+    fn with_adapter(
+        mut self,
+        xlora_model_id: String,
+        xlora_order: Ordering,
+        no_kv_cache: bool,
+        tgt_non_granular_index: Option<usize>,
+    ) -> Self {
+        self.xlora_model_id = Some(xlora_model_id);
+        self.xlora_order = Some(xlora_order);
+        self.no_kv_cache = no_kv_cache;
+        self.tgt_non_granular_index = tgt_non_granular_index;
+        self.model_id = if let Some(id) = self.model_id {
+            Some(id)
+        } else {
+            info!(
+                "Using adapter base model ID: `{}`",
+                self.xlora_order.as_ref().unwrap().base_model_id
+            );
+            Some(self.xlora_order.as_ref().unwrap().base_model_id.clone())
+        };
+        self
+    }
+
+    pub fn with_xlora(
+        mut self,
+        xlora_model_id: String,
+        xlora_order: Ordering,
+        no_kv_cache: bool,
+        tgt_non_granular_index: Option<usize>,
+    ) -> Self {
+        self.kind = ModelKind::XLoraGGUF;
+        self.with_adapter(
+            xlora_model_id,
+            xlora_order,
+            no_kv_cache,
+            tgt_non_granular_index,
+        )
+    }
+
+    pub fn with_lora(
+        mut self,
+        xlora_model_id: String,
+        xlora_order: Ordering,
+        no_kv_cache: bool,
+        tgt_non_granular_index: Option<usize>,
+    ) -> Self {
+        self.kind = ModelKind::LoraGGUF;
+        self.with_adapter(
+            xlora_model_id,
+            xlora_order,
+            no_kv_cache,
+            tgt_non_granular_index,
+        )
+    }
+
+    pub fn build(self) -> Box<dyn Loader> {
+        Box::new(GgmlLoader {
+            model_id: self.model_id.unwrap(),
+            config: self.config,
+            xlora_model_id: self.xlora_model_id,
+            kind: self.kind,
+            xlora_order: self.xlora_order,
+            no_kv_cache: self.no_kv_cache,
+            chat_template: self.chat_template,
+            tokenizer_json: self.tokenizer_json,
+            tgt_non_granular_index: self.tgt_non_granular_index,
+            quantized_filename: Some(self.quantized_filename),
+            quantized_model_id: Some(self.quantized_model_id),
+        })
+    }
 }
 
-fn default_max_position_embeddings() -> usize {
-    4096
-}
-
-#[derive(Deserialize)]
-pub struct BasicConfig {
-    pub attention_bias: bool,
-    pub head_dim: usize,
-    pub hidden_act: candle_nn::Activation,
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub num_attention_heads: usize,
-    pub num_hidden_layers: usize,
-    pub num_key_value_heads: usize,
-    pub rms_norm_eps: f64,
-    pub rope_theta: f64,
-    pub vocab_size: usize,
-
-    #[serde(default = "default_max_position_embeddings")]
-    pub max_position_embeddings: usize,
-}
-
-#[derive(Error, Debug)]
-enum TokenizerError {
-    #[error("`{0}`")]
-    Error(String),
-}
-
-impl GemmaLoader {
+impl GgmlLoader {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        model_id: String,
-        config: GemmaSpecificConfig,
+        model_id: Option<String>,
+        config: GgmlSpecificConfig,
         quantized_model_id: Option<String>,
         quantized_filename: Option<String>,
         xlora_model_id: Option<String>,
@@ -153,82 +234,45 @@ impl GemmaLoader {
         tokenizer_json: Option<String>,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
+        let model_id = if let Some(id) = model_id {
+            id
+        } else {
+            info!(
+                "Using adapter base model ID: `{}`",
+                xlora_order.as_ref().unwrap().base_model_id
+            );
+            xlora_order.as_ref().unwrap().base_model_id.clone()
+        };
         Self {
             model_id,
             config,
             quantized_model_id,
             quantized_filename,
             xlora_model_id,
-            kind,
             xlora_order,
             no_kv_cache,
             chat_template,
             tokenizer_json,
+            kind,
             tgt_non_granular_index,
         }
     }
 }
 
-impl Loader for GemmaLoader {
+impl Loader for GgmlLoader {
     fn download_model(
         &self,
         revision: Option<String>,
         token_source: TokenSource,
     ) -> Result<Box<dyn ModelPaths>> {
-        let api = ApiBuilder::new()
-            .with_progress(true)
-            .with_token(Some(get_token(&token_source)?))
-            .build()?;
-        let revision = revision.unwrap_or("main".to_string());
-        let api = api.repo(Repo::with_revision(
-            self.model_id.clone(),
-            RepoType::Model,
-            revision.clone(),
-        ));
-
-        let tokenizer_filename = if let Some(ref p) = self.tokenizer_json {
-            info!("Using tokenizer.json at `{p}`");
-            PathBuf::from_str(p)?
-        } else {
-            api.get("tokenizer.json")?
-        };
-
-        let config_filename = api.get("config.json")?;
-
-        let filenames = get_model_paths(
-            revision.clone(),
+        get_paths!(
+            MistralModelPaths,
             &token_source,
-            &self.quantized_model_id,
-            &self.quantized_filename,
-            &api,
-        )?;
-
-        let XLoraPaths {
-            adapter_configs,
-            adapter_safetensors,
-            classifier_path,
-            xlora_order,
-            xlora_config,
-        } = get_xlora_paths(
-            &self.xlora_model_id,
-            &token_source,
-            revision.clone(),
-            &self.xlora_order,
-        )?;
-
-        let template_filename = api.get("tokenizer_config.json")?;
-
-        Ok(Box::new(GemmaModelPaths {
-            tokenizer_filename,
-            config_filename,
-            filenames,
-            xlora_adapter_configs: adapter_configs,
-            xlora_adapter_filenames: adapter_safetensors,
-            classifier_path,
-            classifier_config: xlora_config,
-            xlora_ordering: xlora_order,
-            template_filename,
-        }))
+            revision,
+            self,
+            self.quantized_model_id,
+            self.quantized_filename
+        )
     }
 
     fn _setup_model(
@@ -237,54 +281,22 @@ impl Loader for GemmaLoader {
         dtype: Option<DType>,
         device: &Device,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
-        let basic_config: BasicConfig =
-            serde_json::from_slice(&std::fs::read(paths.get_config_filename())?)?;
-        let config = Config {
-            vocab_size: basic_config.vocab_size,
-            hidden_size: basic_config.hidden_size,
-            intermediate_size: basic_config.intermediate_size,
-            num_hidden_layers: basic_config.num_hidden_layers,
-            num_attention_heads: basic_config.num_attention_heads,
-            num_key_value_heads: basic_config.num_key_value_heads,
-            hidden_act: basic_config.hidden_act,
-            max_position_embeddings: basic_config.max_position_embeddings,
-            rms_norm_eps: basic_config.rms_norm_eps,
-            rope_theta: basic_config.rope_theta,
-            attention_bias: basic_config.attention_bias,
-            head_dim: basic_config.head_dim,
-        };
         let default_dtype = if device.is_cuda() {
             DType::BF16
         } else {
             DType::F32
         };
 
-        info!("Model config: {config:?}");
+        let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
+        let model = ggml_file::Content::read(&mut file, device)
+            .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
 
         let mut is_lora = false;
         let model = match self.kind {
-            ModelKind::QuantizedGGUF => unreachable!(),
-            ModelKind::QuantizedGGML => unreachable!(),
-            ModelKind::Normal => {
+            ModelKind::QuantizedGGML => Model::Llama(QLlama::from_ggml(model, self.config.gqa)?),
+            ModelKind::XLoraGGML => {
                 let vb = from_mmaped_safetensors(
-                    paths.get_weight_filenames().to_vec(),
-                    Vec::new(),
-                    dtype.unwrap_or(default_dtype),
-                    device,
-                    false,
-                )?;
-
-                let model = NormalModel::new(&config, vb)?;
-                Model::Normal(model)
-            }
-            ModelKind::XLoraNormal => {
-                let mut safetensors_paths = paths.get_weight_filenames().iter().collect::<Vec<_>>();
-                safetensors_paths.push(paths.get_classifier_path().as_ref().unwrap());
-                let vb = from_mmaped_safetensors(
-                    safetensors_paths
-                        .iter()
-                        .map(|x| (*x).to_owned())
-                        .collect::<Vec<_>>(),
+                    vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()],
                     paths
                         .get_adapter_filenames()
                         .as_ref()
@@ -297,92 +309,77 @@ impl Loader for GemmaLoader {
                     false,
                 )?;
 
-                let model = XLoraGemma::new(
-                    &config,
-                    vb,
+                Model::XLoraLlama(XLoraQLlama::from_ggml(
+                    model,
+                    self.config.gqa,
                     paths.get_adapter_configs().as_ref().unwrap(),
+                    &vb,
+                    paths.get_ordering().as_ref().unwrap(),
                     Some(paths.get_classifier_config().as_ref().unwrap().clone()),
-                    paths.get_ordering().as_ref().unwrap().clone(),
-                )?;
-                Model::XLoraNormal(model)
+                )?)
             }
-            ModelKind::XLoraGGUF => unreachable!(),
-            ModelKind::XLoraGGML => unreachable!(),
-            ModelKind::LoraGGUF => unreachable!(),
-            ModelKind::LoraGGML => unreachable!(),
-            ModelKind::LoraNormal => {
-                let mut safetensors_paths = paths.get_weight_filenames().iter().collect::<Vec<_>>();
-                safetensors_paths.push(paths.get_classifier_path().as_ref().unwrap());
-                let vb = from_mmaped_safetensors(
-                    safetensors_paths
-                        .iter()
-                        .map(|x| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    paths
-                        .get_adapter_filenames()
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(|(_, x)| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    dtype.unwrap_or(default_dtype),
-                    device,
-                    false,
-                )?;
-
-                let model = XLoraGemma::new(
-                    &config,
-                    vb,
-                    paths.get_adapter_configs().as_ref().unwrap(),
-                    Some(paths.get_classifier_config().as_ref().unwrap().clone()),
-                    paths.get_ordering().as_ref().unwrap().clone(),
-                )?;
+            ModelKind::LoraGGML => {
                 is_lora = true;
-                Model::XLoraNormal(model)
+                let vb = from_mmaped_safetensors(
+                    vec![],
+                    paths
+                        .get_adapter_filenames()
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .map(|(_, x)| (*x).to_owned())
+                        .collect::<Vec<_>>(),
+                    dtype.unwrap_or(default_dtype),
+                    device,
+                    false,
+                )?;
+
+                Model::XLoraLlama(XLoraQLlama::from_ggml(
+                    model,
+                    self.config.gqa,
+                    paths.get_adapter_configs().as_ref().unwrap(),
+                    &vb,
+                    paths.get_ordering().as_ref().unwrap(),
+                    Some(paths.get_classifier_config().as_ref().unwrap().clone()),
+                )?)
             }
+            _ => unreachable!(),
         };
 
-        let tokenizer = Tokenizer::from_file(paths.get_tokenizer_filename())
-            .map_err(|e| TokenizerError::Error(e.to_string()))?;
+        let tokenizer =
+            Tokenizer::from_file(paths.get_tokenizer_filename()).map_err(anyhow::Error::msg)?;
 
         let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
 
-        info!(
-            "bos_tok = {}, eos_tok = {}, unk_tok = {}",
-            chat_template.bos_tok(),
-            chat_template.eos_tok(),
-            chat_template.eos_tok()
-        );
-
-        Ok(Box::new(Mutex::new(GemmaPipeline {
+        Ok(Box::new(Mutex::new(GgmlPipeline {
             model,
-            eos_tok: calculate_eos_tok(vec![chat_template.eos_tok()], &tokenizer),
+            config: self.config,
+            eos_tok: calculate_eos_tokens(&chat_template, &tokenizer),
             tok_trie: build_tok_trie(tokenizer.clone()),
             tokenizer: tokenizer.into(),
-            config: self.config,
             no_kv_cache: self.no_kv_cache,
             chat_template,
+            model_id: self.model_id.clone(),
             non_granular_state: self.tgt_non_granular_index.map(|tgt_non_granular_index| {
                 NonGranularState {
                     non_granular_index: Arc::new(Mutex::new(0)),
                     tgt_non_granular_index,
                 }
             }),
-            model_id: self.model_id.clone(),
             is_lora,
         })))
     }
 
     fn get_id(&self) -> &str {
-        &self.model_id
+        self.xlora_model_id.as_deref().unwrap_or(&self.model_id)
     }
 
     fn get_kind(&self) -> ModelKind {
-        self.kind
+        ModelKind::QuantizedGGUF
     }
 }
 
-impl Pipeline for GemmaPipeline {
+impl Pipeline for GgmlPipeline {
     fn forward(
         &mut self,
         input_toks: &[&mut Sequence],
@@ -405,13 +402,13 @@ impl Pipeline for GemmaPipeline {
         )
         .unwrap();
         match self.model {
-            Model::Normal(ref mut model) => model.forward(
+            Model::Llama(ref mut model) => model.forward(
                 &input_ids,
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
             ),
-            Model::XLoraNormal(ref mut model) => model.forward(
+            Model::XLoraLlama(ref mut model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,
@@ -426,8 +423,8 @@ impl Pipeline for GemmaPipeline {
     }
     fn device(&self) -> &Device {
         match self.model {
-            Model::Normal(ref model) => &model.device,
-            Model::XLoraNormal(ref model) => &model.device,
+            Model::Llama(ref model) => &model.device,
+            Model::XLoraLlama(ref model) => &model.device,
         }
     }
     fn num_hidden_layers(&self) -> usize {
@@ -435,8 +432,8 @@ impl Pipeline for GemmaPipeline {
     }
     fn cache(&self) -> &Cache {
         match self.model {
-            Model::Normal(ref model) => &model.cache,
-            Model::XLoraNormal(ref model) => &model.cache,
+            Model::Llama(ref model) => &model.cache,
+            Model::XLoraLlama(ref model) => &model.cache,
         }
     }
     fn get_repeat_last_n(&self) -> usize {
@@ -453,14 +450,14 @@ impl Pipeline for GemmaPipeline {
     }
     fn get_max_seq_len(&self) -> usize {
         match &self.model {
-            Model::Normal(model) => model.max_seq_len,
-            Model::XLoraNormal(model) => model.max_seq_len,
+            Model::Llama(model) => model.max_seq_len,
+            Model::XLoraLlama(model) => model.max_seq_len,
         }
     }
     fn is_xlora(&self) -> bool {
         match &self.model {
-            Model::Normal(_) => false,
-            Model::XLoraNormal(_) => !self.is_lora,
+            Model::Llama(_) => false,
+            Model::XLoraLlama(_) => !self.is_lora,
         }
     }
     fn has_no_kv_cache(&self) -> bool {
@@ -470,7 +467,7 @@ impl Pipeline for GemmaPipeline {
         &self.chat_template
     }
     fn get_non_granular_state(&self) -> &Option<NonGranularState> {
-        &self.non_granular_state
+        &None
     }
     fn tok_trie(&self) -> &TokTrie {
         &self.tok_trie

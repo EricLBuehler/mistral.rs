@@ -7,14 +7,44 @@ use candle_nn::{RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_b as linear, LinearLayerLike, LoraConfig, Ordering};
 
 use crate::{
-    models::{gemma::Config, Cache, RmsNorm},
-    pipeline::{extract_logits, GEMMA_IS_GPTX},
+    models::{gemma::Config, repeat_kv, Cache},
+    pipeline::{extract_logits, NormalModel},
 };
 
 use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
 
 fn default_max_position_embeddings() -> usize {
     4096
+}
+
+#[derive(Debug, Clone)]
+struct RmsNorm {
+    weight: Tensor,
+    eps: f64,
+}
+
+impl RmsNorm {
+    fn new(dim: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        let weight = vb.get(dim, "weight")?;
+        Ok(Self { weight, eps })
+    }
+}
+
+impl Module for RmsNorm {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let x_dtype = x.dtype();
+        let internal_dtype = match x_dtype {
+            DType::F16 | DType::BF16 => DType::F32,
+            d => d,
+        };
+        let hidden_size = x.dim(D::Minus1)?;
+        let x = x.to_dtype(internal_dtype)?;
+        let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
+        let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
+        x_normed
+            .to_dtype(x_dtype)?
+            .broadcast_mul(&(&self.weight + 1.0)?)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -30,7 +60,7 @@ impl MLP {
     fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
     ) -> Result<Self> {
@@ -67,7 +97,7 @@ impl MLP {
             gate_proj,
             up_proj,
             down_proj,
-            act_fn: cfg.hidden_act,
+            act_fn: cfg.hidden_act()?,
         })
     }
 
@@ -115,7 +145,7 @@ impl Attention {
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
     ) -> Result<Self> {
@@ -172,18 +202,6 @@ impl Attention {
             head_dim,
             rotary_emb,
         })
-    }
-
-    fn repeat_kv(&self, xs: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_kv_groups;
-        if n_rep == 1 {
-            Ok(xs)
-        } else {
-            let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
-            xs.unsqueeze(2)?
-                .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
-        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -249,8 +267,8 @@ impl Attention {
         };
         *kv_cache = Some((k.clone(), v.clone()));
 
-        let k = self.repeat_kv(k)?.contiguous()?;
-        let v = self.repeat_kv(v)?.contiguous()?;
+        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
+        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
         let attn_output = {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
@@ -285,7 +303,7 @@ impl DecoderLayer {
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
     ) -> Result<Self> {
@@ -360,9 +378,10 @@ impl XLoraModel {
     pub fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
+        is_gptx: bool,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
@@ -372,7 +391,7 @@ impl XLoraModel {
             cfg.head_dim,
             cfg.max_position_embeddings,
             vb.device(),
-            GEMMA_IS_GPTX,
+            is_gptx,
             vb.dtype(),
         )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
@@ -491,7 +510,7 @@ impl XLoraModel {
                 attention_mask.as_ref(),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
-                cache.get_mut(i).unwrap(),
+                &mut cache[i],
                 scalings.clone(),
                 self.xlora_classifier
                     .as_ref()
@@ -579,6 +598,54 @@ impl XLoraModel {
                 context_lens,
             )
         }
+    }
+}
+
+impl NormalModel for XLoraModel {
+    fn forward(
+        &mut self,
+        _input_ids: &Tensor,
+        _seqlen_offsets: &[usize],
+        _start_offsets_kernel: Tensor,
+        _context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        unreachable!()
+    }
+    fn xlora_forward(
+        &mut self,
+        input_ids: &Tensor,
+        input_ids_full: &Tensor,
+        seqlen_offsets: &[usize],
+        seqlen_offsets_full: &[usize],
+        start_offsets_kernel: Tensor,
+        start_offsets_kernel_full: Tensor,
+        no_kv_cache: bool,
+        non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        self.forward(
+            input_ids,
+            input_ids_full,
+            seqlen_offsets,
+            seqlen_offsets_full,
+            start_offsets_kernel,
+            start_offsets_kernel_full,
+            no_kv_cache,
+            non_granular_state,
+            context_lens,
+        )
+    }
+    fn cache(&self) -> &Cache {
+        &self.cache
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn is_xlora(&self) -> bool {
+        false
+    }
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
     }
 }
 

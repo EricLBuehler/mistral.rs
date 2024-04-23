@@ -66,7 +66,7 @@ impl futures::Stream for Streamer {
                     Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
                 }
                 Response::Chunk(response) => {
-                    if response.choices.iter().all(|x| x.stopreason.is_some()) {
+                    if response.choices.iter().all(|x| x.finish_reason.is_some()) {
                         self.is_done = true;
                     }
                     MistralRs::maybe_log_response(self.state.clone(), &response);
@@ -150,7 +150,7 @@ fn parse_request(
     state: Arc<MistralRs>,
     tx: Sender<Response>,
 ) -> Request {
-    let repr = serde_json::to_string(&oairequest).unwrap();
+    let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
     MistralRs::maybe_log_request(state.clone(), repr);
 
     let stop_toks = match oairequest.stop_seqs {

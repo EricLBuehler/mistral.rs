@@ -8,10 +8,10 @@ use std::sync::Arc;
 
 use crate::{
     device_map::DeviceMapper,
-    pipeline::{extract_logits, MISTRAL_IS_GPTX},
+    pipeline::{extract_logits, NormalModel},
 };
 
-use super::{flash_attn, Cache, RmsNorm};
+use super::{flash_attn, repeat_kv, Cache, RmsNorm};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -103,16 +103,6 @@ impl Attention {
         })
     }
 
-    fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_kv_groups;
-        if n_rep == 1 {
-            Ok(x)
-        } else {
-            let (b_sz, n_kv_head, seq_len, head_dim) = x.dims4()?;
-            Tensor::cat(&vec![&x; n_rep], 2)?.reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))
-        }
-    }
-
     fn forward(
         &mut self,
         xs: &Tensor,
@@ -157,8 +147,8 @@ impl Attention {
         };
         *kv_cache = Some((k.clone(), v.clone()));
 
-        let k = self.repeat_kv(k)?;
-        let v = self.repeat_kv(v)?;
+        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
+        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
         let attn_output = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
@@ -253,7 +243,7 @@ pub struct Model {
 impl Model {
     pub fn new(
         cfg: &Config,
-        vb: VarBuilder,
+        vb: VarBuilder, is_gptx: bool,
         mapper: Box<dyn DeviceMapper + Send + Sync>,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
@@ -265,7 +255,7 @@ impl Model {
             head_dim,
             cfg.max_position_embeddings,
             vb.device(),
-            MISTRAL_IS_GPTX,
+            is_gptx,
             vb.dtype(),
         )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
@@ -368,10 +358,53 @@ impl Model {
                 attention_mask.as_ref(),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
-                cache.get_mut(i).unwrap(),
+                &mut cache[i],
             )?;
             xs = self.mapper.map(xs, i)?;
         }
         extract_logits(&xs.apply(&self.norm)?.apply(&self.lm_head)?, context_lens)
+    }
+}
+
+impl NormalModel for Model {
+    fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        self.forward(
+            input_ids,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+        )
+    }
+    fn xlora_forward(
+        &mut self,
+        _input_ids: &Tensor,
+        _input_ids_full: &Tensor,
+        _seqlen_offsets: &[usize],
+        _seqlen_offsets_full: &[usize],
+        _start_offsets_kernel: Tensor,
+        _start_offsets_kernel_full: Tensor,
+        _no_kv_cache: bool,
+        _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        _context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        unimplemented!()
+    }
+    fn cache(&self) -> &Cache {
+        &self.cache
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn is_xlora(&self) -> bool {
+        false
+    }
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
     }
 }

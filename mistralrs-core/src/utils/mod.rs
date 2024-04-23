@@ -19,8 +19,9 @@ macro_rules! handle_seq_error {
             Ok(v) => v,
             Err(e) => {
                 use $crate::response::Response;
-                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                $response.send(Response::InternalError(e.into())).unwrap();
+                $response
+                    .send(Response::InternalError(e.into()))
+                    .expect("Expected receiver.");
                 return;
             }
         }
@@ -34,8 +35,9 @@ macro_rules! handle_seq_error_ok {
             Ok(v) => v,
             Err(e) => {
                 use $crate::response::Response;
-                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                $response.send(Response::InternalError(e.into())).unwrap();
+                $response
+                    .send(Response::InternalError(e.into()))
+                    .expect("Expected receiver.");
                 return Ok(());
             }
         }
@@ -50,8 +52,9 @@ macro_rules! handle_seq_error_stateaware {
             Err(e) => {
                 use $crate::response::Response;
                 use $crate::sequence::SequenceState;
-                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                $seq.responder().send(Response::InternalError(e.into())).unwrap();
+                $seq.responder()
+                    .send(Response::InternalError(e.into()))
+                    .expect("Expected receiver.");
                 $seq.set_state(SequenceState::Error);
                 return;
             }
@@ -67,8 +70,9 @@ macro_rules! handle_seq_error_stateaware_ok {
             Err(e) => {
                 use $crate::response::Response;
                 use $crate::sequence::SequenceState;
-                // NOTE(EricLBuehler): Unwrap reasoning: The receiver should really be there, otherwise it is their fault.
-                $seq.responder().send(Response::InternalError(e.into())).unwrap();
+                $seq.responder()
+                    .send(Response::InternalError(e.into()))
+                    .expect("Expected receiver.");
                 $seq.set_state(SequenceState::Error);
                 return Ok(());
             }
@@ -78,7 +82,7 @@ macro_rules! handle_seq_error_stateaware_ok {
 
 #[macro_export]
 macro_rules! handle_pipeline_forward_error {
-    ($stage: tt, $fallible:expr, $seq_slice:expr, $pipeline:expr, $label:tt) => {
+    ($stage: tt, $fallible:expr, $seq_slice:expr, $pipeline:expr, $label:tt, $prefix_cacher:expr) => {
         match $fallible {
             Ok(v) => v,
             Err(e) => {
@@ -100,7 +104,7 @@ macro_rules! handle_pipeline_forward_error {
 
                     if seq.get_mut_group().is_chat {
                         let choice = Choice {
-                            stopreason: "error".to_string(),
+                            finish_reason: "error".to_string(),
                             index: seq.get_response_index(),
                             message: ResponseMessage {
                                 content: res,
@@ -111,7 +115,7 @@ macro_rules! handle_pipeline_forward_error {
                         seq.add_choice_to_group(choice);
                     } else {
                         let choice = CompletionChoice {
-                            stopreason: "error".to_string(),
+                            finish_reason: "error".to_string(),
                             index: seq.get_response_index(),
                             text: res,
                             logprobs: None,
@@ -165,6 +169,7 @@ macro_rules! handle_pipeline_forward_error {
                 }
 
                 Engine::set_none_cache(&mut *$pipeline);
+                $prefix_cacher.evict_all_to_cpu().unwrap();
 
                 continue $label;
             }

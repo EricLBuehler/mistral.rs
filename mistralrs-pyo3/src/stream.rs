@@ -1,6 +1,6 @@
 use std::sync::mpsc::Receiver;
 
-use mistralrs::Response;
+use mistralrs_core::{ChatCompletionChunkResponse, Response};
 use pyo3::{exceptions::PyValueError, pyclass, pymethods, PyRef, PyRefMut, PyResult};
 
 #[pyclass]
@@ -20,7 +20,7 @@ impl ChatCompletionStreamer {
     fn __iter__(this: PyRef<'_, Self>) -> PyRef<'_, Self> {
         this
     }
-    fn __next__(mut this: PyRefMut<'_, Self>) -> Option<PyResult<String>> {
+    fn __next__(mut this: PyRefMut<'_, Self>) -> Option<PyResult<ChatCompletionChunkResponse>> {
         if this.is_done {
             return None;
         }
@@ -30,10 +30,10 @@ impl ChatCompletionStreamer {
                 Response::ValidationError(e) => Some(Err(PyValueError::new_err(e.to_string()))),
                 Response::InternalError(e) => Some(Err(PyValueError::new_err(e.to_string()))),
                 Response::Chunk(response) => {
-                    if response.choices.iter().all(|x| x.stopreason.is_some()) {
+                    if response.choices.iter().all(|x| x.finish_reason.is_some()) {
                         this.is_done = true;
                     }
-                    Some(Ok(serde_json::to_string(&response).unwrap()))
+                    Some(Ok(response))
                 }
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),

@@ -12,9 +12,9 @@ use candle_nn::{
 };
 use serde::Deserialize;
 
-use crate::pipeline::{extract_logits, PHI2_IS_GPTX};
+use crate::pipeline::{extract_logits, NormalModel};
 
-use super::{flash_attn, Cache};
+use super::{flash_attn, repeat_kv, Cache};
 
 // https://huggingface.co/microsoft/phi-2/blob/main/configuration_phi.py
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -104,7 +104,7 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 }
 
 impl Attention {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &Config, vb: VarBuilder, is_gptx: bool) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads();
         let head_dim = cfg.head_dim();
@@ -119,7 +119,7 @@ impl Attention {
             (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
             cfg.max_position_embeddings,
             vb.device(),
-            PHI2_IS_GPTX,
+            is_gptx,
             vb.dtype(),
         )?;
         let (q_layernorm, k_layernorm) = if cfg.qk_layernorm {
@@ -144,18 +144,6 @@ impl Attention {
             head_dim,
             use_flash_attn: cfg.use_flash_attn,
         })
-    }
-
-    fn repeat_kv(&self, xs: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_heads / self.num_kv_heads;
-        if n_rep == 1 {
-            Ok(xs)
-        } else {
-            let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
-            xs.unsqueeze(2)?
-                .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
-        }
     }
 
     fn forward(
@@ -215,9 +203,8 @@ impl Attention {
         };
         *kv_cache = Some((k.clone(), v.clone()));
 
-        // Repeat kv.
-        let k = self.repeat_kv(k)?.contiguous()?;
-        let v = self.repeat_kv(v)?.contiguous()?;
+        let k = repeat_kv(k, self.num_heads / self.num_kv_heads)?.contiguous()?;
+        let v = repeat_kv(v, self.num_heads / self.num_kv_heads)?.contiguous()?;
 
         let attn_output = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
@@ -259,8 +246,8 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let self_attn = Attention::new(cfg, vb.pp("self_attn"))?;
+    fn new(cfg: &Config, vb: VarBuilder, is_gptx: bool) -> Result<Self> {
+        let self_attn = Attention::new(cfg, vb.pp("self_attn"), is_gptx)?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
         let input_layernorm = layer_norm(
             cfg.hidden_size,
@@ -304,7 +291,7 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder, is_gptx: bool) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
         let final_layernorm = layer_norm(
@@ -315,7 +302,7 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_m = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
-            let layer = DecoderLayer::new(cfg, vb_m.pp(layer_idx))?;
+            let layer = DecoderLayer::new(cfg, vb_m.pp(layer_idx), is_gptx)?;
             layers.push(layer)
         }
         let lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
@@ -351,12 +338,55 @@ impl Model {
                 mask.as_ref(),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
-                cache.get_mut(i).unwrap(),
+                &mut cache[i],
             )?;
         }
         extract_logits(
             &xs.apply(&self.final_layernorm)?.apply(&self.lm_head)?,
             context_lens,
         )
+    }
+}
+
+impl NormalModel for Model {
+    fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        self.forward(
+            input_ids,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+        )
+    }
+    fn xlora_forward(
+        &mut self,
+        _input_ids: &Tensor,
+        _input_ids_full: &Tensor,
+        _seqlen_offsets: &[usize],
+        _seqlen_offsets_full: &[usize],
+        _start_offsets_kernel: Tensor,
+        _start_offsets_kernel_full: Tensor,
+        _no_kv_cache: bool,
+        _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        _context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        unimplemented!()
+    }
+    fn cache(&self) -> &Cache {
+        &self.cache
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn is_xlora(&self) -> bool {
+        false
+    }
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
     }
 }

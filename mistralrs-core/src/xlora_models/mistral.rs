@@ -7,8 +7,8 @@ use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 use std::sync::Arc;
 
 use crate::{
-    models::{flash_attn, mistral::Config, Cache, RmsNorm},
-    pipeline::{extract_logits, MISTRAL_IS_GPTX},
+    models::{flash_attn, mistral::Config, repeat_kv, Cache, RmsNorm},
+    pipeline::{extract_logits, NormalModel},
 };
 
 use super::{classifier::XLoraClassifier, config::XLoraConfig, NonGranularState, ScalingsMaker};
@@ -26,7 +26,7 @@ impl MLP {
     fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
     ) -> Result<Self> {
@@ -110,7 +110,7 @@ impl Attention {
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
     ) -> Result<Self> {
@@ -164,18 +164,6 @@ impl Attention {
             rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
         })
-    }
-
-    fn repeat_kv(&self, xs: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_kv_groups;
-        if n_rep == 1 {
-            Ok(xs)
-        } else {
-            let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
-            xs.unsqueeze(2)?
-                .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
-        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -241,8 +229,8 @@ impl Attention {
         };
         *kv_cache = Some((k.clone(), v.clone()));
 
-        let k = self.repeat_kv(k)?;
-        let v = self.repeat_kv(v)?;
+        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
+        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
         let attn_output = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
@@ -286,7 +274,7 @@ impl DecoderLayer {
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
     ) -> Result<Self> {
@@ -361,9 +349,10 @@ impl XLoraModel {
     pub fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
+        is_gptx: bool,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
@@ -374,7 +363,7 @@ impl XLoraModel {
             head_dim,
             cfg.max_position_embeddings,
             vb.device(),
-            MISTRAL_IS_GPTX,
+            is_gptx,
             vb.dtype(),
         )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
@@ -502,7 +491,7 @@ impl XLoraModel {
                 attention_mask.as_ref(),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
-                cache.get_mut(i).unwrap(),
+                &mut cache[i],
                 scalings.clone(),
                 self.xlora_classifier
                     .as_ref()
@@ -590,6 +579,54 @@ impl XLoraModel {
                 context_lens,
             )
         }
+    }
+}
+
+impl NormalModel for XLoraModel {
+    fn forward(
+        &mut self,
+        _input_ids: &Tensor,
+        _seqlen_offsets: &[usize],
+        _start_offsets_kernel: Tensor,
+        _context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        unreachable!()
+    }
+    fn xlora_forward(
+        &mut self,
+        input_ids: &Tensor,
+        input_ids_full: &Tensor,
+        seqlen_offsets: &[usize],
+        seqlen_offsets_full: &[usize],
+        start_offsets_kernel: Tensor,
+        start_offsets_kernel_full: Tensor,
+        no_kv_cache: bool,
+        non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        self.forward(
+            input_ids,
+            input_ids_full,
+            seqlen_offsets,
+            seqlen_offsets_full,
+            start_offsets_kernel,
+            start_offsets_kernel_full,
+            no_kv_cache,
+            non_granular_state,
+            context_lens,
+        )
+    }
+    fn cache(&self) -> &Cache {
+        &self.cache
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn is_xlora(&self) -> bool {
+        true
+    }
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
     }
 }
 

@@ -2,12 +2,12 @@
 
 use std::sync::Arc;
 
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{linear_b as linear, Linear, RotaryEmbedding, VarBuilder};
+use candle_core::{DType, Device, Module, Result, Tensor, D};
+use candle_nn::{linear_b as linear, Activation, Linear, RotaryEmbedding, VarBuilder};
 
-use crate::pipeline::{extract_logits, GEMMA_IS_GPTX};
+use crate::pipeline::{extract_logits, NormalModel};
 
-use super::{Cache, RmsNorm};
+use super::{repeat_kv, Cache};
 
 fn default_max_position_embeddings() -> usize {
     4096
@@ -17,7 +17,9 @@ fn default_max_position_embeddings() -> usize {
 pub struct Config {
     pub attention_bias: bool,
     pub head_dim: usize,
-    pub hidden_act: candle_nn::Activation,
+    // The code gemma configs include both hidden_act and hidden_activation.
+    pub hidden_act: Option<Activation>,
+    pub hidden_activation: Option<Activation>,
     pub hidden_size: usize,
     pub intermediate_size: usize,
     pub num_attention_heads: usize,
@@ -29,6 +31,48 @@ pub struct Config {
 
     #[serde(default = "default_max_position_embeddings")]
     pub max_position_embeddings: usize,
+}
+
+impl Config {
+    pub fn hidden_act(&self) -> Result<Activation> {
+        match (self.hidden_act, self.hidden_activation) {
+            (None, Some(act)) | (Some(act), None) => Ok(act),
+            (Some(_), Some(_)) => {
+                candle_core::bail!("both hidden_act and hidden_activation are set")
+            }
+            (None, None) => candle_core::bail!("none of hidden_act and hidden_activation are set"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RmsNorm {
+    weight: Tensor,
+    eps: f64,
+}
+
+impl RmsNorm {
+    fn new(dim: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        let weight = vb.get(dim, "weight")?;
+        Ok(Self { weight, eps })
+    }
+}
+
+impl Module for RmsNorm {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let x_dtype = x.dtype();
+        let internal_dtype = match x_dtype {
+            DType::F16 | DType::BF16 => DType::F32,
+            d => d,
+        };
+        let hidden_size = x.dim(D::Minus1)?;
+        let x = x.to_dtype(internal_dtype)?;
+        let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
+        let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
+        x_normed
+            .to_dtype(x_dtype)?
+            .broadcast_mul(&(&self.weight + 1.0)?)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -51,7 +95,7 @@ impl MLP {
             gate_proj,
             up_proj,
             down_proj,
-            act_fn: cfg.hidden_act,
+            act_fn: cfg.hidden_act()?,
         })
     }
 }
@@ -102,18 +146,6 @@ impl Attention {
         })
     }
 
-    fn repeat_kv(&self, xs: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_kv_groups;
-        if n_rep == 1 {
-            Ok(xs)
-        } else {
-            let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
-            xs.unsqueeze(2)?
-                .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
-        }
-    }
-
     fn forward(
         &mut self,
         xs: &Tensor,
@@ -158,8 +190,8 @@ impl Attention {
         };
         *kv_cache = Some((k.clone(), v.clone()));
 
-        let k = self.repeat_kv(k)?.contiguous()?;
-        let v = self.repeat_kv(v)?.contiguous()?;
+        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
+        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
         let attn_output = {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
@@ -244,7 +276,7 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder, is_gptx: bool) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
@@ -253,7 +285,7 @@ impl Model {
             cfg.head_dim,
             cfg.max_position_embeddings,
             vb.device(),
-            GEMMA_IS_GPTX,
+            is_gptx,
             vb.dtype(),
         )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
@@ -297,22 +329,6 @@ impl Model {
             .to_dtype(self.dtype)
     }
 
-    fn calculate_past_kv_len(&mut self, seq_len: usize) -> Result<usize> {
-        let cache = self.cache.lock();
-        let kv_cache_1 = cache.first().unwrap();
-        if kv_cache_1.is_none() {
-            return Ok(0);
-        }
-        let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
-        if k_cache_1.dims()[0] <= seq_len {
-            Ok(0)
-        } else {
-            let indexed = k_cache_1.i(seq_len)?;
-            let dims = indexed.dims();
-            Ok(dims[dims.len() - 2])
-        }
-    }
-
     pub fn forward(
         &mut self,
         input_ids: &Tensor,
@@ -321,16 +337,10 @@ impl Model {
         context_lens: Vec<usize>,
     ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
-        if seqlen_offsets.len() > b_size {
-            candle_core::bail!("Expected seqlen offsets have length equal to batch size.")
-        }
-
-        let past_key_values_length = self.calculate_past_kv_len(seq_len)?;
         let attention_mask = if seq_len <= 1 {
             None
         } else {
-            let mask =
-                self.prepare_decoder_attention_mask(b_size, seq_len, past_key_values_length)?;
+            let mask = self.prepare_decoder_attention_mask(b_size, seq_len, seqlen_offsets[0])?;
             Some(mask)
         };
         let xs = self.embed_tokens.forward(input_ids)?;
@@ -342,9 +352,52 @@ impl Model {
                 attention_mask.as_ref(),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
-                cache.get_mut(i).unwrap(),
+                &mut cache[i],
             )?
         }
         extract_logits(&xs.apply(&self.norm)?.apply(&self.lm_head)?, context_lens)
+    }
+}
+
+impl NormalModel for Model {
+    fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        self.forward(
+            input_ids,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+        )
+    }
+    fn xlora_forward(
+        &mut self,
+        _input_ids: &Tensor,
+        _input_ids_full: &Tensor,
+        _seqlen_offsets: &[usize],
+        _seqlen_offsets_full: &[usize],
+        _start_offsets_kernel: Tensor,
+        _start_offsets_kernel_full: Tensor,
+        _no_kv_cache: bool,
+        _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        _context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        unimplemented!()
+    }
+    fn cache(&self) -> &Cache {
+        &self.cache
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn is_xlora(&self) -> bool {
+        false
+    }
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
     }
 }

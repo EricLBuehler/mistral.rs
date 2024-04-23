@@ -9,9 +9,9 @@ use crate::{
     models::{
         self, flash_attn,
         llama::{Config, MAX_SEQ_LEN},
-        LayerCaches, RmsNorm,
+        repeat_kv, LayerCaches, RmsNorm,
     },
-    pipeline::{extract_logits, LLAMA_IS_GPTX},
+    pipeline::{extract_logits, NormalModel},
 };
 
 use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -129,8 +129,8 @@ impl CausalSelfAttention {
         }
         kv_cache[block_idx] = Some((k.clone(), v.clone()));
 
-        let k = self.repeat_kv(k)?;
-        let v = self.repeat_kv(v)?;
+        let k = repeat_kv(k, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
+        let v = repeat_kv(v, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
 
         let y = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
@@ -161,26 +161,13 @@ impl CausalSelfAttention {
         Ok(y)
     }
 
-    fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_attention_heads / self.num_key_value_heads;
-        if n_rep == 1 {
-            Ok(x)
-        } else {
-            let (b_sz, n_kv_head, seq_len, head_dim) = x.dims4()?;
-            let x = x
-                .unsqueeze(2)?
-                .expand((b_sz, n_kv_head, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))?;
-            Ok(x)
-        }
-    }
-
     fn load(
         vb: VarBuilder,
         cfg: &Config,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
+        is_gptx: bool,
     ) -> Result<Self> {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
@@ -195,7 +182,7 @@ impl CausalSelfAttention {
             head_dim,
             MAX_SEQ_LEN,
             vb.device(),
-            LLAMA_IS_GPTX,
+            is_gptx,
             vb.dtype(),
         )?);
         Ok(Self {
@@ -252,7 +239,7 @@ impl Mlp {
     fn load(
         vb: VarBuilder,
         cfg: &Config,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
     ) -> Result<Self> {
@@ -317,11 +304,13 @@ impl Block {
     fn load(
         vb: VarBuilder,
         cfg: &Config,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
+        is_gptx: bool,
     ) -> Result<Self> {
-        let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg, lora_config, count, ord)?;
+        let attn =
+            CausalSelfAttention::load(vb.pp("self_attn"), cfg, lora_config, count, ord, is_gptx)?;
         let mlp = Mlp::load(vb.pp("mlp"), cfg, lora_config, count, ord)?;
         let rms_1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let rms_2 = RmsNorm::new(
@@ -474,15 +463,16 @@ impl XLoraLlama {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn load(
-        vb: VarBuilder,
+    pub fn new(
         cfg: &Config,
-        dtype: DType,
-        device: &Device,
-        lora_config: &Vec<(String, LoraConfig)>,
+        vb: VarBuilder,
+        lora_config: &[(String, LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
+        is_gptx: bool,
     ) -> Result<Self> {
+        let device = vb.device();
+        let dtype = vb.dtype();
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let lm_head = candle_nn::linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
@@ -495,8 +485,9 @@ impl XLoraLlama {
                     lora_config,
                     &mut count,
                     &xlora_ordering,
+                    is_gptx,
                 )
-                .unwrap()
+                .expect("Failed to load block.")
             })
             .collect();
 
@@ -513,6 +504,54 @@ impl XLoraLlama {
             }),
             dtype,
         })
+    }
+}
+
+impl NormalModel for XLoraLlama {
+    fn forward(
+        &mut self,
+        _input_ids: &Tensor,
+        _seqlen_offsets: &[usize],
+        _start_offsets_kernel: Tensor,
+        _context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        unreachable!()
+    }
+    fn xlora_forward(
+        &mut self,
+        input_ids: &Tensor,
+        input_ids_full: &Tensor,
+        seqlen_offsets: &[usize],
+        seqlen_offsets_full: &[usize],
+        start_offsets_kernel: Tensor,
+        start_offsets_kernel_full: Tensor,
+        no_kv_cache: bool,
+        non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        self.forward(
+            input_ids,
+            input_ids_full,
+            seqlen_offsets,
+            seqlen_offsets_full,
+            start_offsets_kernel,
+            start_offsets_kernel_full,
+            no_kv_cache,
+            non_granular_state,
+            context_lens,
+        )
+    }
+    fn cache(&self) -> &super::Cache {
+        &self.kv_cache
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn is_xlora(&self) -> bool {
+        true
+    }
+    fn max_seq_len(&self) -> usize {
+        MAX_SEQ_LEN
     }
 }
 

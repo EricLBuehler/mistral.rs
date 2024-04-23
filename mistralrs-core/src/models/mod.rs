@@ -14,6 +14,7 @@ pub(crate) mod mistral;
 pub(crate) mod mixtral;
 pub(crate) mod phi2;
 pub(crate) mod quantized_llama;
+pub(crate) mod quantized_phi2;
 
 pub type LayerCaches = Vec<Option<(Tensor, Tensor)>>;
 
@@ -48,13 +49,16 @@ impl Cache {
     /// # Panics
     /// If there is no xlora cache
     pub(crate) fn xlora_lock(&self) -> MutexGuard<'_, LayerCaches> {
-        get_mut_arcmutex!(self.xlora_cache.as_ref().unwrap())
+        get_mut_arcmutex!(self.xlora_cache.as_ref().expect("No X-LoRA cache."))
     }
 
     /// # Panics
     /// If there is no xlora cache
     pub(crate) fn get_scalings_cache(&self) -> MutexGuard<'_, Option<Tensor>> {
-        get_mut_arcmutex!(self.scalings_cache.as_ref().unwrap())
+        get_mut_arcmutex!(self
+            .scalings_cache
+            .as_ref()
+            .expect("No X-LoRA scalings cache."))
     }
 
     pub(crate) fn is_xlora(&self) -> bool {
@@ -118,4 +122,13 @@ pub fn verify_sanity_gguf(arch: &str, expected_arch: &str) -> Result<()> {
         candle_core::bail!("Expected `{expected_arch}` architecture, got `{arch}`.");
     }
     Ok(())
+}
+
+pub fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
+    if n_rep == 1 {
+        Ok(x)
+    } else {
+        let (b_sz, n_kv_head, seq_len, head_dim) = x.dims4()?;
+        Tensor::cat(&vec![&x; n_rep], 2)?.reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))
+    }
 }
