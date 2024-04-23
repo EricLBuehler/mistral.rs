@@ -4,18 +4,16 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
-use crate::deserialize_chat_template;
 use crate::models::Cache;
 use crate::pipeline::{calculate_eos_tok, ChatTemplate};
-use crate::xlora_models::{NonGranularState, XLoraConfig, XLoraMistral, XLoraModelWeights};
+use crate::xlora_models::{NonGranularState, XLoraConfig, XLoraMistral};
+use crate::{deserialize_chat_template, get_paths};
 use crate::{
     models::mistral::{Config, Model as NormalModel},
-    models::quantized_llama::ModelWeights as QModelWeights,
     sequence::Sequence,
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
 };
 use anyhow::Result;
-use candle_core::quantized::gguf_file;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Activation;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -34,8 +32,6 @@ use tracing::info;
 
 enum Model {
     Normal(NormalModel),
-    Quantized(QModelWeights),
-    XLoraQuantized(XLoraModelWeights),
     XLoraNormal(XLoraMistral),
 }
 pub const MISTRAL_IS_GPTX: bool = true;
@@ -182,61 +178,7 @@ impl Loader for MistralLoader {
         revision: Option<String>,
         token_source: TokenSource,
     ) -> Result<Box<dyn ModelPaths>> {
-        let api = ApiBuilder::new()
-            .with_progress(true)
-            .with_token(Some(get_token(&token_source)?))
-            .build()?;
-        let revision = revision.unwrap_or("main".to_string());
-        let api = api.repo(Repo::with_revision(
-            self.model_id.clone(),
-            RepoType::Model,
-            revision.clone(),
-        ));
-
-        let tokenizer_filename = if let Some(ref p) = self.tokenizer_json {
-            info!("Using tokenizer.json at `{p}`");
-            PathBuf::from_str(p)?
-        } else {
-            api.get("tokenizer.json")?
-        };
-
-        let config_filename = api.get("config.json")?;
-
-        let filenames = get_model_paths(
-            revision.clone(),
-            &token_source,
-            &self.quantized_model_id,
-            &self.quantized_filename,
-            &api,
-        )?;
-
-        let XLoraPaths {
-            adapter_configs,
-            adapter_safetensors,
-            classifier_path,
-            xlora_order,
-            xlora_config,
-        } = get_xlora_paths(
-            self.model_id.clone(),
-            &self.xlora_model_id,
-            &token_source,
-            revision.clone(),
-            &self.xlora_order,
-        )?;
-
-        let template_filename = api.get("tokenizer_config.json")?;
-
-        Ok(Box::new(MistralModelPaths {
-            tokenizer_filename,
-            config_filename,
-            filenames,
-            xlora_adapter_configs: adapter_configs,
-            xlora_adapter_filenames: adapter_safetensors,
-            classifier_path,
-            classifier_config: xlora_config,
-            xlora_ordering: xlora_order,
-            template_filename,
-        }))
+        get_paths!(MistralModelPaths, &token_source, revision, self)
     }
 
     fn _setup_model(
@@ -271,13 +213,7 @@ impl Loader for MistralLoader {
 
         let mut is_lora = false;
         let model = match self.kind {
-            ModelKind::QuantizedGGUF => {
-                let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
-                let model = gguf_file::Content::read(&mut file)
-                    .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
-                let model = QModelWeights::from_gguf(model, &mut file, device)?;
-                Model::Quantized(model)
-            }
+            ModelKind::QuantizedGGUF => unreachable!(),
             ModelKind::QuantizedGGML => unreachable!(),
             ModelKind::Normal => {
                 let vb = from_mmaped_safetensors(
@@ -320,66 +256,9 @@ impl Loader for MistralLoader {
                 )?;
                 Model::XLoraNormal(model)
             }
-            ModelKind::XLoraGGUF => {
-                let vb = from_mmaped_safetensors(
-                    vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()],
-                    paths
-                        .get_adapter_filenames()
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(|(_, x)| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    dtype.unwrap_or(default_dtype),
-                    device,
-                    false,
-                )?;
-
-                let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
-                let model = gguf_file::Content::read(&mut file)
-                    .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
-                let model = XLoraModelWeights::from_gguf(
-                    model,
-                    &mut file,
-                    device,
-                    paths.get_adapter_configs().as_ref().unwrap(),
-                    &vb,
-                    paths.get_ordering().as_ref().unwrap(),
-                    Some(paths.get_classifier_config().as_ref().unwrap().clone()),
-                )?;
-                Model::XLoraQuantized(model)
-            }
+            ModelKind::XLoraGGUF => unreachable!(),
             ModelKind::XLoraGGML => unreachable!(),
-            ModelKind::LoraGGUF => {
-                let vb = from_mmaped_safetensors(
-                    vec![],
-                    paths
-                        .get_adapter_filenames()
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(|(_, x)| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    dtype.unwrap_or(default_dtype),
-                    device,
-                    false,
-                )?;
-
-                let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
-                let model = gguf_file::Content::read(&mut file)
-                    .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
-                let model = XLoraModelWeights::from_gguf(
-                    model,
-                    &mut file,
-                    device,
-                    paths.get_adapter_configs().as_ref().unwrap(),
-                    &vb,
-                    paths.get_ordering().as_ref().unwrap(),
-                    None,
-                )?;
-                is_lora = true;
-                Model::XLoraQuantized(model)
-            }
+            ModelKind::LoraGGUF => unreachable!(),
             ModelKind::LoraNormal => {
                 let vb = from_mmaped_safetensors(
                     paths.get_weight_filenames().to_vec(),
@@ -477,24 +356,7 @@ impl Pipeline for MistralPipeline {
                 seqlen_offsets_kernel,
                 context_lens,
             ),
-            Model::Quantized(ref mut model) => model.forward(
-                &input_ids,
-                &seqlen_offsets,
-                seqlen_offsets_kernel,
-                context_lens,
-            ),
             Model::XLoraNormal(ref mut model) => model.forward(
-                &input_ids,
-                input_ids_full.as_ref().unwrap_or(&input_ids),
-                &seqlen_offsets,
-                seqlen_offsets_full.as_ref().unwrap_or(&seqlen_offsets),
-                seqlen_offsets_kernel.clone(),
-                seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
-                self.no_kv_cache,
-                &self.non_granular_state,
-                context_lens,
-            ),
-            Model::XLoraQuantized(ref mut model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,
@@ -510,9 +372,7 @@ impl Pipeline for MistralPipeline {
     fn device(&self) -> &Device {
         match self.model {
             Model::Normal(ref model) => &model.device,
-            Model::Quantized(ref model) => &model.device,
             Model::XLoraNormal(ref model) => &model.device,
-            Model::XLoraQuantized(ref model) => &model.device,
         }
     }
     fn num_hidden_layers(&self) -> usize {
@@ -521,9 +381,7 @@ impl Pipeline for MistralPipeline {
     fn cache(&self) -> &Cache {
         match self.model {
             Model::Normal(ref model) => &model.cache,
-            Model::Quantized(ref model) => &model.cache,
             Model::XLoraNormal(ref model) => &model.cache,
-            Model::XLoraQuantized(ref model) => &model.cache,
         }
     }
     fn get_repeat_last_n(&self) -> usize {
@@ -541,15 +399,13 @@ impl Pipeline for MistralPipeline {
     fn get_max_seq_len(&self) -> usize {
         match &self.model {
             Model::Normal(model) => model.max_seq_len,
-            Model::Quantized(model) => model.max_seq_len,
             Model::XLoraNormal(model) => model.max_seq_len,
-            Model::XLoraQuantized(model) => model.max_seq_len,
         }
     }
     fn is_xlora(&self) -> bool {
         match &self.model {
-            Model::Normal(_) | Model::Quantized(_) => false,
-            Model::XLoraNormal(_) | Model::XLoraQuantized(_) => !self.is_lora,
+            Model::Normal(_) => false,
+            Model::XLoraNormal(_) => !self.is_lora,
         }
     }
     fn has_no_kv_cache(&self) -> bool {

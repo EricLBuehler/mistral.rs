@@ -4,21 +4,17 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
-use crate::deserialize_chat_template;
 use crate::models::Cache;
 use crate::pipeline::{calculate_eos_tok, ChatTemplate};
 use crate::xlora_models::{NonGranularState, XLoraConfig};
+use crate::{deserialize_chat_template, get_paths};
 use crate::{
-    models::{
-        phi2::{Config, Model as NormalModel},
-        quantized_phi2::ModelWeights as QModelWeights,
-    },
+    models::phi2::{Config, Model as NormalModel},
     sequence::Sequence,
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
     xlora_models::XLoraPhi2,
 };
 use anyhow::Result;
-use candle_core::quantized::gguf_file;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Activation;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -38,7 +34,6 @@ use tracing::{info, warn};
 enum Model {
     Normal(NormalModel),
     XLoraNormal(XLoraPhi2),
-    Quantized(QModelWeights),
 }
 pub const PHI2_IS_GPTX: bool = true;
 
@@ -187,61 +182,7 @@ impl Loader for Phi2Loader {
         revision: Option<String>,
         token_source: TokenSource,
     ) -> Result<Box<dyn ModelPaths>> {
-        let api = ApiBuilder::new()
-            .with_progress(true)
-            .with_token(Some(get_token(&token_source)?))
-            .build()?;
-        let revision = revision.unwrap_or("main".to_string());
-        let api = api.repo(Repo::with_revision(
-            self.model_id.clone(),
-            RepoType::Model,
-            revision.clone(),
-        ));
-
-        let tokenizer_filename = if let Some(ref p) = self.tokenizer_json {
-            info!("Using tokenizer.json at `{p}`");
-            PathBuf::from_str(p)?
-        } else {
-            api.get("tokenizer.json")?
-        };
-
-        let config_filename = api.get("config.json")?;
-
-        let filenames = get_model_paths(
-            revision.clone(),
-            &token_source,
-            &self.quantized_model_id,
-            &self.quantized_filename,
-            &api,
-        )?;
-
-        let XLoraPaths {
-            adapter_configs,
-            adapter_safetensors,
-            classifier_path,
-            xlora_order,
-            xlora_config,
-        } = get_xlora_paths(
-            self.model_id.clone(),
-            &self.xlora_model_id,
-            &token_source,
-            revision.clone(),
-            &self.xlora_order,
-        )?;
-
-        let template_filename = api.get("tokenizer_config.json")?;
-
-        Ok(Box::new(Phi2ModelPaths {
-            tokenizer_filename,
-            config_filename,
-            filenames,
-            xlora_adapter_configs: adapter_configs,
-            xlora_adapter_filenames: adapter_safetensors,
-            classifier_path,
-            classifier_config: xlora_config,
-            xlora_ordering: xlora_order,
-            template_filename,
-        }))
+        get_paths!(Phi2ModelPaths, &token_source, revision, self)
     }
 
     fn _setup_model(
@@ -278,13 +219,7 @@ impl Loader for Phi2Loader {
 
         let mut is_lora = false;
         let model = match self.kind {
-            ModelKind::QuantizedGGUF => {
-                let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
-                let model = gguf_file::Content::read(&mut file)
-                    .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
-                let model = QModelWeights::from_gguf(model, &mut file, device)?;
-                Model::Quantized(model)
-            }
+            ModelKind::QuantizedGGUF => unreachable!(),
             ModelKind::QuantizedGGML => unreachable!(),
             ModelKind::Normal => {
                 let vb = from_mmaped_safetensors(
@@ -442,16 +377,12 @@ impl Pipeline for Phi2Pipeline {
                 &self.non_granular_state,
                 context_lens,
             ),
-            Model::Quantized(ref mut model) => {
-                model.forward(&input_ids, &seqlen_offsets, context_lens)
-            }
         }
     }
     fn device(&self) -> &Device {
         match self.model {
             Model::Normal(ref model) => &model.device,
             Model::XLoraNormal(ref model) => &model.device,
-            Model::Quantized(ref model) => &model.device,
         }
     }
     fn num_hidden_layers(&self) -> usize {
@@ -461,7 +392,6 @@ impl Pipeline for Phi2Pipeline {
         match self.model {
             Model::Normal(ref model) => &model.cache,
             Model::XLoraNormal(ref model) => &model.cache,
-            Model::Quantized(ref model) => &model.cache,
         }
     }
     fn get_repeat_last_n(&self) -> usize {
@@ -480,12 +410,11 @@ impl Pipeline for Phi2Pipeline {
         match &self.model {
             Model::Normal(ref model) => model.max_seq_len,
             Model::XLoraNormal(ref model) => model.max_seq_len,
-            Model::Quantized(ref model) => model.max_seq_len,
         }
     }
     fn is_xlora(&self) -> bool {
         match &self.model {
-            Model::Normal(_) | Model::Quantized(_) => false,
+            Model::Normal(_) => false,
             Model::XLoraNormal(_) => !self.is_lora,
         }
     }

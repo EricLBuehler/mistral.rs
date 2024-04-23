@@ -1,4 +1,5 @@
 mod gemma;
+mod gguf;
 mod llama;
 mod mistral;
 mod mixtral;
@@ -8,6 +9,7 @@ use crate::{get_bias_if_not_allowed, sampler::Logprobs, sequence::SequenceRecogn
 use core::fmt;
 use either::Either;
 pub use gemma::{GemmaLoader, GemmaSpecificConfig, GEMMA_IS_GPTX};
+pub use gguf::{GgufLoader, GgufSpecificConfig};
 use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
     Repo, RepoType,
@@ -813,6 +815,67 @@ macro_rules! deserialize_chat_template {
                 serde_json::from_str(&ser).unwrap()
             }
         }
+    }};
+}
+
+#[macro_export]
+macro_rules! get_paths {
+    ($path_name:ident, $token_source:expr, $revision:expr, $this:expr) => {{
+        let api = ApiBuilder::new()
+            .with_progress(true)
+            .with_token(Some(get_token($token_source)?))
+            .build()?;
+        let revision = $revision.unwrap_or("main".to_string());
+        let api = api.repo(Repo::with_revision(
+            $this.model_id.clone(),
+            RepoType::Model,
+            revision.clone(),
+        ));
+
+        let tokenizer_filename = if let Some(ref p) = $this.tokenizer_json {
+            info!("Using tokenizer.json at `{p}`");
+            PathBuf::from_str(p)?
+        } else {
+            api.get("tokenizer.json")?
+        };
+
+        let config_filename = api.get("config.json")?;
+
+        let filenames = get_model_paths(
+            revision.clone(),
+            &$token_source,
+            &$this.quantized_model_id,
+            &$this.quantized_filename,
+            &api,
+        )?;
+
+        let XLoraPaths {
+            adapter_configs,
+            adapter_safetensors,
+            classifier_path,
+            xlora_order,
+            xlora_config,
+        } = get_xlora_paths(
+            $this.model_id.clone(),
+            &$this.xlora_model_id,
+            &$token_source,
+            revision.clone(),
+            &$this.xlora_order,
+        )?;
+
+        let template_filename = api.get("tokenizer_config.json")?;
+
+        Ok(Box::new($path_name {
+            tokenizer_filename,
+            config_filename,
+            filenames,
+            xlora_adapter_configs: adapter_configs,
+            xlora_adapter_filenames: adapter_safetensors,
+            classifier_path,
+            classifier_config: xlora_config,
+            xlora_ordering: xlora_order,
+            template_filename,
+        }))
     }};
 }
 

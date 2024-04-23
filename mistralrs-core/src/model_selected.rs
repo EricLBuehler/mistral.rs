@@ -17,38 +17,6 @@ pub enum ModelSelected {
         repeat_last_n: usize,
     },
 
-    /// Select the quantized mistral model with gguf.
-    MistralGGUF {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "mistralai/Mistral-7B-Instruct-v0.1")]
-        tok_model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(long)]
-        tokenizer_json: Option<String>,
-
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
-        #[arg(
-            short = 'm',
-            long,
-            default_value = "TheBloke/Mistral-7B-Instruct-v0.1-GGUF"
-        )]
-        quantized_model_id: Option<String>,
-
-        /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(
-            short = 'f',
-            long,
-            default_value = "mistral-7b-instruct-v0.1.Q4_K_M.gguf"
-        )]
-        quantized_filename: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-    },
-
     /// Select the mistral model, with X-LoRA.
     XLoraMistral {
         /// Force a base model ID to load from instead of using the ordering file.
@@ -136,30 +104,6 @@ pub enum ModelSelected {
     },
 
     /// Select the quantized llama model with gguf.
-    LlamaGGUF {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
-        tok_model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(long)]
-        tokenizer_json: Option<String>,
-
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
-        #[arg(short = 'm', long, default_value = "TheBloke/Llama-2-13B-chat-GGUF")]
-        quantized_model_id: Option<String>,
-
-        /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(short = 'f', long, default_value = "llama-2-13b-chat.Q4_K_M.gguf")]
-        quantized_filename: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-    },
-
-    /// Select the quantized llama model with gguf.
     LlamaGGML {
         /// Model ID to load the tokenizer from
         #[arg(short, long, default_value = "meta-llama/Llama-2-13b-chat-hf")]
@@ -234,30 +178,6 @@ pub enum ModelSelected {
         repeat_last_n: usize,
     },
 
-    /// Select the quantized mixtral model with gguf.
-    MixtralGGUF {
-        /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "mistralai/Mixtral-8x7B-Instruct-v0.1")]
-        tok_model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(long)]
-        tokenizer_json: Option<String>,
-
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
-        #[arg(short = 'm', long, default_value = "TheBloke/Mixtral-8x7B-v0.1-GGUF")]
-        quantized_model_id: Option<String>,
-
-        /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(short = 'f', long, default_value = "mixtral-8x7b-v0.1.Q4_K_M.gguf")]
-        quantized_filename: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-    },
-
     /// Select the mixtral model, with X-LoRA.
     XLoraMixtral {
         /// Force a base model ID to load from instead of using the ordering file.
@@ -275,80 +195,6 @@ pub enum ModelSelected {
         /// Control the application of repeat penalty for the last n tokens
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
-
-        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        /// This makes the maximum running sequences 1.
-        #[arg(long)]
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    /// Select the quantized mistral model with gguf and X-LoRA.
-    XLoraMistralGGUF {
-        /// Force a base model ID to load the tokenizer from instead of using the ordering file.
-        #[arg(short, long)]
-        tok_model_id: Option<String>,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(long)]
-        tokenizer_json: Option<String>,
-
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
-        #[arg(short = 'm', long, default_value = "TheBloke/zephyr-7B-beta-GGUF")]
-        quantized_model_id: Option<String>,
-
-        /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(short = 'f', long, default_value = "zephyr-7b-beta.Q8_0.gguf")]
-        quantized_filename: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Model ID to load X-LoRA from.
-        #[arg(short, long, default_value = "lamm-mit/x-lora")]
-        xlora_model_id: String,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
-
-        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        /// This makes the maximum running sequences 1.
-        #[arg(long)]
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    /// Select the quantized mistral model with gguf and X-LoRA.
-    XLoraLlamaGGUF {
-        /// Force a base model ID to load the tokenizer from instead of using the ordering file.
-        #[arg(short, long)]
-        tok_model_id: Option<String>,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(long)]
-        tokenizer_json: Option<String>,
-
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
-        #[arg(short = 'm', long, default_value = "TheBloke/Llama-2-13B-chat-GGUF")]
-        quantized_model_id: Option<String>,
-
-        /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(short = 'f', long, default_value = "llama-2-13b-chat.Q4_K_M.gguf")]
-        quantized_filename: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Model ID to load X-LoRA from.
-        #[arg(short, long)]
-        xlora_model_id: String,
 
         /// Ordering JSON file
         #[arg(short, long)]
@@ -405,43 +251,6 @@ pub enum ModelSelected {
         tgt_non_granular_index: Option<usize>,
     },
 
-    /// Select the quantized mistral model with gguf and X-LoRA.
-    XLoraMixtralGGUF {
-        /// Force a base model ID to load the tokenizer from instead of using the ordering file.
-        #[arg(short, long)]
-        tok_model_id: Option<String>,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(long)]
-        tokenizer_json: Option<String>,
-
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
-        #[arg(short = 'm', long, default_value = "TheBloke/Mixtral-8x7B-v0.1-GGUF")]
-        quantized_model_id: Option<String>,
-
-        /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(short = 'f', long, default_value = "mixtral-8x7b-v0.1.Q4_K_M.gguf")]
-        quantized_filename: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Model ID to load X-LoRA from.
-        #[arg(short, long)]
-        xlora_model_id: String,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
-
-        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        /// This makes the maximum running sequences 1.
-        #[arg(long)]
-        tgt_non_granular_index: Option<usize>,
-    },
-
     /// Select the phi2 model.
     Phi2 {
         /// Model ID to load from
@@ -483,38 +292,6 @@ pub enum ModelSelected {
         /// This makes the maximum running sequences 1.
         #[arg(long)]
         tgt_non_granular_index: Option<usize>,
-    },
-
-    /// Select the mistral model, with LoRA and gguf.
-    LoraMistralGGUF {
-        /// Force a base model ID to load the tokenizer from instead of using the ordering file.
-        #[arg(short, long)]
-        tok_model_id: Option<String>,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
-        #[arg(short = 'm', long, default_value = "TheBloke/zephyr-7B-beta-GGUF")]
-        quantized_model_id: Option<String>,
-
-        /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(short = 'f', long, default_value = "zephyr-7b-beta.Q8_0.gguf")]
-        quantized_filename: Option<String>,
-
-        /// Model ID to load X-LoRA from.
-        #[arg(short, long, default_value = "lamm-mit/x-lora")]
-        adapters_model_id: String,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
     },
 
     /// Select the mistral model, with LoRA.
@@ -587,38 +364,6 @@ pub enum ModelSelected {
     },
 
     /// Select the quantized mistral model with gguf and LoRA.
-    LoraLlamaGGUF {
-        /// Force a base model ID to load the tokenizer from instead of using the ordering file.
-        #[arg(short, long)]
-        tok_model_id: Option<String>,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(long)]
-        tokenizer_json: Option<String>,
-
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
-        #[arg(short = 'm', long, default_value = "TheBloke/Llama-2-13B-chat-GGUF")]
-        quantized_model_id: Option<String>,
-
-        /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(short = 'f', long, default_value = "llama-2-13b-chat.Q4_K_M.gguf")]
-        quantized_filename: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Model ID to load X-LoRA from.
-        #[arg(short, long)]
-        adapters_model_id: String,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
-    },
-
-    /// Select the quantized mistral model with gguf and LoRA.
     LoraLlamaGGML {
         /// Force a base model ID to load the tokenizer from instead of using the ordering file.
         #[arg(short, long)]
@@ -658,42 +403,10 @@ pub enum ModelSelected {
         gqa: usize,
     },
 
-    /// Select the quantized mistral model with gguf and LoRA.
-    LoraMixtralGGUF {
-        /// Force a base model ID to load the tokenizer from instead of using the ordering file.
-        #[arg(short, long)]
-        tok_model_id: Option<String>,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(long)]
-        tokenizer_json: Option<String>,
-
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
-        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
-        #[arg(short = 'm', long, default_value = "TheBloke/Mixtral-8x7B-v0.1-GGUF")]
-        quantized_model_id: Option<String>,
-
-        /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(short = 'f', long, default_value = "mixtral-8x7b-v0.1.Q4_K_M.gguf")]
-        quantized_filename: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// Model ID to load X-LoRA from.
-        #[arg(short, long)]
-        adapters_model_id: String,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
-    },
-
-    /// Select the quantized phi2 model with gguf.
-    Phi2GGUF {
+    /// Select a GGUF model.
+    GGUF {
         /// Model ID to load the tokenizer from
-        #[arg(short, long, default_value = "microsoft/phi-2")]
+        #[arg(short, long)]
         tok_model_id: String,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
@@ -702,15 +415,52 @@ pub enum ModelSelected {
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
         /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
-        #[arg(short = 'm', long, default_value = "TheBloke/phi-2-GGUF")]
+        #[arg(short = 'm', long)]
         quantized_model_id: Option<String>,
 
         /// Quantized filename, only applicable if `quantized` is set.
-        #[arg(short = 'f', long, default_value = "phi-2.Q4_K_M.gguf")]
+        #[arg(short = 'f', long)]
         quantized_filename: Option<String>,
 
         /// Control the application of repeat penalty for the last n tokens
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
+    },
+
+    /// Select a GGUF model.
+    XLoraGGUF {
+        /// Model ID to load the tokenizer from
+        #[arg(short, long)]
+        tok_model_id: String,
+
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(long)]
+        tokenizer_json: Option<String>,
+
+        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// If it is set to an empty string then the quantized filename will be used as a path to the GGUF file.
+        #[arg(short = 'm', long)]
+        quantized_model_id: Option<String>,
+
+        /// Quantized filename, only applicable if `quantized` is set.
+        #[arg(short = 'f', long)]
+        quantized_filename: Option<String>,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
+
+        /// Model ID to load X-LoRA from.
+        #[arg(short, long)]
+        xlora_model_id: String,
+
+        /// Ordering JSON file
+        #[arg(short, long)]
+        order: String,
+
+        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
+        /// This makes the maximum running sequences 1.
+        #[arg(long)]
+        tgt_non_granular_index: Option<usize>,
     },
 }

@@ -4,10 +4,10 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
-use crate::deserialize_chat_template;
 use crate::models::Cache;
 use crate::pipeline::{calculate_eos_tok, ChatTemplate};
 use crate::xlora_models::{NonGranularState, XLoraConfig, XLoraGemma};
+use crate::{deserialize_chat_template, get_paths};
 use crate::{
     models::gemma::{Config, Model as NormalModel},
     sequence::Sequence,
@@ -188,61 +188,7 @@ impl Loader for GemmaLoader {
         revision: Option<String>,
         token_source: TokenSource,
     ) -> Result<Box<dyn ModelPaths>> {
-        let api = ApiBuilder::new()
-            .with_progress(true)
-            .with_token(Some(get_token(&token_source)?))
-            .build()?;
-        let revision = revision.unwrap_or("main".to_string());
-        let api = api.repo(Repo::with_revision(
-            self.model_id.clone(),
-            RepoType::Model,
-            revision.clone(),
-        ));
-
-        let tokenizer_filename = if let Some(ref p) = self.tokenizer_json {
-            info!("Using tokenizer.json at `{p}`");
-            PathBuf::from_str(p)?
-        } else {
-            api.get("tokenizer.json")?
-        };
-
-        let config_filename = api.get("config.json")?;
-
-        let filenames = get_model_paths(
-            revision.clone(),
-            &token_source,
-            &self.quantized_model_id,
-            &self.quantized_filename,
-            &api,
-        )?;
-
-        let XLoraPaths {
-            adapter_configs,
-            adapter_safetensors,
-            classifier_path,
-            xlora_order,
-            xlora_config,
-        } = get_xlora_paths(
-            self.model_id.clone(),
-            &self.xlora_model_id,
-            &token_source,
-            revision.clone(),
-            &self.xlora_order,
-        )?;
-
-        let template_filename = api.get("tokenizer_config.json")?;
-
-        Ok(Box::new(GemmaModelPaths {
-            tokenizer_filename,
-            config_filename,
-            filenames,
-            xlora_adapter_configs: adapter_configs,
-            xlora_adapter_filenames: adapter_safetensors,
-            classifier_path,
-            classifier_config: xlora_config,
-            xlora_ordering: xlora_order,
-            template_filename,
-        }))
+        get_paths!(GemmaModelPaths, &token_source, revision, self)
     }
 
     fn _setup_model(
