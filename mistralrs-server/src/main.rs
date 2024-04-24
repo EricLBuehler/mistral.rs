@@ -211,7 +211,7 @@ async fn main() -> Result<()> {
         None,
         &device,
         args.num_device_layers
-            .map(|n| DeviceMapMetadata::from_num_device_layers(n))
+            .map(DeviceMapMetadata::from_num_device_layers)
             .unwrap_or(DeviceMapMetadata::dummy()),
     )?;
     info!("Model loaded.");

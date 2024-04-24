@@ -305,6 +305,7 @@ pub trait NormalModelLoader {
         vb: VarBuilder,
         mapper: DeviceMapMetadata,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
+    #[allow(clippy::too_many_arguments)]
     fn load_xlora(
         &self,
         config: &str,
