@@ -136,7 +136,7 @@ impl AsRef<str> for ModelKind {
 ///
 /// # Example
 /// ```no_run
-/// use mistralrs_core::{Loader, TokenSource};
+/// use mistralrs_core::{Loader, TokenSource, DeviceMapMetadata};
 /// use candle_core::Device;
 ///
 /// let loader: Box<dyn Loader> = todo!();
@@ -145,6 +145,7 @@ impl AsRef<str> for ModelKind {
 ///     TokenSource::CacheToken,
 ///     None,
 ///     &Device::cuda_if_available(0).unwrap(),
+///     DeviceMapMetadata::dummy(),
 /// ).unwrap();
 /// ```
 pub trait Loader {
