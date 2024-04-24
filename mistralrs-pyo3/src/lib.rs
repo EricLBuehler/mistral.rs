@@ -420,6 +420,7 @@ impl Runner {
                             let role = match message.role {
                                 Role::Assistant => "assistant",
                                 Role::User => "user",
+                                Role::System => "system",
                             };
                             message_map.insert("role".to_string(), role.to_string());
                             message_map.insert("content".to_string(), message.content.clone());

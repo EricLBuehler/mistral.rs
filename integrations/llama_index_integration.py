@@ -57,9 +57,11 @@ def llama_index_to_mistralrs_messages(messages: Sequence[ChatMessage]) -> list[M
             messages_new.append(Message(Role.User, message.content))
         elif message.role == "assistant":
             messages_new.append(Message(Role.Assistant, message.content))
+        elif message.role == "system":
+            messages_new.append(Message(Role.System, message.content))
         else:
             raise ValueError(
-                f"Unsupported chat role `{message.role}` for `mistralrs` automatic chat templating: supported are `user` and `assistant`. Please specify `messages_to_prompt`."
+                f"Unsupported chat role `{message.role}` for `mistralrs` automatic chat templating: supported are `user`, `assistant`, `system`. Please specify `messages_to_prompt`."
             )
     return messages_new
 
