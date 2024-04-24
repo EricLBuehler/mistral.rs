@@ -1,6 +1,5 @@
 from typing import Any, Callable, Dict, Optional, Sequence
 
-import json
 from llama_index.core.base.llms.types import (
     ChatMessage,
     ChatResponse,
@@ -8,6 +7,7 @@ from llama_index.core.base.llms.types import (
     CompletionResponse,
     CompletionResponseGen,
     LLMMetadata,
+    MessageRole,
 )
 from llama_index.core.bridge.pydantic import Field, PrivateAttr
 from llama_index.core.callbacks import CallbackManager
@@ -230,7 +230,13 @@ class MistralRS(CustomLLM):
             for response in streamer:
                 delta = response.choices[0].delta.content
                 text += delta
-                yield CompletionResponse(delta=delta, text=text)
+                yield ChatResponse(
+                    message=ChatMessage(
+                        role=MessageRole.ASSISTANT,
+                        content=delta,
+                    ),
+                    delta=delta,
+                )
 
         return gen()
 
