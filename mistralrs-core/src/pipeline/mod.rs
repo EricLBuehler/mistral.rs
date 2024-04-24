@@ -134,7 +134,7 @@ impl AsRef<str> for ModelKind {
 /// `load_model` method.
 ///
 /// # Example
-/// ```rust,no_run
+/// ```no_run
 /// let loader: Box<dyn Loader> = ...;
 /// let pipeline = loader.load_model(
 ///     None,
