@@ -934,15 +934,15 @@
 /// # Example
 /// ```no_run
 /// use mistralrs_core::{Loader, TokenSource};
-/// use candle::Device;
+/// use candle_core::Device;
 ///
 /// let loader: Box&lt;dyn Loader&gt; = todo!();
 /// let pipeline = loader.load_model(
 ///     None,
 ///     TokenSource::CacheToken,
 ///     None,
-///     &amp;Device::cuda_if_available(0)?,
-/// )?;
+///     &amp;Device::cuda_if_available(0).unwrap(),
+/// ).unwrap();
 /// ```
 </span><span class="kw">pub trait </span>Loader {
     <span class="kw">fn </span>download_model(
