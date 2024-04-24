@@ -140,7 +140,7 @@ impl GgmlLoaderBuilder {
             chat_template,
             tokenizer_json,
             model_id,
-            kind: ModelKind::Normal,
+            kind: ModelKind::QuantizedGGML,
             quantized_filename,
             quantized_model_id,
             ..Default::default()
@@ -177,7 +177,7 @@ impl GgmlLoaderBuilder {
         no_kv_cache: bool,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
-        self.kind = ModelKind::XLoraGGUF;
+        self.kind = ModelKind::XLoraGGML;
         self.with_adapter(
             xlora_model_id,
             xlora_order,
@@ -193,7 +193,7 @@ impl GgmlLoaderBuilder {
         no_kv_cache: bool,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
-        self.kind = ModelKind::LoraGGUF;
+        self.kind = ModelKind::LoraGGML;
         self.with_adapter(
             xlora_model_id,
             xlora_order,

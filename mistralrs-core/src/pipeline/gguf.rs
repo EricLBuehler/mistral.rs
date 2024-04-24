@@ -174,7 +174,7 @@ impl GgufLoaderBuilder {
             chat_template,
             tokenizer_json,
             model_id,
-            kind: ModelKind::Normal,
+            kind: ModelKind::QuantizedGGUF,
             quantized_filename,
             quantized_model_id,
             ..Default::default()
