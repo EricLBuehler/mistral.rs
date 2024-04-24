@@ -612,9 +612,9 @@
     }
 }
 
-<span class="kw">pub struct </span>GgufPipeline {
+<span class="kw">pub struct </span>GGUFPipeline {
     model: Model,
-    config: GgufSpecificConfig,
+    config: GGUFSpecificConfig,
     tokenizer: Arc&lt;Tokenizer&gt;,
     tok_trie: TokTrie,
     no_kv_cache: bool,
@@ -625,9 +625,9 @@
     is_lora: bool,
 }
 
-<span class="kw">pub struct </span>GgufLoader {
+<span class="kw">pub struct </span>GGUFLoader {
     model_id: String,
-    config: GgufSpecificConfig,
+    config: GGUFSpecificConfig,
     quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     quantized_filename: <span class="prelude-ty">Option</span>&lt;String&gt;,
     xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -640,7 +640,7 @@
 }
 
 <span class="attr">#[derive(Debug)]
-</span><span class="kw">enum </span>GgufArchitecture {
+</span><span class="kw">enum </span>GGUFArchitecture {
     Llama,
     Mpt,
     Gptneox,
@@ -653,21 +653,21 @@
     Phi2,
 }
 
-<span class="kw">impl </span>FromStr <span class="kw">for </span>GgufArchitecture {
+<span class="kw">impl </span>FromStr <span class="kw">for </span>GGUFArchitecture {
     <span class="kw">type </span><span class="prelude-val">Err </span>= String;
 
     <span class="kw">fn </span>from_str(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Err&gt; {
         <span class="kw">match </span>s {
-            <span class="string">"llama" </span>=&gt; <span class="prelude-val">Ok</span>(GgufArchitecture::Llama),
-            <span class="string">"mpt" </span>=&gt; <span class="prelude-val">Ok</span>(GgufArchitecture::Mpt),
-            <span class="string">"gptneox" </span>=&gt; <span class="prelude-val">Ok</span>(GgufArchitecture::Gptneox),
-            <span class="string">"gptj" </span>=&gt; <span class="prelude-val">Ok</span>(GgufArchitecture::Gptj),
-            <span class="string">"gpt2" </span>=&gt; <span class="prelude-val">Ok</span>(GgufArchitecture::Gpt2),
-            <span class="string">"bloom" </span>=&gt; <span class="prelude-val">Ok</span>(GgufArchitecture::Bloom),
-            <span class="string">"falcon" </span>=&gt; <span class="prelude-val">Ok</span>(GgufArchitecture::Falcon),
-            <span class="string">"mamba" </span>=&gt; <span class="prelude-val">Ok</span>(GgufArchitecture::Mamba),
-            <span class="string">"rwkv" </span>=&gt; <span class="prelude-val">Ok</span>(GgufArchitecture::Rwkv),
-            <span class="string">"phi2" </span>=&gt; <span class="prelude-val">Ok</span>(GgufArchitecture::Phi2),
+            <span class="string">"llama" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Llama),
+            <span class="string">"mpt" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Mpt),
+            <span class="string">"gptneox" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Gptneox),
+            <span class="string">"gptj" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Gptj),
+            <span class="string">"gpt2" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Gpt2),
+            <span class="string">"bloom" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Bloom),
+            <span class="string">"falcon" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Falcon),
+            <span class="string">"mamba" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Mamba),
+            <span class="string">"rwkv" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Rwkv),
+            <span class="string">"phi2" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Phi2),
             a =&gt; <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Unknown GGUF architecture `{a}`"</span>)),
         }
     }
@@ -675,15 +675,15 @@
 
 <span class="attr">#[derive(Clone, Copy, Default)]
 </span><span class="doccomment">/// A config for a GGUF loader.
-</span><span class="kw">pub struct </span>GgufSpecificConfig {
+</span><span class="kw">pub struct </span>GGUFSpecificConfig {
     <span class="kw">pub </span>repeat_last_n: usize,
 }
 
 <span class="attr">#[derive(Default)]
 </span><span class="doccomment">/// A builder for a GGUF loader.
-</span><span class="kw">pub struct </span>GgufLoaderBuilder {
+</span><span class="kw">pub struct </span>GGUFLoaderBuilder {
     model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    config: GgufSpecificConfig,
+    config: GGUFSpecificConfig,
     quantized_model_id: String,
     quantized_filename: String,
     xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -695,9 +695,9 @@
     tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
-<span class="kw">impl </span>GgufLoaderBuilder {
+<span class="kw">impl </span>GGUFLoaderBuilder {
     <span class="kw">pub fn </span>new(
-        config: GgufSpecificConfig,
+        config: GGUFSpecificConfig,
         chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
         tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
         model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -772,7 +772,7 @@
     }
 
     <span class="kw">pub fn </span>build(<span class="self">self</span>) -&gt; Box&lt;<span class="kw">dyn </span>Loader&gt; {
-        Box::new(GgufLoader {
+        Box::new(GGUFLoader {
             model_id: <span class="self">self</span>.model_id.unwrap(),
             config: <span class="self">self</span>.config,
             xlora_model_id: <span class="self">self</span>.xlora_model_id,
@@ -788,11 +788,11 @@
     }
 }
 
-<span class="kw">impl </span>GgufLoader {
+<span class="kw">impl </span>GGUFLoader {
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>new(
         model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
-        config: GgufSpecificConfig,
+        config: GGUFSpecificConfig,
         quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         quantized_filename: <span class="prelude-ty">Option</span>&lt;String&gt;,
         xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -828,7 +828,7 @@
     }
 }
 
-<span class="kw">impl </span>Loader <span class="kw">for </span>GgufLoader {
+<span class="kw">impl </span>Loader <span class="kw">for </span>GGUFLoader {
     <span class="kw">fn </span>download_model(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -860,7 +860,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())<span class="question-mark">?</span>;
         <span class="kw">let </span>model = gguf_file::Content::read(<span class="kw-2">&amp;mut </span>file)
             .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))<span class="question-mark">?</span>;
-        <span class="kw">let </span>arch: GgufArchitecture = model.metadata[<span class="string">"general.architecture"</span>]
+        <span class="kw">let </span>arch: GGUFArchitecture = model.metadata[<span class="string">"general.architecture"</span>]
             .to_string()
             .unwrap()
             .parse()
@@ -869,10 +869,10 @@
         <span class="kw">let </span><span class="kw-2">mut </span>is_lora = <span class="bool-val">false</span>;
         <span class="kw">let </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
             ModelKind::QuantizedGGUF =&gt; <span class="kw">match </span>arch {
-                GgufArchitecture::Llama =&gt; {
+                GGUFArchitecture::Llama =&gt; {
                     Model::Llama(QLlama::from_gguf(model, <span class="kw-2">&amp;mut </span>file, device)<span class="question-mark">?</span>)
                 }
-                GgufArchitecture::Phi2 =&gt; Model::Phi2(QPhi::from_gguf(model, <span class="kw-2">&amp;mut </span>file, device)<span class="question-mark">?</span>),
+                GGUFArchitecture::Phi2 =&gt; Model::Phi2(QPhi::from_gguf(model, <span class="kw-2">&amp;mut </span>file, device)<span class="question-mark">?</span>),
                 a =&gt; <span class="macro">bail!</span>(<span class="string">"Unsupported architecture `{a:?}`"</span>),
             },
             ModelKind::XLoraGGUF =&gt; {
@@ -891,7 +891,7 @@
                 )<span class="question-mark">?</span>;
 
                 <span class="kw">match </span>arch {
-                    GgufArchitecture::Llama =&gt; Model::XLoraLlama(XLoraQLlama::from_gguf(
+                    GGUFArchitecture::Llama =&gt; Model::XLoraLlama(XLoraQLlama::from_gguf(
                         model,
                         <span class="kw-2">&amp;mut </span>file,
                         device,
@@ -920,7 +920,7 @@
                 )<span class="question-mark">?</span>;
 
                 <span class="kw">match </span>arch {
-                    GgufArchitecture::Llama =&gt; Model::XLoraLlama(XLoraQLlama::from_gguf(
+                    GGUFArchitecture::Llama =&gt; Model::XLoraLlama(XLoraQLlama::from_gguf(
                         model,
                         <span class="kw-2">&amp;mut </span>file,
                         device,
@@ -940,7 +940,7 @@
 
         <span class="kw">let </span>chat_template: ChatTemplate = <span class="macro">deserialize_chat_template!</span>(paths, <span class="self">self</span>);
 
-        <span class="prelude-val">Ok</span>(Box::new(Mutex::new(GgufPipeline {
+        <span class="prelude-val">Ok</span>(Box::new(Mutex::new(GGUFPipeline {
             model,
             config: <span class="self">self</span>.config,
             eos_tok: calculate_eos_tokens(<span class="kw-2">&amp;</span>chat_template, <span class="kw-2">&amp;</span>tokenizer),
@@ -968,7 +968,7 @@
     }
 }
 
-<span class="kw">impl </span>Pipeline <span class="kw">for </span>GgufPipeline {
+<span class="kw">impl </span>Pipeline <span class="kw">for </span>GGUFPipeline {
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         input_toks: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],

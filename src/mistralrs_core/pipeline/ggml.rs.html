@@ -554,9 +554,9 @@
     }
 }
 
-<span class="kw">pub struct </span>GgmlPipeline {
+<span class="kw">pub struct </span>GGMLPipeline {
     model: Model,
-    config: GgmlSpecificConfig,
+    config: GGMLSpecificConfig,
     tokenizer: Arc&lt;Tokenizer&gt;,
     tok_trie: TokTrie,
     no_kv_cache: bool,
@@ -567,9 +567,9 @@
     is_lora: bool,
 }
 
-<span class="kw">pub struct </span>GgmlLoader {
+<span class="kw">pub struct </span>GGMLLoader {
     model_id: String,
-    config: GgmlSpecificConfig,
+    config: GGMLSpecificConfig,
     quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     quantized_filename: <span class="prelude-ty">Option</span>&lt;String&gt;,
     xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -583,16 +583,16 @@
 
 <span class="attr">#[derive(Clone, Copy, Default)]
 </span><span class="doccomment">/// Config for a GGML loader.
-</span><span class="kw">pub struct </span>GgmlSpecificConfig {
+</span><span class="kw">pub struct </span>GGMLSpecificConfig {
     <span class="kw">pub </span>repeat_last_n: usize,
     <span class="kw">pub </span>gqa: usize,
 }
 
 <span class="attr">#[derive(Default)]
 </span><span class="doccomment">/// A builder for a GGML loader.
-</span><span class="kw">pub struct </span>GgmlLoaderBuilder {
+</span><span class="kw">pub struct </span>GGMLLoaderBuilder {
     model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    config: GgmlSpecificConfig,
+    config: GGMLSpecificConfig,
     quantized_model_id: String,
     quantized_filename: String,
     xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -604,9 +604,9 @@
     tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
-<span class="kw">impl </span>GgmlLoaderBuilder {
+<span class="kw">impl </span>GGMLLoaderBuilder {
     <span class="kw">pub fn </span>new(
-        config: GgmlSpecificConfig,
+        config: GGMLSpecificConfig,
         chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
         tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
         model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -681,7 +681,7 @@
     }
 
     <span class="kw">pub fn </span>build(<span class="self">self</span>) -&gt; Box&lt;<span class="kw">dyn </span>Loader&gt; {
-        Box::new(GgmlLoader {
+        Box::new(GGMLLoader {
             model_id: <span class="self">self</span>.model_id.unwrap(),
             config: <span class="self">self</span>.config,
             xlora_model_id: <span class="self">self</span>.xlora_model_id,
@@ -697,11 +697,11 @@
     }
 }
 
-<span class="kw">impl </span>GgmlLoader {
+<span class="kw">impl </span>GGMLLoader {
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>new(
         model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
-        config: GgmlSpecificConfig,
+        config: GGMLSpecificConfig,
         quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         quantized_filename: <span class="prelude-ty">Option</span>&lt;String&gt;,
         xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -737,7 +737,7 @@
     }
 }
 
-<span class="kw">impl </span>Loader <span class="kw">for </span>GgmlLoader {
+<span class="kw">impl </span>Loader <span class="kw">for </span>GGMLLoader {
     <span class="kw">fn </span>download_model(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -830,7 +830,7 @@
 
         <span class="kw">let </span>chat_template: ChatTemplate = <span class="macro">deserialize_chat_template!</span>(paths, <span class="self">self</span>);
 
-        <span class="prelude-val">Ok</span>(Box::new(Mutex::new(GgmlPipeline {
+        <span class="prelude-val">Ok</span>(Box::new(Mutex::new(GGMLPipeline {
             model,
             config: <span class="self">self</span>.config,
             eos_tok: calculate_eos_tokens(<span class="kw-2">&amp;</span>chat_template, <span class="kw-2">&amp;</span>tokenizer),
@@ -858,7 +858,7 @@
     }
 }
 
-<span class="kw">impl </span>Pipeline <span class="kw">for </span>GgmlPipeline {
+<span class="kw">impl </span>Pipeline <span class="kw">for </span>GGMLPipeline {
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         input_toks: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],

@@ -288,7 +288,7 @@
 
 <span class="kw">use crate</span>::{
     pipeline::{
-        GgmlLoaderBuilder, GgmlSpecificConfig, GgufLoaderBuilder, GgufSpecificConfig,
+        GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
         NormalSpecificConfig,
     },
     Loader, ModelSelected, NormalLoaderBuilder,
@@ -430,8 +430,8 @@
             quantized_model_id,
             quantized_filename,
             repeat_last_n,
-        } =&gt; GgufLoaderBuilder::new(
-            GgufSpecificConfig { repeat_last_n },
+        } =&gt; GGUFLoaderBuilder::new(
+            GGUFSpecificConfig { repeat_last_n },
             args.chat_template,
             tokenizer_json,
             <span class="prelude-val">Some</span>(tok_model_id),
@@ -448,8 +448,8 @@
             xlora_model_id,
             order,
             tgt_non_granular_index,
-        } =&gt; GgufLoaderBuilder::new(
-            GgufSpecificConfig { repeat_last_n },
+        } =&gt; GGUFLoaderBuilder::new(
+            GGUFSpecificConfig { repeat_last_n },
             args.chat_template,
             tokenizer_json,
             tok_model_id,
@@ -475,8 +475,8 @@
             adapters_model_id,
             order,
             tgt_non_granular_index,
-        } =&gt; GgufLoaderBuilder::new(
-            GgufSpecificConfig { repeat_last_n },
+        } =&gt; GGUFLoaderBuilder::new(
+            GGUFSpecificConfig { repeat_last_n },
             args.chat_template,
             tokenizer_json,
             tok_model_id,
@@ -500,8 +500,8 @@
             quantized_filename,
             repeat_last_n,
             gqa,
-        } =&gt; GgmlLoaderBuilder::new(
-            GgmlSpecificConfig { repeat_last_n, gqa },
+        } =&gt; GGMLLoaderBuilder::new(
+            GGMLSpecificConfig { repeat_last_n, gqa },
             args.chat_template,
             tokenizer_json,
             <span class="prelude-val">Some</span>(tok_model_id),
@@ -519,8 +519,8 @@
             order,
             tgt_non_granular_index,
             gqa,
-        } =&gt; GgmlLoaderBuilder::new(
-            GgmlSpecificConfig { repeat_last_n, gqa },
+        } =&gt; GGMLLoaderBuilder::new(
+            GGMLSpecificConfig { repeat_last_n, gqa },
             args.chat_template,
             tokenizer_json,
             tok_model_id,
@@ -547,8 +547,8 @@
             order,
             tgt_non_granular_index,
             gqa,
-        } =&gt; GgmlLoaderBuilder::new(
-            GgmlSpecificConfig { repeat_last_n, gqa },
+        } =&gt; GGMLLoaderBuilder::new(
+            GGMLSpecificConfig { repeat_last_n, gqa },
             args.chat_template,
             tokenizer_json,
             tok_model_id,
