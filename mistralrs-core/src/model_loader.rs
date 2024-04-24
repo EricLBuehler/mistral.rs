@@ -2,7 +2,7 @@ use std::fs::File;
 
 use crate::{
     pipeline::{
-        GgmlLoaderBuilder, GgmlSpecificConfig, GgufLoaderBuilder, GgufSpecificConfig,
+        GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
         NormalSpecificConfig,
     },
     Loader, ModelSelected, NormalLoaderBuilder,
@@ -144,8 +144,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_model_id,
             quantized_filename,
             repeat_last_n,
-        } => GgufLoaderBuilder::new(
-            GgufSpecificConfig { repeat_last_n },
+        } => GGUFLoaderBuilder::new(
+            GGUFSpecificConfig { repeat_last_n },
             args.chat_template,
             tokenizer_json,
             Some(tok_model_id),
@@ -162,8 +162,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             xlora_model_id,
             order,
             tgt_non_granular_index,
-        } => GgufLoaderBuilder::new(
-            GgufSpecificConfig { repeat_last_n },
+        } => GGUFLoaderBuilder::new(
+            GGUFSpecificConfig { repeat_last_n },
             args.chat_template,
             tokenizer_json,
             tok_model_id,
@@ -189,8 +189,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             adapters_model_id,
             order,
             tgt_non_granular_index,
-        } => GgufLoaderBuilder::new(
-            GgufSpecificConfig { repeat_last_n },
+        } => GGUFLoaderBuilder::new(
+            GGUFSpecificConfig { repeat_last_n },
             args.chat_template,
             tokenizer_json,
             tok_model_id,
@@ -214,8 +214,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_filename,
             repeat_last_n,
             gqa,
-        } => GgmlLoaderBuilder::new(
-            GgmlSpecificConfig { repeat_last_n, gqa },
+        } => GGMLLoaderBuilder::new(
+            GGMLSpecificConfig { repeat_last_n, gqa },
             args.chat_template,
             tokenizer_json,
             Some(tok_model_id),
@@ -233,8 +233,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             order,
             tgt_non_granular_index,
             gqa,
-        } => GgmlLoaderBuilder::new(
-            GgmlSpecificConfig { repeat_last_n, gqa },
+        } => GGMLLoaderBuilder::new(
+            GGMLSpecificConfig { repeat_last_n, gqa },
             args.chat_template,
             tokenizer_json,
             tok_model_id,
@@ -261,8 +261,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             order,
             tgt_non_granular_index,
             gqa,
-        } => GgmlLoaderBuilder::new(
-            GgmlSpecificConfig { repeat_last_n, gqa },
+        } => GGMLLoaderBuilder::new(
+            GGMLSpecificConfig { repeat_last_n, gqa },
             args.chat_template,
             tokenizer_json,
             tok_model_id,

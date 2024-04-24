@@ -10,8 +10,8 @@ use candle_nn::VarBuilder;
 use chat_template::{apply_chat_template_to, ChatTemplate};
 use core::fmt;
 use either::Either;
-pub use ggml::{GgmlLoader, GgmlLoaderBuilder, GgmlSpecificConfig};
-pub use gguf::{GgufLoader, GgufLoaderBuilder, GgufSpecificConfig};
+pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
+pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
     Repo, RepoType,

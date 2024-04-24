@@ -76,9 +76,9 @@ impl ModelPaths for MistralModelPaths<PathBuf> {
     }
 }
 
-pub struct GgmlPipeline {
+pub struct GGMLPipeline {
     model: Model,
-    config: GgmlSpecificConfig,
+    config: GGMLSpecificConfig,
     tokenizer: Arc<Tokenizer>,
     tok_trie: TokTrie,
     no_kv_cache: bool,
@@ -89,9 +89,9 @@ pub struct GgmlPipeline {
     is_lora: bool,
 }
 
-pub struct GgmlLoader {
+pub struct GGMLLoader {
     model_id: String,
-    config: GgmlSpecificConfig,
+    config: GGMLSpecificConfig,
     quantized_model_id: Option<String>,
     quantized_filename: Option<String>,
     xlora_model_id: Option<String>,
@@ -105,16 +105,16 @@ pub struct GgmlLoader {
 
 #[derive(Clone, Copy, Default)]
 /// Config for a GGML loader.
-pub struct GgmlSpecificConfig {
+pub struct GGMLSpecificConfig {
     pub repeat_last_n: usize,
     pub gqa: usize,
 }
 
 #[derive(Default)]
 /// A builder for a GGML loader.
-pub struct GgmlLoaderBuilder {
+pub struct GGMLLoaderBuilder {
     model_id: Option<String>,
-    config: GgmlSpecificConfig,
+    config: GGMLSpecificConfig,
     quantized_model_id: String,
     quantized_filename: String,
     xlora_model_id: Option<String>,
@@ -126,9 +126,9 @@ pub struct GgmlLoaderBuilder {
     tgt_non_granular_index: Option<usize>,
 }
 
-impl GgmlLoaderBuilder {
+impl GGMLLoaderBuilder {
     pub fn new(
-        config: GgmlSpecificConfig,
+        config: GGMLSpecificConfig,
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
         model_id: Option<String>,
@@ -203,7 +203,7 @@ impl GgmlLoaderBuilder {
     }
 
     pub fn build(self) -> Box<dyn Loader> {
-        Box::new(GgmlLoader {
+        Box::new(GGMLLoader {
             model_id: self.model_id.unwrap(),
             config: self.config,
             xlora_model_id: self.xlora_model_id,
@@ -219,11 +219,11 @@ impl GgmlLoaderBuilder {
     }
 }
 
-impl GgmlLoader {
+impl GGMLLoader {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         model_id: Option<String>,
-        config: GgmlSpecificConfig,
+        config: GGMLSpecificConfig,
         quantized_model_id: Option<String>,
         quantized_filename: Option<String>,
         xlora_model_id: Option<String>,
@@ -259,7 +259,7 @@ impl GgmlLoader {
     }
 }
 
-impl Loader for GgmlLoader {
+impl Loader for GGMLLoader {
     fn download_model(
         &self,
         revision: Option<String>,
@@ -352,7 +352,7 @@ impl Loader for GgmlLoader {
 
         let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
 
-        Ok(Box::new(Mutex::new(GgmlPipeline {
+        Ok(Box::new(Mutex::new(GGMLPipeline {
             model,
             config: self.config,
             eos_tok: calculate_eos_tokens(&chat_template, &tokenizer),
@@ -380,7 +380,7 @@ impl Loader for GgmlLoader {
     }
 }
 
-impl Pipeline for GgmlPipeline {
+impl Pipeline for GGMLPipeline {
     fn forward(
         &mut self,
         input_toks: &[&mut Sequence],

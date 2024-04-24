@@ -15,8 +15,8 @@ use stream::ChatCompletionStreamer;
 
 use candle_core::Device;
 use mistralrs_core::{
-    ChatCompletionResponse, CompletionResponse, Constraint, GgmlLoaderBuilder, GgmlSpecificConfig,
-    GgufLoaderBuilder, GgufSpecificConfig, Loader, MistralRs, MistralRsBuilder,
+    ChatCompletionResponse, CompletionResponse, Constraint, GGMLLoaderBuilder, GGMLSpecificConfig,
+    GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder,
     NormalLoaderBuilder, NormalSpecificConfig, Request as _Request, RequestMessage, Response,
     SamplingParams, SchedulerMethod, StopTokens, TokenSource,
 };
@@ -88,9 +88,9 @@ impl Runner {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
             | Which::Lora { .. }
-            | Which::Gguf { .. }
+            | Which::GGUF { .. }
             | Which::LoraGGUF { .. }
-            | Which::Ggml { .. }
+            | Which::GGML { .. }
             | Which::LoraGGML { .. } => None,
             Which::XLora {
                 tgt_non_granular_index,
@@ -182,14 +182,14 @@ impl Runner {
                 tgt_non_granular_index,
             )
             .build(arch.into()),
-            Which::Gguf {
+            Which::GGUF {
                 tok_model_id,
                 tokenizer_json,
                 quantized_model_id,
                 quantized_filename,
                 repeat_last_n,
-            } => GgufLoaderBuilder::new(
-                GgufSpecificConfig {
+            } => GGUFLoaderBuilder::new(
+                GGUFSpecificConfig {
                     repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
                 },
                 chat_template,
@@ -208,8 +208,8 @@ impl Runner {
                 xlora_model_id,
                 order,
                 tgt_non_granular_index,
-            } => GgufLoaderBuilder::new(
-                GgufSpecificConfig {
+            } => GGUFLoaderBuilder::new(
+                GGUFSpecificConfig {
                     repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
                 },
                 chat_template,
@@ -238,8 +238,8 @@ impl Runner {
                 adapters_model_id,
                 order,
                 tgt_non_granular_index,
-            } => GgufLoaderBuilder::new(
-                GgufSpecificConfig {
+            } => GGUFLoaderBuilder::new(
+                GGUFSpecificConfig {
                     repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
                 },
                 chat_template,
@@ -259,15 +259,15 @@ impl Runner {
                 tgt_non_granular_index,
             )
             .build(),
-            Which::Ggml {
+            Which::GGML {
                 tok_model_id,
                 tokenizer_json,
                 quantized_model_id,
                 quantized_filename,
                 repeat_last_n,
                 gqa,
-            } => GgmlLoaderBuilder::new(
-                GgmlSpecificConfig {
+            } => GGMLLoaderBuilder::new(
+                GGMLSpecificConfig {
                     repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
                     gqa: gqa.unwrap_or(GQA_DEFAULT),
                 },
@@ -288,8 +288,8 @@ impl Runner {
                 order,
                 tgt_non_granular_index,
                 gqa,
-            } => GgmlLoaderBuilder::new(
-                GgmlSpecificConfig {
+            } => GGMLLoaderBuilder::new(
+                GGMLSpecificConfig {
                     repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
                     gqa: gqa.unwrap_or(GQA_DEFAULT),
                 },
@@ -320,8 +320,8 @@ impl Runner {
                 order,
                 tgt_non_granular_index,
                 gqa,
-            } => GgmlLoaderBuilder::new(
-                GgmlSpecificConfig {
+            } => GGMLLoaderBuilder::new(
+                GGMLSpecificConfig {
                     repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
                     gqa: gqa.unwrap_or(GQA_DEFAULT),
                 },
