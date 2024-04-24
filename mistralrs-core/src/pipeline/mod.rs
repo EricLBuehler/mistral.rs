@@ -135,7 +135,7 @@ impl AsRef<str> for ModelKind {
 ///
 /// # Example
 /// ```no_run
-/// let loader: Box<dyn Loader> = ...;
+/// let loader: Box<dyn Loader> = todo!();
 /// let pipeline = loader.load_model(
 ///     None,
 ///     TokenSource::CacheToken,
