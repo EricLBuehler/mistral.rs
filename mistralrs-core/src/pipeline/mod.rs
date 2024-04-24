@@ -136,15 +136,15 @@ impl AsRef<str> for ModelKind {
 /// # Example
 /// ```no_run
 /// use mistralrs_core::{Loader, TokenSource};
-/// use candle::Device;
+/// use candle_core::Device;
 ///
 /// let loader: Box<dyn Loader> = todo!();
 /// let pipeline = loader.load_model(
 ///     None,
 ///     TokenSource::CacheToken,
 ///     None,
-///     &Device::cuda_if_available(0)?,
-/// )?;
+///     &Device::cuda_if_available(0).unwrap(),
+/// ).unwrap();
 /// ```
 pub trait Loader {
     fn download_model(
