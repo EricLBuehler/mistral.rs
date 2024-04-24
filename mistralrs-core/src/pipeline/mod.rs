@@ -152,6 +152,7 @@ pub trait Loader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
+        silent: bool,
     ) -> Result<Box<dyn ModelPaths>>;
 
     #[allow(clippy::type_complexity)]
@@ -174,7 +175,7 @@ pub trait Loader {
         device: &Device,
         silent: bool,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
-        let paths = self.download_model(revision, token_source)?;
+        let paths = self.download_model(revision, token_source, silent)?;
         self._setup_model(&*paths, dtype, device, silent)
     }
 

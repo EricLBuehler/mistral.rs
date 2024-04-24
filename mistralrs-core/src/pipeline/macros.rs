@@ -66,9 +66,9 @@ macro_rules! deserialize_chat_template {
 
 #[macro_export]
 macro_rules! get_paths {
-    ($path_name:ident, $token_source:expr, $revision:expr, $this:expr, $quantized_model_id:expr, $quantized_filename:expr) => {{
+    ($path_name:ident, $token_source:expr, $revision:expr, $this:expr, $quantized_model_id:expr, $quantized_filename:expr, $silent:expr) => {{
         let api = ApiBuilder::new()
-            .with_progress(true)
+            .with_progress(!$silent)
             .with_token(Some(get_token($token_source)?))
             .build()?;
         let revision = $revision.unwrap_or("main".to_string());

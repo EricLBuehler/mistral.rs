@@ -298,6 +298,7 @@ impl Loader for GGUFLoader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
+        silent: bool,
     ) -> Result<Box<dyn ModelPaths>> {
         get_paths!(
             MistralModelPaths,
@@ -305,7 +306,8 @@ impl Loader for GGUFLoader {
             revision,
             self,
             self.quantized_model_id,
-            self.quantized_filename
+            self.quantized_filename,
+            silent
         )
     }
 

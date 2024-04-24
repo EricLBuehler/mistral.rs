@@ -220,8 +220,17 @@ impl Loader for NormalLoader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
+        silent: bool,
     ) -> Result<Box<dyn ModelPaths>> {
-        get_paths!(NormalModelPaths, &token_source, revision, self, None, None)
+        get_paths!(
+            NormalModelPaths,
+            &token_source,
+            revision,
+            self,
+            None,
+            None,
+            silent
+        )
     }
 
     fn _setup_model(
