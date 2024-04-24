@@ -5,7 +5,7 @@ mod loaders;
 mod macros;
 mod normal;
 use crate::aici::toktree::TokTrie;
-use crate::device_map::DeviceMapper;
+use crate::DeviceMapMetadata;
 use crate::{get_bias_if_not_allowed, sampler::Logprobs, sequence::SequenceRecognizer};
 use candle_nn::VarBuilder;
 use chat_template::{apply_chat_template_to, ChatTemplate};
@@ -157,7 +157,7 @@ pub trait Loader {
         paths: &dyn ModelPaths,
         dtype: Option<DType>,
         device: &Device,
-        mapper: Box<dyn DeviceMapper + Send + Sync>,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>>;
 
     /// If `revision` is None, then it defaults to `main`.
@@ -169,7 +169,7 @@ pub trait Loader {
         token_source: TokenSource,
         dtype: Option<DType>,
         device: &Device,
-        mapper: Box<dyn DeviceMapper + Send + Sync>,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths = self.download_model(revision, token_source)?;
         self._setup_model(&*paths, dtype, device, mapper)
@@ -303,7 +303,7 @@ pub trait NormalModelLoader {
         config: &str,
         use_flash_attn: bool,
         vb: VarBuilder,
-        mapper: Box<dyn DeviceMapper + Send + Sync>,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn load_xlora(
         &self,
@@ -313,7 +313,7 @@ pub trait NormalModelLoader {
         lora_config: &[(String, LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
-        mapper: Box<dyn DeviceMapper + Send + Sync>,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn is_gptx(&self) -> bool;
 }

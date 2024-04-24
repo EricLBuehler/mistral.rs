@@ -8,6 +8,7 @@ use candle_nn::{linear_b as linear, Activation, Linear, RotaryEmbedding, VarBuil
 use crate::{
     device_map::DeviceMapper,
     pipeline::{extract_logits, NormalModel},
+    DeviceMapMetadata,
 };
 
 use super::{repeat_kv, Cache};
@@ -284,7 +285,7 @@ impl Model {
         cfg: &Config,
         vb: VarBuilder,
         is_gptx: bool,
-        mapper: Box<dyn DeviceMapper + Send + Sync>,
+        mapper: DeviceMapMetadata,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
@@ -299,6 +300,7 @@ impl Model {
         )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
         for layer_idx in 0..cfg.num_hidden_layers {
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),

@@ -7,12 +7,14 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
-use crate::device_map::DeviceMapper;
 use crate::models::Cache;
 use crate::pipeline::chat_template::calculate_eos_tokens;
 use crate::pipeline::ChatTemplate;
 use crate::xlora_models::{NonGranularState, XLoraConfig};
-use crate::{deserialize_chat_template, get_paths, normal_model_loader, xlora_model_loader};
+use crate::{
+    deserialize_chat_template, get_paths, normal_model_loader, xlora_model_loader,
+    DeviceMapMetadata,
+};
 use crate::{
     sequence::Sequence,
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
@@ -230,7 +232,7 @@ impl Loader for NormalLoader {
         paths: &dyn ModelPaths,
         dtype: Option<DType>,
         device: &Device,
-        mapper: Box<dyn DeviceMapper + Send + Sync>,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         let default_dtype = if device.is_cuda() {

@@ -15,6 +15,7 @@ use serde::Deserialize;
 use crate::{
     device_map::DeviceMapper,
     pipeline::{extract_logits, NormalModel},
+    DeviceMapMetadata,
 };
 
 use super::{flash_attn, repeat_kv, Cache};
@@ -298,7 +299,7 @@ impl Model {
         cfg: &Config,
         vb: VarBuilder,
         is_gptx: bool,
-        mapper: Box<dyn DeviceMapper + Send + Sync>,
+        mapper: DeviceMapMetadata,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
@@ -309,6 +310,7 @@ impl Model {
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_m = vb_m.pp("layers");
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
         for layer_idx in 0..cfg.num_hidden_layers {
             let layer = DecoderLayer::new(
                 cfg,

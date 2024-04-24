@@ -8,6 +8,7 @@ use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Embedding, LayerNorm};
 
 use crate::device_map::DeviceMapper;
+use crate::DeviceMapMetadata;
 
 use super::repeat_kv;
 use super::Cache;
@@ -188,7 +189,7 @@ impl ModelWeights {
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
-        mapper: Box<dyn DeviceMapper + Send + Sync>,
+        mapper: DeviceMapMetadata,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle_core::bail!("cannot find {s} in metadata"),
@@ -218,8 +219,11 @@ impl ModelWeights {
         )?;
         let output = QLinear::new(&ct, reader, "output", device)?;
         let mut layers = Vec::with_capacity(block_count);
+        let mapper = mapper.into_mapper(block_count, device)?;
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
+            let device = mapper.device_for(layer_idx).unwrap_or(device);
+
             let ffn_up = QLinear::new(&ct, reader, &format!("{prefix}.ffn_up"), device)?;
             let ffn_down = QLinear::new(&ct, reader, &format!("{prefix}.ffn_down"), device)?;
             let mlp = Mlp { ffn_up, ffn_down };

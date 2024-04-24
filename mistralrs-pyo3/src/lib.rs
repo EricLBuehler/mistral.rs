@@ -15,7 +15,7 @@ use stream::ChatCompletionStreamer;
 
 use candle_core::Device;
 use mistralrs_core::{
-    new_dummy_mapper, ChatCompletionResponse, CompletionResponse, Constraint, GgmlLoaderBuilder,
+    ChatCompletionResponse, CompletionResponse, Constraint, DeviceMapMetadata, GgmlLoaderBuilder,
     GgmlSpecificConfig, GgufLoaderBuilder, GgufSpecificConfig, Loader, MistralRs, MistralRsBuilder,
     NormalLoaderBuilder, NormalSpecificConfig, Request as _Request, RequestMessage, Response,
     SamplingParams, SchedulerMethod, StopTokens, TokenSource,
@@ -68,7 +68,7 @@ static NEXT_REQUEST_ID: Mutex<RefCell<usize>> = Mutex::new(RefCell::new(0));
 #[pymethods]
 impl Runner {
     #[new]
-    #[pyo3(signature = (which, max_seqs = 16, no_kv_cache = false, prefix_cache_n = 16, token_source = "cache", chat_template = None))]
+    #[pyo3(signature = (which, max_seqs = 16, no_kv_cache = false, prefix_cache_n = 16, token_source = "cache", chat_template = None, num_device_layers = None))]
     fn new(
         which: Which,
         max_seqs: usize,
@@ -76,6 +76,7 @@ impl Runner {
         prefix_cache_n: usize,
         token_source: &str,
         chat_template: Option<String>,
+        num_device_layers: Option<usize>,
     ) -> PyResult<Self> {
         const REPEAT_LAST_N_DEFAULT: usize = 64;
         const GQA_DEFAULT: usize = 1;
@@ -352,7 +353,9 @@ impl Runner {
                     .map_err(|e| PyValueError::new_err(e.to_string()))?,
                 None,
                 &device,
-                new_dummy_mapper(),
+                num_device_layers
+                    .map(|n| DeviceMapMetadata::from_num_device_layers(n))
+                    .unwrap_or(DeviceMapMetadata::dummy()),
             )
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
 

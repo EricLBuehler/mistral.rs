@@ -12,6 +12,7 @@ use crate::{
     device_map::DeviceMapper,
     models::{flash_attn, mixtral::Config, repeat_kv, Cache, RmsNorm},
     pipeline::{extract_logits, NormalModel},
+    DeviceMapMetadata,
 };
 
 use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -464,7 +465,7 @@ impl XLoraModel {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         is_gptx: bool,
-        mapper: Box<dyn DeviceMapper + Send + Sync>,
+        mapper: DeviceMapMetadata,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
@@ -481,6 +482,7 @@ impl XLoraModel {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         let mut count = 0;
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
         for layer_idx in 0..cfg.num_hidden_layers {
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),

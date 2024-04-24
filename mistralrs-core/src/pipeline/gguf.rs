@@ -4,13 +4,12 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
-use crate::device_map::DeviceMapper;
 use crate::models::Cache;
 use crate::pipeline::chat_template::calculate_eos_tokens;
 use crate::pipeline::ChatTemplate;
 use crate::utils::varbuilder_utils::from_mmaped_safetensors;
 use crate::xlora_models::{NonGranularState, XLoraConfig};
-use crate::{deserialize_chat_template, get_paths};
+use crate::{deserialize_chat_template, get_paths, DeviceMapMetadata};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama, models::quantized_phi2::ModelWeights as QPhi,
     sequence::Sequence, utils::tokens::get_token, xlora_models::XLoraModelWeights as XLoraQLlama,
@@ -315,7 +314,7 @@ impl Loader for GgufLoader {
         paths: &dyn ModelPaths,
         _dtype: Option<DType>,
         device: &Device,
-        mapper: Box<dyn DeviceMapper + Send + Sync>,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
         let model = gguf_file::Content::read(&mut file)

@@ -11,6 +11,7 @@ use mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Merge, Ordering,
 use crate::device_map::DeviceMapper;
 use crate::models::{repeat_kv, verify_sanity_gguf, Cache, QRmsNorm};
 use crate::pipeline::extract_logits;
+use crate::DeviceMapMetadata;
 
 use super::classifier::XLoraClassifier;
 use super::{verify_sanity_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -423,7 +424,7 @@ impl ModelWeights {
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
-        mapper: Box<dyn DeviceMapper + Send + Sync>,
+        mapper: DeviceMapMetadata,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle_core::bail!("cannot find {s} in metadata"),
@@ -473,8 +474,11 @@ impl ModelWeights {
         let output = ct.tensor(reader, "output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
         let mut count = 0;
+        let mapper = mapper.into_mapper(block_count, device)?;
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
+            let device = mapper.device_for(layer_idx).unwrap_or(device);
+
             let attention_wq = ct.tensor(reader, &format!("{prefix}.attn_q.weight"), device)?;
             let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"), device)?;
             let attention_wv = ct.tensor(reader, &format!("{prefix}.attn_v.weight"), device)?;

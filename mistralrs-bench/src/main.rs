@@ -2,7 +2,7 @@ use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
-    new_dummy_mapper, Constraint, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelKind,
+    Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelKind,
     ModelSelected, Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
     Usage,
 };
@@ -226,6 +226,10 @@ struct Args {
     /// Number of times to repeat each test.
     #[arg(long, short, default_value_t = 5)]
     repetitions: usize,
+
+    /// Number of device layers to load and run on the device. All others will be on the CPU.
+    #[arg(short, long)]
+    num_device_layers: Option<usize>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -273,7 +277,15 @@ fn main() -> anyhow::Result<()> {
         warn!("Using flash attention with a quantized model has no effect!")
     }
     info!("Model kind is: {}", loader.get_kind().as_ref());
-    let pipeline = loader.load_model(None, token_source, None, &device, new_dummy_mapper())?;
+    let pipeline = loader.load_model(
+        None,
+        token_source,
+        None,
+        &device,
+        args.num_device_layers
+            .map(|n| DeviceMapMetadata::from_num_device_layers(n))
+            .unwrap_or(DeviceMapMetadata::dummy()),
+    )?;
     info!("Model loaded.");
 
     let mistralrs = MistralRsBuilder::new(

@@ -9,6 +9,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     device_map::DeviceMapper,
     pipeline::{extract_logits, NormalModel},
+    DeviceMapMetadata,
 };
 
 use super::{flash_attn, repeat_kv, RmsNorm};
@@ -307,12 +308,13 @@ impl Llama {
         cfg: &Config,
         vb: VarBuilder,
         is_gptx: bool,
-        mapper: Box<dyn DeviceMapper + Send + Sync>,
+        mapper: DeviceMapMetadata,
     ) -> Result<Self> {
         let device = vb.device();
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)
             .map(|i| {
                 Block::load(

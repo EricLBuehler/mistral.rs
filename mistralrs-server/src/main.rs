@@ -8,7 +8,7 @@ use axum::{
 use candle_core::Device;
 use clap::Parser;
 use mistralrs_core::{
-    get_tgt_non_granular_index, new_dummy_mapper, Loader, LoaderBuilder, MistralRs,
+    get_tgt_non_granular_index, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs,
     MistralRsBuilder, ModelKind, ModelSelected, SchedulerMethod, TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
@@ -205,7 +205,15 @@ async fn main() -> Result<()> {
         warn!("Using flash attention with a quantized model has no effect!")
     }
     info!("Model kind is: {}", loader.get_kind().as_ref());
-    let pipeline = loader.load_model(None, args.token_source, None, &device, new_dummy_mapper())?;
+    let pipeline = loader.load_model(
+        None,
+        args.token_source,
+        None,
+        &device,
+        args.num_device_layers
+            .map(|n| DeviceMapMetadata::from_num_device_layers(n))
+            .unwrap_or(DeviceMapMetadata::dummy()),
+    )?;
     info!("Model loaded.");
 
     let mistralrs = MistralRsBuilder::new(

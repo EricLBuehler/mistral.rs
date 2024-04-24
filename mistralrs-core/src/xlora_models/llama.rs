@@ -13,6 +13,7 @@ use crate::{
         repeat_kv, LayerCaches, RmsNorm,
     },
     pipeline::{extract_logits, NormalModel},
+    DeviceMapMetadata,
 };
 
 use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -473,7 +474,7 @@ impl XLoraLlama {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         is_gptx: bool,
-        mapper: Box<dyn DeviceMapper + Send + Sync>,
+        mapper: DeviceMapMetadata,
     ) -> Result<Self> {
         let device = vb.device();
         let dtype = vb.dtype();
@@ -481,6 +482,7 @@ impl XLoraLlama {
         let lm_head = candle_nn::linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
         let mut count = 0;
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)
             .map(|i| {
                 Block::load(
