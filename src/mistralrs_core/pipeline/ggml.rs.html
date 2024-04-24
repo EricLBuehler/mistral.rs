@@ -617,7 +617,7 @@
             chat_template,
             tokenizer_json,
             model_id,
-            kind: ModelKind::Normal,
+            kind: ModelKind::QuantizedGGML,
             quantized_filename,
             quantized_model_id,
             ..Default::default()
@@ -654,7 +654,7 @@
         no_kv_cache: bool,
         tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     ) -&gt; <span class="self">Self </span>{
-        <span class="self">self</span>.kind = ModelKind::XLoraGGUF;
+        <span class="self">self</span>.kind = ModelKind::XLoraGGML;
         <span class="self">self</span>.with_adapter(
             xlora_model_id,
             xlora_order,
@@ -670,7 +670,7 @@
         no_kv_cache: bool,
         tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     ) -&gt; <span class="self">Self </span>{
-        <span class="self">self</span>.kind = ModelKind::LoraGGUF;
+        <span class="self">self</span>.kind = ModelKind::LoraGGML;
         <span class="self">self</span>.with_adapter(
             xlora_model_id,
             xlora_order,
