@@ -476,6 +476,8 @@
 <a href="#474" id="474">474</a>
 <a href="#475" id="475">475</a>
 <a href="#476" id="476">476</a>
+<a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -742,6 +744,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
         token_source: TokenSource,
+        silent: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelPaths&gt;&gt; {
         <span class="macro">get_paths!</span>(
             MistralModelPaths,
@@ -749,7 +752,8 @@
             revision,
             <span class="self">self</span>,
             <span class="self">self</span>.quantized_model_id,
-            <span class="self">self</span>.quantized_filename
+            <span class="self">self</span>.quantized_filename,
+            silent
         )
     }
 

@@ -400,6 +400,15 @@
 <a href="#398" id="398">398</a>
 <a href="#399" id="399">399</a>
 <a href="#400" id="400">400</a>
+<a href="#401" id="401">401</a>
+<a href="#402" id="402">402</a>
+<a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
+<a href="#405" id="405">405</a>
+<a href="#406" id="406">406</a>
+<a href="#407" id="407">407</a>
+<a href="#408" id="408">408</a>
+<a href="#409" id="409">409</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
 };
@@ -622,8 +631,17 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
         token_source: TokenSource,
+        silent: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelPaths&gt;&gt; {
-        <span class="macro">get_paths!</span>(NormalModelPaths, <span class="kw-2">&amp;</span>token_source, revision, <span class="self">self</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
+        <span class="macro">get_paths!</span>(
+            NormalModelPaths,
+            <span class="kw-2">&amp;</span>token_source,
+            revision,
+            <span class="self">self</span>,
+            <span class="prelude-val">None</span>,
+            <span class="prelude-val">None</span>,
+            silent
+        )
     }
 
     <span class="kw">fn </span>_setup_model(
