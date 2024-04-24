@@ -793,6 +793,9 @@
 <a href="#791" id="791">791</a>
 <a href="#792" id="792">792</a>
 <a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a>
+<a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>chat_template;
 <span class="kw">mod </span>ggml;
 <span class="kw">mod </span>gguf;
@@ -930,6 +933,9 @@
 ///
 /// # Example
 /// ```no_run
+/// use mistralrs_core::{Loader, TokenSource};
+/// use candle::Device;
+///
 /// let loader: Box&lt;dyn Loader&gt; = todo!();
 /// let pipeline = loader.load_model(
 ///     None,
