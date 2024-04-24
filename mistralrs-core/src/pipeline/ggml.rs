@@ -280,6 +280,7 @@ impl Loader for GgmlLoader {
         paths: &dyn ModelPaths,
         dtype: Option<DType>,
         device: &Device,
+        silent: bool,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         let default_dtype = if device.is_cuda() {
             DType::BF16
@@ -306,7 +307,7 @@ impl Loader for GgmlLoader {
                         .collect::<Vec<_>>(),
                     dtype.unwrap_or(default_dtype),
                     device,
-                    false,
+                    silent,
                 )?;
 
                 Model::XLoraLlama(XLoraQLlama::from_ggml(
@@ -331,7 +332,7 @@ impl Loader for GgmlLoader {
                         .collect::<Vec<_>>(),
                     dtype.unwrap_or(default_dtype),
                     device,
-                    false,
+                    silent,
                 )?;
 
                 Model::XLoraLlama(XLoraQLlama::from_ggml(

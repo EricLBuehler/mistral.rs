@@ -23,6 +23,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         TokenSource::CacheToken,
         None,
         &Device::cuda_if_available(0)?,
+        false,
     )?;
     // Create the MistralRs, which is a runner
     Ok(MistralRsBuilder::new(pipeline, SchedulerMethod::Fixed(5.try_into().unwrap())).build())

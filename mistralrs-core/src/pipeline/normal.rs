@@ -229,6 +229,7 @@ impl Loader for NormalLoader {
         paths: &dyn ModelPaths,
         dtype: Option<DType>,
         device: &Device,
+        silent: bool,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         let default_dtype = if device.is_cuda() {
@@ -250,7 +251,8 @@ impl Loader for NormalLoader {
                 device,
                 config,
                 self.inner,
-                self.config.use_flash_attn
+                self.config.use_flash_attn,
+                silent
             ),
             ModelKind::XLoraNormal => xlora_model_loader!(
                 paths,
@@ -259,7 +261,8 @@ impl Loader for NormalLoader {
                 device,
                 config,
                 self.inner,
-                self.config.use_flash_attn
+                self.config.use_flash_attn,
+                silent
             ),
             ModelKind::LoraNormal => {
                 is_lora = true;
@@ -270,7 +273,8 @@ impl Loader for NormalLoader {
                     device,
                     config,
                     self.inner,
-                    self.config.use_flash_attn
+                    self.config.use_flash_attn,
+                    silent
                 )
             }
             ModelKind::XLoraGGUF => unreachable!(),

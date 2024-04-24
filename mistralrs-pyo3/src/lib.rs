@@ -352,6 +352,7 @@ impl Runner {
                     .map_err(|e| PyValueError::new_err(e.to_string()))?,
                 None,
                 &device,
+                true, // Silent for jupyter
             )
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
 

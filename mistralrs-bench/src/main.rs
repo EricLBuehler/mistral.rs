@@ -272,7 +272,7 @@ fn main() -> anyhow::Result<()> {
         warn!("Using flash attention with a quantized model has no effect!")
     }
     info!("Model kind is: {}", loader.get_kind().as_ref());
-    let pipeline = loader.load_model(None, token_source, None, &device)?;
+    let pipeline = loader.load_model(None, token_source, None, &device, false)?;
     info!("Model loaded.");
 
     let mistralrs = MistralRsBuilder::new(
