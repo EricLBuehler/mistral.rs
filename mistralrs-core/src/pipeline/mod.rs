@@ -135,6 +135,9 @@ impl AsRef<str> for ModelKind {
 ///
 /// # Example
 /// ```no_run
+/// use mistralrs_core::{Loader, TokenSource};
+/// use candle::Device;
+///
 /// let loader: Box<dyn Loader> = todo!();
 /// let pipeline = loader.load_model(
 ///     None,
