@@ -34,7 +34,9 @@ jobs:
           python3 -m venv myenv
           source myenv/bin/activate
           pip install maturin[patchelf] pdoc
+          cd mistralrs-pyo3
           maturin develop
+          cd ..
           pdoc mistralrs -o ./docs/pyo3
       - name: Deploy
         uses: JamesIves/github-pages-deploy-action@v4
