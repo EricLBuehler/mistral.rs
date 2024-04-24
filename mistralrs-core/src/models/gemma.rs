@@ -361,6 +361,7 @@ impl Model {
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
+            xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
                 attention_mask.as_ref(),
@@ -368,7 +369,6 @@ impl Model {
                 start_offsets_kernel.clone(),
                 &mut cache[i],
             )?;
-            xs = self.mapper.map(xs, i)?;
         }
         extract_logits(&xs.apply(&self.norm)?.apply(&self.lm_head)?, context_lens)
     }

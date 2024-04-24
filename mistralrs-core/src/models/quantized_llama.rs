@@ -427,6 +427,9 @@ impl ModelWeights {
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
+            if let Some(ref mapper) = self.mapper {
+                layer_in = mapper.map(layer_in, i)?;
+            }
             let x = layer_in;
             let residual = &x;
             let x = layer.attention_norm.forward(&x)?;
@@ -445,9 +448,6 @@ impl ModelWeights {
             let x = layer.mlp_or_moe.forward(&x)?;
             let x = (x + residual)?;
             layer_in = x;
-            if let Some(ref mapper) = self.mapper {
-                layer_in = mapper.map(layer_in, i)?;
-            }
         }
         let x = self.norm.forward(&layer_in)?;
         extract_logits(&self.output.forward(&x.contiguous()?)?, context_lens)

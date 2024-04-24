@@ -338,6 +338,7 @@ pub struct XLoraLlama {
     cache: Cache,
     xlora_classifier: Option<XLoraClassifier>,
     dtype: DType,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 impl XLoraLlama {
@@ -367,6 +368,7 @@ impl XLoraLlama {
             self.kv_cache.lock()
         };
         for (block_idx, block) in self.blocks.iter().enumerate() {
+            x = self.mapper.map(x, block_idx)?;
             x = block.forward(
                 &x,
                 seqlen_offsets,
@@ -505,6 +507,7 @@ impl XLoraLlama {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
             }),
             dtype,
+            mapper,
         })
     }
 }

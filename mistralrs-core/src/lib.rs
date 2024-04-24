@@ -36,7 +36,7 @@ mod sequence;
 mod utils;
 mod xlora_models;
 
-pub use device_map::new_dummy_mapper;
+pub use device_map::{new_dummy_mapper, DeviceMapMetadata, LayerDeviceMapper};
 pub use pipeline::{
     GemmaLoader, GgmlLoader, GgmlLoaderBuilder, GgmlSpecificConfig, GgufLoader, GgufLoaderBuilder,
     GgufSpecificConfig, LlamaLoader, Loader, MistralLoader, MixtralLoader, ModelKind, NormalLoader,

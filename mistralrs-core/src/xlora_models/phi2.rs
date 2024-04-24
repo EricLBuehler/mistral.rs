@@ -376,6 +376,7 @@ pub struct Model {
     pub max_seq_len: usize,
     xlora_classifier: Option<XLoraClassifier>,
     dtype: DType,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 impl Model {
@@ -422,6 +423,7 @@ impl Model {
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
             }),
+            mapper,
         })
     }
 
@@ -457,6 +459,7 @@ impl Model {
             self.cache.lock()
         };
         for (i, layer) in self.layers.iter_mut().enumerate() {
+            xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
                 mask.as_ref(),

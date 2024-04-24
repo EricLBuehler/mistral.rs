@@ -13,6 +13,15 @@ pub struct DeviceMapMetadata {
     host_layers: Option<usize>,
 }
 
+impl DeviceMapMetadata {
+    pub fn from_num_device_layers(device_layers: usize) -> Self {
+        Self {
+            device_layers,
+            host_layers: None,
+        }
+    }
+}
+
 pub trait DeviceMapper: Debug {
     fn map(&self, input: Tensor, layer: usize) -> Result<Tensor>;
     fn set_device<'a>(&self, layer: usize, varbuilder: VarBuilder<'a>) -> VarBuilder<'a>;

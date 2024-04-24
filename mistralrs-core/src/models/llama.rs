@@ -288,6 +288,7 @@ impl Llama {
         let mut x = self.wte.forward(x)?;
         let mut cache = self.kv_cache.lock();
         for (block_idx, block) in self.blocks.iter().enumerate() {
+            x = self.mapper.map(x, block_idx)?;
             x = block.forward(
                 &x,
                 seqlen_offsets,
@@ -296,7 +297,6 @@ impl Llama {
                 &mut cache,
                 &mut self.cache,
             )?;
-            x = self.mapper.map(x, block_idx)?;
         }
         let x = self.ln_f.forward(&x)?;
         let logits = self.lm_head.forward(&x)?;

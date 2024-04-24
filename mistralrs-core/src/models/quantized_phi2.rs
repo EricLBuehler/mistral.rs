@@ -7,6 +7,8 @@ use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Embedding, LayerNorm};
 
+use crate::device_map::DeviceMapper;
+
 use super::repeat_kv;
 use super::Cache;
 
@@ -152,6 +154,7 @@ pub struct ModelWeights {
     pub device: Device,
     pub cache: Cache,
     pub max_seq_len: usize,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 fn precomput_freqs_cis(
@@ -185,6 +188,7 @@ impl ModelWeights {
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle_core::bail!("cannot find {s} in metadata"),
@@ -247,6 +251,7 @@ impl ModelWeights {
             device: device.clone(),
             cache: Cache::new(block_count, false),
             max_seq_len,
+            mapper,
         })
     }
 
@@ -278,6 +283,7 @@ impl ModelWeights {
         let mut xs = self.tok_embeddings.forward(xs)?;
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
+            xs = self.mapper.map(xs, i)?;
             let residual = &xs;
             let xs_norm = xs.apply(&layer.attn_norm)?;
             let attn_outputs = layer.forward_attn(

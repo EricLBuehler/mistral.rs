@@ -713,6 +713,9 @@ impl ModelWeights {
             self.cache.lock()
         };
         for (i, layer) in self.layers.iter_mut().enumerate() {
+            if let Some(ref mapper) = self.mapper {
+                layer_in = mapper.map(layer_in, i)?;
+            }
             let x = layer_in;
             let residual = &x;
             let x = layer.attention_norm.forward(&x)?;
@@ -745,9 +748,6 @@ impl ModelWeights {
             )?;
             let x = (x + residual)?;
             layer_in = x;
-            if let Some(ref mapper) = self.mapper {
-                layer_in = mapper.map(layer_in, i)?;
-            }
         }
         self.norm.forward(&layer_in)
     }

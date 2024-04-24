@@ -373,6 +373,7 @@ pub struct XLoraModel {
     pub cache: Cache,
     pub max_seq_len: usize,
     xlora_classifier: Option<XLoraClassifier>,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 impl XLoraModel {
@@ -425,6 +426,7 @@ impl XLoraModel {
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
             }),
+            mapper,
         })
     }
 
@@ -507,6 +509,7 @@ impl XLoraModel {
         let xs = self.embed_tokens.forward(input_ids)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
         for (i, layer) in self.layers.iter_mut().enumerate() {
+            xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
                 attention_mask.as_ref(),

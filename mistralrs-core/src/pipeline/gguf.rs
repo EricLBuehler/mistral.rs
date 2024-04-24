@@ -332,7 +332,9 @@ impl Loader for GgufLoader {
                 GgufArchitecture::Llama => {
                     Model::Llama(QLlama::from_gguf(model, &mut file, device, mapper)?)
                 }
-                GgufArchitecture::Phi2 => Model::Phi2(QPhi::from_gguf(model, &mut file, device)?),
+                GgufArchitecture::Phi2 => {
+                    Model::Phi2(QPhi::from_gguf(model, &mut file, device, mapper)?)
+                }
                 a => bail!("Unsupported architecture `{a:?}`"),
             },
             ModelKind::XLoraGGUF => {
