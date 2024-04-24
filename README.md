@@ -130,7 +130,7 @@ OpenAI API compatible API server
 - CUDA:
   - Enable with `cuda` feature: `--features cuda`
   - Flash attention support with `flash-attn` feature, only applicable to non-quantized models: `--features flash-attn`
-  - CUDNN support with `cudnn` feature: `--features cudnn`
+  - cuDNNsupport with `cudnn` feature: `--features cudnn`
 - Metal:
   - Enable with `metal` feature: `--features metal`
 - CPU:
@@ -156,25 +156,66 @@ Please submit more benchmarks via raising an issue!
 ### Installation and Build
 To install mistral.rs, one should ensure they have Rust installed by following [this](https://rustup.rs/) link. Additionally, the Huggingface token should be provided in `~/.cache/huggingface/token` when using the server to enable automatic download of gated models.
 
-Detailed installation guide: [here](docs/INSTALLATION.md).
+1) Install required packages
+    - `openssl` (ex., `sudo apt install libssl-dev`)
+    - `pkg-config` (ex., `sudo apt install pkg-config`)
 
-**Easy quickstart**
-For an easy quickstart on a `*nix` system, the script below will 
-download an setup Rust and then build mistral.rs to run with CUDA.
-```bash
-sudo apt update -y
-sudo apt install libssl-dev -y
-sudo apt install pkg-config -y
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source $HOME/.cargo/env
+2) Install Rust: https://rustup.rs/
+    ```bash
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    source $HOME/.cargo/env
+    ```
 
-git clone https://github.com/EricLBuehler/mistral.rs.git
-cd mistral.rs
-mkdir ~/.cache/huggingface
-touch ~/.cache/huggingface/token
-echo <HF_TOKEN_HERE> > ~/.cache/huggingface/token
-cargo build --release --features cuda
-```
+3) Set HF token correctly (skip if already set or your model is not gated, or if you want to use the `token_source` parameters in Python or the command line.)
+    ```bash
+    mkdir ~/.cache/huggingface
+    touch ~/.cache/huggingface/token
+    echo <HF_TOKEN_HERE> > ~/.cache/huggingface/token
+    ```
+
+4) Download the code
+    ```bash
+    git clone https://github.com/EricLBuehler/mistral.rs.git
+    cd mistral.rs
+    ```
+
+5) Build or install
+    - Base build command
+        ```bash
+        cargo build --release
+        ```
+    - Build with CUDA support
+        ```bash
+        cargo build --release --features cuda
+        ```
+    - Build with CUDA and Flash Attention V2 support
+        ```bash
+        cargo build --release --features "cuda flash-attn"
+        ```
+    - Build with Metal support
+        ```bash
+        cargo build --release --features metal
+        ```
+    - Build with Accelerate support
+        ```bash
+        cargo build --release --features accelerate
+        ```
+    - Build with MKL support
+        ```bash
+        cargo build --release --features mkl
+        ```
+    - Install with `cargo install` for easy command line usage
+        Pass the same values to `--features` as you would for `cargo build`
+        ```bash
+        cargo install --path mistralrs-server --features cuda
+        ```
+6) The build process will output a binary `misralrs-server` at `./target/release/mistralrs-server` which may be copied into the working directory with the following command:
+    ```
+    cp ./target/release/mistralrs-server .
+    ```
+
+7) Installing Python support
+    You can install Python support by following the guide [here](../mistralrs-pyo3/README.md).
 
 ### Run
 
@@ -200,14 +241,14 @@ You can launch interactive mode, a simple chat application running in the termin
 To start an X-LoRA server with the exactly as presented in [the paper](https://arxiv.org/abs/2402.07148):
 
 ```
-./mistralrs-server --port 1234 x-lora-mistral -o orderings/xlora-paper-ordering.json -m HuggingFaceH4/zephyr-7b-beta -x lamm-mit/x-lora
+./mistralrs-server --port 1234 x-lora-plain -o orderings/xlora-paper-ordering.json -x lamm-mit/x-lora
 ```
 - LoRA with a model from GGUF
 
 To start an LoRA server with adapters from the X-LoRA paper (you should modify the ordering file to use only one adapter, as the adapter static scalings are all 1 and so the signal will become distorted):
 
 ```
-./mistralrs-server --port 1234 lora-gguf -o orderings/xlora-paper-ordering.json -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q8_0.gguf -x lamm-mit/x-lora
+./mistralrs-server --port 1234 lora-gguf -o orderings/xlora-paper-ordering.json -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q8_0.gguf -x lamm-mit/x-lora
 ```
 
 Normally with a LoRA model you would use a custom ordering file. However, for this example we use the ordering from the X-LoRA paper because we are using the adapters from the X-LoRA paper.
@@ -236,13 +277,6 @@ To start a server running Mistral from safetensors.
 ./mistralrs-server --port 1234 gguf -m mistralai/Mistral-7B-Instruct-v0.1
 ```
 
-- Single prompt inference
-
-To run a single prompt and then shut down:
-
-```
-./mistralrs-server --prompt "Hello!" gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
-```
 
 **Command line docs**
 

@@ -49,13 +49,14 @@ class MistralRS(CustomLLM):
     r"""MistralRS LLM.
 
     Examples:
-        Install mistralrs following instructions:
+        Install `mistralrs` following instructions:
         https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/README.md#installation
 
         Then `pip install llama-index-llms-mistral-rs`
 
         ```python
         from llama_index.llms.mistral_rs import MistralRS
+        from mistralrs import Which
 
         def messages_to_prompt(messages):
             prompt = ""
@@ -79,16 +80,20 @@ class MistralRS(CustomLLM):
         def completion_to_prompt(completion):
             return f"<|system|>\n</s>\n<|user|>\n{completion}</s>\n<|assistant|>\n"
 
-        model_url = "https://huggingface.co/TheBloke/zephyr-7B-beta-GGUF/resolve/main/zephyr-7b-beta.Q4_0.gguf"
-
         llm = MistralRS(
-            model_url=model_url,
-            model_path=None,
+            which = Which.XLora(
+                model_id=None,  # Automatically determine from ordering file
+                tokenizer_json=None,
+                repeat_last_n=64,
+                xlora_model_id="lamm-mit/x-lora"
+                order="xlora-paper-ordering.json", # Make sure you copy the ordering file from `mistral.rs/orderings`
+                tgt_non_granular_index=None,
+                arch=Architecture.Mistral,
+            ),
             temperature=0.1,
             max_new_tokens=256,
             context_window=3900,
             generate_kwargs={},
-            model_kwargs={"n_gpu_layers": -1},  # if compiled to use GPU
             messages_to_prompt=messages_to_prompt,
             completion_to_prompt=completion_to_prompt,
             verbose=True,
