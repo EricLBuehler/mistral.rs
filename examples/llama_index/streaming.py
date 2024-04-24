@@ -28,5 +28,5 @@ index = VectorStoreIndex.from_documents(
 query_engine = index.as_query_engine(streaming=True)
 response = query_engine.query("What are non-granular scalings?")
 for text in response.response_gen:
-    print(text,end="")
+    print(text, end="")
     sys.stdout.flush()
