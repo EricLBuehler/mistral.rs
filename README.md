@@ -40,7 +40,7 @@ Mistral.rs is a fast LLM inference platform supporting inference on a variety of
 **Accelerator support**:
 - Apple silicon support with the Metal framework.
 - CPU inference with `mkl`, `accelerate` support and optimized backend.
-- CUDA support with flash attention and CUDNN.
+- CUDA support with flash attention and cuDNN.
 
 **Easy**:
 - Lightweight OpenAI API compatible HTTP server.
@@ -205,6 +205,7 @@ To install mistral.rs, one should ensure they have Rust installed by following [
         cargo build --release --features mkl
         ```
     - Install with `cargo install` for easy command line usage
+
         Pass the same values to `--features` as you would for `cargo build`
         ```bash
         cargo install --path mistralrs-server --features cuda
@@ -215,7 +216,27 @@ To install mistral.rs, one should ensure they have Rust installed by following [
     ```
 
 7) Installing Python support
-    You can install Python support by following the guide [here](../mistralrs-pyo3/README.md).
+
+    You can install Python support by following the guide [here](/mistralrs-pyo3/README.md).
+
+### Getting models
+Mistral.rs will automatically download models from HF hub. To access gated models, you should provide a token source. They may be one of:
+- literal:<value>: Load from a specified literal
+- env:<value>: Load from a specified environment variable
+- path:<value>: Load from a specified file
+- cache: **default**: Load from the HF token at ~/.cache/huggingface/token or equivalent.
+- none: Use no HF token
+
+This is passed in the following ways:
+- Command line:
+```bash
+./mistralrs-server --port 1234 gguf -m mistralai/Mistral-7B-Instruct-v0.1
+```
+- Python:
+
+Example [here](examples/python/token_source.py).
+
+*Loading locally will be added shortly*.
 
 ### Run
 
@@ -240,14 +261,14 @@ You can launch interactive mode, a simple chat application running in the termin
 
 To start an X-LoRA server with the exactly as presented in [the paper](https://arxiv.org/abs/2402.07148):
 
-```
+```bash
 ./mistralrs-server --port 1234 x-lora-plain -o orderings/xlora-paper-ordering.json -x lamm-mit/x-lora
 ```
 - LoRA with a model from GGUF
 
 To start an LoRA server with adapters from the X-LoRA paper (you should modify the ordering file to use only one adapter, as the adapter static scalings are all 1 and so the signal will become distorted):
 
-```
+```bash
 ./mistralrs-server --port 1234 lora-gguf -o orderings/xlora-paper-ordering.json -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q8_0.gguf -x lamm-mit/x-lora
 ```
 
@@ -257,7 +278,7 @@ Normally with a LoRA model you would use a custom ordering file. However, for th
 
 To start a server running Mistral from GGUF:
 
-```
+```bash
 ./mistralrs-server --port 1234 gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
 ```
 
@@ -265,7 +286,7 @@ To start a server running Mistral from GGUF:
 
 To start a server running Llama from GGML:
 
-```
+```bash
 ./mistralrs-server --port 1234 ggml -t meta-llama/Llama-2-13b-chat-hf -m TheBloke/Llama-2-13B-chat-GGML -f llama-2-13b-chat.ggmlv3.q4_K_M.bin
 ```
 
@@ -273,7 +294,7 @@ To start a server running Llama from GGML:
 
 To start a server running Mistral from safetensors.
 
-```
+```bash
 ./mistralrs-server --port 1234 gguf -m mistralai/Mistral-7B-Instruct-v0.1
 ```
 
