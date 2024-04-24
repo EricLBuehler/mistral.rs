@@ -127,7 +127,7 @@ macro_rules! get_paths {
 
 #[macro_export]
 macro_rules! normal_model_loader {
-    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr) => {{
+    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $mapper:expr) => {{
         let vb = from_mmaped_safetensors(
             $paths.get_weight_filenames().to_vec(),
             Vec::new(),
@@ -136,13 +136,13 @@ macro_rules! normal_model_loader {
             false,
         )?;
 
-        $loader.load(&$config, $use_flash_attn, vb)?
+        $loader.load(&$config, $use_flash_attn, vb, $mapper)?
     }};
 }
 
 #[macro_export]
 macro_rules! xlora_model_loader {
-    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr) => {{
+    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $mapper:expr) => {{
         let mut safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
         safetensors_paths.push($paths.get_classifier_path().as_ref().unwrap());
         let vb = from_mmaped_safetensors(
@@ -169,6 +169,7 @@ macro_rules! xlora_model_loader {
             $paths.get_adapter_configs().as_ref().unwrap(),
             Some($paths.get_classifier_config().as_ref().unwrap().clone()),
             $paths.get_ordering().as_ref().unwrap().clone(),
+            $mapper,
         )?
     }};
 }

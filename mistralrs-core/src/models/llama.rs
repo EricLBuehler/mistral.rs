@@ -6,7 +6,10 @@ use candle_transformers::models::with_tracing::{linear_no_bias as linear, Linear
 use serde::Deserialize;
 use std::{collections::HashMap, sync::Arc};
 
-use crate::pipeline::{extract_logits, NormalModel};
+use crate::{
+    device_map::DeviceMapper,
+    pipeline::{extract_logits, NormalModel},
+};
 
 use super::{flash_attn, repeat_kv, RmsNorm};
 
@@ -262,7 +265,7 @@ impl Block {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Llama {
     wte: Embedding,
     blocks: Vec<Block>,
@@ -271,6 +274,7 @@ pub struct Llama {
     pub kv_cache: super::Cache,
     pub device: Device,
     cache: Cache,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 impl Llama {
@@ -292,21 +296,31 @@ impl Llama {
                 &mut cache,
                 &mut self.cache,
             )?;
+            x = self.mapper.map(x, block_idx)?;
         }
         let x = self.ln_f.forward(&x)?;
         let logits = self.lm_head.forward(&x)?;
         extract_logits(&logits.to_dtype(DType::F32)?, context_lens)
     }
 
-    pub fn new(cfg: &Config, vb: VarBuilder, is_gptx: bool) -> Result<Self> {
+    pub fn new(
+        cfg: &Config,
+        vb: VarBuilder,
+        is_gptx: bool,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
+    ) -> Result<Self> {
         let device = vb.device();
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)
             .map(|i| {
-                Block::load(vb.pp(&format!("model.layers.{i}")), cfg, is_gptx)
-                    .expect("Failed to load block.")
+                Block::load(
+                    mapper.set_device(i, vb.pp(&format!("model.layers.{i}"))),
+                    cfg,
+                    is_gptx,
+                )
+                .expect("Failed to load block.")
             })
             .collect();
 
@@ -318,6 +332,7 @@ impl Llama {
             cache: Cache::new(device)?,
             kv_cache: super::Cache::new(cfg.num_hidden_layers, false),
             device: device.clone(),
+            mapper,
         })
     }
 }

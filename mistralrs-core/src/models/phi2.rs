@@ -12,7 +12,10 @@ use candle_nn::{
 };
 use serde::Deserialize;
 
-use crate::pipeline::{extract_logits, NormalModel};
+use crate::{
+    device_map::DeviceMapper,
+    pipeline::{extract_logits, NormalModel},
+};
 
 use super::{flash_attn, repeat_kv, Cache};
 
@@ -279,7 +282,6 @@ impl DecoderLayer {
     }
 }
 
-#[derive(Clone)]
 pub struct Model {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
@@ -288,10 +290,16 @@ pub struct Model {
     pub cache: Cache,
     pub device: Device,
     pub max_seq_len: usize,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder, is_gptx: bool) -> Result<Self> {
+    pub fn new(
+        cfg: &Config,
+        vb: VarBuilder,
+        is_gptx: bool,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
+    ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
         let final_layernorm = layer_norm(
@@ -302,7 +310,11 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_m = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
-            let layer = DecoderLayer::new(cfg, vb_m.pp(layer_idx), is_gptx)?;
+            let layer = DecoderLayer::new(
+                cfg,
+                mapper.set_device(layer_idx, vb_m.pp(layer_idx)),
+                is_gptx,
+            )?;
             layers.push(layer)
         }
         let lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
@@ -314,6 +326,7 @@ impl Model {
             cache: Cache::new(cfg.num_hidden_layers, false),
             device: vb.device().clone(),
             max_seq_len: cfg.max_position_embeddings,
+            mapper,
         })
     }
 
@@ -340,6 +353,7 @@ impl Model {
                 start_offsets_kernel.clone(),
                 &mut cache[i],
             )?;
+            xs = self.mapper.map(xs, i)?;
         }
         extract_logits(
             &xs.apply(&self.final_layernorm)?.apply(&self.lm_head)?,

@@ -2,8 +2,9 @@ use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
-    Constraint, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelKind, ModelSelected,
-    Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource, Usage,
+    new_dummy_mapper, Constraint, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelKind,
+    ModelSelected, Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
+    Usage,
 };
 use std::sync::Arc;
 use std::{fmt::Display, sync::mpsc::channel};
@@ -272,7 +273,7 @@ fn main() -> anyhow::Result<()> {
         warn!("Using flash attention with a quantized model has no effect!")
     }
     info!("Model kind is: {}", loader.get_kind().as_ref());
-    let pipeline = loader.load_model(None, token_source, None, &device)?;
+    let pipeline = loader.load_model(None, token_source, None, &device, new_dummy_mapper())?;
     info!("Model loaded.");
 
     let mistralrs = MistralRsBuilder::new(

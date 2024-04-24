@@ -7,6 +7,7 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
+use crate::device_map::DeviceMapper;
 use crate::models::Cache;
 use crate::pipeline::chat_template::calculate_eos_tokens;
 use crate::pipeline::ChatTemplate;
@@ -229,6 +230,7 @@ impl Loader for NormalLoader {
         paths: &dyn ModelPaths,
         dtype: Option<DType>,
         device: &Device,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         let default_dtype = if device.is_cuda() {
@@ -250,7 +252,8 @@ impl Loader for NormalLoader {
                 device,
                 config,
                 self.inner,
-                self.config.use_flash_attn
+                self.config.use_flash_attn,
+                mapper
             ),
             ModelKind::XLoraNormal => xlora_model_loader!(
                 paths,
@@ -259,7 +262,8 @@ impl Loader for NormalLoader {
                 device,
                 config,
                 self.inner,
-                self.config.use_flash_attn
+                self.config.use_flash_attn,
+                mapper
             ),
             ModelKind::LoraNormal => {
                 is_lora = true;
@@ -270,7 +274,8 @@ impl Loader for NormalLoader {
                     device,
                     config,
                     self.inner,
-                    self.config.use_flash_attn
+                    self.config.use_flash_attn,
+                    mapper
                 )
             }
             ModelKind::XLoraGGUF => unreachable!(),

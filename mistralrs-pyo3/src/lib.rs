@@ -15,8 +15,8 @@ use stream::ChatCompletionStreamer;
 
 use candle_core::Device;
 use mistralrs_core::{
-    ChatCompletionResponse, CompletionResponse, Constraint, GgmlLoaderBuilder, GgmlSpecificConfig,
-    GgufLoaderBuilder, GgufSpecificConfig, Loader, MistralRs, MistralRsBuilder,
+    new_dummy_mapper, ChatCompletionResponse, CompletionResponse, Constraint, GgmlLoaderBuilder,
+    GgmlSpecificConfig, GgufLoaderBuilder, GgufSpecificConfig, Loader, MistralRs, MistralRsBuilder,
     NormalLoaderBuilder, NormalSpecificConfig, Request as _Request, RequestMessage, Response,
     SamplingParams, SchedulerMethod, StopTokens, TokenSource,
 };
@@ -352,6 +352,7 @@ impl Runner {
                     .map_err(|e| PyValueError::new_err(e.to_string()))?,
                 None,
                 &device,
+                new_dummy_mapper(),
             )
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
 

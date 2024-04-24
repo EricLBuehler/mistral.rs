@@ -5,7 +5,10 @@ use std::sync::Arc;
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{linear_b as linear, Activation, Linear, RotaryEmbedding, VarBuilder};
 
-use crate::pipeline::{extract_logits, NormalModel};
+use crate::{
+    device_map::DeviceMapper,
+    pipeline::{extract_logits, NormalModel},
+};
 
 use super::{repeat_kv, Cache};
 
@@ -262,7 +265,7 @@ impl DecoderLayer {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
@@ -273,10 +276,16 @@ pub struct Model {
     pub device: Device,
     pub cache: Cache,
     pub max_seq_len: usize,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder, is_gptx: bool) -> Result<Self> {
+    pub fn new(
+        cfg: &Config,
+        vb: VarBuilder,
+        is_gptx: bool,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
+    ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
@@ -291,7 +300,11 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
-            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
+            let layer = DecoderLayer::new(
+                rotary_emb.clone(),
+                cfg,
+                mapper.set_device(layer_idx, vb_l.pp(layer_idx)),
+            )?;
             layers.push(layer)
         }
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
@@ -306,6 +319,7 @@ impl Model {
             hidden_size: cfg.hidden_size,
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: default_max_position_embeddings(),
+            mapper,
         })
     }
 
@@ -353,7 +367,8 @@ impl Model {
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 &mut cache[i],
-            )?
+            )?;
+            xs = self.mapper.map(xs, i)?;
         }
         extract_logits(&xs.apply(&self.norm)?.apply(&self.lm_head)?, context_lens)
     }

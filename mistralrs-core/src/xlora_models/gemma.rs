@@ -7,6 +7,7 @@ use candle_nn::{RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_b as linear, LinearLayerLike, LoraConfig, Ordering};
 
 use crate::{
+    device_map::DeviceMapper,
     models::{gemma::Config, repeat_kv, Cache},
     pipeline::{extract_logits, NormalModel},
 };
@@ -382,6 +383,7 @@ impl XLoraModel {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         is_gptx: bool,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
@@ -401,7 +403,7 @@ impl XLoraModel {
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
-                vb_l.pp(layer_idx),
+                mapper.set_device(layer_idx, vb_l.pp(layer_idx)),
                 lora_config,
                 &mut count,
                 &xlora_ordering,

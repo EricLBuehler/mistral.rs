@@ -4,6 +4,7 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
+use crate::device_map::DeviceMapper;
 use crate::models::Cache;
 use crate::pipeline::chat_template::calculate_eos_tokens;
 use crate::pipeline::ChatTemplate;
@@ -280,6 +281,7 @@ impl Loader for GgmlLoader {
         paths: &dyn ModelPaths,
         dtype: Option<DType>,
         device: &Device,
+        _mapper: Box<dyn DeviceMapper + Send + Sync>,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         let default_dtype = if device.is_cuda() {
             DType::BF16

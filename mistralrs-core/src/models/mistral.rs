@@ -243,7 +243,8 @@ pub struct Model {
 impl Model {
     pub fn new(
         cfg: &Config,
-        vb: VarBuilder, is_gptx: bool,
+        vb: VarBuilder,
+        is_gptx: bool,
         mapper: Box<dyn DeviceMapper + Send + Sync>,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");

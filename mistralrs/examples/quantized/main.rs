@@ -2,8 +2,9 @@ use std::sync::{mpsc::channel, Arc};
 
 use candle_core::Device;
 use mistralrs::{
-    Constraint, GgufLoaderBuilder, GgufSpecificConfig, MistralRs, MistralRsBuilder, Request,
-    RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
+    new_dummy_mapper, Constraint, GgufLoaderBuilder, GgufSpecificConfig, MistralRs,
+    MistralRsBuilder, Request, RequestMessage, Response, SamplingParams, SchedulerMethod,
+    TokenSource,
 };
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {
@@ -23,6 +24,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         TokenSource::CacheToken,
         None,
         &Device::cuda_if_available(0)?,
+        new_dummy_mapper(),
     )?;
     // Create the MistralRs, which is a runner
     Ok(MistralRsBuilder::new(pipeline, SchedulerMethod::Fixed(5.try_into().unwrap())).build())

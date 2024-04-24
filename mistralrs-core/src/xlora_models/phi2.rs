@@ -14,6 +14,7 @@ use candle_nn::{
 use mistralrs_lora::{linear, LinearLayerLike, LoraConfig, Ordering};
 
 use crate::{
+    device_map::DeviceMapper,
     models::{flash_attn, phi2::Config, repeat_kv},
     pipeline::{extract_logits, NormalModel},
 };
@@ -385,6 +386,7 @@ impl Model {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         is_gptx: bool,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
@@ -399,7 +401,7 @@ impl Model {
         for layer_idx in 0..cfg.num_hidden_layers {
             let layer = DecoderLayer::new(
                 cfg,
-                vb_m.pp(layer_idx),
+                mapper.set_device(layer_idx, vb_m.pp(layer_idx)),
                 lora_config,
                 &mut count,
                 &xlora_ordering,

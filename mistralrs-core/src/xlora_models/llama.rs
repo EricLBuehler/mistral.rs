@@ -6,6 +6,7 @@ use mistralrs_lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Orde
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
+    device_map::DeviceMapper,
     models::{
         self, flash_attn,
         llama::{Config, MAX_SEQ_LEN},
@@ -470,6 +471,7 @@ impl XLoraLlama {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         is_gptx: bool,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
     ) -> Result<Self> {
         let device = vb.device();
         let dtype = vb.dtype();
@@ -480,7 +482,7 @@ impl XLoraLlama {
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)
             .map(|i| {
                 Block::load(
-                    vb.pp(&format!("model.layers.{i}")),
+                    mapper.set_device(i, vb.pp(&format!("model.layers.{i}"))),
                     cfg,
                     lora_config,
                     &mut count,

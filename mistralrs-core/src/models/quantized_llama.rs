@@ -193,7 +193,7 @@ impl LayerWeights {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ModelWeights {
     tok_embeddings: Embedding,
     layers: Vec<LayerWeights>,
