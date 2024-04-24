@@ -221,11 +221,11 @@ To install mistral.rs, one should ensure they have Rust installed by following [
 
 ### Getting models
 Mistral.rs will automatically download models from HF hub. To access gated models, you should provide a token source. They may be one of:
-- literal:<value>: Load from a specified literal
-- env:<value>: Load from a specified environment variable
-- path:<value>: Load from a specified file
-- cache: **default**: Load from the HF token at ~/.cache/huggingface/token or equivalent.
-- none: Use no HF token
+- `literal:<value>`: Load from a specified literal
+- `env:<value>`: Load from a specified environment variable
+- `path:<value>`: Load from a specified file
+- `cache`: **default**: Load from the HF token at ~/.cache/huggingface/token or equivalent.
+- `none`: Use no HF token
 
 This is passed in the following ways:
 - Command line:
