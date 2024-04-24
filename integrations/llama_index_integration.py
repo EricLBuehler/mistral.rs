@@ -228,7 +228,7 @@ class MistralRS(CustomLLM):
         def gen() -> CompletionResponseGen:
             text = ""
             for response in streamer:
-                delta = response.choices[0].text
+                delta = response.choices[0].delta.content
                 text += delta
                 yield CompletionResponse(delta=delta, text=text)
 
@@ -273,7 +273,7 @@ class MistralRS(CustomLLM):
         def gen() -> CompletionResponseGen:
             text = ""
             for response in streamer:
-                delta = response.choices[0].text
+                delta = response.choices[0].delta.content
                 text += delta
                 yield CompletionResponse(delta=delta, text=text)
 
