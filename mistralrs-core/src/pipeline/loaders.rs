@@ -21,6 +21,7 @@ pub enum NormalLoaderType {
     Mixtral,
     Llama,
     Phi2,
+    Phi3,
 }
 
 impl FromStr for NormalLoaderType {
@@ -32,6 +33,7 @@ impl FromStr for NormalLoaderType {
             "mixtral" => Ok(Self::Mixtral),
             "llama" => Ok(Self::Llama),
             "phi2" => Ok(Self::Phi2),
+            "phi3" => Ok(Self::Phi3),
             a => Err(format!("Unknown architecture `{a}`")),
         }
     }
@@ -40,7 +42,7 @@ impl FromStr for NormalLoaderType {
 // ======================== Mistral loader
 
 #[derive(Deserialize)]
-pub struct MistralBasicConfig {
+struct MistralBasicConfig {
     vocab_size: usize,
     hidden_size: usize,
     intermediate_size: usize,
@@ -119,23 +121,23 @@ fn default_max_position_embeddings() -> usize {
 }
 
 #[derive(Deserialize)]
-pub struct GemmaBasicConfig {
-    pub attention_bias: bool,
-    pub head_dim: usize,
+struct GemmaBasicConfig {
+    attention_bias: bool,
+    head_dim: usize,
     // The code gemma configs include both hidden_act and hidden_activation.
-    pub hidden_act: Option<Activation>,
-    pub hidden_activation: Option<Activation>,
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub num_attention_heads: usize,
-    pub num_hidden_layers: usize,
-    pub num_key_value_heads: usize,
-    pub rms_norm_eps: f64,
-    pub rope_theta: f64,
-    pub vocab_size: usize,
+    hidden_act: Option<Activation>,
+    hidden_activation: Option<Activation>,
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_attention_heads: usize,
+    num_hidden_layers: usize,
+    num_key_value_heads: usize,
+    rms_norm_eps: f64,
+    rope_theta: f64,
+    vocab_size: usize,
 
     #[serde(default = "default_max_position_embeddings")]
-    pub max_position_embeddings: usize,
+    max_position_embeddings: usize,
 }
 
 impl GemmaBasicConfig {
@@ -200,16 +202,16 @@ impl NormalModelLoader for GemmaLoader {
 // ======================== Llama loader
 
 #[derive(Deserialize)]
-pub struct LlamaBasicConfig {
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub vocab_size: usize,
-    pub num_hidden_layers: usize,
-    pub num_attention_heads: usize,
-    pub num_key_value_heads: Option<usize>,
-    pub rms_norm_eps: f64,
+struct LlamaBasicConfig {
+    hidden_size: usize,
+    intermediate_size: usize,
+    vocab_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: Option<usize>,
+    rms_norm_eps: f64,
     #[serde(default = "default_rope")]
-    pub rope_theta: f32,
+    rope_theta: f32,
 }
 
 fn default_rope() -> f32 {
@@ -276,7 +278,7 @@ impl NormalModelLoader for LlamaLoader {
 // ======================== Mixtral loader
 
 #[derive(Deserialize)]
-pub struct MixtralBasicConfig {
+struct MixtralBasicConfig {
     vocab_size: usize,
     hidden_size: usize,
     intermediate_size: usize,
@@ -355,7 +357,7 @@ impl NormalModelLoader for MixtralLoader {
 // ======================== Phi2 loader
 
 #[derive(Deserialize)]
-pub struct Phi2BasicConfig {
+struct Phi2BasicConfig {
     vocab_size: usize,
     hidden_size: usize,
     intermediate_size: usize,
@@ -425,6 +427,78 @@ impl NormalModelLoader for Phi2Loader {
             xlora_ordering,
             self.is_gptx(),
         )?))
+    }
+    fn is_gptx(&self) -> bool {
+        true
+    }
+}
+
+// ======================== Phi3 loader
+
+#[derive(Deserialize)]
+struct Phi3BasicConfig {
+    vocab_size: usize,
+    hidden_act: candle_nn::Activation,
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    rms_norm_eps: f64,
+    rope_theta: f64,
+    bos_token_id: Option<u32>,
+    eos_token_id: Option<u32>,
+    rope_scaling: Option<String>,
+    max_position_embeddings: usize,
+}
+
+impl Phi3BasicConfig {
+    fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::phi3::Config> {
+        let basic_config: Self = serde_json::from_str(slice)?;
+        Ok(models::phi3::Config {
+            vocab_size: basic_config.vocab_size,
+            hidden_size: basic_config.hidden_size,
+            intermediate_size: basic_config.intermediate_size,
+            num_hidden_layers: basic_config.num_hidden_layers,
+            num_attention_heads: basic_config.num_attention_heads,
+            num_key_value_heads: basic_config.num_key_value_heads,
+            hidden_act: basic_config.hidden_act,
+            max_position_embeddings: basic_config.max_position_embeddings,
+            rope_theta: basic_config.rope_theta,
+            rms_norm_eps: basic_config.rms_norm_eps,
+            eos_token_id: basic_config.eos_token_id,
+            bos_token_id: basic_config.bos_token_id,
+            rope_scaling: basic_config.rope_scaling,
+            use_flash_attn,
+        })
+    }
+}
+
+pub struct Phi3Loader;
+
+impl NormalModelLoader for Phi3Loader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        Ok(Box::new(models::phi3::Model::new(
+            &Phi3BasicConfig::deserialize(config, use_flash_attn)?,
+            vb,
+            self.is_gptx(),
+        )?))
+    }
+    fn load_xlora(
+        &self,
+        _config: &str,
+        _use_flash_attn: bool,
+        _vb: VarBuilder,
+        _lora_config: &[(String, LoraConfig)],
+        _xlora_config: Option<XLoraConfig>,
+        _xlora_ordering: Ordering,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        todo!()
     }
     fn is_gptx(&self) -> bool {
         true
