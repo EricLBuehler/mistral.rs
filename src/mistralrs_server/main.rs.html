@@ -476,7 +476,7 @@
         <span class="macro">warn!</span>(<span class="string">"Using flash attention with a quantized model has no effect!"</span>)
     }
     <span class="macro">info!</span>(<span class="string">"Model kind is: {}"</span>, loader.get_kind().as_ref());
-    <span class="kw">let </span>pipeline = loader.load_model(<span class="prelude-val">None</span>, args.token_source, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>;
+    <span class="kw">let </span>pipeline = loader.load_model(<span class="prelude-val">None</span>, args.token_source, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>device, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
     <span class="macro">info!</span>(<span class="string">"Model loaded."</span>);
 
     <span class="kw">let </span>mistralrs = MistralRsBuilder::new(

@@ -475,6 +475,7 @@
 <a href="#473" id="473">473</a>
 <a href="#474" id="474">474</a>
 <a href="#475" id="475">475</a>
+<a href="#476" id="476">476</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -757,6 +758,7 @@
         paths: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelPaths,
         dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
         device: <span class="kw-2">&amp;</span>Device,
+        silent: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>default_dtype = <span class="kw">if </span>device.is_cuda() {
             DType::BF16
@@ -783,7 +785,7 @@
                         .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
                     dtype.unwrap_or(default_dtype),
                     device,
-                    <span class="bool-val">false</span>,
+                    silent,
                 )<span class="question-mark">?</span>;
 
                 Model::XLoraLlama(XLoraQLlama::from_ggml(
@@ -808,7 +810,7 @@
                         .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
                     dtype.unwrap_or(default_dtype),
                     device,
-                    <span class="bool-val">false</span>,
+                    silent,
                 )<span class="question-mark">?</span>;
 
                 Model::XLoraLlama(XLoraQLlama::from_ggml(

@@ -796,6 +796,9 @@
 <a href="#794" id="794">794</a>
 <a href="#795" id="795">795</a>
 <a href="#796" id="796">796</a>
+<a href="#797" id="797">797</a>
+<a href="#798" id="798">798</a>
+<a href="#799" id="799">799</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>chat_template;
 <span class="kw">mod </span>ggml;
 <span class="kw">mod </span>gguf;
@@ -942,6 +945,7 @@
 ///     TokenSource::CacheToken,
 ///     None,
 ///     &amp;Device::cuda_if_available(0).unwrap(),
+///     false,
 /// ).unwrap();
 /// ```
 </span><span class="kw">pub trait </span>Loader {
@@ -957,6 +961,7 @@
         paths: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelPaths,
         dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
         device: <span class="kw-2">&amp;</span>Device,
+        silent: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt;;
 
     <span class="doccomment">/// If `revision` is None, then it defaults to `main`.
@@ -968,9 +973,10 @@
         token_source: TokenSource,
         dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
         device: <span class="kw-2">&amp;</span>Device,
+        silent: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>paths = <span class="self">self</span>.download_model(revision, token_source)<span class="question-mark">?</span>;
-        <span class="self">self</span>._setup_model(<span class="kw-2">&amp;*</span>paths, dtype, device)
+        <span class="self">self</span>._setup_model(<span class="kw-2">&amp;*</span>paths, dtype, device, silent)
     }
 
     <span class="kw">fn </span>get_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str;

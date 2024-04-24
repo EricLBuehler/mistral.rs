@@ -396,6 +396,10 @@
 <a href="#394" id="394">394</a>
 <a href="#395" id="395">395</a>
 <a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
+<a href="#400" id="400">400</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
 };
@@ -627,6 +631,7 @@
         paths: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelPaths,
         dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
         device: <span class="kw-2">&amp;</span>Device,
+        silent: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>config = std::fs::read_to_string(paths.get_config_filename())<span class="question-mark">?</span>;
         <span class="kw">let </span>default_dtype = <span class="kw">if </span>device.is_cuda() {
@@ -648,7 +653,8 @@
                 device,
                 config,
                 <span class="self">self</span>.inner,
-                <span class="self">self</span>.config.use_flash_attn
+                <span class="self">self</span>.config.use_flash_attn,
+                silent
             ),
             ModelKind::XLoraNormal =&gt; <span class="macro">xlora_model_loader!</span>(
                 paths,
@@ -657,7 +663,8 @@
                 device,
                 config,
                 <span class="self">self</span>.inner,
-                <span class="self">self</span>.config.use_flash_attn
+                <span class="self">self</span>.config.use_flash_attn,
+                silent
             ),
             ModelKind::LoraNormal =&gt; {
                 is_lora = <span class="bool-val">true</span>;
@@ -668,7 +675,8 @@
                     device,
                     config,
                     <span class="self">self</span>.inner,
-                    <span class="self">self</span>.config.use_flash_attn
+                    <span class="self">self</span>.config.use_flash_attn,
+                    silent
                 )
             }
             ModelKind::XLoraGGUF =&gt; <span class="macro">unreachable!</span>(),
