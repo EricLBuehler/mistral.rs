@@ -127,13 +127,13 @@ macro_rules! get_paths {
 
 #[macro_export]
 macro_rules! normal_model_loader {
-    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr) => {{
+    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr) => {{
         let vb = from_mmaped_safetensors(
             $paths.get_weight_filenames().to_vec(),
             Vec::new(),
             $dtype.unwrap_or($default_dtype),
             $device,
-            false,
+            $silent,
         )?;
 
         $loader.load(&$config, $use_flash_attn, vb)?
@@ -142,7 +142,7 @@ macro_rules! normal_model_loader {
 
 #[macro_export]
 macro_rules! xlora_model_loader {
-    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr) => {{
+    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr) => {{
         let mut safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
         safetensors_paths.push($paths.get_classifier_path().as_ref().unwrap());
         let vb = from_mmaped_safetensors(
@@ -159,59 +159,12 @@ macro_rules! xlora_model_loader {
                 .collect::<Vec<_>>(),
             $dtype.unwrap_or($default_dtype),
             $device,
-            false,
+            $silent,
         )?;
 
         $loader.load_xlora(
             &$config,
             $use_flash_attn,
-            vb,
-            $paths.get_adapter_configs().as_ref().unwrap(),
-            Some($paths.get_classifier_config().as_ref().unwrap().clone()),
-            $paths.get_ordering().as_ref().unwrap().clone(),
-        )?
-    }};
-}
-
-#[macro_export]
-macro_rules! normal_model {
-    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $model:ident) => {{
-        let vb = from_mmaped_safetensors(
-            $paths.get_weight_filenames().to_vec(),
-            Vec::new(),
-            $dtype.unwrap_or($default_dtype),
-            $device,
-            false,
-        )?;
-
-        $model::new(&$config, vb)?
-    }};
-}
-
-#[macro_export]
-macro_rules! xlora_model {
-    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $model:ident) => {{
-        let mut safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
-        safetensors_paths.push($paths.get_classifier_path().as_ref().unwrap());
-        let vb = from_mmaped_safetensors(
-            safetensors_paths
-                .iter()
-                .map(|x| (*x).to_owned())
-                .collect::<Vec<_>>(),
-            $paths
-                .get_adapter_filenames()
-                .as_ref()
-                .unwrap()
-                .iter()
-                .map(|(_, x)| (*x).to_owned())
-                .collect::<Vec<_>>(),
-            $dtype.unwrap_or($default_dtype),
-            $device,
-            false,
-        )?;
-
-        $model::new(
-            &$config,
             vb,
             $paths.get_adapter_configs().as_ref().unwrap(),
             Some($paths.get_classifier_config().as_ref().unwrap().clone()),

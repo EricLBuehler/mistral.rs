@@ -314,6 +314,7 @@ impl Loader for GgufLoader {
         paths: &dyn ModelPaths,
         dtype: Option<DType>,
         device: &Device,
+        silent: bool,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         let default_dtype = if device.is_cuda() {
             DType::BF16
@@ -351,7 +352,7 @@ impl Loader for GgufLoader {
                         .collect::<Vec<_>>(),
                     dtype.unwrap_or(default_dtype),
                     device,
-                    false,
+                    silent,
                 )?;
 
                 match arch {
@@ -380,7 +381,7 @@ impl Loader for GgufLoader {
                         .collect::<Vec<_>>(),
                     dtype.unwrap_or(default_dtype),
                     device,
-                    false,
+                    silent,
                 )?;
 
                 match arch {

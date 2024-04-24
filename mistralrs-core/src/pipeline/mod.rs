@@ -144,6 +144,7 @@ impl AsRef<str> for ModelKind {
 ///     TokenSource::CacheToken,
 ///     None,
 ///     &Device::cuda_if_available(0).unwrap(),
+///     false,
 /// ).unwrap();
 /// ```
 pub trait Loader {
@@ -159,6 +160,7 @@ pub trait Loader {
         paths: &dyn ModelPaths,
         dtype: Option<DType>,
         device: &Device,
+        silent: bool,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>>;
 
     /// If `revision` is None, then it defaults to `main`.
@@ -170,9 +172,10 @@ pub trait Loader {
         token_source: TokenSource,
         dtype: Option<DType>,
         device: &Device,
+        silent: bool,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths = self.download_model(revision, token_source)?;
-        self._setup_model(&*paths, dtype, device)
+        self._setup_model(&*paths, dtype, device, silent)
     }
 
     fn get_id(&self) -> &str;
