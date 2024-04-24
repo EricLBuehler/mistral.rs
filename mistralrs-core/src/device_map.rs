@@ -16,6 +16,7 @@ pub struct DeviceMapMetadata {
 pub trait DeviceMapper: Debug {
     fn map(&self, input: Tensor, layer: usize) -> Result<Tensor>;
     fn set_device<'a>(&self, layer: usize, varbuilder: VarBuilder<'a>) -> VarBuilder<'a>;
+    fn is_dummy(&self) -> bool;
 }
 
 pub fn new_dummy_mapper() -> Box<dyn DeviceMapper + Send + Sync> {
@@ -54,6 +55,9 @@ impl DeviceMapper for LayerDeviceMapper {
     fn set_device<'a>(&self, layer: usize, varbuilder: VarBuilder<'a>) -> VarBuilder<'a> {
         varbuilder.set_device(self.mappings[layer].clone())
     }
+    fn is_dummy(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug)]
@@ -65,5 +69,8 @@ impl DeviceMapper for DummyDeviceMapper {
     }
     fn set_device<'a>(&self, _: usize, varbuilder: VarBuilder<'a>) -> VarBuilder<'a> {
         varbuilder
+    }
+    fn is_dummy(&self) -> bool {
+        true
     }
 }

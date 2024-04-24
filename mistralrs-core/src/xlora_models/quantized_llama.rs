@@ -8,6 +8,7 @@ use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear};
 
+use crate::device_map::DeviceMapper;
 use crate::models::{repeat_kv, verify_sanity_gguf, Cache, QRmsNorm};
 use crate::pipeline::extract_logits;
 
@@ -273,6 +274,7 @@ pub struct ModelWeights {
     pub cache: Cache,
     xlora_classifier: Option<XLoraClassifier>,
     pub max_seq_len: usize,
+    mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
 }
 
 impl ModelWeights {
@@ -408,6 +410,7 @@ impl ModelWeights {
                     .unwrap()
             }),
             max_seq_len: MAX_SEQ_LEN as usize, // Cannot determine from ggml.
+            mapper: None,
         })
     }
 
@@ -420,6 +423,7 @@ impl ModelWeights {
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle_core::bail!("cannot find {s} in metadata"),
@@ -660,6 +664,7 @@ impl ModelWeights {
             max_seq_len: md_get("llama.context_length")
                 .and_then(|m| m.to_u64())
                 .unwrap_or(MAX_SEQ_LEN as u64) as usize,
+            mapper: Some(mapper),
         })
     }
 
@@ -739,7 +744,10 @@ impl ModelWeights {
                 is_scaling_pass,
             )?;
             let x = (x + residual)?;
-            layer_in = x
+            layer_in = x;
+            if let Some(ref mapper) = self.mapper {
+                layer_in = mapper.map(layer_in, i)?;
+            }
         }
         self.norm.forward(&layer_in)
     }
