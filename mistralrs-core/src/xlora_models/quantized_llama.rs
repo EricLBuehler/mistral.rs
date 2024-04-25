@@ -7,6 +7,8 @@ use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear};
+use tqdm::Iter;
+use tracing::info;
 
 use crate::device_map::DeviceMapper;
 use crate::models::{repeat_kv, verify_sanity_gguf, Cache, QRmsNorm};
@@ -631,7 +633,8 @@ impl ModelWeights {
         }
         if xlora_config.is_none() {
             // We are now a LoRA model so we must merge the weights
-            for layer in &mut layers {
+            info!("Merging LoRA adapters.");
+            for layer in layers.iter_mut().tqdm() {
                 layer.attention_wk.merge_weights()?;
                 layer.attention_wo.merge_weights()?;
                 layer.attention_wq.merge_weights()?;

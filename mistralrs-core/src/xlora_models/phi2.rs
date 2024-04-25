@@ -12,6 +12,8 @@ use candle_nn::{
     embedding, layer_norm, Activation, Embedding, LayerNorm, Linear, RotaryEmbedding, VarBuilder,
 };
 use mistralrs_lora::{linear, LinearLayerLike, LoraConfig, Ordering};
+use tqdm::Iter;
+use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
@@ -411,6 +413,27 @@ impl Model {
                 is_gptx,
             )?;
             layers.push(layer)
+        }
+        if xlora_config.is_none() {
+            // We are now a LoRA model so we must merge the weights
+            info!("Merging LoRA adapters.");
+            for layer in layers.iter_mut().tqdm() {
+                Arc::get_mut(&mut layer.self_attn.k_proj)
+                    .unwrap()
+                    .merge_weights()?;
+                Arc::get_mut(&mut layer.self_attn.dense)
+                    .unwrap()
+                    .merge_weights()?;
+                Arc::get_mut(&mut layer.self_attn.q_proj)
+                    .unwrap()
+                    .merge_weights()?;
+                Arc::get_mut(&mut layer.self_attn.v_proj)
+                    .unwrap()
+                    .merge_weights()?;
+
+                Arc::get_mut(&mut layer.mlp.fc1).unwrap().merge_weights()?;
+                Arc::get_mut(&mut layer.mlp.fc2).unwrap().merge_weights()?;
+            }
         }
         let lm_head = candle_nn::linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         Ok(Self {

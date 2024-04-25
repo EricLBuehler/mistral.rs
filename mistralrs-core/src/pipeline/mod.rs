@@ -667,7 +667,7 @@ fn get_xlora_paths(
             || xlora_config.base_model_id != base_model_id
         {
             anyhow::bail!(
-                "X-LoRA ordering file, X-LoRA config, and base model ID do not match: {}, {}, and {} respectively.",
+                "Adapter ordering file, adapter model config, and base model ID do not match: {}, {}, and {} respectively.",
                 xlora_order.as_ref().unwrap().base_model_id,
                 xlora_config.base_model_id,
                 base_model_id

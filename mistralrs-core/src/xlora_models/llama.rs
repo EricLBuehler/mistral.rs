@@ -4,6 +4,8 @@ use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering};
 use std::{collections::HashMap, sync::Arc};
+use tqdm::Iter;
+use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
@@ -484,7 +486,7 @@ impl XLoraLlama {
         let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
         let mut count = 0;
         let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
-        let blocks: Vec<_> = (0..cfg.num_hidden_layers)
+        let mut blocks: Vec<_> = (0..cfg.num_hidden_layers)
             .map(|i| {
                 Block::load(
                     mapper.set_device(i, vb.pp(&format!("model.layers.{i}"))),
@@ -497,6 +499,34 @@ impl XLoraLlama {
                 .expect("Failed to load block.")
             })
             .collect();
+        if xlora_config.is_none() {
+            // We are now a LoRA model so we must merge the weights
+            info!("Merging LoRA adapters.");
+            for layer in blocks.iter_mut().tqdm() {
+                Arc::get_mut(&mut layer.attn.k_proj)
+                    .unwrap()
+                    .merge_weights()?;
+                Arc::get_mut(&mut layer.attn.o_proj)
+                    .unwrap()
+                    .merge_weights()?;
+                Arc::get_mut(&mut layer.attn.q_proj)
+                    .unwrap()
+                    .merge_weights()?;
+                Arc::get_mut(&mut layer.attn.v_proj)
+                    .unwrap()
+                    .merge_weights()?;
+
+                Arc::get_mut(&mut layer.mlp.c_fc1)
+                    .unwrap()
+                    .merge_weights()?;
+                Arc::get_mut(&mut layer.mlp.c_fc2)
+                    .unwrap()
+                    .merge_weights()?;
+                Arc::get_mut(&mut layer.mlp.c_proj)
+                    .unwrap()
+                    .merge_weights()?;
+            }
+        }
 
         Ok(Self {
             wte,

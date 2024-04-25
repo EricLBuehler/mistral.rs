@@ -70,7 +70,7 @@ impl LoraConfig {
 }
 
 /// Any layer that is linear-like.
-pub trait LinearLayerLike: Debug {
+pub trait LinearLayerLike: Debug + Merge {
     fn weight(&self) -> &Tensor;
     fn bias(&self) -> Option<&Tensor>;
     fn shape(&self) -> &Shape;
@@ -88,6 +88,15 @@ pub trait Merge {
     fn get_delta_weight(&self, adapter: usize) -> Result<Tensor>;
     /// Merge the LoRA weights.
     fn merge_weights(&mut self) -> Result<()>;
+}
+
+impl Merge for Linear {
+    fn merge_weights(&mut self) -> Result<()> {
+        Ok(())
+    }
+    fn get_delta_weight(&self, _adapter: usize) -> Result<Tensor> {
+        unreachable!()
+    }
 }
 
 impl LinearLayerLike for Linear {
