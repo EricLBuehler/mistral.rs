@@ -18,6 +18,7 @@ pub use mistralrs_lora::Ordering;
 pub use pipeline::Pipeline;
 
 mod aici;
+mod device_map;
 mod engine;
 mod model_loader;
 pub use model_loader::{get_tgt_non_granular_index, LoaderBuilder};
@@ -35,6 +36,7 @@ mod sequence;
 mod utils;
 mod xlora_models;
 
+pub use device_map::{DeviceMapMetadata, LayerDeviceMapper};
 pub use pipeline::{
     GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder,
     GGUFSpecificConfig, GemmaLoader, LlamaLoader, Loader, MistralLoader, MixtralLoader, ModelKind,

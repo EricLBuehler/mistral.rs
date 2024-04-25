@@ -10,6 +10,7 @@ use super::{NormalModel, NormalModelLoader};
 use crate::{
     models,
     xlora_models::{self, XLoraConfig},
+    DeviceMapMetadata,
 };
 
 #[pyclass]
@@ -82,11 +83,13 @@ impl NormalModelLoader for MistralLoader {
         config: &str,
         use_flash_attn: bool,
         vb: VarBuilder,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::mistral::Model::new(
             &MistralBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
             self.is_gptx(),
+            mapper,
         )?))
     }
     fn load_xlora(
@@ -97,6 +100,7 @@ impl NormalModelLoader for MistralLoader {
         lora_config: &[(String, LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraMistral::new(
             &MistralBasicConfig::deserialize(config, use_flash_attn)?,
@@ -105,6 +109,7 @@ impl NormalModelLoader for MistralLoader {
             xlora_config,
             xlora_ordering,
             self.is_gptx(),
+            mapper,
         )?))
     }
     fn is_gptx(&self) -> bool {
@@ -167,11 +172,13 @@ impl NormalModelLoader for GemmaLoader {
         config: &str,
         use_flash_attn: bool,
         vb: VarBuilder,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::gemma::Model::new(
             &GemmaBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
             self.is_gptx(),
+            mapper,
         )?))
     }
     fn load_xlora(
@@ -182,6 +189,7 @@ impl NormalModelLoader for GemmaLoader {
         lora_config: &[(String, LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraGemma::new(
             &GemmaBasicConfig::deserialize(config, use_flash_attn)?,
@@ -190,6 +198,7 @@ impl NormalModelLoader for GemmaLoader {
             xlora_config,
             xlora_ordering,
             self.is_gptx(),
+            mapper,
         )?))
     }
     fn is_gptx(&self) -> bool {
@@ -243,11 +252,13 @@ impl NormalModelLoader for LlamaLoader {
         config: &str,
         use_flash_attn: bool,
         vb: VarBuilder,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::llama::Llama::new(
             &LlamaBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
             self.is_gptx(),
+            mapper,
         )?))
     }
     fn load_xlora(
@@ -258,6 +269,7 @@ impl NormalModelLoader for LlamaLoader {
         lora_config: &[(String, LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraLlama::new(
             &LlamaBasicConfig::deserialize(config, use_flash_attn)?,
@@ -266,6 +278,7 @@ impl NormalModelLoader for LlamaLoader {
             xlora_config,
             xlora_ordering,
             self.is_gptx(),
+            mapper,
         )?))
     }
     fn is_gptx(&self) -> bool {
@@ -322,11 +335,13 @@ impl NormalModelLoader for MixtralLoader {
         config: &str,
         use_flash_attn: bool,
         vb: VarBuilder,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::mixtral::Model::new(
             &MixtralBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
             self.is_gptx(),
+            mapper,
         )?))
     }
     fn load_xlora(
@@ -337,6 +352,7 @@ impl NormalModelLoader for MixtralLoader {
         lora_config: &[(String, LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraMixtral::new(
             &MixtralBasicConfig::deserialize(config, use_flash_attn)?,
@@ -345,6 +361,7 @@ impl NormalModelLoader for MixtralLoader {
             xlora_config,
             xlora_ordering,
             self.is_gptx(),
+            mapper,
         )?))
     }
     fn is_gptx(&self) -> bool {
@@ -401,11 +418,13 @@ impl NormalModelLoader for Phi2Loader {
         config: &str,
         use_flash_attn: bool,
         vb: VarBuilder,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::phi2::Model::new(
             &Phi2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
             self.is_gptx(),
+            mapper,
         )?))
     }
     fn load_xlora(
@@ -416,6 +435,7 @@ impl NormalModelLoader for Phi2Loader {
         lora_config: &[(String, LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraPhi2::new(
             &Phi2BasicConfig::deserialize(config, use_flash_attn)?,
@@ -424,6 +444,7 @@ impl NormalModelLoader for Phi2Loader {
             xlora_config,
             xlora_ordering,
             self.is_gptx(),
+            mapper,
         )?))
     }
     fn is_gptx(&self) -> bool {

@@ -14,8 +14,10 @@ use candle_nn::{
 use mistralrs_lora::{linear, LinearLayerLike, LoraConfig, Ordering};
 
 use crate::{
+    device_map::DeviceMapper,
     models::{flash_attn, phi2::Config, repeat_kv},
     pipeline::{extract_logits, NormalModel},
+    DeviceMapMetadata,
 };
 
 use super::{classifier::XLoraClassifier, Cache, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -375,6 +377,7 @@ pub struct Model {
     pub max_seq_len: usize,
     xlora_classifier: Option<XLoraClassifier>,
     dtype: DType,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 impl Model {
@@ -385,6 +388,7 @@ impl Model {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         is_gptx: bool,
+        mapper: DeviceMapMetadata,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
@@ -396,10 +400,11 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_m = vb_m.pp("layers");
         let mut count = 0;
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
         for layer_idx in 0..cfg.num_hidden_layers {
             let layer = DecoderLayer::new(
                 cfg,
-                vb_m.pp(layer_idx),
+                mapper.set_device(layer_idx, vb_m.pp(layer_idx)),
                 lora_config,
                 &mut count,
                 &xlora_ordering,
@@ -420,6 +425,7 @@ impl Model {
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
             }),
+            mapper,
         })
     }
 
@@ -455,9 +461,12 @@ impl Model {
             self.cache.lock()
         };
         for (i, layer) in self.layers.iter_mut().enumerate() {
+            xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                mask.as_ref(),
+                mask.as_ref()
+                    .map(|m| m.to_device(xs.device()).unwrap())
+                    .as_ref(),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 &mut cache[i],
@@ -469,6 +478,7 @@ impl Model {
                 is_scaling_pass,
             )?;
         }
+        let xs = xs.to_device(&self.device)?;
         xs.apply(&self.final_layernorm)?
             .narrow(1, seq_len - 1, 1)?
             .apply(&self.lm_head)?
