@@ -13,10 +13,12 @@ Blazingly fast LLM inference.
 
 Mistral.rs is a fast LLM inference platform supporting inference on a variety of devices, quantization, and easy-to-use application with an Open-AI API compatible HTTP server and Python bindings. 
 
-## Current work and upcoming features
+## Upcoming features
 - More models: please submit requests [here](https://github.com/EricLBuehler/mistral.rs/issues/156).
 - X-LoRA: Scalings `topk` and softmax `topk` ([#48](https://github.com/EricLBuehler/mistral.rs/issues/48)).
 - Parallel linear layers (sharding) ([#50](https://github.com/EricLBuehler/mistral.rs/issues/50)).
+- In situ quantization: download safetensor models and quantize them in place
+- Speculative decoding: https://arxiv.org/pdf/2211.17192
 
 **Running the new Llama 3 model**
 
