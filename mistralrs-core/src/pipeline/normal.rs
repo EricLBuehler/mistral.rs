@@ -11,7 +11,10 @@ use crate::models::Cache;
 use crate::pipeline::chat_template::calculate_eos_tokens;
 use crate::pipeline::ChatTemplate;
 use crate::xlora_models::{NonGranularState, XLoraConfig};
-use crate::{deserialize_chat_template, get_paths, normal_model_loader, xlora_model_loader};
+use crate::{
+    deserialize_chat_template, get_paths, lora_model_loader, normal_model_loader,
+    xlora_model_loader,
+};
 use crate::{
     sequence::Sequence,
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
@@ -275,7 +278,7 @@ impl Loader for NormalLoader {
             ),
             ModelKind::LoraNormal => {
                 is_lora = true;
-                xlora_model_loader!(
+                lora_model_loader!(
                     paths,
                     dtype,
                     default_dtype,
