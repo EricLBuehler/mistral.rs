@@ -173,3 +173,37 @@ macro_rules! xlora_model_loader {
         )?
     }};
 }
+
+#[macro_export]
+macro_rules! lora_model_loader {
+    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr) => {{
+        let mut safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
+        safetensors_paths.push($paths.get_classifier_path().as_ref().unwrap());
+        let vb = from_mmaped_safetensors(
+            safetensors_paths
+                .iter()
+                .map(|x| (*x).to_owned())
+                .collect::<Vec<_>>(),
+            $paths
+                .get_adapter_filenames()
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|(_, x)| (*x).to_owned())
+                .collect::<Vec<_>>(),
+            $dtype.unwrap_or($default_dtype),
+            $device,
+            $silent,
+        )?;
+
+        $loader.load_xlora(
+            &$config,
+            $use_flash_attn,
+            vb,
+            $paths.get_adapter_configs().as_ref().unwrap(),
+            Some($paths.get_classifier_config().as_ref().unwrap().clone()),
+            $paths.get_ordering().as_ref().unwrap().clone(),
+            $mapper,
+        )?
+    }};
+}

@@ -342,7 +342,7 @@ impl Loader for GGMLLoader {
                     paths.get_adapter_configs().as_ref().unwrap(),
                     &vb,
                     paths.get_ordering().as_ref().unwrap(),
-                    Some(paths.get_classifier_config().as_ref().unwrap().clone()),
+                    None,
                 )?)
             }
             _ => unreachable!(),
@@ -377,7 +377,7 @@ impl Loader for GGMLLoader {
     }
 
     fn get_kind(&self) -> ModelKind {
-        ModelKind::QuantizedGGUF
+        self.kind
     }
 }
 

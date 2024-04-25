@@ -392,7 +392,7 @@ impl Loader for GGUFLoader {
                         paths.get_adapter_configs().as_ref().unwrap(),
                         &vb,
                         paths.get_ordering().as_ref().unwrap(),
-                        Some(paths.get_classifier_config().as_ref().unwrap().clone()),
+                        None,
                         mapper,
                     )?),
                     a => bail!("Unsupported architecture for GGUF X-LoRA `{a:?}`"),
@@ -430,7 +430,7 @@ impl Loader for GGUFLoader {
     }
 
     fn get_kind(&self) -> ModelKind {
-        ModelKind::QuantizedGGUF
+        self.kind
     }
 }
 

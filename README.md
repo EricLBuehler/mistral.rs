@@ -124,6 +124,7 @@ OpenAI API compatible API server
 
 - [Source](integrations/llama_index_integration.py).
 - [Example](examples/llama_index/xlora_gguf.py)
+- [Cookbook](examples/llama_index/cookbook.ipynb)
 
 ---
 
