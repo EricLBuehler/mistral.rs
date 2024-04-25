@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/xlora_models/phi2.rs`."><title>phi2.rs - source</title><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/SourceSerif4-Regular-46f98efaafac5295.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/FiraSans-Regular-018c141bf0843ffd.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/FiraSans-Medium-8f9a781e4970d388.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2"><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-5bc39a1768837dd0.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.77.2 (25ef9e3d8 2024-04-09)" data-channel="1.77.2" data-search-js="search-dd67cee4cfa65049.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-4c98445ec4002617.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-48f368f3872407c8.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-04d5337699b92874.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-16x16-8b506e7a72182f1c.png"><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/xlora_models/phi3.rs`."><title>phi3.rs - source</title><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/SourceSerif4-Regular-46f98efaafac5295.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/FiraSans-Regular-018c141bf0843ffd.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/FiraSans-Medium-8f9a781e4970d388.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2"><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-5bc39a1768837dd0.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.77.2 (25ef9e3d8 2024-04-09)" data-channel="1.77.2" data-search-js="search-dd67cee4cfa65049.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-4c98445ec4002617.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-48f368f3872407c8.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-04d5337699b92874.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-16x16-8b506e7a72182f1c.png"><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title">
             <h2>Files</h2></div></nav><div class="sidebar-resizer"></div>
     <main><nav class="sub"><form class="search-form"><span></span><div id="sidebar-button" tabindex="-1"><a href="../../../mistralrs_core/all.html" title="show sidebar"></a></div><input class="search-input" name="search" aria-label="Run search in the documentation" autocomplete="off" spellcheck="false" placeholder="Click or press ‘S’ to search, ‘?’ for more options…" type="search"><div id="help-button" tabindex="-1"><a href="../../../help.html" title="help">?</a></div><div id="settings-menu" tabindex="-1"><a href="../../../settings.html" title="settings"><img width="22" height="22" alt="Change settings" src="../../../static.files/wheel-7b819b6101059cd0.svg"></a></div></form></nav><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
@@ -665,41 +665,223 @@
 <a href="#663" id="663">663</a>
 <a href="#664" id="664">664</a>
 <a href="#665" id="665">665</a>
+<a href="#666" id="666">666</a>
+<a href="#667" id="667">667</a>
+<a href="#668" id="668">668</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-</span><span class="kw">use </span>std::sync::Arc;
-
-<span class="doccomment">/// Phi model.
-/// https://huggingface.co/microsoft/phi-2
-/// There is an alternative implementation of the phi model in mixformers.rs.
-/// This corresponds to the model update made with the following commit:
-/// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
-</span><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::{
-    embedding, layer_norm, Activation, Embedding, LayerNorm, Linear, RotaryEmbedding, VarBuilder,
-};
-<span class="kw">use </span>mistralrs_lora::{linear, LinearLayerLike, LoraConfig, Ordering};
+</span><span class="comment">// This implementation is based on:
+// https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
+</span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
+<span class="kw">use </span>candle_nn::{Linear, VarBuilder};
+<span class="kw">use </span>mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
+<span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>tqdm::Iter;
 <span class="kw">use </span>tracing::info;
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    models::{flash_attn, phi2::Config, repeat_kv},
+    models::phi3::Config,
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
 
-<span class="kw">use super</span>::{classifier::XLoraClassifier, Cache, NonGranularState, ScalingsMaker, XLoraConfig};
+<span class="kw">use </span><span class="kw">crate</span>::models::{flash_attn, repeat_kv, Cache, RmsNorm};
+
+<span class="kw">use super</span>::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
 
 <span class="attr">#[derive(Debug, Clone)]
-#[allow(clippy::upper_case_acronyms)]
-</span><span class="kw">struct </span>MLP {
-    fc1: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
-    fc2: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
-    act: Activation,
+</span><span class="kw">struct </span>RotaryEmbedding {
+    sin: Tensor,
+    cos: Tensor,
 }
 
-<span class="kw">impl </span>MLP {
+<span class="kw">impl </span>RotaryEmbedding {
+    <span class="kw">fn </span>new(dtype: DType, cfg: <span class="kw-2">&amp;</span>Config, dev: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">let </span>dim = cfg.head_dim();
+        <span class="kw">let </span>max_seq_len = cfg.max_position_embeddings;
+        <span class="kw">let </span>inv_freq: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..dim)
+            .step_by(<span class="number">2</span>)
+            .map(|i| <span class="number">1f32 </span>/ cfg.rope_theta.powf(i <span class="kw">as </span>f64 / dim <span class="kw">as </span>f64) <span class="kw">as </span>f32)
+            .collect();
+        <span class="kw">let </span>inv_freq_len = inv_freq.len();
+        <span class="kw">let </span>inv_freq = Tensor::from_vec(inv_freq, (<span class="number">1</span>, inv_freq_len), dev)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
+        <span class="kw">let </span>t = Tensor::arange(<span class="number">0u32</span>, max_seq_len <span class="kw">as </span>u32, dev)<span class="question-mark">?
+            </span>.to_dtype(dtype)<span class="question-mark">?
+            </span>.reshape((max_seq_len, <span class="number">1</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>freqs = t.matmul(<span class="kw-2">&amp;</span>inv_freq)<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+            sin: freqs.sin()<span class="question-mark">?</span>,
+            cos: freqs.cos()<span class="question-mark">?</span>,
+        })
+    }
+
+    <span class="kw">fn </span>apply_rotary_emb_qkv(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        q: <span class="kw-2">&amp;</span>Tensor,
+        k: <span class="kw-2">&amp;</span>Tensor,
+        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor)&gt; {
+        <span class="kw">let </span>(_b_sz, _h, seq_len, _n_embd) = q.dims4()<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>q_embeds = Vec::new();
+        <span class="kw">let </span><span class="kw-2">mut </span>k_embeds = Vec::new();
+        <span class="kw">for </span>offset <span class="kw">in </span>seqlen_offsets {
+            <span class="kw">let </span>cos = <span class="self">self</span>.cos.narrow(<span class="number">0</span>, <span class="kw-2">*</span>offset, seq_len)<span class="question-mark">?</span>;
+            <span class="kw">let </span>sin = <span class="self">self</span>.sin.narrow(<span class="number">0</span>, <span class="kw-2">*</span>offset, seq_len)<span class="question-mark">?</span>;
+            <span class="kw">let </span>q_embed = candle_nn::rotary_emb::rope(<span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>cos, <span class="kw-2">&amp;</span>sin)<span class="question-mark">?</span>;
+            <span class="kw">let </span>k_embed = candle_nn::rotary_emb::rope(<span class="kw-2">&amp;</span>k.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>cos, <span class="kw-2">&amp;</span>sin)<span class="question-mark">?</span>;
+            q_embeds.push(q_embed);
+            k_embeds.push(k_embed);
+        }
+        <span class="prelude-val">Ok</span>((Tensor::cat(<span class="kw-2">&amp;</span>q_embeds, <span class="number">0</span>)<span class="question-mark">?</span>, Tensor::cat(<span class="kw-2">&amp;</span>k_embeds, <span class="number">0</span>)<span class="question-mark">?</span>))
+    }
+}
+
+<span class="attr">#[derive(Debug, Clone)]
+</span><span class="kw">struct </span>Attention {
+    qkv_proj: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
+    o_proj: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
+    num_heads: usize,
+    num_kv_heads: usize,
+    num_kv_groups: usize,
+    head_dim: usize,
+    rotary_emb: Arc&lt;RotaryEmbedding&gt;,
+    use_flash_attn: bool,
+}
+
+<span class="kw">impl </span>Attention {
+    <span class="kw">fn </span>new(
+        rotary_emb: Arc&lt;RotaryEmbedding&gt;,
+        cfg: <span class="kw-2">&amp;</span>Config,
+        vb: VarBuilder,
+        lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
+        count: <span class="kw-2">&amp;mut </span>usize,
+        ord: <span class="kw-2">&amp;</span>Ordering,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">let </span>num_heads = cfg.num_attention_heads;
+        <span class="kw">let </span>num_kv_heads = cfg.num_key_value_heads;
+        <span class="kw">let </span>head_dim = cfg.head_dim();
+        <span class="kw">let </span>op_size = num_heads * head_dim + <span class="number">2 </span>* num_kv_heads * head_dim;
+        <span class="kw">let </span>qkv_proj = linear_no_bias(
+            cfg.hidden_size,
+            op_size,
+            vb.pp(<span class="string">"qkv_proj"</span>),
+            lora_config,
+            count,
+            ord,
+        )<span class="question-mark">?</span>;
+        <span class="kw">let </span>o_proj = linear_no_bias(
+            num_heads * head_dim,
+            cfg.hidden_size,
+            vb.pp(<span class="string">"o_proj"</span>),
+            lora_config,
+            count,
+            ord,
+        )<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+            qkv_proj,
+            o_proj,
+            rotary_emb,
+            num_heads,
+            num_kv_heads,
+            num_kv_groups: num_heads / num_kv_heads,
+            head_dim,
+            use_flash_attn: cfg.use_flash_attn,
+        })
+    }
+
+    <span class="attr">#[allow(clippy::too_many_arguments)]
+    </span><span class="kw">fn </span>forward(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        xs: <span class="kw-2">&amp;</span>Tensor,
+        attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
+        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+        _start_offsets_kernel: Tensor,
+        kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
+        scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+        global_scaling_weight: f64,
+        is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">let </span>(b_sz, q_len, <span class="kw">_</span>) = xs.dims3()<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>qkv = <span class="self">self</span>.qkv_proj.lora_forward(
+            xs,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )<span class="question-mark">?</span>;
+        <span class="kw">let </span>query_pos = <span class="self">self</span>.num_heads * <span class="self">self</span>.head_dim;
+        <span class="kw">let </span>q = qkv.narrow(D::Minus1, <span class="number">0</span>, query_pos)<span class="question-mark">?</span>;
+        <span class="kw">let </span>k = qkv.narrow(D::Minus1, query_pos, <span class="self">self</span>.num_kv_heads * <span class="self">self</span>.head_dim)<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = qkv.narrow(
+            D::Minus1,
+            query_pos + <span class="self">self</span>.num_kv_heads * <span class="self">self</span>.head_dim,
+            <span class="self">self</span>.num_kv_heads * <span class="self">self</span>.head_dim,
+        )<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>q = q
+            .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>k = k
+            .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = v
+            .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>(q, k) = <span class="self">self
+            </span>.rotary_emb
+            .apply_rotary_emb_qkv(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, seqlen_offsets)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>(k, v) = <span class="kw">match </span><span class="kw-2">&amp;*</span>kv_cache {
+            <span class="prelude-val">None </span>=&gt; (k, v),
+            <span class="prelude-val">Some</span>((prev_k, prev_v)) =&gt; {
+                <span class="kw">let </span>k = Tensor::cat(<span class="kw-2">&amp;</span>[prev_k, <span class="kw-2">&amp;</span>k], <span class="number">2</span>)<span class="question-mark">?</span>;
+                <span class="kw">let </span>v = Tensor::cat(<span class="kw-2">&amp;</span>[prev_v, <span class="kw-2">&amp;</span>v], <span class="number">2</span>)<span class="question-mark">?</span>;
+                (k, v)
+            }
+        };
+        <span class="kw-2">*</span>kv_cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
+
+        <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>attn_output = <span class="kw">if </span><span class="self">self</span>.use_flash_attn {
+            <span class="comment">// flash-attn expects (b_sz, seq_len, nheads, head_dim)
+            </span><span class="kw">let </span>q = q.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>k = k.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>v = v.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>softmax_scale = <span class="number">1f32 </span>/ (<span class="self">self</span>.head_dim <span class="kw">as </span>f32).sqrt();
+            flash_attn(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, softmax_scale, q_len &gt; <span class="number">1</span>)<span class="question-mark">?</span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+        </span>} <span class="kw">else </span>{
+            <span class="kw">let </span>scale = <span class="number">1f64 </span>/ f64::sqrt(<span class="self">self</span>.head_dim <span class="kw">as </span>f64);
+            <span class="kw">let </span>attn_weights = (q.matmul(<span class="kw-2">&amp;</span>k.transpose(<span class="number">2</span>, <span class="number">3</span>)<span class="question-mark">?</span>)<span class="question-mark">? </span>* scale)<span class="question-mark">?</span>;
+
+            <span class="kw">let </span>attn_weights = <span class="kw">match </span>attention_mask {
+                <span class="prelude-val">None </span>=&gt; attn_weights,
+                <span class="prelude-val">Some</span>(mask) =&gt; attn_weights.broadcast_add(mask)<span class="question-mark">?</span>,
+            };
+            <span class="kw">let </span>attn_weights = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>;
+            attn_weights.matmul(<span class="kw-2">&amp;</span>v)<span class="question-mark">?
+        </span>};
+        <span class="self">self</span>.o_proj.lora_forward(
+            <span class="kw-2">&amp;</span>attn_output.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>.reshape((b_sz, q_len, ()))<span class="question-mark">?</span>,
+            scalings,
+            global_scaling_weight,
+            is_scaling_pass,
+        )
+    }
+}
+
+<span class="attr">#[derive(Debug, Clone)]
+</span><span class="kw">struct </span>Mlp {
+    gate_up_proj: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
+    down_proj: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
+    act_fn: candle_nn::Activation,
+    i_size: usize,
+}
+
+<span class="kw">impl </span>Mlp {
     <span class="kw">fn </span>new(
         cfg: <span class="kw-2">&amp;</span>Config,
         vb: VarBuilder,
@@ -707,28 +889,29 @@
         count: <span class="kw-2">&amp;mut </span>usize,
         ord: <span class="kw-2">&amp;</span>Ordering,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>fc1 = linear(
-            cfg.hidden_size,
-            cfg.intermediate_size,
-            vb.pp(<span class="string">"fc1"</span>),
+        <span class="kw">let </span>hidden_size = cfg.hidden_size;
+        <span class="kw">let </span>i_size = cfg.intermediate_size;
+        <span class="kw">let </span>gate_up_proj = linear_no_bias(
+            hidden_size,
+            <span class="number">2 </span>* i_size,
+            vb.pp(<span class="string">"gate_up_proj"</span>),
             lora_config,
             count,
             ord,
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>fc2 = linear(
-            cfg.intermediate_size,
-            cfg.hidden_size,
-            vb.pp(<span class="string">"fc2"</span>),
+        <span class="kw">let </span>down_proj = linear_no_bias(
+            i_size,
+            hidden_size,
+            vb.pp(<span class="string">"down_proj"</span>),
             lora_config,
             count,
             ord,
         )<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-            fc1,
-            fc2,
-            <span class="comment">// This does not match the mixformers implementation where Gelu is used rather than
-            // GeluNew.
-            </span>act: cfg.hidden_act,
+            gate_up_proj,
+            down_proj,
+            act_fn: cfg.hidden_act,
+            i_size,
         })
     }
 
@@ -739,269 +922,52 @@
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="self">self</span>.fc2.lora_forward(
-            <span class="kw-2">&amp;</span><span class="self">self
-                </span>.fc1
-                .lora_forward(xs, scalings.clone(), global_scaling_weight, is_scaling_pass)<span class="question-mark">?
-                </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.act)<span class="question-mark">?</span>,
-            scalings,
-            global_scaling_weight,
-            is_scaling_pass,
-        )
-    }
-}
-
-<span class="attr">#[derive(Clone)]
-</span><span class="kw">struct </span>Attention {
-    q_proj: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
-    k_proj: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
-    v_proj: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
-    dense: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
-    q_layernorm: <span class="prelude-ty">Option</span>&lt;LayerNorm&gt;,
-    k_layernorm: <span class="prelude-ty">Option</span>&lt;LayerNorm&gt;,
-    rotary_emb: RotaryEmbedding,
-    softmax_scale: f64,
-    num_heads: usize,
-    num_kv_heads: usize,
-    head_dim: usize,
-    use_flash_attn: bool,
-}
-
-<span class="kw">fn </span>get_mask(size: usize, device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-    <span class="kw">let </span>mask: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..size)
-        .flat_map(|i| (<span class="number">0</span>..size).map(<span class="kw">move </span>|j| u8::from(j &gt; i)))
-        .collect();
-    Tensor::from_slice(<span class="kw-2">&amp;</span>mask, (size, size), device)
-}
-
-<span class="kw">fn </span>masked_fill(on_false: <span class="kw-2">&amp;</span>Tensor, mask: <span class="kw-2">&amp;</span>Tensor, on_true: f32) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-    <span class="kw">let </span>shape = mask.shape();
-    <span class="kw">let </span>on_true = Tensor::new(on_true, on_false.device())<span class="question-mark">?</span>.broadcast_as(shape.dims())<span class="question-mark">?</span>;
-    <span class="kw">let </span>m = mask.where_cond(<span class="kw-2">&amp;</span>on_true, on_false)<span class="question-mark">?</span>;
-    <span class="prelude-val">Ok</span>(m)
-}
-
-<span class="kw">impl </span>Attention {
-    <span class="kw">fn </span>new(
-        cfg: <span class="kw-2">&amp;</span>Config,
-        vb: VarBuilder,
-        lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
-        count: <span class="kw-2">&amp;mut </span>usize,
-        ord: <span class="kw-2">&amp;</span>Ordering,
-        is_gptx: bool,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>num_heads = cfg.num_attention_heads;
-        <span class="kw">let </span>num_kv_heads = cfg.num_key_value_heads();
-        <span class="kw">let </span>head_dim = cfg.head_dim();
-        <span class="kw">let </span>q_proj = linear(
-            cfg.hidden_size,
-            num_heads * head_dim,
-            vb.pp(<span class="string">"q_proj"</span>),
-            lora_config,
-            count,
-            ord,
-        )<span class="question-mark">?</span>;
-        <span class="kw">let </span>k_proj = linear(
-            cfg.hidden_size,
-            num_kv_heads * head_dim,
-            vb.pp(<span class="string">"k_proj"</span>),
-            lora_config,
-            count,
-            ord,
-        )<span class="question-mark">?</span>;
-        <span class="kw">let </span>v_proj = linear(
-            cfg.hidden_size,
-            num_kv_heads * head_dim,
-            vb.pp(<span class="string">"v_proj"</span>),
-            lora_config,
-            count,
-            ord,
-        )<span class="question-mark">?</span>;
-        <span class="kw">let </span>dense = linear(
-            num_heads * head_dim,
-            cfg.hidden_size,
-            vb.pp(<span class="string">"dense"</span>),
-            lora_config,
-            count,
-            ord,
-        )<span class="question-mark">?</span>;
-        <span class="comment">// Alternative rope scalings are not supported.
-        </span><span class="kw">let </span>rotary_emb = RotaryEmbedding::new_partial(
-            cfg.rope_theta,
-            cfg.head_dim(),
-            (cfg.partial_rotary_factor * cfg.head_dim() <span class="kw">as </span>f64) <span class="kw">as </span>usize,
-            cfg.max_position_embeddings,
-            vb.device(),
-            is_gptx,
-            vb.dtype(),
-        )<span class="question-mark">?</span>;
-        <span class="kw">let </span>(q_layernorm, k_layernorm) = <span class="kw">if </span>cfg.qk_layernorm {
-            <span class="kw">let </span>q_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp(<span class="string">"q_layernorm"</span>))<span class="question-mark">?</span>;
-            <span class="kw">let </span>k_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp(<span class="string">"k_layernorm"</span>))<span class="question-mark">?</span>;
-            (<span class="prelude-val">Some</span>(q_layernorm), <span class="prelude-val">Some</span>(k_layernorm))
-        } <span class="kw">else </span>{
-            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
-        };
-        <span class="kw">let </span>softmax_scale = <span class="number">1f64 </span>/ (head_dim <span class="kw">as </span>f64).sqrt();
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-            q_proj,
-            k_proj,
-            v_proj,
-            dense,
-            q_layernorm,
-            k_layernorm,
-            rotary_emb,
-            softmax_scale,
-            num_heads,
-            num_kv_heads,
-            head_dim,
-            use_flash_attn: cfg.use_flash_attn,
-        })
-    }
-
-    <span class="attr">#[allow(clippy::too_many_arguments)]
-    </span><span class="kw">fn </span>forward(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-        xs: <span class="kw-2">&amp;</span>Tensor,
-        mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
-        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
-        kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
-        scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
-        global_scaling_weight: f64,
-        is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>(b_size, seq_len, _n_embd) = xs.dims3()<span class="question-mark">?</span>;
-        <span class="kw">let </span>q = <span class="self">self</span>.q_proj.lora_forward(
+        <span class="kw">let </span>up_states = <span class="self">self</span>.gate_up_proj.lora_forward(
             xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>k = <span class="self">self</span>.k_proj.lora_forward(
-            xs,
-            scalings.clone(),
-            global_scaling_weight,
-            is_scaling_pass,
-        )<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = <span class="self">self</span>.v_proj.lora_forward(
-            xs,
-            scalings.clone(),
-            global_scaling_weight,
-            is_scaling_pass,
-        )<span class="question-mark">?</span>;
-
-        <span class="kw">let </span>q = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.q_layernorm {
-            <span class="prelude-val">None </span>=&gt; q,
-            <span class="prelude-val">Some</span>(ln) =&gt; q.apply(ln)<span class="question-mark">?</span>,
-        };
-        <span class="kw">let </span>k = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.k_layernorm {
-            <span class="prelude-val">None </span>=&gt; k,
-            <span class="prelude-val">Some</span>(ln) =&gt; k.apply(ln)<span class="question-mark">?</span>,
-        };
-
-        <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_size * seq_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_size * seq_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = v
-            .reshape((b_size, seq_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-
-        <span class="self">self</span>.rotary_emb.forward(
-            seqlen_offsets,
-            <span class="kw-2">&amp;</span>start_offsets_kernel,
-            <span class="kw-2">&amp;mut </span>q,
-            <span class="kw-2">&amp;mut </span>k,
-            b_size,
-        )<span class="question-mark">?</span>;
-
-        <span class="kw">if </span>q.rank() == <span class="number">3 </span>{
-            q = q
-                .reshape((b_size, seq_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-                </span>.contiguous()<span class="question-mark">?</span>;
-            k = k
-                .reshape((b_size, seq_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-                </span>.contiguous()<span class="question-mark">?</span>;
-        }
-
-        <span class="kw">let </span>(k, v) = <span class="kw">match </span><span class="kw-2">&amp;*</span>kv_cache {
-            <span class="prelude-val">None </span>=&gt; (k, v),
-            <span class="prelude-val">Some</span>((prev_k, prev_v)) =&gt; {
-                <span class="kw">let </span>k = candle_nn::ops::kvconcat(prev_k, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>;
-                <span class="kw">let </span>v = candle_nn::ops::kvconcat(prev_v, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>;
-                (k, v)
-            }
-        };
-        <span class="kw-2">*</span>kv_cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
-
-        <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_heads / <span class="self">self</span>.num_kv_heads)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_heads / <span class="self">self</span>.num_kv_heads)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-
-        <span class="kw">let </span>attn_output = <span class="kw">if </span><span class="self">self</span>.use_flash_attn {
-            <span class="comment">// flash-attn expects (b_sz, seq_len, nheads, head_dim)
-            </span><span class="kw">let </span>q = q.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>k = k.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>v = v.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-            flash_attn(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, <span class="self">self</span>.softmax_scale <span class="kw">as </span>f32, seq_len &gt; <span class="number">1</span>)<span class="question-mark">?</span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-        </span>} <span class="kw">else </span>{
-            <span class="kw">let </span>attn_weights = (q
-                .to_dtype(DType::F32)<span class="question-mark">?
-                </span>.contiguous()<span class="question-mark">?
-                </span>.matmul(<span class="kw-2">&amp;</span>k.to_dtype(DType::F32)<span class="question-mark">?</span>.t()<span class="question-mark">?</span>)<span class="question-mark">?
-                </span>* <span class="self">self</span>.softmax_scale)<span class="question-mark">?</span>;
-            <span class="kw">let </span>attn_weights = <span class="kw">match </span>mask {
-                <span class="prelude-val">None </span>=&gt; attn_weights,
-                <span class="prelude-val">Some</span>(mask) =&gt; masked_fill(
-                    <span class="kw-2">&amp;</span>attn_weights,
-                    <span class="kw-2">&amp;</span>mask.broadcast_left((b_size, <span class="self">self</span>.num_heads))<span class="question-mark">?</span>,
-                    f32::NEG_INFINITY,
-                )<span class="question-mark">?</span>,
-            };
-            <span class="kw">let </span>attn_weights =
-                candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>.to_dtype(v.dtype())<span class="question-mark">?</span>;
-            attn_weights.matmul(<span class="kw-2">&amp;</span>v)<span class="question-mark">?
-        </span>};
-
-        <span class="kw">let </span>attn_output = attn_output
-            .transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-            </span>.reshape((b_size, seq_len, ()))<span class="question-mark">?</span>;
-        <span class="self">self</span>.dense.lora_forward(
-            <span class="kw-2">&amp;</span>attn_output,
-            scalings,
-            global_scaling_weight,
-            is_scaling_pass,
-        )
+        <span class="kw">let </span>gate = up_states.narrow(D::Minus1, <span class="number">0</span>, <span class="self">self</span>.i_size)<span class="question-mark">?</span>;
+        <span class="kw">let </span>up_states = up_states.narrow(D::Minus1, <span class="self">self</span>.i_size, <span class="self">self</span>.i_size)<span class="question-mark">?</span>;
+        <span class="kw">let </span>up_states = (up_states * gate.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.act_fn))<span class="question-mark">?</span>;
+        <span class="self">self</span>.down_proj
+            .lora_forward(<span class="kw-2">&amp;</span>up_states, scalings, global_scaling_weight, is_scaling_pass)
     }
 }
 
-<span class="attr">#[derive(Clone)]
+<span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">struct </span>DecoderLayer {
     self_attn: Attention,
-    mlp: MLP,
-    input_layernorm: LayerNorm,
+    mlp: Mlp,
+    input_layernorm: RmsNorm,
+    post_attention_layernorm: RmsNorm,
 }
 
 <span class="kw">impl </span>DecoderLayer {
     <span class="kw">fn </span>new(
+        rotary_emb: Arc&lt;RotaryEmbedding&gt;,
         cfg: <span class="kw-2">&amp;</span>Config,
         vb: VarBuilder,
         lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
         count: <span class="kw-2">&amp;mut </span>usize,
         ord: <span class="kw-2">&amp;</span>Ordering,
-        is_gptx: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>self_attn = Attention::new(cfg, vb.pp(<span class="string">"self_attn"</span>), lora_config, count, ord, is_gptx)<span class="question-mark">?</span>;
-        <span class="kw">let </span>mlp = MLP::new(cfg, vb.pp(<span class="string">"mlp"</span>), lora_config, count, ord)<span class="question-mark">?</span>;
-        <span class="kw">let </span>input_layernorm = layer_norm(
+        <span class="kw">let </span>self_attn =
+            Attention::new(rotary_emb, cfg, vb.pp(<span class="string">"self_attn"</span>), lora_config, count, ord)<span class="question-mark">?</span>;
+        <span class="kw">let </span>mlp = Mlp::new(cfg, vb.pp(<span class="string">"mlp"</span>), lora_config, count, ord)<span class="question-mark">?</span>;
+        <span class="kw">let </span>input_layernorm =
+            RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp(<span class="string">"input_layernorm"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>post_attention_layernorm = RmsNorm::new(
             cfg.hidden_size,
-            cfg.layer_norm_eps,
-            vb.pp(<span class="string">"input_layernorm"</span>),
+            cfg.rms_norm_eps,
+            vb.pp(<span class="string">"post_attention_layernorm"</span>),
         )<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             self_attn,
             mlp,
             input_layernorm,
+            post_attention_layernorm,
         })
     }
 
@@ -1009,7 +975,7 @@
     </span><span class="kw">fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         xs: <span class="kw-2">&amp;</span>Tensor,
-        mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
+        attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
         kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
@@ -1018,10 +984,10 @@
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>residual = xs;
-        <span class="kw">let </span>xs = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.input_layernorm)<span class="question-mark">?</span>;
-        <span class="kw">let </span>attn_outputs = <span class="self">self</span>.self_attn.forward(
+        <span class="kw">let </span>xs = <span class="self">self</span>.input_layernorm.forward(xs)<span class="question-mark">?</span>;
+        <span class="kw">let </span>xs = <span class="self">self</span>.self_attn.forward(
             <span class="kw-2">&amp;</span>xs,
-            mask,
+            attention_mask,
             seqlen_offsets,
             start_offsets_kernel,
             kv_cache,
@@ -1029,24 +995,29 @@
             global_scaling_weight,
             is_scaling_pass,
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>feed_forward_hidden_states =
-            <span class="self">self</span>.mlp
-                .forward(<span class="kw-2">&amp;</span>xs, scalings, global_scaling_weight, is_scaling_pass)<span class="question-mark">?</span>;
-        attn_outputs + feed_forward_hidden_states + residual
+        <span class="kw">let </span>xs = (xs + residual)<span class="question-mark">?</span>;
+        <span class="kw">let </span>residual = <span class="kw-2">&amp;</span>xs;
+        <span class="kw">let </span>xs = <span class="self">self</span>.mlp.forward(
+            <span class="kw-2">&amp;</span>xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.post_attention_layernorm)<span class="question-mark">?</span>,
+            scalings,
+            global_scaling_weight,
+            is_scaling_pass,
+        );
+        residual + xs
     }
 }
 
 <span class="kw">pub struct </span>Model {
-    embed_tokens: Embedding,
+    embed_tokens: candle_nn::Embedding,
     layers: Vec&lt;DecoderLayer&gt;,
-    final_layernorm: LayerNorm,
+    norm: RmsNorm,
     lm_head: Linear,
-    <span class="kw">pub </span>cache: Cache,
-    <span class="kw">pub </span>device: Device,
-    <span class="kw">pub </span>max_seq_len: usize,
-    xlora_classifier: <span class="prelude-ty">Option</span>&lt;XLoraClassifier&gt;,
     dtype: DType,
+    <span class="kw">pub </span>device: Device,
+    <span class="kw">pub </span>cache: Cache,
+    <span class="kw">pub </span>max_seq_len: usize,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
+    xlora_classifier: <span class="prelude-ty">Option</span>&lt;XLoraClassifier&gt;,
 }
 
 <span class="kw">impl </span>Model {
@@ -1056,28 +1027,25 @@
         lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         xlora_ordering: Ordering,
-        is_gptx: bool,
+        _is_gptx: bool,
         mapper: DeviceMapMetadata,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
-        <span class="kw">let </span>embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp(<span class="string">"embed_tokens"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>final_layernorm = layer_norm(
-            cfg.hidden_size,
-            cfg.layer_norm_eps,
-            vb_m.pp(<span class="string">"final_layernorm"</span>),
-        )<span class="question-mark">?</span>;
+        <span class="kw">let </span>embed_tokens =
+            candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp(<span class="string">"embed_tokens"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
-        <span class="kw">let </span>vb_m = vb_m.pp(<span class="string">"layers"</span>);
-        <span class="kw">let </span><span class="kw-2">mut </span>count = <span class="number">0</span>;
+        <span class="kw">let </span>vb_l = vb_m.pp(<span class="string">"layers"</span>);
         <span class="kw">let </span>mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>count = <span class="number">0</span>;
         <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
+            <span class="kw">let </span>rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb_m.device())<span class="question-mark">?</span>);
             <span class="kw">let </span>layer = DecoderLayer::new(
+                rotary_emb.clone(),
                 cfg,
-                mapper.set_device(layer_idx, vb_m.pp(layer_idx)),
+                mapper.set_device(layer_idx, vb_l.pp(layer_idx)),
                 lora_config,
                 <span class="kw-2">&amp;mut </span>count,
                 <span class="kw-2">&amp;</span>xlora_ordering,
-                is_gptx,
             )<span class="question-mark">?</span>;
             layers.push(layer)
         }
@@ -1085,44 +1053,79 @@
             <span class="comment">// We are now a LoRA model so we must merge the weights
             </span><span class="macro">info!</span>(<span class="string">"Merging LoRA adapters."</span>);
             <span class="kw">for </span>layer <span class="kw">in </span>layers.iter_mut().tqdm() {
-                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.k_proj)
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.qkv_proj)
                     .unwrap()
                     .merge_weights()<span class="question-mark">?</span>;
-                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.dense)
-                    .unwrap()
-                    .merge_weights()<span class="question-mark">?</span>;
-                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.q_proj)
-                    .unwrap()
-                    .merge_weights()<span class="question-mark">?</span>;
-                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.v_proj)
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.o_proj)
                     .unwrap()
                     .merge_weights()<span class="question-mark">?</span>;
 
-                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.fc1).unwrap().merge_weights()<span class="question-mark">?</span>;
-                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.fc2).unwrap().merge_weights()<span class="question-mark">?</span>;
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.down_proj)
+                    .unwrap()
+                    .merge_weights()<span class="question-mark">?</span>;
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.gate_up_proj)
+                    .unwrap()
+                    .merge_weights()<span class="question-mark">?</span>;
             }
         }
-        <span class="kw">let </span>lm_head = candle_nn::linear(cfg.hidden_size, cfg.vocab_size, vb.pp(<span class="string">"lm_head"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp(<span class="string">"norm"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>lm_head = candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp(<span class="string">"lm_head"</span>))<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             embed_tokens,
             layers,
-            final_layernorm,
+            norm,
             lm_head,
-            cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">true</span>),
             device: vb.device().clone(),
-            max_seq_len: cfg.max_position_embeddings,
             dtype: vb.dtype(),
+            cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">true</span>),
+            max_seq_len: cfg.max_position_embeddings,
+            mapper,
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, <span class="bool-val">false</span>).unwrap()
             }),
-            mapper,
         })
+    }
+
+    <span class="kw">fn </span>prepare_decoder_attention_mask(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        b_size: usize,
+        tgt_len: usize,
+        seqlen_offset: usize,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">let </span>mask: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..tgt_len)
+            .flat_map(|i| (<span class="number">0</span>..tgt_len).map(<span class="kw">move </span>|j| <span class="kw">if </span>i &lt; j { f32::NEG_INFINITY } <span class="kw">else </span>{ <span class="number">0. </span>}))
+            .collect();
+        <span class="kw">let </span>mask = Tensor::from_slice(<span class="kw-2">&amp;</span>mask, (tgt_len, tgt_len), <span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>mask = <span class="kw">if </span>seqlen_offset &gt; <span class="number">0 </span>{
+            <span class="kw">let </span>mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, <span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
+            Tensor::cat(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>mask0, <span class="kw-2">&amp;</span>mask], D::Minus1)<span class="question-mark">?
+        </span>} <span class="kw">else </span>{
+            mask
+        };
+        mask.expand((b_size, <span class="number">1</span>, tgt_len, tgt_len + seqlen_offset))<span class="question-mark">?
+            </span>.to_dtype(<span class="self">self</span>.dtype)
+    }
+
+    <span class="kw">fn </span>calculate_past_kv_len(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seq_len: usize) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>cache = <span class="self">self</span>.cache.lock();
+        <span class="kw">let </span>kv_cache_1 = cache.first().unwrap();
+        <span class="kw">if </span>kv_cache_1.is_none() {
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="number">0</span>);
+        }
+        <span class="kw">let </span>k_cache_1 = <span class="kw-2">&amp;</span>kv_cache_1.as_ref().unwrap().<span class="number">0</span>;
+        <span class="kw">if </span>k_cache_1.dims()[<span class="number">0</span>] &lt;= seq_len {
+            <span class="prelude-val">Ok</span>(<span class="number">0</span>)
+        } <span class="kw">else </span>{
+            <span class="kw">let </span>indexed = k_cache_1.i(seq_len)<span class="question-mark">?</span>;
+            <span class="kw">let </span>dims = indexed.dims();
+            <span class="prelude-val">Ok</span>(dims[dims.len() - <span class="number">2</span>])
+        }
     }
 
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>inner_forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-        xs: <span class="kw-2">&amp;</span>Tensor,
+        input_ids: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
         scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
@@ -1130,13 +1133,16 @@
         no_kv_cache: bool,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>(_b_size, seq_len) = xs.dims2()<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens)<span class="question-mark">?</span>;
-        <span class="kw">let </span>mask = <span class="kw">if </span>seq_len &lt;= <span class="number">1 </span>{
+        <span class="kw">let </span>(b_size, seq_len) = input_ids.dims2()<span class="question-mark">?</span>;
+        <span class="kw">let </span>past_key_values_length = <span class="self">self</span>.calculate_past_kv_len(seq_len)<span class="question-mark">?</span>;
+        <span class="kw">let </span>attention_mask = <span class="kw">if </span>seq_len &lt;= <span class="number">1 </span>{
             <span class="prelude-val">None
         </span>} <span class="kw">else </span>{
-            <span class="prelude-val">Some</span>(get_mask(seq_len, xs.device())<span class="question-mark">?</span>)
+            <span class="kw">let </span>mask =
+                <span class="self">self</span>.prepare_decoder_attention_mask(b_size, seq_len, past_key_values_length)<span class="question-mark">?</span>;
+            <span class="prelude-val">Some</span>(mask)
         };
+        <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="kw">if </span>is_full_pass {
             <span class="kw">if </span>no_kv_cache {
                 <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
@@ -1154,7 +1160,8 @@
             xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
             xs = layer.forward(
                 <span class="kw-2">&amp;</span>xs,
-                mask.as_ref()
+                attention_mask
+                    .as_ref()
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
                 seqlen_offsets,
@@ -1166,10 +1173,9 @@
                     .map(|classifier| classifier.get_global_scaling_weight())
                     .unwrap_or(<span class="number">1.0</span>),
                 is_scaling_pass,
-            )<span class="question-mark">?</span>;
-        }
-        <span class="kw">let </span>xs = xs.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
-        xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.final_layernorm)
+            )<span class="question-mark">?
+        </span>}
+        xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.norm)
     }
 
     <span class="attr">#[allow(clippy::too_many_arguments)]
@@ -1292,7 +1298,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>.device
     }
     <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-        <span class="bool-val">true
+        <span class="bool-val">false
     </span>}
     <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="self">self</span>.max_seq_len

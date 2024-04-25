@@ -416,8 +416,11 @@
 <a href="#414" id="414">414</a>
 <a href="#415" id="415">415</a>
 <a href="#416" id="416">416</a>
+<a href="#417" id="417">417</a>
+<a href="#418" id="418">418</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
+    Phi3Loader,
 };
 <span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
@@ -620,6 +623,7 @@
             NormalLoaderType::Llama =&gt; Box::new(LlamaLoader),
             NormalLoaderType::Mixtral =&gt; Box::new(MixtralLoader),
             NormalLoaderType::Phi2 =&gt; Box::new(Phi2Loader),
+            NormalLoaderType::Phi3 =&gt; Box::new(Phi3Loader),
         };
         Box::new(NormalLoader {
             inner: loader,
@@ -669,7 +673,7 @@
             DType::F32
         };
 
-        <span class="macro">info!</span>(<span class="string">"Model config: {config:?}"</span>);
+        <span class="macro">info!</span>(<span class="string">"Model config: {config}"</span>);
 
         <span class="kw">let </span><span class="kw-2">mut </span>is_lora = <span class="bool-val">false</span>;
         <span class="kw">let </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
