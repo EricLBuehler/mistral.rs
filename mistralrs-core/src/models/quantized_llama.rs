@@ -7,7 +7,9 @@ use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 
+use crate::device_map::DeviceMapper;
 use crate::pipeline::extract_logits;
+use crate::DeviceMapMetadata;
 
 use super::{repeat_kv, verify_sanity_gguf, Cache, QRmsNorm};
 
@@ -130,6 +132,7 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Ten
     let m = mask.where_cond(&on_true.broadcast_as(shape.dims())?, on_false)?;
     Ok(m)
 }
+
 impl LayerWeights {
     fn forward_attn(
         &mut self,
@@ -193,7 +196,7 @@ impl LayerWeights {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ModelWeights {
     tok_embeddings: Embedding,
     layers: Vec<LayerWeights>,
@@ -203,6 +206,7 @@ pub struct ModelWeights {
     pub device: Device,
     pub cache: Cache,
     pub max_seq_len: usize,
+    mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
 }
 
 impl ModelWeights {
@@ -265,6 +269,7 @@ impl ModelWeights {
             device: ct.device.clone(),
             cache: Cache::new(ct.hparams.n_layer as usize, false),
             max_seq_len: MAX_SEQ_LEN as usize, // Cannot determine from ggml.
+            mapper: None,
         })
     }
 
@@ -272,6 +277,7 @@ impl ModelWeights {
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
+        mapper: DeviceMapMetadata,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle_core::bail!("cannot find {s} in metadata"),
@@ -301,16 +307,6 @@ impl ModelWeights {
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
         let head_dim = embedding_length / head_count;
-        let rotary = RotaryEmbedding::new_partial(
-            rope_freq_base,
-            head_dim,
-            rope_dim,
-            MAX_SEQ_LEN as usize,
-            device,
-            false,
-            DType::F32,
-        )?;
-        let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
         let norm = QRmsNorm::new(
@@ -319,8 +315,21 @@ impl ModelWeights {
         )?;
         let output = ct.tensor(reader, "output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
+        let mapper = mapper.into_mapper(block_count, device)?;
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
+            let device = mapper.device_for(layer_idx).unwrap_or(device);
+            let rotary = RotaryEmbedding::new_partial(
+                rope_freq_base,
+                head_dim,
+                rope_dim,
+                MAX_SEQ_LEN as usize,
+                device,
+                false,
+                DType::F32,
+            )?;
+            let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
+
             let attention_wq = ct.tensor(reader, &format!("{prefix}.attn_q.weight"), device)?;
             let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"), device)?;
             let attention_wv = ct.tensor(reader, &format!("{prefix}.attn_v.weight"), device)?;
@@ -390,6 +399,7 @@ impl ModelWeights {
             max_seq_len: md_get("llama.context_length")
                 .and_then(|m| m.to_u64())
                 .unwrap_or(MAX_SEQ_LEN as u64) as usize,
+            mapper: Some(mapper),
         })
     }
 
@@ -422,12 +432,15 @@ impl ModelWeights {
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
+            if let Some(ref mapper) = self.mapper {
+                layer_in = mapper.map(layer_in, i)?;
+            }
             let x = layer_in;
             let residual = &x;
             let x = layer.attention_norm.forward(&x)?;
             let attn = layer.forward_attn(
                 &x,
-                &mask,
+                &mask.as_ref().map(|m| m.to_device(x.device()).unwrap()),
                 start_offsets,
                 start_offsets_kernel.clone(),
                 &mut cache[i],
@@ -439,8 +452,9 @@ impl ModelWeights {
             let x = layer.ffn_norm.forward(&x)?;
             let x = layer.mlp_or_moe.forward(&x)?;
             let x = (x + residual)?;
-            layer_in = x
+            layer_in = x;
         }
+        let layer_in = layer_in.to_device(&self.device)?;
         let x = self.norm.forward(&layer_in)?;
         extract_logits(&self.output.forward(&x.contiguous()?)?, context_lens)
     }

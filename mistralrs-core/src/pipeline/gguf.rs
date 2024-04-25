@@ -9,7 +9,7 @@ use crate::pipeline::chat_template::calculate_eos_tokens;
 use crate::pipeline::ChatTemplate;
 use crate::utils::varbuilder_utils::from_mmaped_safetensors;
 use crate::xlora_models::{NonGranularState, XLoraConfig};
-use crate::{deserialize_chat_template, get_paths};
+use crate::{deserialize_chat_template, get_paths, DeviceMapMetadata};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama, models::quantized_phi2::ModelWeights as QPhi,
     sequence::Sequence, utils::tokens::get_token, xlora_models::XLoraModelWeights as XLoraQLlama,
@@ -314,16 +314,11 @@ impl Loader for GGUFLoader {
     fn _setup_model(
         &self,
         paths: &dyn ModelPaths,
-        dtype: Option<DType>,
+        _dtype: Option<DType>,
         device: &Device,
         silent: bool,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
-        let default_dtype = if device.is_cuda() {
-            DType::BF16
-        } else {
-            DType::F32
-        };
-
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
         let model = gguf_file::Content::read(&mut file)
             .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
@@ -337,9 +332,11 @@ impl Loader for GGUFLoader {
         let model = match self.kind {
             ModelKind::QuantizedGGUF => match arch {
                 GGUFArchitecture::Llama => {
-                    Model::Llama(QLlama::from_gguf(model, &mut file, device)?)
+                    Model::Llama(QLlama::from_gguf(model, &mut file, device, mapper)?)
                 }
-                GGUFArchitecture::Phi2 => Model::Phi2(QPhi::from_gguf(model, &mut file, device)?),
+                GGUFArchitecture::Phi2 => {
+                    Model::Phi2(QPhi::from_gguf(model, &mut file, device, mapper)?)
+                }
                 a => bail!("Unsupported architecture `{a:?}`"),
             },
             ModelKind::XLoraGGUF => {
@@ -352,7 +349,7 @@ impl Loader for GGUFLoader {
                         .iter()
                         .map(|(_, x)| (*x).to_owned())
                         .collect::<Vec<_>>(),
-                    dtype.unwrap_or(default_dtype),
+                    DType::F32,
                     device,
                     silent,
                 )?;
@@ -366,6 +363,7 @@ impl Loader for GGUFLoader {
                         &vb,
                         paths.get_ordering().as_ref().unwrap(),
                         Some(paths.get_classifier_config().as_ref().unwrap().clone()),
+                        mapper,
                     )?),
                     a => bail!("Unsupported architecture for GGUF X-LoRA `{a:?}`"),
                 }
@@ -381,7 +379,7 @@ impl Loader for GGUFLoader {
                         .iter()
                         .map(|(_, x)| (*x).to_owned())
                         .collect::<Vec<_>>(),
-                    dtype.unwrap_or(default_dtype),
+                    DType::F32,
                     device,
                     silent,
                 )?;
@@ -394,7 +392,8 @@ impl Loader for GGUFLoader {
                         paths.get_adapter_configs().as_ref().unwrap(),
                         &vb,
                         paths.get_ordering().as_ref().unwrap(),
-                        Some(paths.get_classifier_config().as_ref().unwrap().clone()),
+                        None,
+                        mapper,
                     )?),
                     a => bail!("Unsupported architecture for GGUF X-LoRA `{a:?}`"),
                 }
@@ -431,7 +430,7 @@ impl Loader for GGUFLoader {
     }
 
     fn get_kind(&self) -> ModelKind {
-        ModelKind::QuantizedGGUF
+        self.kind
     }
 }
 

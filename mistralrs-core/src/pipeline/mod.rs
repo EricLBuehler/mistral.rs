@@ -5,6 +5,7 @@ mod loaders;
 mod macros;
 mod normal;
 use crate::aici::toktree::TokTrie;
+use crate::DeviceMapMetadata;
 use crate::{get_bias_if_not_allowed, sampler::Logprobs, sequence::SequenceRecognizer};
 use candle_nn::VarBuilder;
 use chat_template::{apply_chat_template_to, ChatTemplate};
@@ -136,7 +137,7 @@ impl AsRef<str> for ModelKind {
 ///
 /// # Example
 /// ```no_run
-/// use mistralrs_core::{Loader, TokenSource};
+/// use mistralrs_core::{Loader, TokenSource, DeviceMapMetadata};
 /// use candle_core::Device;
 ///
 /// let loader: Box<dyn Loader> = todo!();
@@ -146,6 +147,7 @@ impl AsRef<str> for ModelKind {
 ///     None,
 ///     &Device::cuda_if_available(0).unwrap(),
 ///     false,
+///     DeviceMapMetadata::dummy(),
 /// ).unwrap();
 /// ```
 pub trait Loader {
@@ -163,6 +165,7 @@ pub trait Loader {
         dtype: Option<DType>,
         device: &Device,
         silent: bool,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>>;
 
     /// If `revision` is None, then it defaults to `main`.
@@ -175,9 +178,10 @@ pub trait Loader {
         dtype: Option<DType>,
         device: &Device,
         silent: bool,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths = self.download_model(revision, token_source, silent)?;
-        self._setup_model(&*paths, dtype, device, silent)
+        self._setup_model(&*paths, dtype, device, silent, mapper)
     }
 
     fn get_id(&self) -> &str;
@@ -308,7 +312,9 @@ pub trait NormalModelLoader {
         config: &str,
         use_flash_attn: bool,
         vb: VarBuilder,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
+    #[allow(clippy::too_many_arguments)]
     fn load_xlora(
         &self,
         config: &str,
@@ -317,6 +323,7 @@ pub trait NormalModelLoader {
         lora_config: &[(String, LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn is_gptx(&self) -> bool;
 }
@@ -661,7 +668,7 @@ fn get_xlora_paths(
             || xlora_config.base_model_id != base_model_id
         {
             anyhow::bail!(
-                "X-LoRA ordering file, X-LoRA config, and base model ID do not match: {}, {}, and {} respectively.",
+                "Adapter ordering file, adapter model config, and base model ID do not match: {}, {}, and {} respectively.",
                 xlora_order.as_ref().unwrap().base_model_id,
                 xlora_config.base_model_id,
                 base_model_id

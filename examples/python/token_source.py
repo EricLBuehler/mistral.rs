@@ -8,7 +8,7 @@ runner = Runner(
         tokenizer_json=None,
         repeat_last_n=64,
     ),
-    token_source="literal: ..." # One of: "literal:<value>", "env:<value>", "path:<value>", "cache", "none"
+    token_source="literal: ...",  # One of: "literal:<value>", "env:<value>", "path:<value>", "cache", "none"
 )
 
 res = runner.send_chat_completion_request(

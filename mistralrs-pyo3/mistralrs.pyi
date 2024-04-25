@@ -150,10 +150,11 @@ class Runner:
         self,
         which: Which,
         max_seqs: int = 16,
-        no_kv_cache=False,
+        no_kv_cache: bool = False,
         prefix_cache_n: int = 16,
-        token_source="cache",
-        chat_template=None,
+        token_source: str = "cache",
+        chat_template: str | None = None,
+        num_device_layers: int | None = None,
     ) -> None:
         """
         Load a model.
@@ -167,6 +168,7 @@ class Runner:
         - `chat_template` specifies an optional JINJA chat template.
             The JINJA template should have `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
             It is used if the automatic deserialization fails. If this ends with `.json` (ie., it is a file) then that template is loaded.
+        - `num_device_layers` sets the number of layers to load and run on the device.
         """
         ...
 
@@ -191,6 +193,7 @@ class Role(Enum):
 
     User = 1
     Assistant = 2
+    System = 3
 
 @dataclass
 class Message:
