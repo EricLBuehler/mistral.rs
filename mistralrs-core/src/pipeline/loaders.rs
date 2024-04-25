@@ -24,6 +24,7 @@ pub enum NormalLoaderType {
     Llama,
     Phi2,
     Phi3,
+    Qwen2,
 }
 
 impl FromStr for NormalLoaderType {
@@ -36,6 +37,7 @@ impl FromStr for NormalLoaderType {
             "llama" => Ok(Self::Llama),
             "phi2" => Ok(Self::Phi2),
             "phi3" => Ok(Self::Phi3),
+            "qwen2" => Ok(Self::Qwen2),
             a => Err(format!("Unknown architecture `{a}`")),
         }
     }
@@ -541,6 +543,83 @@ impl NormalModelLoader for Phi3Loader {
             self.is_gptx(),
             mapper,
         )?))
+    }
+    fn is_gptx(&self) -> bool {
+        true
+    }
+}
+
+// ======================== Qwen2 loader
+
+#[derive(Deserialize)]
+struct Qwen2BasicConfig {
+    vocab_size: usize,
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    max_position_embeddings: usize,
+    sliding_window: usize,
+    max_window_layers: usize,
+    tie_word_embeddings: bool,
+    rope_theta: f64,
+    rms_norm_eps: f64,
+    use_sliding_window: bool,
+    hidden_act: Activation,
+}
+
+impl Qwen2BasicConfig {
+    fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::qwen2::Config> {
+        let basic_config: Self = serde_json::from_str(slice)?;
+        Ok(models::qwen2::Config {
+            vocab_size: basic_config.vocab_size,
+            hidden_size: basic_config.hidden_size,
+            intermediate_size: basic_config.intermediate_size,
+            num_hidden_layers: basic_config.num_hidden_layers,
+            num_attention_heads: basic_config.num_attention_heads,
+            num_key_value_heads: basic_config.num_key_value_heads,
+            hidden_act: basic_config.hidden_act,
+            max_position_embeddings: basic_config.max_position_embeddings,
+            rope_theta: basic_config.rope_theta,
+            rms_norm_eps: basic_config.rms_norm_eps,
+            sliding_window: basic_config.sliding_window,
+            max_window_layers: basic_config.max_window_layers,
+            tie_word_embeddings: basic_config.tie_word_embeddings,
+            use_sliding_window: basic_config.use_sliding_window,
+            use_flash_attn,
+        })
+    }
+}
+
+pub struct Qwen2Loader;
+
+impl NormalModelLoader for Qwen2Loader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        mapper: DeviceMapMetadata,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        Ok(Box::new(models::qwen2::Model::new(
+            &Qwen2BasicConfig::deserialize(config, use_flash_attn)?,
+            vb,
+            self.is_gptx(),
+            mapper,
+        )?))
+    }
+    fn load_xlora(
+        &self,
+        _config: &str,
+        _use_flash_attn: bool,
+        _vb: VarBuilder,
+        _lora_config: &[(String, LoraConfig)],
+        _xlora_config: Option<XLoraConfig>,
+        _xlora_ordering: Ordering,
+        _mapper: DeviceMapMetadata,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        todo!()
     }
     fn is_gptx(&self) -> bool {
         true
