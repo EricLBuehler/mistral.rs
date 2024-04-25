@@ -1,7 +1,7 @@
 use candle_core::{Module, Result, Shape, Tensor};
 use candle_nn::Linear;
 
-use crate::LinearLayerLike;
+use crate::{LinearLayerLike, Merge};
 
 /// Linear, but with a `new` implementation that ensures the weight and/or biases are detached (frozen).
 #[derive(Debug)]
@@ -24,6 +24,15 @@ impl FrozenLinear {
 impl Module for FrozenLinear {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         self.linear.forward(x)
+    }
+}
+
+impl Merge for FrozenLinear {
+    fn merge_weights(&mut self) -> Result<()> {
+        Ok(())
+    }
+    fn get_delta_weight(&self, _adapter: usize) -> Result<Tensor> {
+        unreachable!()
     }
 }
 
