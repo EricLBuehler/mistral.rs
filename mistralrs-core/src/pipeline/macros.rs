@@ -169,6 +169,7 @@ macro_rules! xlora_model_loader {
             $paths.get_adapter_configs().as_ref().unwrap(),
             Some($paths.get_classifier_config().as_ref().unwrap().clone()),
             $paths.get_ordering().as_ref().unwrap().clone(),
+            $mapper,
         )?
     }};
 }
