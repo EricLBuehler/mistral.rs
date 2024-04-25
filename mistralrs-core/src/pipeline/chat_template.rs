@@ -31,6 +31,8 @@ fn raise_exception(msg: String) -> Result<String, minijinja::Error> {
 
 #[derive(Debug, Deserialize)]
 pub struct Unk(#[serde(with = "either::serde_untagged")] pub Either<String, AddedTokensDecoder>);
+#[derive(Debug, Deserialize)]
+pub struct Bos(#[serde(with = "either::serde_untagged")] pub Either<String, AddedTokensDecoder>);
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
@@ -39,8 +41,7 @@ pub struct ChatTemplate {
     add_eos_token: Option<bool>,
     added_tokens_decoder: Option<HashMap<String, AddedTokensDecoder>>,
     additional_special_tokens: Option<Vec<String>>,
-    #[serde(with = "either::serde_untagged")]
-    pub bos_token: Either<String, AddedTokensDecoder>,
+    pub bos_token: Option<Bos>,
     pub chat_template: Option<String>,
     clean_up_tokenization_spaces: Option<bool>,
     device_map: Option<String>,
@@ -69,10 +70,10 @@ impl ChatTemplate {
         }
     }
 
-    pub fn bos_tok(&self) -> String {
-        match self.bos_token {
-            Either::Left(ref lit) => lit.clone(),
-            Either::Right(ref added) => added.content.clone(),
+    pub fn bos_tok(&self) -> Option<String> {
+        match self.bos_token.as_ref()?.0 {
+            Either::Left(ref lit) => Some(lit.clone()),
+            Either::Right(ref added) => Some(added.content.clone()),
         }
     }
 
@@ -95,9 +96,9 @@ pub fn calculate_eos_tokens(chat_template: &ChatTemplate, tokenizer: &Tokenizer)
 
     info!(
         "bos_tok = {}, eos_tok = {:?}, unk_tok = {}",
-        chat_template.bos_tok(),
+        chat_template.bos_tok().unwrap_or("`None`".to_string()),
         eos_tok_ids,
-        chat_template.eos_tok()
+        chat_template.unk_tok().unwrap_or("`None`".to_string()),
     );
 
     let mut eos_toks = Vec::new();
@@ -117,7 +118,7 @@ pub fn apply_chat_template_to(
     messages: Vec<IndexMap<String, String>>,
     add_generation_prompt: bool,
     template: &str,
-    bos_tok: &str,
+    bos_tok: Option<String>,
     eos_tok: &str,
     unk_tok: Option<String>,
 ) -> Result<String> {
