@@ -23,11 +23,8 @@ pub use loaders::{
     Phi3Loader, Qwen2Loader,
 };
 use mistralrs_lora::{LoraConfig, Ordering};
-pub use mixtral::{MixtralLoader, MixtralSpecificConfig, MIXTRAL_IS_GPTX};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
-pub use phi2::{Phi2Loader, Phi2SpecificConfig, PHI2_IS_GPTX};
 use rand_isaac::Isaac64Rng;
-use serde::Deserialize;
 use std::sync::Arc;
 use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
 use tokenizers::Tokenizer;
