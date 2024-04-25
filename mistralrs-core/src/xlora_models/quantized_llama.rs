@@ -753,6 +753,7 @@ impl ModelWeights {
             let x = (x + residual)?;
             layer_in = x;
         }
+        let layer_in = layer_in.to_device(&self.device)?;
         self.norm.forward(&layer_in)
     }
 

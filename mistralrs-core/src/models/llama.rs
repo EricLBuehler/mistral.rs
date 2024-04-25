@@ -299,6 +299,7 @@ impl Llama {
                 &mut self.cache,
             )?;
         }
+        let x = x.to_device(&self.device)?;
         let x = self.ln_f.forward(&x)?;
         let logits = self.lm_head.forward(&x)?;
         extract_logits(&logits.to_dtype(DType::F32)?, context_lens)

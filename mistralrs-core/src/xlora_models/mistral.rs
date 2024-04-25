@@ -507,6 +507,7 @@ impl XLoraModel {
                 is_scaling_pass,
             )?
         }
+        let xs = xs.to_device(&self.device)?;
         xs.apply(&self.norm)
     }
 

@@ -385,6 +385,7 @@ impl XLoraLlama {
                 is_scaling_pass,
             )?;
         }
+        let x = x.to_device(&self.device)?;
         self.ln_f.forward(&x)?.to_dtype(DType::F32)
     }
 

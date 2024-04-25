@@ -357,6 +357,7 @@ impl Model {
                 &mut cache[i],
             )?;
         }
+        let xs = xs.to_device(&self.device)?;
         extract_logits(
             &xs.apply(&self.final_layernorm)?.apply(&self.lm_head)?,
             context_lens,

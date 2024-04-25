@@ -299,6 +299,7 @@ impl ModelWeights {
             let feed_forward_hidden_states = layer.mlp.forward(&xs_norm)?;
             xs = (attn_outputs + feed_forward_hidden_states + residual)?
         }
+        let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.output_norm)?.i((.., seq_len - 1, ..))?;
         self.output.forward(&xs)
     }
