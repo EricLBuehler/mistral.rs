@@ -29,7 +29,7 @@ pub struct Config {
     pub rope_theta: f64,
     pub bos_token_id: Option<u32>,
     pub eos_token_id: Option<u32>,
-    pub rope_scaling: Option<Either<String, HashMap<String, f32>>>,
+    pub rope_scaling: Option<Either<String, HashMap<String, Either<Vec<f32>, f32>>>>,
     pub max_position_embeddings: usize,
     pub use_flash_attn: bool,
 }
