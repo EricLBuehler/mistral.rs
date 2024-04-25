@@ -76,7 +76,7 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Ten
 }
 
 impl LayerWeights {
-    fn apply_rotary_emb(&self, xs: &Tensor, start_offsets: &[usize]) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, start_offsets: &[usize]) -> Result<Tensor> {
         let (_b_sz, _n_head, seq_len, _n_embd) = xs.dims4()?;
         let xs_rot = xs.i((.., .., .., ..self.rope_dim))?;
         let xs_pass = xs.i((.., .., .., self.rope_dim..))?;
@@ -112,8 +112,8 @@ impl LayerWeights {
         // impact on performance.
         let v = v.contiguous()?;
 
-        let q = self.apply_rotary_emb(&q, seqlen_offsets)?.contiguous()?;
-        let k = self.apply_rotary_emb(&k, seqlen_offsets)?;
+        let q = self.forward(&q, seqlen_offsets)?.contiguous()?;
+        let k = self.forward(&k, seqlen_offsets)?;
 
         let (k, v) = match &*kv_cache {
             None => (k, v),

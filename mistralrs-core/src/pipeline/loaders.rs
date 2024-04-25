@@ -475,6 +475,7 @@ struct Phi3BasicConfig {
     eos_token_id: Option<u32>,
     rope_scaling: Option<HashMap<String, RopeScaling>>,
     max_position_embeddings: usize,
+    original_max_position_embeddings: usize,
 }
 
 impl Phi3BasicConfig {
@@ -501,6 +502,7 @@ impl Phi3BasicConfig {
                     .map(|(k, v)| (k, v.0))
                     .collect::<HashMap<_, _>>()
             }),
+            original_max_position_embeddings: basic_config.original_max_position_embeddings,
             use_flash_attn,
         })
     }

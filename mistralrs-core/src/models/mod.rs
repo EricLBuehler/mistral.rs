@@ -1,14 +1,11 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use candle_core::{quantized::QTensor, Result, Tensor};
-use candle_nn::{
-    layer_norm::{RmsNormNonQuantized, RmsNormQuantized},
-    Module, VarBuilder,
-};
+use candle_core::{Result, Tensor};
 
 use crate::get_mut_arcmutex;
 
 pub(crate) mod gemma;
+pub(crate) mod layers;
 pub(crate) mod llama;
 pub(crate) mod mistral;
 pub(crate) mod mixtral;
@@ -16,6 +13,7 @@ pub(crate) mod phi2;
 pub(crate) mod phi3;
 pub(crate) mod quantized_llama;
 pub(crate) mod quantized_phi2;
+pub(crate) use layers::*;
 
 pub type LayerCaches = Vec<Option<(Tensor, Tensor)>>;
 
@@ -64,41 +62,6 @@ impl Cache {
 
     pub(crate) fn is_xlora(&self) -> bool {
         self.xlora_cache.is_some()
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct RmsNorm {
-    inner: candle_nn::RmsNorm<RmsNormNonQuantized>,
-}
-
-impl RmsNorm {
-    pub fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
-        Ok(Self { inner })
-    }
-}
-
-impl Module for RmsNorm {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.inner.forward(x)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct QRmsNorm {
-    inner: candle_nn::RmsNorm<RmsNormQuantized>,
-}
-
-impl QRmsNorm {
-    pub fn new(scale: QTensor, eps: f32) -> Result<Self> {
-        let scale = scale.dequantize(&scale.device())?;
-        let inner = candle_nn::RmsNorm::<RmsNormQuantized>::new(scale, eps as f64);
-        Ok(Self { inner })
-    }
-
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.inner.forward(x)
     }
 }
 
