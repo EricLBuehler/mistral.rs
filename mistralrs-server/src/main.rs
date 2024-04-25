@@ -8,8 +8,8 @@ use axum::{
 use candle_core::Device;
 use clap::Parser;
 use mistralrs_core::{
-    get_tgt_non_granular_index, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelKind,
-    ModelSelected, SchedulerMethod, TokenSource,
+    get_tgt_non_granular_index, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs,
+    MistralRsBuilder, ModelKind, ModelSelected, SchedulerMethod, TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use std::sync::Arc;
@@ -20,10 +20,8 @@ use crate::{chat_completion::__path_chatcompletions, completions::completions};
 use crate::{chat_completion::chatcompletions, openai::ModelObject};
 mod interactive_mode;
 mod openai;
-mod prompt_mode;
 
 use interactive_mode::interactive_mode;
-use prompt_mode::prompt_mode;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{info, warn};
 use utoipa::OpenApi;
@@ -85,17 +83,9 @@ struct Args {
     #[arg(long, default_value_t = 16)]
     prefix_cache_n: usize,
 
-    /// Run a single prompt. This cannot be used with interactive mode.
-    #[clap(long)]
-    prompt: Option<String>,
-
-    /// Requires --prompt. Number of prompt completions to run concurrently in prompt mode.
-    #[clap(long, default_value_t = 1, requires = "prompt")]
-    prompt_concurrency: usize,
-
-    /// Requires --prompt. Number of prompt tokens to generate.
-    #[clap(long, default_value_t = 128, requires = "prompt")]
-    prompt_max_tokens: usize,
+    /// Number of device layers to load and run on the device. All others will be on the CPU.
+    #[arg(short, long)]
+    num_device_layers: Option<usize>,
 }
 
 #[utoipa::path(
@@ -215,7 +205,16 @@ async fn main() -> Result<()> {
         warn!("Using flash attention with a quantized model has no effect!")
     }
     info!("Model kind is: {}", loader.get_kind().as_ref());
-    let pipeline = loader.load_model(None, args.token_source, None, &device, false)?;
+    let pipeline = loader.load_model(
+        None,
+        args.token_source,
+        None,
+        &device,
+        false,
+        args.num_device_layers
+            .map(DeviceMapMetadata::from_num_device_layers)
+            .unwrap_or(DeviceMapMetadata::dummy()),
+    )?;
     info!("Model loaded.");
 
     let mistralrs = MistralRsBuilder::new(
@@ -228,15 +227,6 @@ async fn main() -> Result<()> {
     .with_prefix_cache_n(args.prefix_cache_n)
     .build();
 
-    if let Some(prompt) = args.prompt {
-        prompt_mode(
-            mistralrs,
-            prompt,
-            args.prompt_concurrency,
-            args.prompt_max_tokens,
-        );
-        return Ok(());
-    }
     if args.interactive_mode {
         interactive_mode(mistralrs);
         return Ok(());
