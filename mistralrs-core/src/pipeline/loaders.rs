@@ -1,7 +1,8 @@
-use std::str::FromStr;
+use std::{collections::HashMap, str::FromStr};
 
 use anyhow::Result;
 use candle_nn::{Activation, VarBuilder};
+use either::Either;
 use mistralrs_lora::{LoraConfig, Ordering};
 use pyo3::pyclass;
 use serde::Deserialize;
@@ -457,6 +458,9 @@ impl NormalModelLoader for Phi2Loader {
 // ======================== Phi3 loader
 
 #[derive(Deserialize)]
+struct RopeScaling(#[serde(with = "either::serde_untagged")] Either<String, HashMap<String, f32>>);
+
+#[derive(Deserialize)]
 struct Phi3BasicConfig {
     vocab_size: usize,
     hidden_act: candle_nn::Activation,
@@ -469,7 +473,7 @@ struct Phi3BasicConfig {
     rope_theta: f64,
     bos_token_id: Option<u32>,
     eos_token_id: Option<u32>,
-    rope_scaling: Option<String>,
+    rope_scaling: Option<RopeScaling>,
     max_position_embeddings: usize,
 }
 
@@ -489,7 +493,7 @@ impl Phi3BasicConfig {
             rms_norm_eps: basic_config.rms_norm_eps,
             eos_token_id: basic_config.eos_token_id,
             bos_token_id: basic_config.bos_token_id,
-            rope_scaling: basic_config.rope_scaling,
+            rope_scaling: basic_config.rope_scaling.map(|s| s.0),
             use_flash_attn,
         })
     }

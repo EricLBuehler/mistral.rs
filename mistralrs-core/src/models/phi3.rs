@@ -4,7 +4,8 @@
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{linear_no_bias, Linear, RotaryEmbedding, VarBuilder};
-use std::sync::Arc;
+use either::Either;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     device_map::DeviceMapper,
@@ -28,7 +29,7 @@ pub struct Config {
     pub rope_theta: f64,
     pub bos_token_id: Option<u32>,
     pub eos_token_id: Option<u32>,
-    pub rope_scaling: Option<String>,
+    pub rope_scaling: Option<Either<String, HashMap<String, f32>>>,
     pub max_position_embeddings: usize,
     pub use_flash_attn: bool,
 }
