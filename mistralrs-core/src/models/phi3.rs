@@ -6,7 +6,11 @@ use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{linear_no_bias, Linear, RotaryEmbedding, VarBuilder};
 use std::sync::Arc;
 
-use crate::pipeline::{extract_logits, NormalModel};
+use crate::{
+    device_map::DeviceMapper,
+    pipeline::{extract_logits, NormalModel},
+    DeviceMapMetadata,
+};
 
 use super::{flash_attn, repeat_kv, Cache, RmsNorm};
 
@@ -229,7 +233,7 @@ impl DecoderLayer {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
@@ -239,26 +243,37 @@ pub struct Model {
     pub device: Device,
     pub cache: Cache,
     pub max_seq_len: usize,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder, is_gptx: bool) -> Result<Self> {
+    pub fn new(
+        cfg: &Config,
+        vb: VarBuilder,
+        is_gptx: bool,
+        mapper: DeviceMapMetadata,
+    ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        let rotary_emb = Arc::new(RotaryEmbedding::new(
-            cfg.rope_theta as f32,
-            head_dim,
-            cfg.max_position_embeddings,
-            vb.device(),
-            is_gptx,
-            vb.dtype(),
-        )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
         for layer_idx in 0..cfg.num_hidden_layers {
-            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
+            let rotary_emb = Arc::new(RotaryEmbedding::new(
+                cfg.rope_theta as f32,
+                head_dim,
+                cfg.max_position_embeddings,
+                vb.device(),
+                is_gptx,
+                vb.dtype(),
+            )?);
+            let layer = DecoderLayer::new(
+                rotary_emb.clone(),
+                cfg,
+                mapper.set_device(layer_idx, vb_l.pp(layer_idx)),
+            )?;
             layers.push(layer)
         }
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
@@ -272,6 +287,7 @@ impl Model {
             dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: cfg.max_position_embeddings,
+            mapper,
         })
     }
 
@@ -330,9 +346,13 @@ impl Model {
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
+            xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                attention_mask.as_ref(),
+                attention_mask
+                    .as_ref()
+                    .map(|m| m.to_device(xs.device()).unwrap())
+                    .as_ref(),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 &mut cache[i],

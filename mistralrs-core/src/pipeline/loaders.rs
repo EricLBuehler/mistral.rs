@@ -503,11 +503,13 @@ impl NormalModelLoader for Phi3Loader {
         config: &str,
         use_flash_attn: bool,
         vb: VarBuilder,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::phi3::Model::new(
             &Phi3BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
             self.is_gptx(),
+            mapper,
         )?))
     }
     fn load_xlora(
@@ -518,6 +520,7 @@ impl NormalModelLoader for Phi3Loader {
         _lora_config: &[(String, LoraConfig)],
         _xlora_config: Option<XLoraConfig>,
         _xlora_ordering: Ordering,
+        _mapper: DeviceMapMetadata,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         todo!()
     }
