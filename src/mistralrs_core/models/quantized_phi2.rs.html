@@ -386,7 +386,7 @@
 }
 
 <span class="kw">impl </span>LayerWeights {
-    <span class="kw">fn </span>apply_rotary_emb(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor, start_offsets: <span class="kw-2">&amp;</span>[usize]) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor, start_offsets: <span class="kw-2">&amp;</span>[usize]) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(_b_sz, _n_head, seq_len, _n_embd) = xs.dims4()<span class="question-mark">?</span>;
         <span class="kw">let </span>xs_rot = xs.i((.., .., .., ..<span class="self">self</span>.rope_dim))<span class="question-mark">?</span>;
         <span class="kw">let </span>xs_pass = xs.i((.., .., .., <span class="self">self</span>.rope_dim..))<span class="question-mark">?</span>;
@@ -422,8 +422,8 @@
         // impact on performance.
         </span><span class="kw">let </span>v = v.contiguous()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>q = <span class="self">self</span>.apply_rotary_emb(<span class="kw-2">&amp;</span>q, seqlen_offsets)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-        <span class="kw">let </span>k = <span class="self">self</span>.apply_rotary_emb(<span class="kw-2">&amp;</span>k, seqlen_offsets)<span class="question-mark">?</span>;
+        <span class="kw">let </span>q = <span class="self">self</span>.forward(<span class="kw-2">&amp;</span>q, seqlen_offsets)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>k = <span class="self">self</span>.forward(<span class="kw-2">&amp;</span>k, seqlen_offsets)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>(k, v) = <span class="kw">match </span><span class="kw-2">&amp;*</span>kv_cache {
             <span class="prelude-val">None </span>=&gt; (k, v),

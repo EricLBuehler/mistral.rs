@@ -98,54 +98,14 @@
 <a href="#96" id="96">96</a>
 <a href="#97" id="97">97</a>
 <a href="#98" id="98">98</a>
-<a href="#99" id="99">99</a>
-<a href="#100" id="100">100</a>
-<a href="#101" id="101">101</a>
-<a href="#102" id="102">102</a>
-<a href="#103" id="103">103</a>
-<a href="#104" id="104">104</a>
-<a href="#105" id="105">105</a>
-<a href="#106" id="106">106</a>
-<a href="#107" id="107">107</a>
-<a href="#108" id="108">108</a>
-<a href="#109" id="109">109</a>
-<a href="#110" id="110">110</a>
-<a href="#111" id="111">111</a>
-<a href="#112" id="112">112</a>
-<a href="#113" id="113">113</a>
-<a href="#114" id="114">114</a>
-<a href="#115" id="115">115</a>
-<a href="#116" id="116">116</a>
-<a href="#117" id="117">117</a>
-<a href="#118" id="118">118</a>
-<a href="#119" id="119">119</a>
-<a href="#120" id="120">120</a>
-<a href="#121" id="121">121</a>
-<a href="#122" id="122">122</a>
-<a href="#123" id="123">123</a>
-<a href="#124" id="124">124</a>
-<a href="#125" id="125">125</a>
-<a href="#126" id="126">126</a>
-<a href="#127" id="127">127</a>
-<a href="#128" id="128">128</a>
-<a href="#129" id="129">129</a>
-<a href="#130" id="130">130</a>
-<a href="#131" id="131">131</a>
-<a href="#132" id="132">132</a>
-<a href="#133" id="133">133</a>
-<a href="#134" id="134">134</a>
-<a href="#135" id="135">135</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
 
-<span class="kw">use </span>candle_core::{quantized::QTensor, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::{
-    layer_norm::{RmsNormNonQuantized, RmsNormQuantized},
-    Module, VarBuilder,
-};
+<span class="kw">use </span>candle_core::{<span class="prelude-ty">Result</span>, Tensor};
 
 <span class="kw">use </span><span class="kw">crate</span>::get_mut_arcmutex;
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>gemma;
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>layers;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>llama;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>mistral;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>mixtral;
@@ -153,6 +113,7 @@
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>phi3;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>quantized_llama;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>quantized_phi2;
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>layers::<span class="kw-2">*</span>;
 
 <span class="kw">pub type </span>LayerCaches = Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt;;
 
@@ -201,41 +162,6 @@
 
     <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="self">self</span>.xlora_cache.is_some()
-    }
-}
-
-<span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">pub struct </span>RmsNorm {
-    inner: candle_nn::RmsNorm&lt;RmsNormNonQuantized&gt;,
-}
-
-<span class="kw">impl </span>RmsNorm {
-    <span class="kw">pub fn </span>new(size: usize, eps: f64, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>inner = candle_nn::rms_norm_non_quant(size, eps, vb)<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ inner })
-    }
-}
-
-<span class="kw">impl </span>Module <span class="kw">for </span>RmsNorm {
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="self">self</span>.inner.forward(x)
-    }
-}
-
-<span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">pub struct </span>QRmsNorm {
-    inner: candle_nn::RmsNorm&lt;RmsNormQuantized&gt;,
-}
-
-<span class="kw">impl </span>QRmsNorm {
-    <span class="kw">pub fn </span>new(scale: QTensor, eps: f32) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>scale = scale.dequantize(<span class="kw-2">&amp;</span>scale.device())<span class="question-mark">?</span>;
-        <span class="kw">let </span>inner = candle_nn::RmsNorm::&lt;RmsNormQuantized&gt;::new(scale, eps <span class="kw">as </span>f64);
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ inner })
-    }
-
-    <span class="kw">pub fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="self">self</span>.inner.forward(x)
     }
 }
 

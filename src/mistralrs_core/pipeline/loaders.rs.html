@@ -548,7 +548,6 @@
 <a href="#546" id="546">546</a>
 <a href="#547" id="547">547</a>
 <a href="#548" id="548">548</a>
-<a href="#549" id="549">549</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, str::FromStr};
 
 <span class="kw">use </span>anyhow::Result;
@@ -1026,14 +1025,12 @@
     eos_token_id: <span class="prelude-ty">Option</span>&lt;u32&gt;,
     rope_scaling: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, RopeScaling&gt;&gt;,
     max_position_embeddings: usize,
+    original_max_position_embeddings: usize,
 }
 
 <span class="kw">impl </span>Phi3BasicConfig {
     <span class="kw">fn </span>deserialize(slice: <span class="kw-2">&amp;</span>str, use_flash_attn: bool) -&gt; <span class="prelude-ty">Result</span>&lt;models::phi3::Config&gt; {
         <span class="kw">let </span>basic_config: <span class="self">Self </span>= serde_json::from_str(slice)<span class="question-mark">?</span>;
-        <span class="kw">if </span>basic_config.rope_scaling.is_some() {
-            <span class="macro">anyhow::bail!</span>(<span class="string">"128K LongRope is not supported yet, it is coming soon."</span>);
-        }
         <span class="prelude-val">Ok</span>(models::phi3::Config {
             vocab_size: basic_config.vocab_size,
             hidden_size: basic_config.hidden_size,
@@ -1052,6 +1049,7 @@
                     .map(|(k, v)| (k, v.<span class="number">0</span>))
                     .collect::&lt;HashMap&lt;<span class="kw">_</span>, <span class="kw">_</span>&gt;&gt;()
             }),
+            original_max_position_embeddings: basic_config.original_max_position_embeddings,
             use_flash_attn,
         })
     }
