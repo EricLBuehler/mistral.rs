@@ -1,5 +1,6 @@
 use super::loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
+    Phi3Loader,
 };
 use super::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
@@ -202,6 +203,7 @@ impl NormalLoaderBuilder {
             NormalLoaderType::Llama => Box::new(LlamaLoader),
             NormalLoaderType::Mixtral => Box::new(MixtralLoader),
             NormalLoaderType::Phi2 => Box::new(Phi2Loader),
+            NormalLoaderType::Phi3 => Box::new(Phi3Loader),
         };
         Box::new(NormalLoader {
             inner: loader,
@@ -251,7 +253,7 @@ impl Loader for NormalLoader {
             DType::F32
         };
 
-        info!("Model config: {config:?}");
+        info!("Model config: {config}");
 
         let mut is_lora = false;
         let model = match self.kind {

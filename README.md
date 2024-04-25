@@ -19,17 +19,13 @@ Mistral.rs is a fast LLM inference platform supporting inference on a variety of
 - Parallel linear layers (sharding) ([#50](https://github.com/EricLBuehler/mistral.rs/issues/50)). ⭐ Top priority, active work
 - Device offloading ([#157](https://github.com/EricLBuehler/mistral.rs/pull/157)). ⭐ Top priority, active work
 
-**Running the new Llama 3 model on CUDA**
+**Running the new Llama 3 model**
 
-`cargo run --release --features cuda -- -i plain -m meta-llama/Meta-Llama-3-8B-Instruct -a llama`
+`cargo run --release --features ... -- -i plain -m meta-llama/Meta-Llama-3-8B-Instruct -a llama`
 
-**Running the new Llama 3 model on Metal**
+**Running the new Phi 3 model**
 
-`cargo run --release --features metal -- -i plain -m meta-llama/Meta-Llama-3-8B-Instruct -a llama`
-
-**Running the new Llama 3 model on CPU**
-
-`cargo run --release -- -i plain -m meta-llama/Meta-Llama-3-8B-Instruct -a llama`
+`cargo run --release --features ... -- -i plain -m microsoft/Phi-3-mini-4k-instruct -a phi3`
 
 ## Description
 **Fast**:
@@ -63,7 +59,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95
 - Gemma
 - Llama, including Llama 3
 - Mixtral 8x7B
-- Phi 2
+- Phi 2 and Phi 3
 
 Please see [this section](README#supported-models) for details on quantization and LoRA support.
 
@@ -316,6 +312,7 @@ Command line docs [here](docs/CMD_LINE_DOCS.md)
 |Llama|✅|✅|
 |Mixtral 8x7B|✅| |
 |Phi 2|✅| |
+|Phi 3|✅| |
 
 **Device mapping support**
 |Model|Supported|
@@ -332,6 +329,7 @@ Command line docs [here](docs/CMD_LINE_DOCS.md)
 |Llama|✅|✅|✅|
 |Mixtral 8x7B|✅|✅| |
 |Phi 2|✅| | |
+|Phi 3|✅|✅| |
 
 **Using derivative models**
 
