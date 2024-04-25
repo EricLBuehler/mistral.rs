@@ -1,13 +1,12 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::ops::Mul;
+use std::{ops::Mul, str::FromStr};
 
 use candle_core::{quantized::QTensor, DType, Device, Result, Tensor};
 use candle_nn::{
     layer_norm::{RmsNormNonQuantized, RmsNormQuantized},
     Module, VarBuilder,
 };
-use serde::Deserialize;
 
 use super::phi3;
 
@@ -56,12 +55,23 @@ pub struct PhiRotaryEmbedding {
     original_max_position_embeddings: usize,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 enum ScaledRopeType {
-    #[serde(rename = "su")]
     Su,
-    #[serde(rename = "yarn")]
     Yarn,
+}
+
+impl FromStr for ScaledRopeType {
+    type Err = candle_core::Error;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "su" => Ok(Self::Su),
+            "yarn" => Ok(Self::Yarn),
+            _ => Err(candle_core::Error::Msg(
+                "Expected either `su` or `yarn` scaled RoPE type.".to_string(),
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -76,7 +86,7 @@ impl PhiRotaryEmbedding {
         let scaled_params = cfg.rope_scaling.as_ref().map(|r| ScaledRopeParams {
             short_factor: r["short_factor"].clone().left().unwrap(),
             long_factor: r["long_factor"].clone().left().unwrap(),
-            scaling_type: serde_json::from_str(&r["type"].clone().right().unwrap()).unwrap(),
+            scaling_type: r["type"].clone().right().unwrap().parse().unwrap(),
         });
         let max_seq_len = cfg.max_position_embeddings;
         let dim = cfg.head_dim();
