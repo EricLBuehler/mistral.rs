@@ -1,15 +1,59 @@
+use mistralrs_core::NormalLoaderType;
 use pyo3::pyclass;
+
+#[pyclass]
+#[derive(Debug, Clone)]
+pub enum Architecture {
+    Mistral,
+    Gemma,
+    Mixtral,
+    Llama,
+    Phi2,
+}
+
+impl From<Architecture> for NormalLoaderType {
+    fn from(value: Architecture) -> Self {
+        match value {
+            Architecture::Gemma => Self::Gemma,
+            Architecture::Llama => Self::Llama,
+            Architecture::Mistral => Self::Mistral,
+            Architecture::Mixtral => Self::Mixtral,
+            Architecture::Phi2 => Self::Phi2,
+        }
+    }
+}
 
 #[pyclass]
 #[derive(Clone)]
 pub enum Which {
-    Mistral {
+    Plain {
         model_id: String,
         tokenizer_json: Option<String>,
         repeat_last_n: Option<usize>,
+        arch: Architecture,
     },
 
-    MistralGGUF {
+    XLora {
+        model_id: Option<String>,
+        tokenizer_json: Option<String>,
+        xlora_model_id: String,
+        repeat_last_n: Option<usize>,
+        order: String,
+        tgt_non_granular_index: Option<usize>,
+        arch: Architecture,
+    },
+
+    Lora {
+        model_id: Option<String>,
+        tokenizer_json: Option<String>,
+        adapters_model_id: String,
+        repeat_last_n: Option<usize>,
+        order: String,
+        arch: Architecture,
+    },
+
+    #[allow(clippy::upper_case_acronyms)]
+    GGUF {
         tok_model_id: String,
         tokenizer_json: Option<String>,
         quantized_model_id: String,
@@ -17,45 +61,30 @@ pub enum Which {
         repeat_last_n: Option<usize>,
     },
 
-    XLoraMistral {
-        model_id: Option<String>,
-        tokenizer_json: Option<String>,
-        xlora_model_id: String,
-        repeat_last_n: Option<usize>,
-        order: String,
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    Gemma {
-        model_id: String,
-        tokenizer_json: Option<String>,
-        repeat_last_n: Option<usize>,
-    },
-
-    XLoraGemma {
-        model_id: Option<String>,
-        tokenizer_json: Option<String>,
-        xlora_model_id: String,
-        repeat_last_n: Option<usize>,
-        order: String,
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    Llama {
-        model_id: String,
-        tokenizer_json: Option<String>,
-        repeat_last_n: Option<usize>,
-    },
-
-    LlamaGGUF {
-        tok_model_id: String,
+    XLoraGGUF {
+        tok_model_id: Option<String>,
         tokenizer_json: Option<String>,
         quantized_model_id: String,
         quantized_filename: String,
         repeat_last_n: Option<usize>,
+        xlora_model_id: String,
+        order: String,
+        tgt_non_granular_index: Option<usize>,
     },
 
-    LlamaGGML {
+    LoraGGUF {
+        tok_model_id: Option<String>,
+        tokenizer_json: Option<String>,
+        quantized_model_id: String,
+        quantized_filename: String,
+        repeat_last_n: Option<usize>,
+        adapters_model_id: String,
+        order: String,
+        tgt_non_granular_index: Option<usize>,
+    },
+
+    #[allow(clippy::upper_case_acronyms)]
+    GGML {
         tok_model_id: String,
         tokenizer_json: Option<String>,
         quantized_model_id: String,
@@ -64,39 +93,7 @@ pub enum Which {
         gqa: Option<usize>,
     },
 
-    XLoraLlama {
-        model_id: Option<String>,
-        tokenizer_json: Option<String>,
-        xlora_model_id: String,
-        repeat_last_n: Option<usize>,
-        order: String,
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    Mixtral {
-        model_id: String,
-        tokenizer_json: Option<String>,
-        repeat_last_n: Option<usize>,
-    },
-
-    MixtralGGUF {
-        tok_model_id: String,
-        tokenizer_json: Option<String>,
-        quantized_model_id: String,
-        quantized_filename: String,
-        repeat_last_n: Option<usize>,
-    },
-
-    XLoraMixtral {
-        model_id: Option<String>,
-        tokenizer_json: Option<String>,
-        xlora_model_id: String,
-        repeat_last_n: Option<usize>,
-        order: String,
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    XLoraMistralGGUF {
+    XLoraGGML {
         tok_model_id: Option<String>,
         tokenizer_json: Option<String>,
         quantized_model_id: String,
@@ -105,113 +102,10 @@ pub enum Which {
         xlora_model_id: String,
         order: String,
         tgt_non_granular_index: Option<usize>,
-    },
-
-    XLoraLlamaGGUF {
-        tok_model_id: Option<String>,
-        tokenizer_json: Option<String>,
-        quantized_model_id: String,
-        quantized_filename: String,
-        repeat_last_n: Option<usize>,
-        xlora_model_id: String,
-        order: String,
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    XLoraLlamaGGML {
-        tok_model_id: Option<String>,
-        tokenizer_json: Option<String>,
-        quantized_model_id: String,
-        quantized_filename: String,
-        repeat_last_n: Option<usize>,
-        xlora_model_id: String,
-        order: String,
-        gqa: Option<usize>,
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    XLoraMixtralGGUF {
-        tok_model_id: Option<String>,
-        tokenizer_json: Option<String>,
-        quantized_model_id: String,
-        quantized_filename: String,
-        repeat_last_n: Option<usize>,
-        xlora_model_id: String,
-        order: String,
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    Phi2 {
-        model_id: String,
-        tokenizer_json: Option<String>,
-        repeat_last_n: Option<usize>,
-    },
-
-    XLoraPhi2 {
-        model_id: Option<String>,
-        tokenizer_json: Option<String>,
-        xlora_model_id: String,
-        repeat_last_n: Option<usize>,
-        order: String,
-        tgt_non_granular_index: Option<usize>,
-    },
-
-    LoraMistralGGUF {
-        tok_model_id: String,
-        tokenizer_json: Option<String>,
-        quantized_model_id: String,
-        quantized_filename: String,
-        adapters_model_id: String,
-        repeat_last_n: Option<usize>,
-        order: String,
-    },
-
-    LoraMistral {
-        model_id: Option<String>,
-        tokenizer_json: Option<String>,
-        adapters_model_id: String,
-        repeat_last_n: Option<usize>,
-        order: String,
-    },
-
-    LoraMixtral {
-        model_id: Option<String>,
-        tokenizer_json: Option<String>,
-        adapters_model_id: String,
-        repeat_last_n: Option<usize>,
-        order: String,
-    },
-
-    LoraLlama {
-        model_id: Option<String>,
-        tokenizer_json: Option<String>,
-        adapters_model_id: String,
-        repeat_last_n: Option<usize>,
-        order: String,
-    },
-
-    LoraLlamaGGUF {
-        tok_model_id: Option<String>,
-        tokenizer_json: Option<String>,
-        quantized_model_id: String,
-        quantized_filename: String,
-        repeat_last_n: Option<usize>,
-        adapters_model_id: String,
-        order: String,
-    },
-
-    LoraLlamaGGML {
-        tok_model_id: Option<String>,
-        tokenizer_json: Option<String>,
-        quantized_model_id: String,
-        quantized_filename: String,
-        repeat_last_n: Option<usize>,
-        adapters_model_id: String,
-        order: String,
         gqa: Option<usize>,
     },
 
-    LoraMixtralGGUF {
+    LoraGGML {
         tok_model_id: Option<String>,
         tokenizer_json: Option<String>,
         quantized_model_id: String,
@@ -219,13 +113,7 @@ pub enum Which {
         repeat_last_n: Option<usize>,
         adapters_model_id: String,
         order: String,
-    },
-
-    Phi2GGUF {
-        tok_model_id: String,
-        tokenizer_json: Option<String>,
-        quantized_model_id: String,
-        quantized_filename: String,
-        repeat_last_n: Option<usize>,
+        tgt_non_granular_index: Option<usize>,
+        gqa: Option<usize>,
     },
 }

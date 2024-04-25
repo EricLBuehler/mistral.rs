@@ -31,3 +31,7 @@ required-features = []
 [[example]]
 name = "grammar"
 required-features = []
+
+[[example]]
+name = "quantized"
+required-features = []

@@ -70,7 +70,7 @@ impl LoraConfig {
 }
 
 /// Any layer that is linear-like.
-pub trait LinearLayerLike: Debug {
+pub trait LinearLayerLike: Debug + Merge {
     fn weight(&self) -> &Tensor;
     fn bias(&self) -> Option<&Tensor>;
     fn shape(&self) -> &Shape;
@@ -88,6 +88,15 @@ pub trait Merge {
     fn get_delta_weight(&self, adapter: usize) -> Result<Tensor>;
     /// Merge the LoRA weights.
     fn merge_weights(&mut self) -> Result<()>;
+}
+
+impl Merge for Linear {
+    fn merge_weights(&mut self) -> Result<()> {
+        Ok(())
+    }
+    fn get_delta_weight(&self, _adapter: usize) -> Result<Tensor> {
+        unreachable!()
+    }
 }
 
 impl LinearLayerLike for Linear {
@@ -115,7 +124,7 @@ pub fn linear(
     d1: usize,
     d2: usize,
     vb: VarBuilder,
-    lora_config: &Vec<(String, LoraConfig)>,
+    lora_config: &[(String, LoraConfig)],
     count: &mut usize,
     ord: &Ordering,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
@@ -147,7 +156,7 @@ pub fn linear_no_bias(
     d1: usize,
     d2: usize,
     vb: VarBuilder,
-    lora_config: &Vec<(String, LoraConfig)>,
+    lora_config: &[(String, LoraConfig)],
     count: &mut usize,
     ord: &Ordering,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
@@ -184,7 +193,7 @@ pub fn linear_b(
     out_dim: usize,
     bias: bool,
     vb: crate::VarBuilder,
-    lora_config: &Vec<(String, LoraConfig)>,
+    lora_config: &[(String, LoraConfig)],
     count: &mut usize,
     ord: &Ordering,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {

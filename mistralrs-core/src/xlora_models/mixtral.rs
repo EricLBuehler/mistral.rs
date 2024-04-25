@@ -7,10 +7,14 @@ use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 use std::sync::Arc;
+use tqdm::Iter;
+use tracing::info;
 
 use crate::{
+    device_map::DeviceMapper,
     models::{flash_attn, mixtral::Config, repeat_kv, Cache, RmsNorm},
-    pipeline::{extract_logits, MIXTRAL_IS_GPTX},
+    pipeline::{extract_logits, NormalModel},
+    DeviceMapMetadata,
 };
 
 use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -35,7 +39,7 @@ impl Attention {
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
     ) -> Result<Self> {
@@ -198,7 +202,7 @@ impl BlockSparseTop2MLP {
     fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
     ) -> Result<Self> {
@@ -270,7 +274,7 @@ impl SparseMoeBlock {
     fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
     ) -> Result<Self> {
@@ -382,7 +386,7 @@ impl DecoderLayer {
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
     ) -> Result<Self> {
@@ -452,41 +456,72 @@ pub struct XLoraModel {
     dtype: DType,
     pub max_seq_len: usize,
     xlora_classifier: Option<XLoraClassifier>,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 impl XLoraModel {
     pub fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
+        is_gptx: bool,
+        mapper: DeviceMapMetadata,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        let rotary_emb = Arc::new(RotaryEmbedding::new(
-            cfg.rope_theta as f32,
-            head_dim,
-            cfg.max_position_embeddings,
-            vb_m.device(),
-            MIXTRAL_IS_GPTX,
-            vb.dtype(),
-        )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         let mut count = 0;
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
         for layer_idx in 0..cfg.num_hidden_layers {
+            let rotary_emb = Arc::new(RotaryEmbedding::new(
+                cfg.rope_theta as f32,
+                head_dim,
+                cfg.max_position_embeddings,
+                vb.device(),
+                is_gptx,
+                vb.dtype(),
+            )?);
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
-                vb_l.pp(layer_idx),
+                mapper.set_device(layer_idx, vb_l.pp(layer_idx)),
                 lora_config,
                 &mut count,
                 &xlora_ordering,
             )?;
             layers.push(layer)
+        }
+        if xlora_config.is_none() {
+            // We are now a LoRA model so we must merge the weights
+            info!("Merging LoRA adapters.");
+            for layer in layers.iter_mut().tqdm() {
+                Arc::get_mut(&mut layer.self_attn.k_proj)
+                    .unwrap()
+                    .merge_weights()?;
+                Arc::get_mut(&mut layer.self_attn.o_proj)
+                    .unwrap()
+                    .merge_weights()?;
+                Arc::get_mut(&mut layer.self_attn.q_proj)
+                    .unwrap()
+                    .merge_weights()?;
+                Arc::get_mut(&mut layer.self_attn.v_proj)
+                    .unwrap()
+                    .merge_weights()?;
+
+                Arc::get_mut(&mut layer.block_sparse_moe.gate)
+                    .unwrap()
+                    .merge_weights()?;
+                for expert in layer.block_sparse_moe.experts.iter_mut() {
+                    Arc::get_mut(&mut expert.w1).unwrap().merge_weights()?;
+                    Arc::get_mut(&mut expert.w2).unwrap().merge_weights()?;
+                    Arc::get_mut(&mut expert.w3).unwrap().merge_weights()?;
+                }
+            }
         }
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
         let lm_head = candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
@@ -503,6 +538,7 @@ impl XLoraModel {
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
             }),
+            mapper,
         })
     }
 
@@ -586,9 +622,13 @@ impl XLoraModel {
         };
         let mut xs = self.embed_tokens.forward(input_ids)?;
         for (i, layer) in self.layers.iter_mut().enumerate() {
+            xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                attention_mask.as_ref(),
+                attention_mask
+                    .as_ref()
+                    .map(|m| m.to_device(xs.device()).unwrap())
+                    .as_ref(),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 &mut cache[i],
@@ -600,6 +640,7 @@ impl XLoraModel {
                 is_scaling_pass,
             )?
         }
+        let xs = xs.to_device(&self.device)?;
         xs.apply(&self.norm)
     }
 
@@ -679,6 +720,54 @@ impl XLoraModel {
                 context_lens,
             )
         }
+    }
+}
+
+impl NormalModel for XLoraModel {
+    fn forward(
+        &mut self,
+        _input_ids: &Tensor,
+        _seqlen_offsets: &[usize],
+        _start_offsets_kernel: Tensor,
+        _context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        unreachable!()
+    }
+    fn xlora_forward(
+        &mut self,
+        input_ids: &Tensor,
+        input_ids_full: &Tensor,
+        seqlen_offsets: &[usize],
+        seqlen_offsets_full: &[usize],
+        start_offsets_kernel: Tensor,
+        start_offsets_kernel_full: Tensor,
+        no_kv_cache: bool,
+        non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        self.forward(
+            input_ids,
+            input_ids_full,
+            seqlen_offsets,
+            seqlen_offsets_full,
+            start_offsets_kernel,
+            start_offsets_kernel_full,
+            no_kv_cache,
+            non_granular_state,
+            context_lens,
+        )
+    }
+    fn cache(&self) -> &Cache {
+        &self.cache
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn is_xlora(&self) -> bool {
+        true
+    }
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
     }
 }
 

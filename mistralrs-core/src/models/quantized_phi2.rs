@@ -7,6 +7,9 @@ use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Embedding, LayerNorm};
 
+use crate::device_map::DeviceMapper;
+use crate::DeviceMapMetadata;
+
 use super::repeat_kv;
 use super::Cache;
 
@@ -73,7 +76,7 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Ten
 }
 
 impl LayerWeights {
-    fn apply_rotary_emb(&self, xs: &Tensor, start_offsets: &[usize]) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, start_offsets: &[usize]) -> Result<Tensor> {
         let (_b_sz, _n_head, seq_len, _n_embd) = xs.dims4()?;
         let xs_rot = xs.i((.., .., .., ..self.rope_dim))?;
         let xs_pass = xs.i((.., .., .., self.rope_dim..))?;
@@ -109,8 +112,8 @@ impl LayerWeights {
         // impact on performance.
         let v = v.contiguous()?;
 
-        let q = self.apply_rotary_emb(&q, seqlen_offsets)?.contiguous()?;
-        let k = self.apply_rotary_emb(&k, seqlen_offsets)?;
+        let q = self.forward(&q, seqlen_offsets)?.contiguous()?;
+        let k = self.forward(&k, seqlen_offsets)?;
 
         let (k, v) = match &*kv_cache {
             None => (k, v),
@@ -142,7 +145,7 @@ impl LayerWeights {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ModelWeights {
     tok_embeddings: Embedding,
     layers: Vec<LayerWeights>,
@@ -152,6 +155,7 @@ pub struct ModelWeights {
     pub device: Device,
     pub cache: Cache,
     pub max_seq_len: usize,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 fn precomput_freqs_cis(
@@ -185,6 +189,7 @@ impl ModelWeights {
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
+        mapper: DeviceMapMetadata,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle_core::bail!("cannot find {s} in metadata"),
@@ -214,8 +219,11 @@ impl ModelWeights {
         )?;
         let output = QLinear::new(&ct, reader, "output", device)?;
         let mut layers = Vec::with_capacity(block_count);
+        let mapper = mapper.into_mapper(block_count, device)?;
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
+            let device = mapper.device_for(layer_idx).unwrap_or(device);
+
             let ffn_up = QLinear::new(&ct, reader, &format!("{prefix}.ffn_up"), device)?;
             let ffn_down = QLinear::new(&ct, reader, &format!("{prefix}.ffn_down"), device)?;
             let mlp = Mlp { ffn_up, ffn_down };
@@ -232,8 +240,8 @@ impl ModelWeights {
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
-                cos: cos.clone(),
-                sin: sin.clone(),
+                cos: cos.clone().to_device(device)?,
+                sin: sin.clone().to_device(device)?,
                 rope_dim,
                 neg_inf: neg_inf.clone(),
             })
@@ -247,6 +255,7 @@ impl ModelWeights {
             device: device.clone(),
             cache: Cache::new(block_count, false),
             max_seq_len,
+            mapper,
         })
     }
 
@@ -278,17 +287,21 @@ impl ModelWeights {
         let mut xs = self.tok_embeddings.forward(xs)?;
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
+            xs = self.mapper.map(xs, i)?;
             let residual = &xs;
             let xs_norm = xs.apply(&layer.attn_norm)?;
             let attn_outputs = layer.forward_attn(
                 &xs_norm,
-                mask.as_ref(),
+                mask.as_ref()
+                    .map(|m| m.to_device(xs.device()).unwrap())
+                    .as_ref(),
                 seqlen_offsets,
                 cache.get_mut(i).unwrap(),
             )?;
             let feed_forward_hidden_states = layer.mlp.forward(&xs_norm)?;
             xs = (attn_outputs + feed_forward_hidden_states + residual)?
         }
+        let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.output_norm)?.i((.., seq_len - 1, ..))?;
         self.output.forward(&xs)
     }

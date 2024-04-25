@@ -12,10 +12,14 @@ use candle_nn::{
     embedding, layer_norm, Activation, Embedding, LayerNorm, Linear, RotaryEmbedding, VarBuilder,
 };
 use mistralrs_lora::{linear, LinearLayerLike, LoraConfig, Ordering};
+use tqdm::Iter;
+use tracing::info;
 
 use crate::{
+    device_map::DeviceMapper,
     models::{flash_attn, phi2::Config, repeat_kv},
-    pipeline::{extract_logits, PHI2_IS_GPTX},
+    pipeline::{extract_logits, NormalModel},
+    DeviceMapMetadata,
 };
 
 use super::{classifier::XLoraClassifier, Cache, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -32,7 +36,7 @@ impl MLP {
     fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
     ) -> Result<Self> {
@@ -114,9 +118,10 @@ impl Attention {
     fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
+        is_gptx: bool,
     ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads();
@@ -160,7 +165,7 @@ impl Attention {
             (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
             cfg.max_position_embeddings,
             vb.device(),
-            PHI2_IS_GPTX,
+            is_gptx,
             vb.dtype(),
         )?;
         let (q_layernorm, k_layernorm) = if cfg.qk_layernorm {
@@ -314,11 +319,12 @@ impl DecoderLayer {
     fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
+        is_gptx: bool,
     ) -> Result<Self> {
-        let self_attn = Attention::new(cfg, vb.pp("self_attn"), lora_config, count, ord)?;
+        let self_attn = Attention::new(cfg, vb.pp("self_attn"), lora_config, count, ord, is_gptx)?;
         let mlp = MLP::new(cfg, vb.pp("mlp"), lora_config, count, ord)?;
         let input_layernorm = layer_norm(
             cfg.hidden_size,
@@ -373,15 +379,18 @@ pub struct Model {
     pub max_seq_len: usize,
     xlora_classifier: Option<XLoraClassifier>,
     dtype: DType,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 impl Model {
     pub fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &Vec<(String, LoraConfig)>,
+        lora_config: &[(String, LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
+        is_gptx: bool,
+        mapper: DeviceMapMetadata,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
@@ -393,15 +402,38 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_m = vb_m.pp("layers");
         let mut count = 0;
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
         for layer_idx in 0..cfg.num_hidden_layers {
             let layer = DecoderLayer::new(
                 cfg,
-                vb_m.pp(layer_idx),
+                mapper.set_device(layer_idx, vb_m.pp(layer_idx)),
                 lora_config,
                 &mut count,
                 &xlora_ordering,
+                is_gptx,
             )?;
             layers.push(layer)
+        }
+        if xlora_config.is_none() {
+            // We are now a LoRA model so we must merge the weights
+            info!("Merging LoRA adapters.");
+            for layer in layers.iter_mut().tqdm() {
+                Arc::get_mut(&mut layer.self_attn.k_proj)
+                    .unwrap()
+                    .merge_weights()?;
+                Arc::get_mut(&mut layer.self_attn.dense)
+                    .unwrap()
+                    .merge_weights()?;
+                Arc::get_mut(&mut layer.self_attn.q_proj)
+                    .unwrap()
+                    .merge_weights()?;
+                Arc::get_mut(&mut layer.self_attn.v_proj)
+                    .unwrap()
+                    .merge_weights()?;
+
+                Arc::get_mut(&mut layer.mlp.fc1).unwrap().merge_weights()?;
+                Arc::get_mut(&mut layer.mlp.fc2).unwrap().merge_weights()?;
+            }
         }
         let lm_head = candle_nn::linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         Ok(Self {
@@ -416,6 +448,7 @@ impl Model {
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
             }),
+            mapper,
         })
     }
 
@@ -451,9 +484,12 @@ impl Model {
             self.cache.lock()
         };
         for (i, layer) in self.layers.iter_mut().enumerate() {
+            xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                mask.as_ref(),
+                mask.as_ref()
+                    .map(|m| m.to_device(xs.device()).unwrap())
+                    .as_ref(),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 &mut cache[i],
@@ -465,10 +501,8 @@ impl Model {
                 is_scaling_pass,
             )?;
         }
-        xs.apply(&self.final_layernorm)?
-            .narrow(1, seq_len - 1, 1)?
-            .apply(&self.lm_head)?
-            .squeeze(1)
+        let xs = xs.to_device(&self.device)?;
+        xs.apply(&self.final_layernorm)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -547,6 +581,54 @@ impl Model {
                 context_lens,
             )
         }
+    }
+}
+
+impl NormalModel for Model {
+    fn forward(
+        &mut self,
+        _input_ids: &Tensor,
+        _seqlen_offsets: &[usize],
+        _start_offsets_kernel: Tensor,
+        _context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        unreachable!()
+    }
+    fn xlora_forward(
+        &mut self,
+        input_ids: &Tensor,
+        input_ids_full: &Tensor,
+        seqlen_offsets: &[usize],
+        seqlen_offsets_full: &[usize],
+        start_offsets_kernel: Tensor,
+        start_offsets_kernel_full: Tensor,
+        no_kv_cache: bool,
+        non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        self.forward(
+            input_ids,
+            input_ids_full,
+            seqlen_offsets,
+            seqlen_offsets_full,
+            start_offsets_kernel,
+            start_offsets_kernel_full,
+            no_kv_cache,
+            non_granular_state,
+            context_lens,
+        )
+    }
+    fn cache(&self) -> &Cache {
+        &self.cache
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn is_xlora(&self) -> bool {
+        true
+    }
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
     }
 }
 

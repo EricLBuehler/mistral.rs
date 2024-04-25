@@ -4,3 +4,6 @@ extend-ignore-identifiers-re = [
     "mmaped",
     "arange"
 ]
+
+[files]
+extend-exclude = ["mistralrs-pyo3/pdoc/*"]

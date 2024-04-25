@@ -50,3 +50,5 @@ Mistral.rs supports running quantized models with X-LoRA or LoRA. The X-LoRA or 
 ## Avoiding the scaling pass with non-granular scalings
 
 The X-LoRA implementation supports non-granular scalings. This caches the scalings after `k` completion tokens are generated and they will be used for the remaining passes avoiding the scaling pass. The number of tokens to generate before caching is defined by setting `tgt_non_granular_index`. Setting `tgt_non_granular_index` will restrict the maximum running sequences to 1.
+
+Please see [this page](NON_GRANULAR.md) for more details and examples.

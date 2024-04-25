@@ -1,10 +1,11 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-/// Mistral LLM, https://github.com/mistralai/mistral-src
+// This implementation is based on:
+// https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
-use candle_transformers::models::with_tracing::{linear_no_bias, Linear};
-use std::sync::Arc;
+use candle_nn::{linear_no_bias, Linear, VarBuilder};
+use either::Either;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     device_map::DeviceMapper,
@@ -12,94 +13,62 @@ use crate::{
     DeviceMapMetadata,
 };
 
-use super::{flash_attn, repeat_kv, Cache, RmsNorm};
+use super::{flash_attn, repeat_kv, Cache, PhiRotaryEmbedding, RmsNorm};
 
-#[derive(Debug, Clone, PartialEq)]
+// https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
-    pub(crate) vocab_size: usize,
-    pub(crate) hidden_size: usize,
-    pub(crate) intermediate_size: usize,
-    pub(crate) num_hidden_layers: usize,
-    pub(crate) num_attention_heads: usize,
-    pub(crate) num_key_value_heads: usize,
-    pub(crate) hidden_act: Activation,
-    pub(crate) max_position_embeddings: usize,
-    pub(crate) rms_norm_eps: f64,
-    pub(crate) rope_theta: f64,
-    pub(crate) sliding_window: Option<usize>,
-    pub(crate) use_flash_attn: bool,
+    pub vocab_size: usize,
+    pub hidden_act: candle_nn::Activation,
+    pub hidden_size: usize,
+    pub intermediate_size: usize,
+    pub num_hidden_layers: usize,
+    pub num_attention_heads: usize,
+    pub num_key_value_heads: usize,
+    pub rms_norm_eps: f64,
+    pub rope_theta: f64,
+    pub bos_token_id: Option<u32>,
+    pub eos_token_id: Option<u32>,
+    pub rope_scaling: Option<HashMap<String, Either<Vec<f32>, String>>>,
+    pub max_position_embeddings: usize,
+    pub use_flash_attn: bool,
+    pub original_max_position_embeddings: usize,
 }
 
-#[derive(Debug, Clone)]
-#[allow(clippy::upper_case_acronyms)]
-struct MLP {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
-    act_fn: Activation,
-}
-
-impl MLP {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let hidden_sz = cfg.hidden_size;
-        let intermediate_sz = cfg.intermediate_size;
-        let gate_proj = linear_no_bias(hidden_sz, intermediate_sz, vb.pp("gate_proj"))?;
-        let up_proj = linear_no_bias(hidden_sz, intermediate_sz, vb.pp("up_proj"))?;
-        let down_proj = linear_no_bias(intermediate_sz, hidden_sz, vb.pp("down_proj"))?;
-        Ok(Self {
-            gate_proj,
-            up_proj,
-            down_proj,
-            act_fn: cfg.hidden_act,
-        })
-    }
-}
-
-impl Module for MLP {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let lhs = xs.apply(&self.gate_proj)?.apply(&self.act_fn)?;
-        let rhs = xs.apply(&self.up_proj)?;
-        (lhs * rhs)?.apply(&self.down_proj)
+impl Config {
+    pub fn head_dim(&self) -> usize {
+        self.hidden_size / self.num_attention_heads
     }
 }
 
 #[derive(Debug, Clone)]
 struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
+    qkv_proj: Linear,
     o_proj: Linear,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
-    hidden_size: usize,
-    rotary_emb: Arc<RotaryEmbedding>,
+    rotary_emb: Arc<PhiRotaryEmbedding>,
     use_flash_attn: bool,
 }
 
 impl Attention {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let hidden_sz = cfg.hidden_size;
+    fn new(rotary_emb: Arc<PhiRotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
-        let num_kv_groups = num_heads / num_kv_heads;
-        let head_dim = hidden_sz / num_heads;
-        let q_proj = linear_no_bias(hidden_sz, num_heads * head_dim, vb.pp("q_proj"))?;
-        let k_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("k_proj"))?;
-        let v_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("v_proj"))?;
-        let o_proj = linear_no_bias(num_heads * head_dim, hidden_sz, vb.pp("o_proj"))?;
+        let head_dim = cfg.head_dim();
+        let op_size = num_heads * head_dim + 2 * num_kv_heads * head_dim;
+        let qkv_proj = linear_no_bias(cfg.hidden_size, op_size, vb.pp("qkv_proj"))?;
+        let o_proj = linear_no_bias(num_heads * head_dim, cfg.hidden_size, vb.pp("o_proj"))?;
         Ok(Self {
-            q_proj,
-            k_proj,
-            v_proj,
+            qkv_proj,
             o_proj,
+            rotary_emb,
             num_heads,
             num_kv_heads,
-            num_kv_groups,
+            num_kv_groups: num_heads / num_kv_heads,
             head_dim,
-            hidden_size: hidden_sz,
-            rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
         })
     }
@@ -109,40 +78,38 @@ impl Attention {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
+        _start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let q = self.q_proj.forward(xs)?;
-        let k = self.k_proj.forward(xs)?;
-        let v = self.v_proj.forward(xs)?;
+        let qkv = self.qkv_proj.forward(xs)?;
+        let query_pos = self.num_heads * self.head_dim;
+        let q = qkv.narrow(D::Minus1, 0, query_pos)?;
+        let k = qkv.narrow(D::Minus1, query_pos, self.num_kv_heads * self.head_dim)?;
+        let v = qkv.narrow(
+            D::Minus1,
+            query_pos + self.num_kv_heads * self.head_dim,
+            self.num_kv_heads * self.head_dim,
+        )?;
 
-        let mut q = q.reshape((b_sz * q_len, self.num_heads, self.head_dim))?;
-        let mut k = k.reshape((b_sz * q_len, self.num_kv_heads, self.head_dim))?;
+        let q = q
+            .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
+            .transpose(1, 2)?;
+        let k = k
+            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+            .transpose(1, 2)?;
         let v = v
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        self.rotary_emb
-            .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
-
-        if q.rank() == 3 {
-            q = q
-                .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-            k = k
-                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-        }
+        let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
 
         let (k, v) = match &*kv_cache {
             None => (k, v),
             Some((prev_k, prev_v)) => {
-                let k = candle_nn::ops::kvconcat(prev_k, &k, 2)?;
-                let v = candle_nn::ops::kvconcat(prev_v, &v, 2)?;
+                let k = Tensor::cat(&[prev_k, &k], 2)?;
+                let v = Tensor::cat(&[prev_v, &v], 2)?;
                 (k, v)
             }
         };
@@ -171,23 +138,56 @@ impl Attention {
         };
         attn_output
             .transpose(1, 2)?
-            .reshape((b_sz, q_len, self.hidden_size))?
+            .reshape((b_sz, q_len, ()))?
             .apply(&self.o_proj)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Mlp {
+    gate_up_proj: Linear,
+    down_proj: Linear,
+    act_fn: candle_nn::Activation,
+    i_size: usize,
+}
+
+impl Mlp {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let hidden_size = cfg.hidden_size;
+        let i_size = cfg.intermediate_size;
+        let gate_up_proj = linear_no_bias(hidden_size, 2 * i_size, vb.pp("gate_up_proj"))?;
+        let down_proj = linear_no_bias(i_size, hidden_size, vb.pp("down_proj"))?;
+        Ok(Self {
+            gate_up_proj,
+            down_proj,
+            act_fn: cfg.hidden_act,
+            i_size,
+        })
+    }
+}
+
+impl Module for Mlp {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let up_states = xs.apply(&self.gate_up_proj)?;
+        let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
+        let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
+        let up_states = (up_states * gate.apply(&self.act_fn))?;
+        up_states.apply(&self.down_proj)
     }
 }
 
 #[derive(Debug, Clone)]
 struct DecoderLayer {
     self_attn: Attention,
-    mlp: MLP,
+    mlp: Mlp,
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
 }
 
 impl DecoderLayer {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(rotary_emb: Arc<PhiRotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
-        let mlp = MLP::new(cfg, vb.pp("mlp"))?;
+        let mlp = Mlp::new(cfg, vb.pp("mlp"))?;
         let input_layernorm =
             RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let post_attention_layernorm = RmsNorm::new(
@@ -233,7 +233,6 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Linear,
-    sliding_window: Option<usize>,
     dtype: DType,
     pub device: Device,
     pub cache: Cache,
@@ -245,24 +244,20 @@ impl Model {
     pub fn new(
         cfg: &Config,
         vb: VarBuilder,
-        is_gptx: bool,
+        _is_gptx: bool,
         mapper: DeviceMapMetadata,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
-        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
         for layer_idx in 0..cfg.num_hidden_layers {
-            let rotary_emb = Arc::new(RotaryEmbedding::new(
-                cfg.rope_theta as f32,
-                head_dim,
-                cfg.max_position_embeddings,
-                mapper.device_for(layer_idx).unwrap_or(vb.device()),
-                is_gptx,
+            let rotary_emb = Arc::new(PhiRotaryEmbedding::new(
                 vb.dtype(),
+                cfg,
+                mapper.device_for(layer_idx).unwrap_or(vb.device()),
             )?);
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
@@ -278,7 +273,6 @@ impl Model {
             layers,
             norm,
             lm_head,
-            sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
             dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, false),
@@ -293,18 +287,8 @@ impl Model {
         tgt_len: usize,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
-        // Sliding window mask
-        let sliding_window = self.sliding_window.unwrap_or(tgt_len + 1);
         let mask: Vec<_> = (0..tgt_len)
-            .flat_map(|i| {
-                (0..tgt_len).map(move |j| {
-                    if i < j || j + sliding_window < i {
-                        f32::NEG_INFINITY
-                    } else {
-                        0.
-                    }
-                })
-            })
+            .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. }))
             .collect();
         let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
         let mask = if seqlen_offset > 0 {
@@ -341,10 +325,6 @@ impl Model {
         context_lens: Vec<usize>,
     ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
-        if seqlen_offsets.len() > b_size {
-            candle_core::bail!("Expected seqlen offsets have length equal to batch size.")
-        }
-
         let past_key_values_length = self.calculate_past_kv_len(seq_len)?;
         let attention_mask = if seq_len <= 1 {
             None
@@ -366,9 +346,8 @@ impl Model {
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 &mut cache[i],
-            )?;
+            )?
         }
-        let xs = xs.to_device(&self.device)?;
         extract_logits(&xs.apply(&self.norm)?.apply(&self.lm_head)?, context_lens)
     }
 }

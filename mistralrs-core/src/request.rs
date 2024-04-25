@@ -4,6 +4,7 @@ use crate::{response::Response, sampler::SamplingParams};
 use std::{fmt::Debug, sync::mpsc::Sender};
 
 #[derive(Clone)]
+/// Control the constraint with Regex or Yacc.
 pub enum Constraint {
     Regex(String),
     Yacc(String),
@@ -11,6 +12,7 @@ pub enum Constraint {
 }
 
 #[derive(Clone, Debug)]
+/// Message or messages for a [`Request`].
 pub enum RequestMessage {
     Chat(Vec<IndexMap<String, String>>),
     Completion {
@@ -22,6 +24,8 @@ pub enum RequestMessage {
 }
 
 #[derive(Clone)]
+/// A request to the Engine, encapsulating the various parameters as well as
+/// the `mspc` response `Sender` used to return the [`Response`].
 pub struct Request {
     pub messages: RequestMessage,
     pub sampling_params: SamplingParams,

@@ -1,6 +1,6 @@
 # HTTP server
 
-Mistral.rs provides a lightweight OpenAI API compatible HTTP server based on [axum](https://github.com/tokio-rs/axum). The request and response formats are supersets of the OpenAI API, and more details can be found [here](https://ericlbuehler.github.io/mistral.rs/mistralrs_server/openai/struct.ChatCompletionRequest.html) for requests and [here](https://ericlbuehler.github.io/mistral.rs/mistralrs_core/struct.ChatCompletionResponse.html) for responses.
+Mistral.rs provides a lightweight OpenAI API compatible HTTP server based on [axum](https://github.com/tokio-rs/axum). The request and response formats are supersets of the OpenAI API.
 
 The API consists of the following endpoints. They can be viewed in your browser interactively by going to `http://localhost:<port>/docs`.
 

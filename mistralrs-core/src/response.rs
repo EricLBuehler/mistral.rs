@@ -86,6 +86,7 @@ generate_repr!(ChunkChoice);
 #[pyclass]
 #[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
+/// OpenAI compatible (superset) usage during a request.
 pub struct Usage {
     pub completion_tokens: usize,
     pub prompt_tokens: usize,
@@ -103,6 +104,7 @@ generate_repr!(Usage);
 #[pyclass]
 #[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
+/// An OpenAI compatible chat completion response.
 pub struct ChatCompletionResponse {
     pub id: String,
     pub choices: Vec<Choice>,
@@ -144,6 +146,7 @@ generate_repr!(CompletionChoice);
 #[pyclass]
 #[pyo3(get_all)]
 #[derive(Debug, Clone, Serialize)]
+/// An OpenAI compatible completion response.
 pub struct CompletionResponse {
     pub id: String,
     pub choices: Vec<CompletionChoice>,
@@ -156,11 +159,15 @@ pub struct CompletionResponse {
 
 generate_repr!(CompletionResponse);
 
+/// The response enum contains 3 types of variants:
+/// - Error (-Error suffix)
+/// - Chat (no suffix or prefix)
+/// - Completion (Completion- prefix)
 pub enum Response {
     InternalError(Box<dyn Error + Send + Sync>),
     ValidationError(Box<dyn Error + Send + Sync>),
-    // Chat
     ModelError(String, ChatCompletionResponse),
+    // Chat
     Done(ChatCompletionResponse),
     Chunk(ChatCompletionChunkResponse),
     // Completion

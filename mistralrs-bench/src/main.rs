@@ -2,8 +2,9 @@ use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
-    Constraint, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelKind, ModelSelected,
-    Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource, Usage,
+    Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelKind,
+    ModelSelected, Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
+    Usage,
 };
 use std::sync::Arc;
 use std::{fmt::Display, sync::mpsc::channel};
@@ -215,7 +216,7 @@ struct Args {
     n_prompt: usize,
 
     /// Number of generations tokens to run.
-    #[arg(long, short = 'n', default_value_t = 128)]
+    #[arg(long, short = 'g', default_value_t = 128)]
     n_gen: usize,
 
     /// Number of concurrent requests to run. Default is 1
@@ -225,6 +226,10 @@ struct Args {
     /// Number of times to repeat each test.
     #[arg(long, short, default_value_t = 5)]
     repetitions: usize,
+
+    /// Number of device layers to load and run on the device. All others will be on the CPU.
+    #[arg(short, long)]
+    num_device_layers: Option<usize>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -272,7 +277,16 @@ fn main() -> anyhow::Result<()> {
         warn!("Using flash attention with a quantized model has no effect!")
     }
     info!("Model kind is: {}", loader.get_kind().as_ref());
-    let pipeline = loader.load_model(None, token_source, None, &device)?;
+    let pipeline = loader.load_model(
+        None,
+        token_source,
+        None,
+        &device,
+        false,
+        args.num_device_layers
+            .map(DeviceMapMetadata::from_num_device_layers)
+            .unwrap_or(DeviceMapMetadata::dummy()),
+    )?;
     info!("Model loaded.");
 
     let mistralrs = MistralRsBuilder::new(

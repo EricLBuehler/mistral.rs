@@ -14,12 +14,14 @@ use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 
 #[derive(Clone, Debug)]
+/// Stop sequences or ids.
 pub enum StopTokens {
     Seqs(Vec<String>),
     Ids(Vec<u32>),
 }
 
 #[derive(Clone, Debug, Default)]
+/// Sampling params are used to control sampling.
 pub struct SamplingParams {
     pub temperature: Option<f64>,
     pub top_k: Option<usize>,

@@ -2,23 +2,22 @@ use std::sync::{mpsc::channel, Arc};
 
 use candle_core::Device;
 use mistralrs::{
-    Constraint, DeviceMapMetadata, MistralRs, MistralRsBuilder, NormalLoaderBuilder,
-    NormalLoaderType, NormalSpecificConfig, Request, RequestMessage, Response, SamplingParams,
-    SchedulerMethod, TokenSource,
+    Constraint, DeviceMapMetadata, GGUFLoaderBuilder, GGUFSpecificConfig, MistralRs,
+    MistralRsBuilder, Request, RequestMessage, Response, SamplingParams, SchedulerMethod,
+    TokenSource,
 };
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {
     // Select a Mistral model
-    let loader = NormalLoaderBuilder::new(
-        NormalSpecificConfig {
-            use_flash_attn: false,
-            repeat_last_n: 64,
-        },
+    let loader = GGUFLoaderBuilder::new(
+        GGUFSpecificConfig { repeat_last_n: 64 },
         None,
         None,
         Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
+        "TheBloke/Mistral-7B-Instruct-v0.1-GGUF".to_string(),
+        "mistral-7b-instruct-v0.1.Q4_K_M.gguf".to_string(),
     )
-    .build(NormalLoaderType::Mistral);
+    .build();
     // Load, into a Pipeline
     let pipeline = loader.load_model(
         None,
@@ -38,7 +37,7 @@ fn main() -> anyhow::Result<()> {
     let (tx, rx) = channel();
     let request = Request {
         messages: RequestMessage::Completion {
-            text: "I like to code in the following language: ".to_string(),
+            text: "Hello! My name is ".to_string(),
             echo_prompt: false,
             best_of: 1,
         },
@@ -47,7 +46,7 @@ fn main() -> anyhow::Result<()> {
         return_logprobs: false,
         is_streaming: false,
         id: 0,
-        constraint: Constraint::Regex("(- [^\n]*\n)+(- [^\n]*)(\n\n)?".to_string()), // Bullet list regex
+        constraint: Constraint::None,
         suffix: None,
     };
     mistralrs.get_sender().send(request)?;

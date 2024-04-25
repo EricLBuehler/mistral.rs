@@ -46,6 +46,10 @@ pub struct SchedulerOutput<'a> {
     pub prompt: Box<[&'a mut Sequence]>,
 }
 
+/// The scheduler method controld how sequences are scheduled during each
+/// step of the engine. For each scheduling step, the scheduler method is used if there
+/// are not only running, only waiting sequences, or none. If is it used, then it
+/// is used to allow waiting sequences to run.
 pub enum SchedulerMethod {
     Fixed(UsizeBounded<1, { usize::MAX }, false>),
 }

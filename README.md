@@ -1,36 +1,44 @@
-# mistral.rs
-[![Documentation](https://github.com/EricLBuehler/mistral.rs/actions/workflows/docs.yml/badge.svg)](https://ericlbuehler.github.io/mistral.rs/mistralrs/)
+<h1 align="center">
+  mistral.rs
+</h1>
+
+<h3 align="center">
+Blazingly fast LLM inference.
+</h3>
+
+<p align="center">
+| <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust Documentation</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/API.md"><b>Python Documentation</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
+
+</p>
 
 Mistral.rs is a fast LLM inference platform supporting inference on a variety of devices, quantization, and easy-to-use application with an Open-AI API compatible HTTP server and Python bindings. 
 
-## Current work and upcoming features
+## Upcoming features
 - More models: please submit requests [here](https://github.com/EricLBuehler/mistral.rs/issues/156).
 - X-LoRA: Scalings `topk` and softmax `topk` ([#48](https://github.com/EricLBuehler/mistral.rs/issues/48)).
-- Parallel linear layers (sharding) ([#50](https://github.com/EricLBuehler/mistral.rs/issues/50)). ⭐ Top priority, active work
-- Device offloading ([#157](https://github.com/EricLBuehler/mistral.rs/pull/157)). ⭐ Top priority, active work
+- Parallel linear layers (sharding) ([#50](https://github.com/EricLBuehler/mistral.rs/issues/50)).
+- In situ quantization: download safetensor models and quantize them in place
+- Speculative decoding: https://arxiv.org/pdf/2211.17192
 
-**Running the new Llama 3 model on CUDA**
+**Running the new Llama 3 model**
 
-`cargo run --release --features cuda -- -i llama -m meta-llama/Meta-Llama-3-8B-Instruct`
+`cargo run --release --features ... -- -i plain -m meta-llama/Meta-Llama-3-8B-Instruct -a llama`
 
-**Running the new Llama 3 model on Metal**
+**Running the new Phi 3 model with 128K context window**
 
-`cargo run --release --features metal -- -i llama -m meta-llama/Meta-Llama-3-8B-Instruct`
-
-**Running the new Llama 3 model on CPU**
-
-`cargo run --release -- -i llama -m meta-llama/Meta-Llama-3-8B-Instruct`
+`cargo run --release --features ... -- -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3`
 
 ## Description
 **Fast**:
 - Quantized model support: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit for faster inference and optimized memory usage.
 - Continuous batching.
 - Prefix caching.
+- Device mapping: load and run some layers on the device and the reset on the CPU.
 
 **Accelerator support**:
 - Apple silicon support with the Metal framework.
 - CPU inference with `mkl`, `accelerate` support and optimized backend.
-- CUDA support with flash attention and CUDNN.
+- CUDA support with flash attention and cuDNN.
 
 **Easy**:
 - Lightweight OpenAI API compatible HTTP server.
@@ -53,6 +61,8 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95
 - Llama, including Llama 3
 - Mixtral 8x7B
 - Phi 2
+- Phi 3
+- Qwen 2
 
 Please see [this section](README#supported-models) for details on quantization and LoRA support.
 
@@ -69,7 +79,8 @@ Rust multithreaded API for easy integration into any application.
 
 Python API for mistral.rs.
 
-- [Docs and installation](mistralrs-pyo3/README.md)
+- [Installation](mistralrs-pyo3/README.md)
+- [Docs](mistralrs-pyo3/API.md)
 - [Example](examples/python/python_api.py)
 - [Cookbook](examples/python/cookbook.ipynb)
 
@@ -77,7 +88,7 @@ Python API for mistral.rs.
 from mistralrs import Runner, Which, ChatCompletionRequest, Message, Role
 
 runner = Runner(
-    which=Which.MistralGGUF(
+    which=Which.GGUF(
         tok_model_id="mistralai/Mistral-7B-Instruct-v0.1",
         quantized_model_id="TheBloke/Mistral-7B-Instruct-v0.1-GGUF",
         quantized_filename="mistral-7b-instruct-v0.1.Q4_K_M.gguf",
@@ -112,6 +123,7 @@ OpenAI API compatible API server
 
 - [Source](integrations/llama_index_integration.py).
 - [Example](examples/llama_index/xlora_gguf.py)
+- [Cookbook](examples/llama_index/cookbook.ipynb)
 
 ---
 
@@ -119,7 +131,7 @@ OpenAI API compatible API server
 - CUDA:
   - Enable with `cuda` feature: `--features cuda`
   - Flash attention support with `flash-attn` feature, only applicable to non-quantized models: `--features flash-attn`
-  - CUDNN support with `cudnn` feature: `--features cudnn`
+  - cuDNNsupport with `cudnn` feature: `--features cudnn`
 - Metal:
   - Enable with `metal` feature: `--features metal`
 - CPU:
@@ -137,6 +149,7 @@ Enabling features is done by passing `--features ...` to the build system. When 
 |A10 GPU, CUDA|78|78|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 |Intel Xeon 8358 CPU, AVX|6|19|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 |Raspberry Pi 5 (8GB), Neon|2|*segfault*|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|2_K|
+|A100 GPU, CUDA|110|119|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 
 Please submit more benchmarks via raising an issue!
 
@@ -144,85 +157,148 @@ Please submit more benchmarks via raising an issue!
 ### Installation and Build
 To install mistral.rs, one should ensure they have Rust installed by following [this](https://rustup.rs/) link. Additionally, the Huggingface token should be provided in `~/.cache/huggingface/token` when using the server to enable automatic download of gated models.
 
-Detailed installation guide: [here](docs/INSTALLATION.md).
+1) Install required packages
+    - `openssl` (ex., `sudo apt install libssl-dev`)
+    - `pkg-config` (ex., `sudo apt install pkg-config`)
 
-**Easy quickstart**
-For an easy quickstart on a `*nix` system, the script below will 
-download an setup Rust and then build mistral.rs to run with CUDA.
+2) Install Rust: https://rustup.rs/
+    ```bash
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    source $HOME/.cargo/env
+    ```
+
+3) Set HF token correctly (skip if already set or your model is not gated, or if you want to use the `token_source` parameters in Python or the command line.)
+    ```bash
+    mkdir ~/.cache/huggingface
+    touch ~/.cache/huggingface/token
+    echo <HF_TOKEN_HERE> > ~/.cache/huggingface/token
+    ```
+
+4) Download the code
+    ```bash
+    git clone https://github.com/EricLBuehler/mistral.rs.git
+    cd mistral.rs
+    ```
+
+5) Build or install
+    - Base build command
+        ```bash
+        cargo build --release
+        ```
+    - Build with CUDA support
+        ```bash
+        cargo build --release --features cuda
+        ```
+    - Build with CUDA and Flash Attention V2 support
+        ```bash
+        cargo build --release --features "cuda flash-attn"
+        ```
+    - Build with Metal support
+        ```bash
+        cargo build --release --features metal
+        ```
+    - Build with Accelerate support
+        ```bash
+        cargo build --release --features accelerate
+        ```
+    - Build with MKL support
+        ```bash
+        cargo build --release --features mkl
+        ```
+    - Install with `cargo install` for easy command line usage
+
+        Pass the same values to `--features` as you would for `cargo build`
+        ```bash
+        cargo install --path mistralrs-server --features cuda
+        ```
+6) The build process will output a binary `misralrs-server` at `./target/release/mistralrs-server` which may be copied into the working directory with the following command:
+    ```
+    cp ./target/release/mistralrs-server .
+    ```
+
+7) Installing Python support
+
+    You can install Python support by following the guide [here](/mistralrs-pyo3/README.md).
+
+### Getting models
+Mistral.rs will automatically download models from HF hub. To access gated models, you should provide a token source. They may be one of:
+- `literal:<value>`: Load from a specified literal
+- `env:<value>`: Load from a specified environment variable
+- `path:<value>`: Load from a specified file
+- `cache`: **default**: Load from the HF token at ~/.cache/huggingface/token or equivalent.
+- `none`: Use no HF token
+
+This is passed in the following ways:
+- Command line:
 ```bash
-sudo apt update -y
-sudo apt install libssl-dev -y
-sudo apt install pkg-config -y
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source $HOME/.cargo/env
-
-git clone https://github.com/EricLBuehler/mistral.rs.git
-cd mistral.rs
-mkdir ~/.cache/huggingface
-touch ~/.cache/huggingface/token
-echo <HF_TOKEN_HERE> > ~/.cache/huggingface/token
-cargo build --release --features cuda
+./mistralrs-server --port 1234 gguf -m mistralai/Mistral-7B-Instruct-v0.1
 ```
+- Python:
+
+Example [here](examples/python/token_source.py).
+
+*Loading locally will be added shortly*.
 
 ### Run
 
 To start a server serving Mistral on `localhost:1234`, 
 ```bash
-./mistralrs-server --port 1234 --log output.log mistral
+./mistralrs-server --port 1234 --log output.log plain -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF
 ```
 
-Mistral.rs uses subcommands to control the model type. They are of format `<XLORA/LORA>-<ARCHITECTURE>-<QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
+Mistral.rs uses subcommands to control the model type. They are generally of format `<XLORA/LORA>-<ARCHITECTURE/QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
 
 **Interactive mode:**
 
 You can launch interactive mode, a simple chat application running in the terminal, by passing `-i`:
 
 ```bash
-./mistralrs-server -i mistral-gguf
+./mistralrs-server -i gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
 ```
 
-**Quick examples:**
+### Quick examples:
 
 - X-LoRA with no quantization
 
 To start an X-LoRA server with the exactly as presented in [the paper](https://arxiv.org/abs/2402.07148):
 
-```
-./mistralrs-server --port 1234 x-lora-mistral -o orderings/xlora-paper-ordering.json -m HuggingFaceH4/zephyr-7b-beta -x lamm-mit/x-lora
+```bash
+./mistralrs-server --port 1234 x-lora-plain -o orderings/xlora-paper-ordering.json -x lamm-mit/x-lora
 ```
 - LoRA with a model from GGUF
 
 To start an LoRA server with adapters from the X-LoRA paper (you should modify the ordering file to use only one adapter, as the adapter static scalings are all 1 and so the signal will become distorted):
 
-```
-./mistralrs-server --port 1234 lora-mistral-gguf -o orderings/xlora-paper-ordering.json -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q8_0.gguf -a lamm-mit/x-lora
+```bash
+./mistralrs-server --port 1234 lora-gguf -o orderings/xlora-paper-ordering.json -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q8_0.gguf -x lamm-mit/x-lora
 ```
 
 Normally with a LoRA model you would use a custom ordering file. However, for this example we use the ordering from the X-LoRA paper because we are using the adapters from the X-LoRA paper.
 
 - With a model from GGUF
 
-To start a server running Llama from GGUF:
+To start a server running Mistral from GGUF:
 
-```
-./mistralrs-server --port 1234 llama-gguf -t meta-llama/Llama-2-13b-chat-hf -m TheBloke/Llama-2-13B-chat-GGUF -f llama-2-13b-chat.Q4_K_M.gguf
+```bash
+./mistralrs-server --port 1234 gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
 ```
 
 - With a model from GGML
 
 To start a server running Llama from GGML:
 
-```
-./mistralrs-server --port 1234 llama-ggml -t meta-llama/Llama-2-13b-chat-hf -m TheBloke/Llama-2-13B-chat-GGML -f llama-2-13b-chat.ggmlv3.q4_K_M.bin
+```bash
+./mistralrs-server --port 1234 ggml -t meta-llama/Llama-2-13b-chat-hf -m TheBloke/Llama-2-13B-chat-GGML -f llama-2-13b-chat.ggmlv3.q4_K_M.bin
 ```
 
-- Single prompt inference
+- Plain model from safetensors
 
-To run a single prompt and then shut down:
+To start a server running Mistral from safetensors.
 
+```bash
+./mistralrs-server --port 1234 gguf -m mistralai/Mistral-7B-Instruct-v0.1
 ```
-./mistralrs-server --prompt "Hello!" mistral-gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
-```
+
 
 **Command line docs**
 
@@ -239,6 +315,15 @@ Command line docs [here](docs/CMD_LINE_DOCS.md)
 |Llama|✅|✅|
 |Mixtral 8x7B|✅| |
 |Phi 2|✅| |
+|Phi 3|✅| |
+|Qwen 2| | |
+
+**Device mapping support**
+|Model|Supported|
+|--|--|
+|Normal|✅|
+|GGUF|✅|
+|GGML| |
 
 **X-LoRA and LoRA support**
 |Model|X-LoRA|X-LoRA+GGUF|X-LoRA+GGML|
@@ -248,6 +333,8 @@ Command line docs [here](docs/CMD_LINE_DOCS.md)
 |Llama|✅|✅|✅|
 |Mixtral 8x7B|✅|✅| |
 |Phi 2|✅| | |
+|Phi 3|✅|✅| |
+|Qwen 2| | | |
 
 **Using derivative models**
 
@@ -266,7 +353,7 @@ It is also important to check the chat template style of the model. If the HF hu
 
 For example, when using a Zephyr model:
 
-`./mistralrs-server --port 1234 --log output.txt mistral-gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf`
+`./mistralrs-server --port 1234 --log output.txt gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf`
 
 ### Adapter model support: X-LoRA and LoRA
 

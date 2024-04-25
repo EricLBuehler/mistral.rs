@@ -1,9 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-/// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
-use candle_transformers::models::with_tracing::{linear_no_bias, Linear};
+use candle_nn::{linear, linear_no_bias, Activation, Linear, RotaryEmbedding, VarBuilder};
 use std::sync::Arc;
 
 use crate::{
@@ -14,20 +12,23 @@ use crate::{
 
 use super::{flash_attn, repeat_kv, Cache, RmsNorm};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
-    pub(crate) vocab_size: usize,
-    pub(crate) hidden_size: usize,
-    pub(crate) intermediate_size: usize,
-    pub(crate) num_hidden_layers: usize,
-    pub(crate) num_attention_heads: usize,
-    pub(crate) num_key_value_heads: usize,
-    pub(crate) hidden_act: Activation,
-    pub(crate) max_position_embeddings: usize,
-    pub(crate) rms_norm_eps: f64,
-    pub(crate) rope_theta: f64,
-    pub(crate) sliding_window: Option<usize>,
-    pub(crate) use_flash_attn: bool,
+    pub vocab_size: usize,
+    pub hidden_size: usize,
+    pub intermediate_size: usize,
+    pub num_hidden_layers: usize,
+    pub num_attention_heads: usize,
+    pub num_key_value_heads: usize,
+    pub max_position_embeddings: usize,
+    pub sliding_window: usize,
+    pub max_window_layers: usize,
+    pub tie_word_embeddings: bool,
+    pub rope_theta: f64,
+    pub rms_norm_eps: f64,
+    pub use_sliding_window: bool,
+    pub hidden_act: Activation,
+    pub use_flash_attn: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -85,9 +86,9 @@ impl Attention {
         let num_kv_heads = cfg.num_key_value_heads;
         let num_kv_groups = num_heads / num_kv_heads;
         let head_dim = hidden_sz / num_heads;
-        let q_proj = linear_no_bias(hidden_sz, num_heads * head_dim, vb.pp("q_proj"))?;
-        let k_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("k_proj"))?;
-        let v_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("v_proj"))?;
+        let q_proj = linear(hidden_sz, num_heads * head_dim, vb.pp("q_proj"))?;
+        let k_proj = linear(hidden_sz, num_kv_heads * head_dim, vb.pp("k_proj"))?;
+        let v_proj = linear(hidden_sz, num_kv_heads * head_dim, vb.pp("v_proj"))?;
         let o_proj = linear_no_bias(num_heads * head_dim, hidden_sz, vb.pp("o_proj"))?;
         Ok(Self {
             q_proj,
@@ -233,7 +234,7 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Linear,
-    sliding_window: Option<usize>,
+    sliding_window: usize,
     dtype: DType,
     pub device: Device,
     pub cache: Cache,
@@ -251,8 +252,8 @@ impl Model {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
-        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let vb_l = vb_m.pp("layers");
         let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
         for layer_idx in 0..cfg.num_hidden_layers {
@@ -293,12 +294,11 @@ impl Model {
         tgt_len: usize,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
-        // Sliding window mask
-        let sliding_window = self.sliding_window.unwrap_or(tgt_len + 1);
+        // Sliding window mask?
         let mask: Vec<_> = (0..tgt_len)
             .flat_map(|i| {
                 (0..tgt_len).map(move |j| {
-                    if i < j || j + sliding_window < i {
+                    if i < j || j + self.sliding_window < i {
                         f32::NEG_INFINITY
                     } else {
                         0.
@@ -341,10 +341,6 @@ impl Model {
         context_lens: Vec<usize>,
     ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
-        if seqlen_offsets.len() > b_size {
-            candle_core::bail!("Expected seqlen offsets have length equal to batch size.")
-        }
-
         let past_key_values_length = self.calculate_past_kv_len(seq_len)?;
         let attention_mask = if seq_len <= 1 {
             None
@@ -366,9 +362,8 @@ impl Model {
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 &mut cache[i],
-            )?;
+            )?
         }
-        let xs = xs.to_device(&self.device)?;
         extract_logits(&xs.apply(&self.norm)?.apply(&self.lm_head)?, context_lens)
     }
 }

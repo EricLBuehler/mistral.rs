@@ -18,6 +18,7 @@ pub use mistralrs_lora::Ordering;
 pub use pipeline::Pipeline;
 
 mod aici;
+mod device_map;
 mod engine;
 mod model_loader;
 pub use model_loader::{get_tgt_non_granular_index, LoaderBuilder};
@@ -35,21 +36,25 @@ mod sequence;
 mod utils;
 mod xlora_models;
 
+pub use device_map::{DeviceMapMetadata, LayerDeviceMapper};
 pub use pipeline::{
-    GemmaLoader, GemmaSpecificConfig, LlamaLoader, LlamaSpecificConfig, Loader, MistralLoader,
-    MistralSpecificConfig, MixtralLoader, MixtralSpecificConfig, ModelKind, Phi2Loader,
-    Phi2SpecificConfig, TokenSource,
+    GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder,
+    GGUFSpecificConfig, GemmaLoader, LlamaLoader, Loader, MistralLoader, MixtralLoader, ModelKind,
+    NormalLoader, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader,
+    Phi3Loader, Qwen2Loader, TokenSource,
 };
 pub use request::{Constraint, Request, RequestMessage};
 pub use response::Response;
-pub use response::{
-    ChatCompletionChunkResponse, ChatCompletionResponse, CompletionResponse, Usage,
-};
+pub use response::*;
 pub use sampler::{SamplingParams, StopTokens, TopLogprob};
 pub use scheduler::SchedulerMethod;
 use serde::Serialize;
 use tokio::runtime::Runtime;
 
+/// The MistralRs struct handles sending requests to the engine.
+/// It is the core multi-threaded component of mistral.rs, and uses `mspc`
+/// `Sender` and `Receiver` primitives to send and receive requests to the
+/// engine.
 pub struct MistralRs {
     sender: Sender<Request>,
     log: Option<String>,
@@ -58,6 +63,9 @@ pub struct MistralRs {
     next_request_id: Mutex<RefCell<usize>>,
 }
 
+/// The MistralRsBuilder takes the pipeline and a scheduler method and constructs
+/// an Engine and a MistralRs instance. The Engine runs on a separate thread, and the MistralRs
+/// instance stays on the calling thread.
 pub struct MistralRsBuilder {
     pipeline: Box<Mutex<dyn Pipeline>>,
     method: SchedulerMethod,

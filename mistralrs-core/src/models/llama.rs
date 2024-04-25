@@ -3,48 +3,20 @@
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
 use candle_transformers::models::with_tracing::{linear_no_bias as linear, Linear};
+use serde::Deserialize;
 use std::{collections::HashMap, sync::Arc};
 
-use crate::pipeline::{extract_logits, LLAMA_IS_GPTX};
+use crate::{
+    device_map::DeviceMapper,
+    pipeline::{extract_logits, NormalModel},
+    DeviceMapMetadata,
+};
 
 use super::{flash_attn, repeat_kv, RmsNorm};
 
 pub const MAX_SEQ_LEN: usize = 4096;
 
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct LlamaConfig {
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub vocab_size: usize,
-    pub num_hidden_layers: usize,
-    pub num_attention_heads: usize,
-    pub num_key_value_heads: Option<usize>,
-    pub rms_norm_eps: f64,
-    #[serde(default = "default_rope")]
-    pub rope_theta: f32,
-}
-
-fn default_rope() -> f32 {
-    10_000.0
-}
-
-impl LlamaConfig {
-    pub fn into_config(self, use_flash_attn: bool) -> Config {
-        Config {
-            hidden_size: self.hidden_size,
-            intermediate_size: self.intermediate_size,
-            vocab_size: self.vocab_size,
-            num_hidden_layers: self.num_hidden_layers,
-            num_attention_heads: self.num_attention_heads,
-            num_key_value_heads: self.num_key_value_heads.unwrap_or(self.num_attention_heads),
-            rms_norm_eps: self.rms_norm_eps,
-            rope_theta: self.rope_theta,
-            use_flash_attn,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub hidden_size: usize,
     pub intermediate_size: usize,
@@ -60,25 +32,23 @@ pub struct Config {
 #[derive(Debug, Clone)]
 pub struct Cache {
     masks: HashMap<usize, Tensor>,
-    device: Device,
 }
 
 impl Cache {
-    pub fn new(device: &Device) -> Result<Self> {
+    pub fn new() -> Result<Self> {
         Ok(Self {
             masks: HashMap::new(),
-            device: device.clone(),
         })
     }
 
-    fn mask(&mut self, t: usize) -> Result<Tensor> {
+    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
         if let Some(mask) = self.masks.get(&t) {
-            Ok(mask.clone())
+            mask.to_device(device)
         } else {
             let mask: Vec<_> = (0..t)
                 .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
                 .collect();
-            let mask = Tensor::from_slice(&mask, (t, t), &self.device)?;
+            let mask = Tensor::from_slice(&mask, (t, t), device)?;
             self.masks.insert(t, mask.clone());
             Ok(mask)
         }
@@ -167,7 +137,9 @@ impl CausalSelfAttention {
             let k = k.to_dtype(DType::F32)?;
             let v = v.to_dtype(DType::F32)?;
             let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-            let mask = cache.mask(seq_len)?.broadcast_as(att.shape())?;
+            let mask = cache
+                .mask(seq_len, att.device())?
+                .broadcast_as(att.shape())?;
             let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
             let att = candle_nn::ops::softmax(&att, D::Minus1)?;
             // Convert to contiguous as matmul doesn't support strided vs for now.
@@ -178,7 +150,7 @@ impl CausalSelfAttention {
         Ok(y)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder, cfg: &Config, is_gptx: bool) -> Result<Self> {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
@@ -192,7 +164,7 @@ impl CausalSelfAttention {
             head_dim,
             MAX_SEQ_LEN,
             vb.device(),
-            LLAMA_IS_GPTX,
+            is_gptx,
             vb.dtype(),
         )?);
         Ok(Self {
@@ -276,8 +248,8 @@ impl Block {
         Ok(x)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
-        let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg)?;
+    fn load(vb: VarBuilder, cfg: &Config, is_gptx: bool) -> Result<Self> {
+        let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg, is_gptx)?;
         let mlp = Mlp::load(vb.pp("mlp"), cfg)?;
         let rms_1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let rms_2 = RmsNorm::new(
@@ -294,7 +266,7 @@ impl Block {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Llama {
     wte: Embedding,
     blocks: Vec<Block>,
@@ -303,6 +275,7 @@ pub struct Llama {
     pub kv_cache: super::Cache,
     pub device: Device,
     cache: Cache,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 impl Llama {
@@ -316,6 +289,7 @@ impl Llama {
         let mut x = self.wte.forward(x)?;
         let mut cache = self.kv_cache.lock();
         for (block_idx, block) in self.blocks.iter().enumerate() {
+            x = self.mapper.map(x, block_idx)?;
             x = block.forward(
                 &x,
                 seqlen_offsets,
@@ -325,19 +299,31 @@ impl Llama {
                 &mut self.cache,
             )?;
         }
+        let x = x.to_device(&self.device)?;
         let x = self.ln_f.forward(&x)?;
         let logits = self.lm_head.forward(&x)?;
         extract_logits(&logits.to_dtype(DType::F32)?, context_lens)
     }
 
-    pub fn load(vb: VarBuilder, cfg: &Config, device: &Device) -> Result<Self> {
+    pub fn new(
+        cfg: &Config,
+        vb: VarBuilder,
+        is_gptx: bool,
+        mapper: DeviceMapMetadata,
+    ) -> Result<Self> {
+        let device = vb.device();
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)
             .map(|i| {
-                Block::load(vb.pp(&format!("model.layers.{i}")), cfg)
-                    .expect("Failed to load block.")
+                Block::load(
+                    mapper.set_device(i, vb.pp(&format!("model.layers.{i}"))),
+                    cfg,
+                    is_gptx,
+                )
+                .expect("Failed to load block.")
             })
             .collect();
 
@@ -346,9 +332,53 @@ impl Llama {
             blocks,
             ln_f,
             lm_head,
-            cache: Cache::new(device)?,
+            cache: Cache::new()?,
             kv_cache: super::Cache::new(cfg.num_hidden_layers, false),
             device: device.clone(),
+            mapper,
         })
+    }
+}
+
+impl NormalModel for Llama {
+    fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        self.forward(
+            input_ids,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+        )
+    }
+    fn xlora_forward(
+        &mut self,
+        _input_ids: &Tensor,
+        _input_ids_full: &Tensor,
+        _seqlen_offsets: &[usize],
+        _seqlen_offsets_full: &[usize],
+        _start_offsets_kernel: Tensor,
+        _start_offsets_kernel_full: Tensor,
+        _no_kv_cache: bool,
+        _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        _context_lens: Vec<usize>,
+    ) -> Result<Tensor> {
+        unimplemented!()
+    }
+    fn cache(&self) -> &super::Cache {
+        &self.kv_cache
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn is_xlora(&self) -> bool {
+        false
+    }
+    fn max_seq_len(&self) -> usize {
+        MAX_SEQ_LEN
     }
 }

@@ -5,6 +5,7 @@ use pyo3::{pyclass, pymethods};
 pub enum Role {
     User,
     Assistant,
+    System,
 }
 
 #[pyclass]

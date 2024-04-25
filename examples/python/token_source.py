@@ -7,7 +7,8 @@ runner = Runner(
         quantized_filename="mistral-7b-instruct-v0.1.Q4_K_M.gguf",
         tokenizer_json=None,
         repeat_last_n=64,
-    )
+    ),
+    token_source="literal: ...",  # One of: "literal:<value>", "env:<value>", "path:<value>", "cache", "none"
 )
 
 res = runner.send_chat_completion_request(
