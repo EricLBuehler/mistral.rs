@@ -409,6 +409,9 @@
 <a href="#407" id="407">407</a>
 <a href="#408" id="408">408</a>
 <a href="#409" id="409">409</a>
+<a href="#410" id="410">410</a>
+<a href="#411" id="411">411</a>
+<a href="#412" id="412">412</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
 };
@@ -422,7 +425,10 @@
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::calculate_eos_tokens;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::{NonGranularState, XLoraConfig};
-<span class="kw">use crate</span>::{deserialize_chat_template, get_paths, normal_model_loader, xlora_model_loader};
+<span class="kw">use crate</span>::{
+    deserialize_chat_template, get_paths, lora_model_loader, normal_model_loader,
+    xlora_model_loader,
+};
 <span class="kw">use crate</span>::{
     sequence::Sequence,
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
@@ -686,7 +692,7 @@
             ),
             ModelKind::LoraNormal =&gt; {
                 is_lora = <span class="bool-val">true</span>;
-                <span class="macro">xlora_model_loader!</span>(
+                <span class="macro">lora_model_loader!</span>(
                     paths,
                     dtype,
                     default_dtype,
