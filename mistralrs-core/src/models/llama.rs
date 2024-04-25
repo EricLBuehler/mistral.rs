@@ -32,25 +32,23 @@ pub struct Config {
 #[derive(Debug, Clone)]
 pub struct Cache {
     masks: HashMap<usize, Tensor>,
-    device: Device,
 }
 
 impl Cache {
-    pub fn new(device: &Device) -> Result<Self> {
+    pub fn new() -> Result<Self> {
         Ok(Self {
             masks: HashMap::new(),
-            device: device.clone(),
         })
     }
 
-    fn mask(&mut self, t: usize) -> Result<Tensor> {
+    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
         if let Some(mask) = self.masks.get(&t) {
-            Ok(mask.clone())
+            mask.to_device(device)
         } else {
             let mask: Vec<_> = (0..t)
                 .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
                 .collect();
-            let mask = Tensor::from_slice(&mask, (t, t), &self.device)?;
+            let mask = Tensor::from_slice(&mask, (t, t), device)?;
             self.masks.insert(t, mask.clone());
             Ok(mask)
         }
@@ -139,7 +137,9 @@ impl CausalSelfAttention {
             let k = k.to_dtype(DType::F32)?;
             let v = v.to_dtype(DType::F32)?;
             let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-            let mask = cache.mask(seq_len)?.broadcast_as(att.shape())?;
+            let mask = cache
+                .mask(seq_len, att.device())?
+                .broadcast_as(att.shape())?;
             let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
             let att = candle_nn::ops::softmax(&att, D::Minus1)?;
             // Convert to contiguous as matmul doesn't support strided vs for now.
@@ -332,7 +332,7 @@ impl Llama {
             blocks,
             ln_f,
             lm_head,
-            cache: Cache::new(device)?,
+            cache: Cache::new()?,
             kv_cache: super::Cache::new(cfg.num_hidden_layers, false),
             device: device.clone(),
             mapper,

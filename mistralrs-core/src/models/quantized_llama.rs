@@ -439,7 +439,7 @@ impl ModelWeights {
             let x = layer.attention_norm.forward(&x)?;
             let attn = layer.forward_attn(
                 &x,
-                &mask,
+                &mask.as_ref().map(|m| m.to_device(x.device()).unwrap()),
                 start_offsets,
                 start_offsets_kernel.clone(),
                 &mut cache[i],
