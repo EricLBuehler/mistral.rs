@@ -99,9 +99,9 @@ impl PhiRotaryEmbedding {
                 1.0
             } else {
                 match scaled_params.scaling_type {
-                    ScaledRopeType::Su => {
-                        (1.0 + scale.ln() / (cfg.max_position_embeddings as f64).ln()).sqrt()
-                    }
+                    ScaledRopeType::Su => (1.0
+                        + scale.ln() / (cfg.original_max_position_embeddings as f64).ln())
+                    .sqrt(),
                     ScaledRopeType::Yarn => 0.1 * scale.ln() + 1.0,
                 }
             };
@@ -111,16 +111,16 @@ impl PhiRotaryEmbedding {
                 .step_by(2)
                 .enumerate()
                 .map(|(k, i)| {
-                    1f32 / scaled_params.long_factor[k]
-                        * cfg.rope_theta.powf(i as f64 / dim as f64) as f32
+                    1f32 / (scaled_params.long_factor[k]
+                        * cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
                 })
                 .collect();
             let inv_freq_short: Vec<_> = (0..dim)
                 .step_by(2)
                 .enumerate()
                 .map(|(k, i)| {
-                    1f32 / scaled_params.short_factor[k]
-                        * cfg.rope_theta.powf(i as f64 / dim as f64) as f32
+                    1f32 / (scaled_params.short_factor[k]
+                        * cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
                 })
                 .collect();
             let inv_freq_len = inv_freq_long.len();
