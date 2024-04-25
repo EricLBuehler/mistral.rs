@@ -378,7 +378,7 @@ impl Loader for GGMLLoader {
     }
 
     fn get_kind(&self) -> ModelKind {
-        ModelKind::QuantizedGGUF
+        self.kind
     }
 }
 
