@@ -20,7 +20,7 @@ use hf_hub::{
 use indexmap::IndexMap;
 pub use loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
-    Phi3Loader,
+    Phi3Loader, Qwen2Loader,
 };
 use mistralrs_lora::{LoraConfig, Ordering};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
@@ -217,9 +217,13 @@ pub trait Pipeline: Send + Sync {
         add_generation_prompt: bool,
     ) -> Result<String> {
         let template = self.get_chat_template().chat_template.as_ref().unwrap();
-        let bos_tok = match self.get_chat_template().bos_token {
-            Either::Left(ref lit) => lit,
-            Either::Right(ref added) => &added.content,
+        let bos_tok = if let Some(ref bos) = self.get_chat_template().bos_token {
+            match bos.0 {
+                Either::Left(ref lit) => Some(lit.to_string()),
+                Either::Right(ref added) => Some(added.content.to_string()),
+            }
+        } else {
+            None
         };
         let eos_tok = match self.get_chat_template().eos_token {
             Either::Left(ref lit) => lit,
@@ -797,7 +801,7 @@ mod tests {
                 },
                 true,
                 template,
-                bos,
+                Some(bos.to_string()),
                 eos,
                 Some(unk.to_string()),
             )

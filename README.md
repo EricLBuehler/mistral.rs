@@ -58,7 +58,9 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95
 - Gemma
 - Llama, including Llama 3
 - Mixtral 8x7B
-- Phi 2 and Phi 3
+- Phi 2
+- Phi 3
+- Qwen 2
 
 Please see [this section](README#supported-models) for details on quantization and LoRA support.
 
@@ -312,6 +314,7 @@ Command line docs [here](docs/CMD_LINE_DOCS.md)
 |Mixtral 8x7B|✅| |
 |Phi 2|✅| |
 |Phi 3|✅| |
+|Qwen 2| | |
 
 **Device mapping support**
 |Model|Supported|
@@ -329,6 +332,7 @@ Command line docs [here](docs/CMD_LINE_DOCS.md)
 |Mixtral 8x7B|✅|✅| |
 |Phi 2|✅| | |
 |Phi 3|✅|✅| |
+|Qwen 2| | | |
 
 **Using derivative models**
 
