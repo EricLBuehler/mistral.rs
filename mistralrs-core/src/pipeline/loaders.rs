@@ -481,9 +481,6 @@ struct Phi3BasicConfig {
 impl Phi3BasicConfig {
     fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::phi3::Config> {
         let basic_config: Self = serde_json::from_str(slice)?;
-        if basic_config.rope_scaling.is_some() {
-            anyhow::bail!("128K LongRope is not supported yet, it is coming soon.");
-        }
         Ok(models::phi3::Config {
             vocab_size: basic_config.vocab_size,
             hidden_size: basic_config.hidden_size,
