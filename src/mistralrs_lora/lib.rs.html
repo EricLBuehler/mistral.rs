@@ -200,6 +200,15 @@
 <a href="#198" id="198">198</a>
 <a href="#199" id="199">199</a>
 <a href="#200" id="200">200</a>
+<a href="#201" id="201">201</a>
+<a href="#202" id="202">202</a>
+<a href="#203" id="203">203</a>
+<a href="#204" id="204">204</a>
+<a href="#205" id="205">205</a>
+<a href="#206" id="206">206</a>
+<a href="#207" id="207">207</a>
+<a href="#208" id="208">208</a>
+<a href="#209" id="209">209</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashSet, fmt::Debug, sync::Arc};
 
 <span class="kw">use </span>candle_core::{quantized::QTensor, IndexOp, <span class="prelude-ty">Result</span>, Shape, Tensor, D};
@@ -272,7 +281,7 @@
 }
 
 <span class="doccomment">/// Any layer that is linear-like.
-</span><span class="kw">pub trait </span>LinearLayerLike: Debug {
+</span><span class="kw">pub trait </span>LinearLayerLike: Debug + Merge {
     <span class="kw">fn </span>weight(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Tensor;
     <span class="kw">fn </span>bias(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;;
     <span class="kw">fn </span>shape(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Shape;
@@ -290,6 +299,15 @@
     </span><span class="kw">fn </span>get_delta_weight(<span class="kw-2">&amp;</span><span class="self">self</span>, adapter: usize) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt;;
     <span class="doccomment">/// Merge the LoRA weights.
     </span><span class="kw">fn </span>merge_weights(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt;;
+}
+
+<span class="kw">impl </span>Merge <span class="kw">for </span>Linear {
+    <span class="kw">fn </span>merge_weights(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="prelude-val">Ok</span>(())
+    }
+    <span class="kw">fn </span>get_delta_weight(<span class="kw-2">&amp;</span><span class="self">self</span>, _adapter: usize) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="macro">unreachable!</span>()
+    }
 }
 
 <span class="kw">impl </span>LinearLayerLike <span class="kw">for </span>Linear {

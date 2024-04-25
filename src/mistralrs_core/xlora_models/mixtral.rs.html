@@ -775,6 +775,35 @@
 <a href="#773" id="773">773</a>
 <a href="#774" id="774">774</a>
 <a href="#775" id="775">775</a>
+<a href="#776" id="776">776</a>
+<a href="#777" id="777">777</a>
+<a href="#778" id="778">778</a>
+<a href="#779" id="779">779</a>
+<a href="#780" id="780">780</a>
+<a href="#781" id="781">781</a>
+<a href="#782" id="782">782</a>
+<a href="#783" id="783">783</a>
+<a href="#784" id="784">784</a>
+<a href="#785" id="785">785</a>
+<a href="#786" id="786">786</a>
+<a href="#787" id="787">787</a>
+<a href="#788" id="788">788</a>
+<a href="#789" id="789">789</a>
+<a href="#790" id="790">790</a>
+<a href="#791" id="791">791</a>
+<a href="#792" id="792">792</a>
+<a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a>
+<a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
+<a href="#797" id="797">797</a>
+<a href="#798" id="798">798</a>
+<a href="#799" id="799">799</a>
+<a href="#800" id="800">800</a>
+<a href="#801" id="801">801</a>
+<a href="#802" id="802">802</a>
+<a href="#803" id="803">803</a>
+<a href="#804" id="804">804</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
@@ -784,6 +813,8 @@
 <span class="kw">use </span>candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 <span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>tqdm::Iter;
+<span class="kw">use </span>tracing::info;
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
@@ -1270,6 +1301,33 @@
                 <span class="kw-2">&amp;</span>xlora_ordering,
             )<span class="question-mark">?</span>;
             layers.push(layer)
+        }
+        <span class="kw">if </span>xlora_config.is_none() {
+            <span class="comment">// We are now a LoRA model so we must merge the weights
+            </span><span class="macro">info!</span>(<span class="string">"Merging LoRA adapters."</span>);
+            <span class="kw">for </span>layer <span class="kw">in </span>layers.iter_mut().tqdm() {
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.k_proj)
+                    .unwrap()
+                    .merge_weights()<span class="question-mark">?</span>;
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.o_proj)
+                    .unwrap()
+                    .merge_weights()<span class="question-mark">?</span>;
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.q_proj)
+                    .unwrap()
+                    .merge_weights()<span class="question-mark">?</span>;
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.v_proj)
+                    .unwrap()
+                    .merge_weights()<span class="question-mark">?</span>;
+
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.block_sparse_moe.gate)
+                    .unwrap()
+                    .merge_weights()<span class="question-mark">?</span>;
+                <span class="kw">for </span>expert <span class="kw">in </span>layer.block_sparse_moe.experts.iter_mut() {
+                    Arc::get_mut(<span class="kw-2">&amp;mut </span>expert.w1).unwrap().merge_weights()<span class="question-mark">?</span>;
+                    Arc::get_mut(<span class="kw-2">&amp;mut </span>expert.w2).unwrap().merge_weights()<span class="question-mark">?</span>;
+                    Arc::get_mut(<span class="kw-2">&amp;mut </span>expert.w3).unwrap().merge_weights()<span class="question-mark">?</span>;
+                }
+            }
         }
         <span class="kw">let </span>norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp(<span class="string">"norm"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>lm_head = candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp(<span class="string">"lm_head"</span>))<span class="question-mark">?</span>;

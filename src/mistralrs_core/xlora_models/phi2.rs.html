@@ -645,6 +645,29 @@
 <a href="#643" id="643">643</a>
 <a href="#644" id="644">644</a>
 <a href="#645" id="645">645</a>
+<a href="#646" id="646">646</a>
+<a href="#647" id="647">647</a>
+<a href="#648" id="648">648</a>
+<a href="#649" id="649">649</a>
+<a href="#650" id="650">650</a>
+<a href="#651" id="651">651</a>
+<a href="#652" id="652">652</a>
+<a href="#653" id="653">653</a>
+<a href="#654" id="654">654</a>
+<a href="#655" id="655">655</a>
+<a href="#656" id="656">656</a>
+<a href="#657" id="657">657</a>
+<a href="#658" id="658">658</a>
+<a href="#659" id="659">659</a>
+<a href="#660" id="660">660</a>
+<a href="#661" id="661">661</a>
+<a href="#662" id="662">662</a>
+<a href="#663" id="663">663</a>
+<a href="#664" id="664">664</a>
+<a href="#665" id="665">665</a>
+<a href="#666" id="666">666</a>
+<a href="#667" id="667">667</a>
+<a href="#668" id="668">668</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
@@ -659,6 +682,8 @@
     embedding, layer_norm, Activation, Embedding, LayerNorm, Linear, RotaryEmbedding, VarBuilder,
 };
 <span class="kw">use </span>mistralrs_lora::{linear, LinearLayerLike, LoraConfig, Ordering};
+<span class="kw">use </span>tqdm::Iter;
+<span class="kw">use </span>tracing::info;
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
@@ -1058,6 +1083,27 @@
                 is_gptx,
             )<span class="question-mark">?</span>;
             layers.push(layer)
+        }
+        <span class="kw">if </span>xlora_config.is_none() {
+            <span class="comment">// We are now a LoRA model so we must merge the weights
+            </span><span class="macro">info!</span>(<span class="string">"Merging LoRA adapters."</span>);
+            <span class="kw">for </span>layer <span class="kw">in </span>layers.iter_mut().tqdm() {
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.k_proj)
+                    .unwrap()
+                    .merge_weights()<span class="question-mark">?</span>;
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.dense)
+                    .unwrap()
+                    .merge_weights()<span class="question-mark">?</span>;
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.q_proj)
+                    .unwrap()
+                    .merge_weights()<span class="question-mark">?</span>;
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.v_proj)
+                    .unwrap()
+                    .merge_weights()<span class="question-mark">?</span>;
+
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.fc1).unwrap().merge_weights()<span class="question-mark">?</span>;
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.fc2).unwrap().merge_weights()<span class="question-mark">?</span>;
+            }
         }
         <span class="kw">let </span>lm_head = candle_nn::linear(cfg.hidden_size, cfg.vocab_size, vb.pp(<span class="string">"lm_head"</span>))<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{

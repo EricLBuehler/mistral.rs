@@ -1476,7 +1476,7 @@
             || xlora_config.base_model_id != base_model_id
         {
             <span class="macro">anyhow::bail!</span>(
-                <span class="string">"X-LoRA ordering file, X-LoRA config, and base model ID do not match: {}, {}, and {} respectively."</span>,
+                <span class="string">"Adapter ordering file, adapter model config, and base model ID do not match: {}, {}, and {} respectively."</span>,
                 xlora_order.as_ref().unwrap().base_model_id,
                 xlora_config.base_model_id,
                 base_model_id

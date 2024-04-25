@@ -693,6 +693,36 @@
 <a href="#691" id="691">691</a>
 <a href="#692" id="692">692</a>
 <a href="#693" id="693">693</a>
+<a href="#694" id="694">694</a>
+<a href="#695" id="695">695</a>
+<a href="#696" id="696">696</a>
+<a href="#697" id="697">697</a>
+<a href="#698" id="698">698</a>
+<a href="#699" id="699">699</a>
+<a href="#700" id="700">700</a>
+<a href="#701" id="701">701</a>
+<a href="#702" id="702">702</a>
+<a href="#703" id="703">703</a>
+<a href="#704" id="704">704</a>
+<a href="#705" id="705">705</a>
+<a href="#706" id="706">706</a>
+<a href="#707" id="707">707</a>
+<a href="#708" id="708">708</a>
+<a href="#709" id="709">709</a>
+<a href="#710" id="710">710</a>
+<a href="#711" id="711">711</a>
+<a href="#712" id="712">712</a>
+<a href="#713" id="713">713</a>
+<a href="#714" id="714">714</a>
+<a href="#715" id="715">715</a>
+<a href="#716" id="716">716</a>
+<a href="#717" id="717">717</a>
+<a href="#718" id="718">718</a>
+<a href="#719" id="719">719</a>
+<a href="#720" id="720">720</a>
+<a href="#721" id="721">721</a>
+<a href="#722" id="722">722</a>
+<a href="#723" id="723">723</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
@@ -700,6 +730,8 @@
 <span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>mistralrs_lora::{linear_b <span class="kw">as </span>linear, LinearLayerLike, LoraConfig, Ordering};
+<span class="kw">use </span>tqdm::Iter;
+<span class="kw">use </span>tracing::info;
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
@@ -1107,6 +1139,34 @@
                 <span class="kw-2">&amp;</span>xlora_ordering,
             )<span class="question-mark">?</span>;
             layers.push(layer)
+        }
+        <span class="kw">if </span>xlora_config.is_none() {
+            <span class="comment">// We are now a LoRA model so we must merge the weights
+            </span><span class="macro">info!</span>(<span class="string">"Merging LoRA adapters."</span>);
+            <span class="kw">for </span>layer <span class="kw">in </span>layers.iter_mut().tqdm() {
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.k_proj)
+                    .unwrap()
+                    .merge_weights()<span class="question-mark">?</span>;
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.o_proj)
+                    .unwrap()
+                    .merge_weights()<span class="question-mark">?</span>;
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.q_proj)
+                    .unwrap()
+                    .merge_weights()<span class="question-mark">?</span>;
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.v_proj)
+                    .unwrap()
+                    .merge_weights()<span class="question-mark">?</span>;
+
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.down_proj)
+                    .unwrap()
+                    .merge_weights()<span class="question-mark">?</span>;
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.gate_proj)
+                    .unwrap()
+                    .merge_weights()<span class="question-mark">?</span>;
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.up_proj)
+                    .unwrap()
+                    .merge_weights()<span class="question-mark">?</span>;
+            }
         }
         <span class="kw">let </span>norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp(<span class="string">"norm"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>lm_head = candle_nn::Linear::new(embed_tokens.embeddings().clone(), <span class="prelude-val">None</span>);
