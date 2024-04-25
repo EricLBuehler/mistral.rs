@@ -522,15 +522,23 @@ impl NormalModelLoader for Phi3Loader {
     }
     fn load_xlora(
         &self,
-        _config: &str,
-        _use_flash_attn: bool,
-        _vb: VarBuilder,
-        _lora_config: &[(String, LoraConfig)],
-        _xlora_config: Option<XLoraConfig>,
-        _xlora_ordering: Ordering,
-        _mapper: DeviceMapMetadata,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        lora_config: &[(String, LoraConfig)],
+        xlora_config: Option<XLoraConfig>,
+        xlora_ordering: Ordering,
+        mapper: DeviceMapMetadata,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        todo!()
+        Ok(Box::new(xlora_models::XLoraPhi3::new(
+            &Phi3BasicConfig::deserialize(config, use_flash_attn)?,
+            vb,
+            lora_config,
+            xlora_config,
+            xlora_ordering,
+            self.is_gptx(),
+            mapper,
+        )?))
     }
     fn is_gptx(&self) -> bool {
         true

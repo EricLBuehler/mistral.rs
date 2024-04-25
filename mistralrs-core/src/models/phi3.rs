@@ -35,7 +35,7 @@ pub struct Config {
 }
 
 impl Config {
-    fn head_dim(&self) -> usize {
+    pub fn head_dim(&self) -> usize {
         self.hidden_size / self.num_attention_heads
     }
 }
