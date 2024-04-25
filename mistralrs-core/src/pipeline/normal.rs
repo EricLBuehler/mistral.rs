@@ -253,7 +253,7 @@ impl Loader for NormalLoader {
             DType::F32
         };
 
-        info!("Model config: {config:?}");
+        info!("Model config: {config}");
 
         let mut is_lora = false;
         let model = match self.kind {
