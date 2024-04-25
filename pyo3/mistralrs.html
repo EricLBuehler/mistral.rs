@@ -141,10 +141,10 @@
                                 <a class="function" href="#ResponseMessage.__init__">ResponseMessage</a>
                         </li>
                         <li>
-                                <a class="variable" href="#ResponseMessage.content">content</a>
+                                <a class="variable" href="#ResponseMessage.role">role</a>
                         </li>
                         <li>
-                                <a class="variable" href="#ResponseMessage.role">role</a>
+                                <a class="variable" href="#ResponseMessage.content">content</a>
                         </li>
                 </ul>
 
@@ -174,13 +174,13 @@
                                 <a class="variable" href="#ResponseLogprob.bytes">bytes</a>
                         </li>
                         <li>
+                                <a class="variable" href="#ResponseLogprob.token">token</a>
+                        </li>
+                        <li>
                                 <a class="variable" href="#ResponseLogprob.logprob">logprob</a>
                         </li>
                         <li>
                                 <a class="variable" href="#ResponseLogprob.top_logprobs">top_logprobs</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ResponseLogprob.token">token</a>
                         </li>
                 </ul>
 
@@ -204,6 +204,9 @@
                                 <a class="function" href="#Choice.__init__">Choice</a>
                         </li>
                         <li>
+                                <a class="variable" href="#Choice.finish_reason">finish_reason</a>
+                        </li>
+                        <li>
                                 <a class="variable" href="#Choice.message">message</a>
                         </li>
                         <li>
@@ -211,9 +214,6 @@
                         </li>
                         <li>
                                 <a class="variable" href="#Choice.logprobs">logprobs</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#Choice.finish_reason">finish_reason</a>
                         </li>
                 </ul>
 
@@ -225,9 +225,6 @@
                                 <a class="function" href="#ChunkChoice.__init__">ChunkChoice</a>
                         </li>
                         <li>
-                                <a class="variable" href="#ChunkChoice.delta">delta</a>
-                        </li>
-                        <li>
                                 <a class="variable" href="#ChunkChoice.logprobs">logprobs</a>
                         </li>
                         <li>
@@ -235,6 +232,9 @@
                         </li>
                         <li>
                                 <a class="variable" href="#ChunkChoice.index">index</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ChunkChoice.delta">delta</a>
                         </li>
                 </ul>
 
@@ -249,28 +249,28 @@
                                 <a class="variable" href="#Usage.avg_compl_tok_per_sec">avg_compl_tok_per_sec</a>
                         </li>
                         <li>
-                                <a class="variable" href="#Usage.total_prompt_time_sec">total_prompt_time_sec</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#Usage.total_tokens">total_tokens</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#Usage.completion_tokens">completion_tokens</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#Usage.total_completion_time_sec">total_completion_time_sec</a>
+                                <a class="variable" href="#Usage.avg_prompt_tok_per_sec">avg_prompt_tok_per_sec</a>
                         </li>
                         <li>
                                 <a class="variable" href="#Usage.avg_tok_per_sec">avg_tok_per_sec</a>
                         </li>
                         <li>
+                                <a class="variable" href="#Usage.total_completion_time_sec">total_completion_time_sec</a>
+                        </li>
+                        <li>
                                 <a class="variable" href="#Usage.total_time_sec">total_time_sec</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#Usage.completion_tokens">completion_tokens</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#Usage.total_tokens">total_tokens</a>
                         </li>
                         <li>
                                 <a class="variable" href="#Usage.prompt_tokens">prompt_tokens</a>
                         </li>
                         <li>
-                                <a class="variable" href="#Usage.avg_prompt_tok_per_sec">avg_prompt_tok_per_sec</a>
+                                <a class="variable" href="#Usage.total_prompt_time_sec">total_prompt_time_sec</a>
                         </li>
                 </ul>
 
@@ -282,25 +282,25 @@
                                 <a class="function" href="#ChatCompletionResponse.__init__">ChatCompletionResponse</a>
                         </li>
                         <li>
-                                <a class="variable" href="#ChatCompletionResponse.model">model</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ChatCompletionResponse.system_fingerprint">system_fingerprint</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ChatCompletionResponse.object">object</a>
-                        </li>
-                        <li>
                                 <a class="variable" href="#ChatCompletionResponse.usage">usage</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ChatCompletionResponse.created">created</a>
                         </li>
                         <li>
                                 <a class="variable" href="#ChatCompletionResponse.id">id</a>
                         </li>
                         <li>
+                                <a class="variable" href="#ChatCompletionResponse.system_fingerprint">system_fingerprint</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ChatCompletionResponse.created">created</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ChatCompletionResponse.model">model</a>
+                        </li>
+                        <li>
                                 <a class="variable" href="#ChatCompletionResponse.choices">choices</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ChatCompletionResponse.object">object</a>
                         </li>
                 </ul>
 
@@ -318,16 +318,16 @@
                                 <a class="variable" href="#ChatCompletionChunkResponse.object">object</a>
                         </li>
                         <li>
-                                <a class="variable" href="#ChatCompletionChunkResponse.choices">choices</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ChatCompletionChunkResponse.id">id</a>
+                                <a class="variable" href="#ChatCompletionChunkResponse.system_fingerprint">system_fingerprint</a>
                         </li>
                         <li>
                                 <a class="variable" href="#ChatCompletionChunkResponse.created">created</a>
                         </li>
                         <li>
-                                <a class="variable" href="#ChatCompletionChunkResponse.system_fingerprint">system_fingerprint</a>
+                                <a class="variable" href="#ChatCompletionChunkResponse.id">id</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ChatCompletionChunkResponse.choices">choices</a>
                         </li>
                 </ul>
 
@@ -339,16 +339,16 @@
                                 <a class="function" href="#CompletionChoice.__init__">CompletionChoice</a>
                         </li>
                         <li>
-                                <a class="variable" href="#CompletionChoice.finish_reason">finish_reason</a>
+                                <a class="variable" href="#CompletionChoice.text">text</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#CompletionChoice.logprobs">logprobs</a>
                         </li>
                         <li>
                                 <a class="variable" href="#CompletionChoice.index">index</a>
                         </li>
                         <li>
-                                <a class="variable" href="#CompletionChoice.text">text</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#CompletionChoice.logprobs">logprobs</a>
+                                <a class="variable" href="#CompletionChoice.finish_reason">finish_reason</a>
                         </li>
                 </ul>
 
@@ -360,25 +360,25 @@
                                 <a class="function" href="#CompletionResponse.__init__">CompletionResponse</a>
                         </li>
                         <li>
-                                <a class="variable" href="#CompletionResponse.object">object</a>
-                        </li>
-                        <li>
                                 <a class="variable" href="#CompletionResponse.system_fingerprint">system_fingerprint</a>
                         </li>
                         <li>
-                                <a class="variable" href="#CompletionResponse.choices">choices</a>
+                                <a class="variable" href="#CompletionResponse.object">object</a>
                         </li>
                         <li>
                                 <a class="variable" href="#CompletionResponse.usage">usage</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#CompletionResponse.model">model</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#CompletionResponse.choices">choices</a>
                         </li>
                         <li>
                                 <a class="variable" href="#CompletionResponse.id">id</a>
                         </li>
                         <li>
                                 <a class="variable" href="#CompletionResponse.created">created</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#CompletionResponse.model">model</a>
                         </li>
                 </ul>
 
@@ -393,10 +393,10 @@
                                 <a class="variable" href="#TopLogprob.logprob">logprob</a>
                         </li>
                         <li>
-                                <a class="variable" href="#TopLogprob.token">token</a>
+                                <a class="variable" href="#TopLogprob.bytes">bytes</a>
                         </li>
                         <li>
-                                <a class="variable" href="#TopLogprob.bytes">bytes</a>
+                                <a class="variable" href="#TopLogprob.token">token</a>
                         </li>
                 </ul>
 
@@ -866,17 +866,6 @@ about input data, sampling, and how to return the response.</p>
     
 
                             </div>
-                            <div id="ResponseMessage.content" class="classattr">
-                                <div class="attr variable">
-            <span class="name">content</span><span class="annotation">: str</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ResponseMessage.content"></a>
-    
-    
-
-                            </div>
                             <div id="ResponseMessage.role" class="classattr">
                                 <div class="attr variable">
             <span class="name">role</span><span class="annotation">: str</span>
@@ -884,6 +873,17 @@ about input data, sampling, and how to return the response.</p>
         
     </div>
     <a class="headerlink" href="#ResponseMessage.role"></a>
+    
+    
+
+                            </div>
+                            <div id="ResponseMessage.content" class="classattr">
+                                <div class="attr variable">
+            <span class="name">content</span><span class="annotation">: str</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResponseMessage.content"></a>
     
     
 
@@ -971,6 +971,17 @@ about input data, sampling, and how to return the response.</p>
     
 
                             </div>
+                            <div id="ResponseLogprob.token" class="classattr">
+                                <div class="attr variable">
+            <span class="name">token</span><span class="annotation">: str</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ResponseLogprob.token"></a>
+    
+    
+
+                            </div>
                             <div id="ResponseLogprob.logprob" class="classattr">
                                 <div class="attr variable">
             <span class="name">logprob</span><span class="annotation">: float</span>
@@ -989,17 +1000,6 @@ about input data, sampling, and how to return the response.</p>
         
     </div>
     <a class="headerlink" href="#ResponseLogprob.top_logprobs"></a>
-    
-    
-
-                            </div>
-                            <div id="ResponseLogprob.token" class="classattr">
-                                <div class="attr variable">
-            <span class="name">token</span><span class="annotation">: str</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ResponseLogprob.token"></a>
     
     
 
@@ -1065,6 +1065,17 @@ about input data, sampling, and how to return the response.</p>
     
 
                             </div>
+                            <div id="Choice.finish_reason" class="classattr">
+                                <div class="attr variable">
+            <span class="name">finish_reason</span><span class="annotation">: str</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Choice.finish_reason"></a>
+    
+    
+
+                            </div>
                             <div id="Choice.message" class="classattr">
                                 <div class="attr variable">
             <span class="name">message</span><span class="annotation">: <a href="#ResponseMessage">mistralrs.ResponseMessage</a></span>
@@ -1098,17 +1109,6 @@ about input data, sampling, and how to return the response.</p>
     
 
                             </div>
-                            <div id="Choice.finish_reason" class="classattr">
-                                <div class="attr variable">
-            <span class="name">finish_reason</span><span class="annotation">: str</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Choice.finish_reason"></a>
-    
-    
-
-                            </div>
                 </section>
                 <section id="ChunkChoice">
                     <div class="attr class">
@@ -1130,17 +1130,6 @@ about input data, sampling, and how to return the response.</p>
         
     </div>
     <a class="headerlink" href="#ChunkChoice.__init__"></a>
-    
-    
-
-                            </div>
-                            <div id="ChunkChoice.delta" class="classattr">
-                                <div class="attr variable">
-            <span class="name">delta</span><span class="annotation">: <a href="#Delta">mistralrs.Delta</a></span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChunkChoice.delta"></a>
     
     
 
@@ -1174,6 +1163,17 @@ about input data, sampling, and how to return the response.</p>
         
     </div>
     <a class="headerlink" href="#ChunkChoice.index"></a>
+    
+    
+
+                            </div>
+                            <div id="ChunkChoice.delta" class="classattr">
+                                <div class="attr variable">
+            <span class="name">delta</span><span class="annotation">: <a href="#Delta">mistralrs.Delta</a></span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChunkChoice.delta"></a>
     
     
 
@@ -1216,46 +1216,13 @@ about input data, sampling, and how to return the response.</p>
     
 
                             </div>
-                            <div id="Usage.total_prompt_time_sec" class="classattr">
+                            <div id="Usage.avg_prompt_tok_per_sec" class="classattr">
                                 <div class="attr variable">
-            <span class="name">total_prompt_time_sec</span><span class="annotation">: float</span>
+            <span class="name">avg_prompt_tok_per_sec</span><span class="annotation">: float</span>
 
         
     </div>
-    <a class="headerlink" href="#Usage.total_prompt_time_sec"></a>
-    
-    
-
-                            </div>
-                            <div id="Usage.total_tokens" class="classattr">
-                                <div class="attr variable">
-            <span class="name">total_tokens</span><span class="annotation">: int</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Usage.total_tokens"></a>
-    
-    
-
-                            </div>
-                            <div id="Usage.completion_tokens" class="classattr">
-                                <div class="attr variable">
-            <span class="name">completion_tokens</span><span class="annotation">: int</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Usage.completion_tokens"></a>
-    
-    
-
-                            </div>
-                            <div id="Usage.total_completion_time_sec" class="classattr">
-                                <div class="attr variable">
-            <span class="name">total_completion_time_sec</span><span class="annotation">: float</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Usage.total_completion_time_sec"></a>
+    <a class="headerlink" href="#Usage.avg_prompt_tok_per_sec"></a>
     
     
 
@@ -1271,6 +1238,17 @@ about input data, sampling, and how to return the response.</p>
     
 
                             </div>
+                            <div id="Usage.total_completion_time_sec" class="classattr">
+                                <div class="attr variable">
+            <span class="name">total_completion_time_sec</span><span class="annotation">: float</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Usage.total_completion_time_sec"></a>
+    
+    
+
+                            </div>
                             <div id="Usage.total_time_sec" class="classattr">
                                 <div class="attr variable">
             <span class="name">total_time_sec</span><span class="annotation">: float</span>
@@ -1278,6 +1256,28 @@ about input data, sampling, and how to return the response.</p>
         
     </div>
     <a class="headerlink" href="#Usage.total_time_sec"></a>
+    
+    
+
+                            </div>
+                            <div id="Usage.completion_tokens" class="classattr">
+                                <div class="attr variable">
+            <span class="name">completion_tokens</span><span class="annotation">: int</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Usage.completion_tokens"></a>
+    
+    
+
+                            </div>
+                            <div id="Usage.total_tokens" class="classattr">
+                                <div class="attr variable">
+            <span class="name">total_tokens</span><span class="annotation">: int</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Usage.total_tokens"></a>
     
     
 
@@ -1293,13 +1293,13 @@ about input data, sampling, and how to return the response.</p>
     
 
                             </div>
-                            <div id="Usage.avg_prompt_tok_per_sec" class="classattr">
+                            <div id="Usage.total_prompt_time_sec" class="classattr">
                                 <div class="attr variable">
-            <span class="name">avg_prompt_tok_per_sec</span><span class="annotation">: float</span>
+            <span class="name">total_prompt_time_sec</span><span class="annotation">: float</span>
 
         
     </div>
-    <a class="headerlink" href="#Usage.avg_prompt_tok_per_sec"></a>
+    <a class="headerlink" href="#Usage.total_prompt_time_sec"></a>
     
     
 
@@ -1331,39 +1331,6 @@ about input data, sampling, and how to return the response.</p>
     
 
                             </div>
-                            <div id="ChatCompletionResponse.model" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model</span><span class="annotation">: str</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionResponse.model"></a>
-    
-    
-
-                            </div>
-                            <div id="ChatCompletionResponse.system_fingerprint" class="classattr">
-                                <div class="attr variable">
-            <span class="name">system_fingerprint</span><span class="annotation">: str</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionResponse.system_fingerprint"></a>
-    
-    
-
-                            </div>
-                            <div id="ChatCompletionResponse.object" class="classattr">
-                                <div class="attr variable">
-            <span class="name">object</span><span class="annotation">: str</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionResponse.object"></a>
-    
-    
-
-                            </div>
                             <div id="ChatCompletionResponse.usage" class="classattr">
                                 <div class="attr variable">
             <span class="name">usage</span><span class="annotation">: <a href="#Usage">mistralrs.Usage</a></span>
@@ -1371,17 +1338,6 @@ about input data, sampling, and how to return the response.</p>
         
     </div>
     <a class="headerlink" href="#ChatCompletionResponse.usage"></a>
-    
-    
-
-                            </div>
-                            <div id="ChatCompletionResponse.created" class="classattr">
-                                <div class="attr variable">
-            <span class="name">created</span><span class="annotation">: int</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionResponse.created"></a>
     
     
 
@@ -1397,6 +1353,39 @@ about input data, sampling, and how to return the response.</p>
     
 
                             </div>
+                            <div id="ChatCompletionResponse.system_fingerprint" class="classattr">
+                                <div class="attr variable">
+            <span class="name">system_fingerprint</span><span class="annotation">: str</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionResponse.system_fingerprint"></a>
+    
+    
+
+                            </div>
+                            <div id="ChatCompletionResponse.created" class="classattr">
+                                <div class="attr variable">
+            <span class="name">created</span><span class="annotation">: int</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionResponse.created"></a>
+    
+    
+
+                            </div>
+                            <div id="ChatCompletionResponse.model" class="classattr">
+                                <div class="attr variable">
+            <span class="name">model</span><span class="annotation">: str</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionResponse.model"></a>
+    
+    
+
+                            </div>
                             <div id="ChatCompletionResponse.choices" class="classattr">
                                 <div class="attr variable">
             <span class="name">choices</span><span class="annotation">: list[<a href="#Choice">mistralrs.Choice</a>]</span>
@@ -1404,6 +1393,17 @@ about input data, sampling, and how to return the response.</p>
         
     </div>
     <a class="headerlink" href="#ChatCompletionResponse.choices"></a>
+    
+    
+
+                            </div>
+                            <div id="ChatCompletionResponse.object" class="classattr">
+                                <div class="attr variable">
+            <span class="name">object</span><span class="annotation">: str</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionResponse.object"></a>
     
     
 
@@ -1455,24 +1455,13 @@ about input data, sampling, and how to return the response.</p>
     
 
                             </div>
-                            <div id="ChatCompletionChunkResponse.choices" class="classattr">
+                            <div id="ChatCompletionChunkResponse.system_fingerprint" class="classattr">
                                 <div class="attr variable">
-            <span class="name">choices</span><span class="annotation">: list[<a href="#ChunkChoice">mistralrs.ChunkChoice</a>]</span>
+            <span class="name">system_fingerprint</span><span class="annotation">: str</span>
 
         
     </div>
-    <a class="headerlink" href="#ChatCompletionChunkResponse.choices"></a>
-    
-    
-
-                            </div>
-                            <div id="ChatCompletionChunkResponse.id" class="classattr">
-                                <div class="attr variable">
-            <span class="name">id</span><span class="annotation">: str</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionChunkResponse.id"></a>
+    <a class="headerlink" href="#ChatCompletionChunkResponse.system_fingerprint"></a>
     
     
 
@@ -1488,13 +1477,24 @@ about input data, sampling, and how to return the response.</p>
     
 
                             </div>
-                            <div id="ChatCompletionChunkResponse.system_fingerprint" class="classattr">
+                            <div id="ChatCompletionChunkResponse.id" class="classattr">
                                 <div class="attr variable">
-            <span class="name">system_fingerprint</span><span class="annotation">: str</span>
+            <span class="name">id</span><span class="annotation">: str</span>
 
         
     </div>
-    <a class="headerlink" href="#ChatCompletionChunkResponse.system_fingerprint"></a>
+    <a class="headerlink" href="#ChatCompletionChunkResponse.id"></a>
+    
+    
+
+                            </div>
+                            <div id="ChatCompletionChunkResponse.choices" class="classattr">
+                                <div class="attr variable">
+            <span class="name">choices</span><span class="annotation">: list[<a href="#ChunkChoice">mistralrs.ChunkChoice</a>]</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionChunkResponse.choices"></a>
     
     
 
@@ -1524,28 +1524,6 @@ about input data, sampling, and how to return the response.</p>
     
 
                             </div>
-                            <div id="CompletionChoice.finish_reason" class="classattr">
-                                <div class="attr variable">
-            <span class="name">finish_reason</span><span class="annotation">: str</span>
-
-        
-    </div>
-    <a class="headerlink" href="#CompletionChoice.finish_reason"></a>
-    
-    
-
-                            </div>
-                            <div id="CompletionChoice.index" class="classattr">
-                                <div class="attr variable">
-            <span class="name">index</span><span class="annotation">: int</span>
-
-        
-    </div>
-    <a class="headerlink" href="#CompletionChoice.index"></a>
-    
-    
-
-                            </div>
                             <div id="CompletionChoice.text" class="classattr">
                                 <div class="attr variable">
             <span class="name">text</span><span class="annotation">: str</span>
@@ -1564,6 +1542,28 @@ about input data, sampling, and how to return the response.</p>
         
     </div>
     <a class="headerlink" href="#CompletionChoice.logprobs"></a>
+    
+    
+
+                            </div>
+                            <div id="CompletionChoice.index" class="classattr">
+                                <div class="attr variable">
+            <span class="name">index</span><span class="annotation">: int</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CompletionChoice.index"></a>
+    
+    
+
+                            </div>
+                            <div id="CompletionChoice.finish_reason" class="classattr">
+                                <div class="attr variable">
+            <span class="name">finish_reason</span><span class="annotation">: str</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CompletionChoice.finish_reason"></a>
     
     
 
@@ -1595,17 +1595,6 @@ about input data, sampling, and how to return the response.</p>
     
 
                             </div>
-                            <div id="CompletionResponse.object" class="classattr">
-                                <div class="attr variable">
-            <span class="name">object</span><span class="annotation">: str</span>
-
-        
-    </div>
-    <a class="headerlink" href="#CompletionResponse.object"></a>
-    
-    
-
-                            </div>
                             <div id="CompletionResponse.system_fingerprint" class="classattr">
                                 <div class="attr variable">
             <span class="name">system_fingerprint</span><span class="annotation">: str</span>
@@ -1617,13 +1606,13 @@ about input data, sampling, and how to return the response.</p>
     
 
                             </div>
-                            <div id="CompletionResponse.choices" class="classattr">
+                            <div id="CompletionResponse.object" class="classattr">
                                 <div class="attr variable">
-            <span class="name">choices</span><span class="annotation">: list[<a href="#CompletionChoice">mistralrs.CompletionChoice</a>]</span>
+            <span class="name">object</span><span class="annotation">: str</span>
 
         
     </div>
-    <a class="headerlink" href="#CompletionResponse.choices"></a>
+    <a class="headerlink" href="#CompletionResponse.object"></a>
     
     
 
@@ -1635,6 +1624,28 @@ about input data, sampling, and how to return the response.</p>
         
     </div>
     <a class="headerlink" href="#CompletionResponse.usage"></a>
+    
+    
+
+                            </div>
+                            <div id="CompletionResponse.model" class="classattr">
+                                <div class="attr variable">
+            <span class="name">model</span><span class="annotation">: str</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CompletionResponse.model"></a>
+    
+    
+
+                            </div>
+                            <div id="CompletionResponse.choices" class="classattr">
+                                <div class="attr variable">
+            <span class="name">choices</span><span class="annotation">: list[<a href="#CompletionChoice">mistralrs.CompletionChoice</a>]</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CompletionResponse.choices"></a>
     
     
 
@@ -1657,17 +1668,6 @@ about input data, sampling, and how to return the response.</p>
         
     </div>
     <a class="headerlink" href="#CompletionResponse.created"></a>
-    
-    
-
-                            </div>
-                            <div id="CompletionResponse.model" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model</span><span class="annotation">: str</span>
-
-        
-    </div>
-    <a class="headerlink" href="#CompletionResponse.model"></a>
     
     
 
@@ -1708,17 +1708,6 @@ about input data, sampling, and how to return the response.</p>
     
 
                             </div>
-                            <div id="TopLogprob.token" class="classattr">
-                                <div class="attr variable">
-            <span class="name">token</span><span class="annotation">: int</span>
-
-        
-    </div>
-    <a class="headerlink" href="#TopLogprob.token"></a>
-    
-    
-
-                            </div>
                             <div id="TopLogprob.bytes" class="classattr">
                                 <div class="attr variable">
             <span class="name">bytes</span><span class="annotation">: str</span>
@@ -1726,6 +1715,17 @@ about input data, sampling, and how to return the response.</p>
         
     </div>
     <a class="headerlink" href="#TopLogprob.bytes"></a>
+    
+    
+
+                            </div>
+                            <div id="TopLogprob.token" class="classattr">
+                                <div class="attr variable">
+            <span class="name">token</span><span class="annotation">: int</span>
+
+        
+    </div>
+    <a class="headerlink" href="#TopLogprob.token"></a>
     
     
 
