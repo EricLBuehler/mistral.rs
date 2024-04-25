@@ -216,7 +216,7 @@ struct Args {
     n_prompt: usize,
 
     /// Number of generations tokens to run.
-    #[arg(long, short = 'n', default_value_t = 128)]
+    #[arg(long, short = 'g', default_value_t = 128)]
     n_gen: usize,
 
     /// Number of concurrent requests to run. Default is 1
