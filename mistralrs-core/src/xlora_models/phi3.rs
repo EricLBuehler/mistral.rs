@@ -368,7 +368,11 @@ impl Model {
         let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
         let mut count = 0;
         for layer_idx in 0..cfg.num_hidden_layers {
-            let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb_m.device())?);
+            let rotary_emb = Arc::new(RotaryEmbedding::new(
+                vb.dtype(),
+                cfg,
+                mapper.device_for(layer_idx).unwrap_or(vb.device()),
+            )?);
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
