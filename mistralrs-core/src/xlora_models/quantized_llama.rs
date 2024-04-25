@@ -169,15 +169,14 @@ struct LayerWeights {
     n_kv_head: usize,
     head_dim: usize,
     rotary: RotaryEmbedding,
+    neg_inf: Tensor,
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Tensor> {
     let shape = mask.shape();
-    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
-    let m = mask.where_cond(&on_true, on_false)?;
+    let m = mask.where_cond(&on_true.broadcast_as(shape.dims())?, on_false)?;
     Ok(m)
 }
-
 impl LayerWeights {
     #[allow(clippy::too_many_arguments)]
     fn forward_attn(
@@ -248,7 +247,7 @@ impl LayerWeights {
             None => att,
             Some(mask) => {
                 let mask = mask.broadcast_as(att.shape())?;
-                masked_fill(&att, &mask, f32::NEG_INFINITY)?
+                masked_fill(&att, &mask, &self.neg_inf)?
             }
         };
         let att = candle_nn::ops::softmax_last_dim(&att)?;
@@ -297,6 +296,7 @@ impl ModelWeights {
             false,
             DType::F32,
         )?;
+        let neg_inf = Tensor::new(f32::NEG_INFINITY, &ct.device)?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(&ct.device)?;
         let norm = QRmsNorm::new(ct.remove("norm.weight")?, 1e-5)?;
@@ -396,6 +396,7 @@ impl ModelWeights {
                 n_kv_head: ct.hparams.n_head as usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
                 rotary: rotary.clone(),
+                neg_inf: neg_inf.clone(),
             })
         }
         Ok(Self {
@@ -478,6 +479,7 @@ impl ModelWeights {
                 false,
                 DType::F32,
             )?;
+            let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
             let attention_wq = ct.tensor(reader, &format!("{prefix}.attn_q.weight"), device)?;
             let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"), device)?;
@@ -624,6 +626,7 @@ impl ModelWeights {
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
                 rotary: rotary.clone(),
+                neg_inf,
             })
         }
         if xlora_config.is_none() {

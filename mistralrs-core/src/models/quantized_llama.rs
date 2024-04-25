@@ -132,6 +132,7 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Ten
     let m = mask.where_cond(&on_true.broadcast_as(shape.dims())?, on_false)?;
     Ok(m)
 }
+
 impl LayerWeights {
     fn forward_attn(
         &mut self,
@@ -306,7 +307,6 @@ impl ModelWeights {
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
         let head_dim = embedding_length / head_count;
-        let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
         let norm = QRmsNorm::new(
@@ -328,6 +328,7 @@ impl ModelWeights {
                 false,
                 DType::F32,
             )?;
+            let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
             let attention_wq = ct.tensor(reader, &format!("{prefix}.attn_q.weight"), device)?;
             let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"), device)?;
