@@ -52,7 +52,8 @@ pub enum Which {
         arch: Architecture,
     },
 
-    Gguf {
+    #[allow(clippy::upper_case_acronyms)]
+    GGUF {
         tok_model_id: String,
         tokenizer_json: Option<String>,
         quantized_model_id: String,
@@ -82,7 +83,8 @@ pub enum Which {
         tgt_non_granular_index: Option<usize>,
     },
 
-    Ggml {
+    #[allow(clippy::upper_case_acronyms)]
+    GGML {
         tok_model_id: String,
         tokenizer_json: Option<String>,
         quantized_model_id: String,

@@ -3,22 +3,75 @@
 `mistralrs` is a Python package which provides an API for `mistral.rs`. We build `mistralrs` with the `maturin` build manager.
 
 ## Installation
-1) `cd` into mistralrs-pyo3.
+1) Install required packages
+    - `libssl` (ex., `sudo apt install libssl-dev`)
+    - `pkg-config` (ex., `sudo apt install pkg-config`)
 
-2) Activate a Python environment if it is not already. For example:
-
+2) Install Rust: https://rustup.rs/
     ```bash
-    python3 -m venv myenv
-    source myenv/bin/activate
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    source $HOME/.cargo/env
     ```
 
-3) Install `maturin` with `pip install maturin[patchelf]`.
+3) Set HF token correctly (skip if already set or your model is not gated, or if you want to use the `token_source` parameters in Python or the command line.)
+    ```bash
+    mkdir ~/.cache/huggingface
+    touch ~/.cache/huggingface/token
+    echo <HF_TOKEN_HERE> > ~/.cache/huggingface/token
+    ```
 
-4) Install `mistralrs`
+4) Download the code
+    ```bash
+    git clone https://github.com/EricLBuehler/mistral.rs.git
+    cd mistral.rs
+    ```
+
+5) `cd` into the correct directory for building `mistralrs`:
+    `cd mistralrs-pyo3`
+
+6) Install `maturin`, our Rust + Python build system:
+    Maturin requires a Python virtual environment such as `venv` or `conda` to be active. The `mistralrs` package will be installed into that
+    environment.
+    ```
+    pip install maturin[patchelf]
+    ```
+
+7) Install `mistralrs`
     Install `mistralrs` by executing the following in this directory where [features](../README.md#supported-accelerators) such as `cuda` or `flash-attn` may be specified with the `--features` argument just like they would be for `cargo run`.
 
+    The base build command is:
     ```bash
-    maturin develop -r --features ...
+    maturin develop -r
+    ```
+
+    - To build for CUDA:
+    
+    ```bash
+    maturin develop -r --features cuda
+    ```
+    
+    - To build for CUDA with flash attention:
+    
+    ```bash
+    maturin develop -r --features "cuda flash-attn"
+    ```
+
+    - To build for Metal:  
+
+    ```bash
+    maturin develop -r --features metal
+    ```
+
+    - To build for Accelerate:  
+      
+    ```bash
+    maturin develop -r --features accelerate
+    ```
+
+    - To build for MKL:  
+      
+    ```bash
+    maturin develop -r --features mkl
     ```
 
 Please find [API docs here](API.md) and the type stubs [here](mistralrs.pyi), which are another great form of documentation.

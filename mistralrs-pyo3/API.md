@@ -3,7 +3,7 @@
 These are API docs for the `mistralrs` package.
 
 **Table of contents**
-- Full API docs: [here](https://html-preview.github.io/?url=https://github.com/EricLBuehler/mistral.rs/blob/docs/mistralrs-pyo3/pdoc/mistralrs.html)
+- Full API docs: [here](https://ericlbuehler.github.io/mistral.rs/pyo3/mistralrs.html)
 - Docs for the `Which` enum: [here](#which)
 - Example: [here](#example)
 

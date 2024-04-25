@@ -38,9 +38,10 @@ mod xlora_models;
 
 pub use device_map::{DeviceMapMetadata, LayerDeviceMapper};
 pub use pipeline::{
-    GemmaLoader, GgmlLoader, GgmlLoaderBuilder, GgmlSpecificConfig, GgufLoader, GgufLoaderBuilder,
-    GgufSpecificConfig, LlamaLoader, Loader, MistralLoader, MixtralLoader, ModelKind, NormalLoader,
-    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, TokenSource,
+    GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder,
+    GGUFSpecificConfig, GemmaLoader, LlamaLoader, Loader, MistralLoader, MixtralLoader, ModelKind,
+    NormalLoader, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader,
+    TokenSource,
 };
 pub use request::{Constraint, Request, RequestMessage};
 pub use response::Response;

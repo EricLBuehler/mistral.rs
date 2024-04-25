@@ -11,8 +11,8 @@ use candle_nn::VarBuilder;
 use chat_template::{apply_chat_template_to, ChatTemplate};
 use core::fmt;
 use either::Either;
-pub use ggml::{GgmlLoader, GgmlLoaderBuilder, GgmlSpecificConfig};
-pub use gguf::{GgufLoader, GgufLoaderBuilder, GgufSpecificConfig};
+pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
+pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
     Repo, RepoType,
@@ -145,6 +145,7 @@ impl AsRef<str> for ModelKind {
 ///     TokenSource::CacheToken,
 ///     None,
 ///     &Device::cuda_if_available(0).unwrap(),
+///     false,
 ///     DeviceMapMetadata::dummy(),
 /// ).unwrap();
 /// ```
@@ -153,6 +154,7 @@ pub trait Loader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
+        silent: bool,
     ) -> Result<Box<dyn ModelPaths>>;
 
     #[allow(clippy::type_complexity)]
@@ -161,6 +163,7 @@ pub trait Loader {
         paths: &dyn ModelPaths,
         dtype: Option<DType>,
         device: &Device,
+        silent: bool,
         mapper: DeviceMapMetadata,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>>;
 
@@ -173,10 +176,11 @@ pub trait Loader {
         token_source: TokenSource,
         dtype: Option<DType>,
         device: &Device,
+        silent: bool,
         mapper: DeviceMapMetadata,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
-        let paths = self.download_model(revision, token_source)?;
-        self._setup_model(&*paths, dtype, device, mapper)
+        let paths = self.download_model(revision, token_source, silent)?;
+        self._setup_model(&*paths, dtype, device, silent, mapper)
     }
 
     fn get_id(&self) -> &str;

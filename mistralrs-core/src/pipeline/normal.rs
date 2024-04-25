@@ -223,8 +223,17 @@ impl Loader for NormalLoader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
+        silent: bool,
     ) -> Result<Box<dyn ModelPaths>> {
-        get_paths!(NormalModelPaths, &token_source, revision, self, None, None)
+        get_paths!(
+            NormalModelPaths,
+            &token_source,
+            revision,
+            self,
+            None,
+            None,
+            silent
+        )
     }
 
     fn _setup_model(
@@ -232,6 +241,7 @@ impl Loader for NormalLoader {
         paths: &dyn ModelPaths,
         dtype: Option<DType>,
         device: &Device,
+        silent: bool,
         mapper: DeviceMapMetadata,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
@@ -255,6 +265,7 @@ impl Loader for NormalLoader {
                 config,
                 self.inner,
                 self.config.use_flash_attn,
+                silent,
                 mapper
             ),
             ModelKind::XLoraNormal => xlora_model_loader!(
@@ -265,6 +276,7 @@ impl Loader for NormalLoader {
                 config,
                 self.inner,
                 self.config.use_flash_attn,
+                silent,
                 mapper
             ),
             ModelKind::LoraNormal => {
@@ -277,6 +289,7 @@ impl Loader for NormalLoader {
                     config,
                     self.inner,
                     self.config.use_flash_attn,
+                    silent,
                     mapper
                 )
             }

@@ -77,9 +77,9 @@ impl ModelPaths for MistralModelPaths<PathBuf> {
     }
 }
 
-pub struct GgufPipeline {
+pub struct GGUFPipeline {
     model: Model,
-    config: GgufSpecificConfig,
+    config: GGUFSpecificConfig,
     tokenizer: Arc<Tokenizer>,
     tok_trie: TokTrie,
     no_kv_cache: bool,
@@ -90,9 +90,9 @@ pub struct GgufPipeline {
     is_lora: bool,
 }
 
-pub struct GgufLoader {
+pub struct GGUFLoader {
     model_id: String,
-    config: GgufSpecificConfig,
+    config: GGUFSpecificConfig,
     quantized_model_id: Option<String>,
     quantized_filename: Option<String>,
     xlora_model_id: Option<String>,
@@ -105,7 +105,7 @@ pub struct GgufLoader {
 }
 
 #[derive(Debug)]
-enum GgufArchitecture {
+enum GGUFArchitecture {
     Llama,
     Mpt,
     Gptneox,
@@ -118,21 +118,21 @@ enum GgufArchitecture {
     Phi2,
 }
 
-impl FromStr for GgufArchitecture {
+impl FromStr for GGUFArchitecture {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "llama" => Ok(GgufArchitecture::Llama),
-            "mpt" => Ok(GgufArchitecture::Mpt),
-            "gptneox" => Ok(GgufArchitecture::Gptneox),
-            "gptj" => Ok(GgufArchitecture::Gptj),
-            "gpt2" => Ok(GgufArchitecture::Gpt2),
-            "bloom" => Ok(GgufArchitecture::Bloom),
-            "falcon" => Ok(GgufArchitecture::Falcon),
-            "mamba" => Ok(GgufArchitecture::Mamba),
-            "rwkv" => Ok(GgufArchitecture::Rwkv),
-            "phi2" => Ok(GgufArchitecture::Phi2),
+            "llama" => Ok(GGUFArchitecture::Llama),
+            "mpt" => Ok(GGUFArchitecture::Mpt),
+            "gptneox" => Ok(GGUFArchitecture::Gptneox),
+            "gptj" => Ok(GGUFArchitecture::Gptj),
+            "gpt2" => Ok(GGUFArchitecture::Gpt2),
+            "bloom" => Ok(GGUFArchitecture::Bloom),
+            "falcon" => Ok(GGUFArchitecture::Falcon),
+            "mamba" => Ok(GGUFArchitecture::Mamba),
+            "rwkv" => Ok(GGUFArchitecture::Rwkv),
+            "phi2" => Ok(GGUFArchitecture::Phi2),
             a => Err(format!("Unknown GGUF architecture `{a}`")),
         }
     }
@@ -140,15 +140,15 @@ impl FromStr for GgufArchitecture {
 
 #[derive(Clone, Copy, Default)]
 /// A config for a GGUF loader.
-pub struct GgufSpecificConfig {
+pub struct GGUFSpecificConfig {
     pub repeat_last_n: usize,
 }
 
 #[derive(Default)]
 /// A builder for a GGUF loader.
-pub struct GgufLoaderBuilder {
+pub struct GGUFLoaderBuilder {
     model_id: Option<String>,
-    config: GgufSpecificConfig,
+    config: GGUFSpecificConfig,
     quantized_model_id: String,
     quantized_filename: String,
     xlora_model_id: Option<String>,
@@ -160,9 +160,9 @@ pub struct GgufLoaderBuilder {
     tgt_non_granular_index: Option<usize>,
 }
 
-impl GgufLoaderBuilder {
+impl GGUFLoaderBuilder {
     pub fn new(
-        config: GgufSpecificConfig,
+        config: GGUFSpecificConfig,
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
         model_id: Option<String>,
@@ -174,7 +174,7 @@ impl GgufLoaderBuilder {
             chat_template,
             tokenizer_json,
             model_id,
-            kind: ModelKind::Normal,
+            kind: ModelKind::QuantizedGGUF,
             quantized_filename,
             quantized_model_id,
             ..Default::default()
@@ -237,7 +237,7 @@ impl GgufLoaderBuilder {
     }
 
     pub fn build(self) -> Box<dyn Loader> {
-        Box::new(GgufLoader {
+        Box::new(GGUFLoader {
             model_id: self.model_id.unwrap(),
             config: self.config,
             xlora_model_id: self.xlora_model_id,
@@ -253,11 +253,11 @@ impl GgufLoaderBuilder {
     }
 }
 
-impl GgufLoader {
+impl GGUFLoader {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         model_id: Option<String>,
-        config: GgufSpecificConfig,
+        config: GGUFSpecificConfig,
         quantized_model_id: Option<String>,
         quantized_filename: Option<String>,
         xlora_model_id: Option<String>,
@@ -293,11 +293,12 @@ impl GgufLoader {
     }
 }
 
-impl Loader for GgufLoader {
+impl Loader for GGUFLoader {
     fn download_model(
         &self,
         revision: Option<String>,
         token_source: TokenSource,
+        silent: bool,
     ) -> Result<Box<dyn ModelPaths>> {
         get_paths!(
             MistralModelPaths,
@@ -305,7 +306,8 @@ impl Loader for GgufLoader {
             revision,
             self,
             self.quantized_model_id,
-            self.quantized_filename
+            self.quantized_filename,
+            silent
         )
     }
 
@@ -314,12 +316,13 @@ impl Loader for GgufLoader {
         paths: &dyn ModelPaths,
         _dtype: Option<DType>,
         device: &Device,
+        silent: bool,
         mapper: DeviceMapMetadata,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
         let model = gguf_file::Content::read(&mut file)
             .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
-        let arch: GgufArchitecture = model.metadata["general.architecture"]
+        let arch: GGUFArchitecture = model.metadata["general.architecture"]
             .to_string()
             .unwrap()
             .parse()
@@ -328,10 +331,10 @@ impl Loader for GgufLoader {
         let mut is_lora = false;
         let model = match self.kind {
             ModelKind::QuantizedGGUF => match arch {
-                GgufArchitecture::Llama => {
+                GGUFArchitecture::Llama => {
                     Model::Llama(QLlama::from_gguf(model, &mut file, device, mapper)?)
                 }
-                GgufArchitecture::Phi2 => {
+                GGUFArchitecture::Phi2 => {
                     Model::Phi2(QPhi::from_gguf(model, &mut file, device, mapper)?)
                 }
                 a => bail!("Unsupported architecture `{a:?}`"),
@@ -348,11 +351,11 @@ impl Loader for GgufLoader {
                         .collect::<Vec<_>>(),
                     DType::F32,
                     device,
-                    false,
+                    silent,
                 )?;
 
                 match arch {
-                    GgufArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::from_gguf(
+                    GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::from_gguf(
                         model,
                         &mut file,
                         device,
@@ -378,11 +381,11 @@ impl Loader for GgufLoader {
                         .collect::<Vec<_>>(),
                     DType::F32,
                     device,
-                    false,
+                    silent,
                 )?;
 
                 match arch {
-                    GgufArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::from_gguf(
+                    GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::from_gguf(
                         model,
                         &mut file,
                         device,
@@ -403,7 +406,7 @@ impl Loader for GgufLoader {
 
         let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
 
-        Ok(Box::new(Mutex::new(GgufPipeline {
+        Ok(Box::new(Mutex::new(GGUFPipeline {
             model,
             config: self.config,
             eos_tok: calculate_eos_tokens(&chat_template, &tokenizer),
@@ -431,7 +434,7 @@ impl Loader for GgufLoader {
     }
 }
 
-impl Pipeline for GgufPipeline {
+impl Pipeline for GGUFPipeline {
     fn forward(
         &mut self,
         input_toks: &[&mut Sequence],

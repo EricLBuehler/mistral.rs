@@ -2,15 +2,15 @@ use std::sync::{mpsc::channel, Arc};
 
 use candle_core::Device;
 use mistralrs::{
-    Constraint, DeviceMapMetadata, GgufLoaderBuilder, GgufSpecificConfig, MistralRs,
+    Constraint, DeviceMapMetadata, GGUFLoaderBuilder, GGUFSpecificConfig, MistralRs,
     MistralRsBuilder, Request, RequestMessage, Response, SamplingParams, SchedulerMethod,
     TokenSource,
 };
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {
     // Select a Mistral model
-    let loader = GgufLoaderBuilder::new(
-        GgufSpecificConfig { repeat_last_n: 64 },
+    let loader = GGUFLoaderBuilder::new(
+        GGUFSpecificConfig { repeat_last_n: 64 },
         None,
         None,
         Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
@@ -24,6 +24,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         TokenSource::CacheToken,
         None,
         &Device::cuda_if_available(0)?,
+        false,
         DeviceMapMetadata::dummy(),
     )?;
     // Create the MistralRs, which is a runner
