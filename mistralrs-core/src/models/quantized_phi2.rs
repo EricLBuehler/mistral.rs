@@ -240,8 +240,8 @@ impl ModelWeights {
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
-                cos: cos.clone(),
-                sin: sin.clone(),
+                cos: cos.clone().to_device(device)?,
+                sin: sin.clone().to_device(device)?,
                 rope_dim,
                 neg_inf: neg_inf.clone(),
             })

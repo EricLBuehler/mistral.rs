@@ -306,15 +306,6 @@ impl ModelWeights {
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
         let head_dim = embedding_length / head_count;
-        let rotary = RotaryEmbedding::new_partial(
-            rope_freq_base,
-            head_dim,
-            rope_dim,
-            MAX_SEQ_LEN as usize,
-            device,
-            false,
-            DType::F32,
-        )?;
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
@@ -328,6 +319,15 @@ impl ModelWeights {
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx).unwrap_or(device);
+            let rotary = RotaryEmbedding::new_partial(
+                rope_freq_base,
+                head_dim,
+                rope_dim,
+                MAX_SEQ_LEN as usize,
+                device,
+                false,
+                DType::F32,
+            )?;
 
             let attention_wq = ct.tensor(reader, &format!("{prefix}.attn_q.weight"), device)?;
             let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"), device)?;

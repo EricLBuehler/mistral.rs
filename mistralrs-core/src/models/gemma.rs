@@ -290,18 +290,18 @@ impl Model {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
-        let rotary_emb = Arc::new(RotaryEmbedding::new(
-            cfg.rope_theta as f32,
-            cfg.head_dim,
-            cfg.max_position_embeddings,
-            vb.device(),
-            is_gptx,
-            vb.dtype(),
-        )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
         for layer_idx in 0..cfg.num_hidden_layers {
+            let rotary_emb = Arc::new(RotaryEmbedding::new(
+                cfg.rope_theta as f32,
+                cfg.head_dim,
+                cfg.max_position_embeddings,
+                mapper.device_for(layer_idx).unwrap_or(vb.device()),
+                is_gptx,
+                vb.dtype(),
+            )?);
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
