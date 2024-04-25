@@ -808,6 +808,10 @@
 <a href="#806" id="806">806</a>
 <a href="#807" id="807">807</a>
 <a href="#808" id="808">808</a>
+<a href="#809" id="809">809</a>
+<a href="#810" id="810">810</a>
+<a href="#811" id="811">811</a>
+<a href="#812" id="812">812</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>chat_template;
 <span class="kw">mod </span>ggml;
 <span class="kw">mod </span>gguf;
@@ -830,7 +834,7 @@
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">pub use </span>loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
-    Phi3Loader,
+    Phi3Loader, Qwen2Loader,
 };
 <span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
 <span class="kw">pub use </span>normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
@@ -1027,10 +1031,14 @@
         add_generation_prompt: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
         <span class="kw">let </span>template = <span class="self">self</span>.get_chat_template().chat_template.as_ref().unwrap();
-        <span class="kw">let </span>bos_tok = <span class="kw">match </span><span class="self">self</span>.get_chat_template().bos_token {
-            Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit,
-            Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="kw-2">&amp;</span>added.content,
-        };
+        <span class="kw">let </span>bos_tok = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>bos) = <span class="self">self</span>.get_chat_template().bos_token {
+            <span class="kw">match </span>bos.<span class="number">0 </span>{
+                Either::Left(<span class="kw-2">ref </span>lit) =&gt; <span class="prelude-val">Some</span>(lit.to_string()),
+                Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="prelude-val">Some</span>(added.content.to_string()),
+            }
+        } <span class="kw">else </span>{
+            <span class="prelude-val">None
+        </span>};
         <span class="kw">let </span>eos_tok = <span class="kw">match </span><span class="self">self</span>.get_chat_template().eos_token {
             Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit,
             Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="kw-2">&amp;</span>added.content,
@@ -1607,7 +1615,7 @@
                 },
                 <span class="bool-val">true</span>,
                 template,
-                bos,
+                <span class="prelude-val">Some</span>(bos.to_string()),
                 eos,
                 <span class="prelude-val">Some</span>(unk.to_string()),
             )

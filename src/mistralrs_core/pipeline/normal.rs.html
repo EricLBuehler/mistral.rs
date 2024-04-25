@@ -418,9 +418,10 @@
 <a href="#416" id="416">416</a>
 <a href="#417" id="417">417</a>
 <a href="#418" id="418">418</a>
+<a href="#419" id="419">419</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
-    Phi3Loader,
+    Phi3Loader, Qwen2Loader,
 };
 <span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
@@ -624,6 +625,7 @@
             NormalLoaderType::Mixtral =&gt; Box::new(MixtralLoader),
             NormalLoaderType::Phi2 =&gt; Box::new(Phi2Loader),
             NormalLoaderType::Phi3 =&gt; Box::new(Phi3Loader),
+            NormalLoaderType::Qwen2 =&gt; Box::new(Qwen2Loader),
         };
         Box::new(NormalLoader {
             inner: loader,

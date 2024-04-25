@@ -140,6 +140,7 @@
 <a href="#138" id="138">138</a>
 <a href="#139" id="139">139</a>
 <a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>anyhow::Result;
@@ -173,6 +174,8 @@
 
 <span class="attr">#[derive(Debug, Deserialize)]
 </span><span class="kw">pub struct </span>Unk(<span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span><span class="kw">pub </span>Either&lt;String, AddedTokensDecoder&gt;);
+<span class="attr">#[derive(Debug, Deserialize)]
+</span><span class="kw">pub struct </span>Bos(<span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span><span class="kw">pub </span>Either&lt;String, AddedTokensDecoder&gt;);
 
 <span class="attr">#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
@@ -181,8 +184,7 @@
     add_eos_token: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     added_tokens_decoder: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, AddedTokensDecoder&gt;&gt;,
     additional_special_tokens: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
-    <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)]
-    </span><span class="kw">pub </span>bos_token: Either&lt;String, AddedTokensDecoder&gt;,
+    <span class="kw">pub </span>bos_token: <span class="prelude-ty">Option</span>&lt;Bos&gt;,
     <span class="kw">pub </span>chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     clean_up_tokenization_spaces: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     device_map: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -211,10 +213,10 @@
         }
     }
 
-    <span class="kw">pub fn </span>bos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
-        <span class="kw">match </span><span class="self">self</span>.bos_token {
-            Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit.clone(),
-            Either::Right(<span class="kw-2">ref </span>added) =&gt; added.content.clone(),
+    <span class="kw">pub fn </span>bos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;String&gt; {
+        <span class="kw">match </span><span class="self">self</span>.bos_token.as_ref()<span class="question-mark">?</span>.<span class="number">0 </span>{
+            Either::Left(<span class="kw-2">ref </span>lit) =&gt; <span class="prelude-val">Some</span>(lit.clone()),
+            Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="prelude-val">Some</span>(added.content.clone()),
         }
     }
 
@@ -237,9 +239,9 @@
 
     <span class="macro">info!</span>(
         <span class="string">"bos_tok = {}, eos_tok = {:?}, unk_tok = {}"</span>,
-        chat_template.bos_tok(),
+        chat_template.bos_tok().unwrap_or(<span class="string">"`None`"</span>.to_string()),
         eos_tok_ids,
-        chat_template.eos_tok()
+        chat_template.unk_tok().unwrap_or(<span class="string">"`None`"</span>.to_string()),
     );
 
     <span class="kw">let </span><span class="kw-2">mut </span>eos_toks = Vec::new();
@@ -259,7 +261,7 @@
     messages: Vec&lt;IndexMap&lt;String, String&gt;&gt;,
     add_generation_prompt: bool,
     template: <span class="kw-2">&amp;</span>str,
-    bos_tok: <span class="kw-2">&amp;</span>str,
+    bos_tok: <span class="prelude-ty">Option</span>&lt;String&gt;,
     eos_tok: <span class="kw-2">&amp;</span>str,
     unk_tok: <span class="prelude-ty">Option</span>&lt;String&gt;,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
