@@ -3,7 +3,7 @@
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{linear_no_bias, Linear, RotaryEmbedding, VarBuilder};
+use candle_nn::{linear_no_bias, Linear, VarBuilder};
 use either::Either;
 use std::{collections::HashMap, sync::Arc};
 
@@ -37,6 +37,53 @@ pub struct Config {
 impl Config {
     fn head_dim(&self) -> usize {
         self.hidden_size / self.num_attention_heads
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RotaryEmbedding {
+    sin: Tensor,
+    cos: Tensor,
+}
+
+impl RotaryEmbedding {
+    fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
+        let dim = cfg.head_dim();
+        let max_seq_len = cfg.max_position_embeddings;
+        let inv_freq: Vec<_> = (0..dim)
+            .step_by(2)
+            .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
+            .collect();
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
+        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
+            .to_dtype(dtype)?
+            .reshape((max_seq_len, 1))?;
+        let freqs = t.matmul(&inv_freq)?;
+        Ok(Self {
+            sin: freqs.sin()?,
+            cos: freqs.cos()?,
+        })
+    }
+
+    fn apply_rotary_emb_qkv(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        seqlen_offsets: &[usize],
+    ) -> Result<(Tensor, Tensor)> {
+        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
+        let mut q_embeds = Vec::new();
+        let mut k_embeds = Vec::new();
+        for offset in seqlen_offsets {
+            let cos = self.cos.narrow(0, *offset, seq_len)?;
+            let sin = self.sin.narrow(0, *offset, seq_len)?;
+            let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
+            let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
+            q_embeds.push(q_embed);
+            k_embeds.push(k_embed);
+        }
+        Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
     }
 }
 
@@ -77,7 +124,7 @@ impl Attention {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
+        _start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
@@ -92,31 +139,25 @@ impl Attention {
             self.num_kv_heads * self.head_dim,
         )?;
 
-        let mut q = q.reshape((b_sz * q_len, self.num_heads, self.head_dim))?;
-        let mut k = k.reshape((b_sz * q_len, self.num_kv_heads, self.head_dim))?;
+        let q = q
+            .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
+            .transpose(1, 2)?;
+        let k = k
+            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+            .transpose(1, 2)?;
         let v = v
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        self.rotary_emb
-            .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
-
-        if q.rank() == 3 {
-            q = q
-                .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-            k = k
-                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-        }
+        let (q, k) = self
+            .rotary_emb
+            .apply_rotary_emb_qkv(&q, &k, seqlen_offsets)?;
 
         let (k, v) = match &*kv_cache {
             None => (k, v),
             Some((prev_k, prev_v)) => {
-                let k = candle_nn::ops::kvconcat(prev_k, &k, 2)?;
-                let v = candle_nn::ops::kvconcat(prev_v, &v, 2)?;
+                let k = Tensor::cat(&[prev_k, &k], 2)?;
+                let v = Tensor::cat(&[prev_v, &v], 2)?;
                 (k, v)
             }
         };
@@ -251,25 +292,17 @@ impl Model {
     pub fn new(
         cfg: &Config,
         vb: VarBuilder,
-        is_gptx: bool,
+        _is_gptx: bool,
         mapper: DeviceMapMetadata,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
-        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
         for layer_idx in 0..cfg.num_hidden_layers {
-            let rotary_emb = Arc::new(RotaryEmbedding::new(
-                cfg.rope_theta as f32,
-                head_dim,
-                cfg.max_position_embeddings,
-                vb.device(),
-                is_gptx,
-                vb.dtype(),
-            )?);
+            let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb_m.device())?);
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
