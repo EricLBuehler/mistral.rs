@@ -249,16 +249,6 @@
 <a href="#247" id="247">247</a>
 <a href="#248" id="248">248</a>
 <a href="#249" id="249">249</a>
-<a href="#250" id="250">250</a>
-<a href="#251" id="251">251</a>
-<a href="#252" id="252">252</a>
-<a href="#253" id="253">253</a>
-<a href="#254" id="254">254</a>
-<a href="#255" id="255">255</a>
-<a href="#256" id="256">256</a>
-<a href="#257" id="257">257</a>
-<a href="#258" id="258">258</a>
-<a href="#259" id="259">259</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{Json, State},
@@ -269,8 +259,8 @@
 <span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>mistralrs_core::{
-    get_tgt_non_granular_index, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelKind,
-    ModelSelected, SchedulerMethod, TokenSource,
+    get_tgt_non_granular_index, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs,
+    MistralRsBuilder, ModelKind, ModelSelected, SchedulerMethod, TokenSource,
 };
 <span class="kw">use </span>openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 <span class="kw">use </span>std::sync::Arc;
@@ -281,10 +271,8 @@
 <span class="kw">use crate</span>::{chat_completion::chatcompletions, openai::ModelObject};
 <span class="kw">mod </span>interactive_mode;
 <span class="kw">mod </span>openai;
-<span class="kw">mod </span>prompt_mode;
 
 <span class="kw">use </span>interactive_mode::interactive_mode;
-<span class="kw">use </span>prompt_mode::prompt_mode;
 <span class="kw">use </span>tower_http::cors::{AllowOrigin, CorsLayer};
 <span class="kw">use </span>tracing::{info, warn};
 <span class="kw">use </span>utoipa::OpenApi;
@@ -346,17 +334,9 @@
     </span><span class="attr">#[arg(long, default_value_t = <span class="number">16</span>)]
     </span>prefix_cache_n: usize,
 
-    <span class="doccomment">/// Run a single prompt. This cannot be used with interactive mode.
-    </span><span class="attr">#[clap(long)]
-    </span>prompt: <span class="prelude-ty">Option</span>&lt;String&gt;,
-
-    <span class="doccomment">/// Requires --prompt. Number of prompt completions to run concurrently in prompt mode.
-    </span><span class="attr">#[clap(long, default_value_t = <span class="number">1</span>, requires = <span class="string">"prompt"</span>)]
-    </span>prompt_concurrency: usize,
-
-    <span class="doccomment">/// Requires --prompt. Number of prompt tokens to generate.
-    </span><span class="attr">#[clap(long, default_value_t = <span class="number">128</span>, requires = <span class="string">"prompt"</span>)]
-    </span>prompt_max_tokens: usize,
+    <span class="doccomment">/// Number of device layers to load and run on the device. All others will be on the CPU.
+    </span><span class="attr">#[arg(short, long)]
+    </span>num_device_layers: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
 <span class="attr">#[utoipa::path(
@@ -476,7 +456,16 @@
         <span class="macro">warn!</span>(<span class="string">"Using flash attention with a quantized model has no effect!"</span>)
     }
     <span class="macro">info!</span>(<span class="string">"Model kind is: {}"</span>, loader.get_kind().as_ref());
-    <span class="kw">let </span>pipeline = loader.load_model(<span class="prelude-val">None</span>, args.token_source, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>device, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+    <span class="kw">let </span>pipeline = loader.load_model(
+        <span class="prelude-val">None</span>,
+        args.token_source,
+        <span class="prelude-val">None</span>,
+        <span class="kw-2">&amp;</span>device,
+        <span class="bool-val">false</span>,
+        args.num_device_layers
+            .map(DeviceMapMetadata::from_num_device_layers)
+            .unwrap_or(DeviceMapMetadata::dummy()),
+    )<span class="question-mark">?</span>;
     <span class="macro">info!</span>(<span class="string">"Model loaded."</span>);
 
     <span class="kw">let </span>mistralrs = MistralRsBuilder::new(
@@ -489,15 +478,6 @@
     .with_prefix_cache_n(args.prefix_cache_n)
     .build();
 
-    <span class="kw">if let </span><span class="prelude-val">Some</span>(prompt) = args.prompt {
-        prompt_mode(
-            mistralrs,
-            prompt,
-            args.prompt_concurrency,
-            args.prompt_max_tokens,
-        );
-        <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-    }
     <span class="kw">if </span>args.interactive_mode {
         interactive_mode(mistralrs);
         <span class="kw">return </span><span class="prelude-val">Ok</span>(());

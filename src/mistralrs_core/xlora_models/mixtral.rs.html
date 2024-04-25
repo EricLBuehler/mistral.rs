@@ -764,6 +764,17 @@
 <a href="#762" id="762">762</a>
 <a href="#763" id="763">763</a>
 <a href="#764" id="764">764</a>
+<a href="#765" id="765">765</a>
+<a href="#766" id="766">766</a>
+<a href="#767" id="767">767</a>
+<a href="#768" id="768">768</a>
+<a href="#769" id="769">769</a>
+<a href="#770" id="770">770</a>
+<a href="#771" id="771">771</a>
+<a href="#772" id="772">772</a>
+<a href="#773" id="773">773</a>
+<a href="#774" id="774">774</a>
+<a href="#775" id="775">775</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
@@ -775,8 +786,10 @@
 <span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use crate</span>::{
+    device_map::DeviceMapper,
     models::{flash_attn, mixtral::Config, repeat_kv, Cache, RmsNorm},
     pipeline::{extract_logits, NormalModel},
+    DeviceMapMetadata,
 };
 
 <span class="kw">use super</span>::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -1218,6 +1231,7 @@
     dtype: DType,
     <span class="kw">pub </span>max_seq_len: usize,
     xlora_classifier: <span class="prelude-ty">Option</span>&lt;XLoraClassifier&gt;,
+    mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
 }
 
 <span class="kw">impl </span>XLoraModel {
@@ -1228,27 +1242,29 @@
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         xlora_ordering: Ordering,
         is_gptx: bool,
+        mapper: DeviceMapMetadata,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
         <span class="kw">let </span>embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp(<span class="string">"embed_tokens"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        <span class="kw">let </span>rotary_emb = Arc::new(RotaryEmbedding::new(
-            cfg.rope_theta <span class="kw">as </span>f32,
-            head_dim,
-            cfg.max_position_embeddings,
-            vb_m.device(),
-            is_gptx,
-            vb.dtype(),
-        )<span class="question-mark">?</span>);
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
         <span class="kw">let </span>vb_l = vb_m.pp(<span class="string">"layers"</span>);
         <span class="kw">let </span><span class="kw-2">mut </span>count = <span class="number">0</span>;
+        <span class="kw">let </span>mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())<span class="question-mark">?</span>;
         <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
+            <span class="kw">let </span>rotary_emb = Arc::new(RotaryEmbedding::new(
+                cfg.rope_theta <span class="kw">as </span>f32,
+                head_dim,
+                cfg.max_position_embeddings,
+                vb.device(),
+                is_gptx,
+                vb.dtype(),
+            )<span class="question-mark">?</span>);
             <span class="kw">let </span>layer = DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
-                vb_l.pp(layer_idx),
+                mapper.set_device(layer_idx, vb_l.pp(layer_idx)),
                 lora_config,
                 <span class="kw-2">&amp;mut </span>count,
                 <span class="kw-2">&amp;</span>xlora_ordering,
@@ -1270,6 +1286,7 @@
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, <span class="bool-val">false</span>).unwrap()
             }),
+            mapper,
         })
     }
 
@@ -1353,9 +1370,13 @@
         };
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
+            xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
             xs = layer.forward(
                 <span class="kw-2">&amp;</span>xs,
-                attention_mask.as_ref(),
+                attention_mask
+                    .as_ref()
+                    .map(|m| m.to_device(xs.device()).unwrap())
+                    .as_ref(),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 <span class="kw-2">&amp;mut </span>cache[i],
@@ -1367,6 +1388,7 @@
                 is_scaling_pass,
             )<span class="question-mark">?
         </span>}
+        <span class="kw">let </span>xs = xs.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
         xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.norm)
     }
 

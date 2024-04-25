@@ -326,12 +326,27 @@
 <a href="#324" id="324">324</a>
 <a href="#325" id="325">325</a>
 <a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 <span class="kw">use </span>mistralrs_core::{
-    Constraint, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelKind, ModelSelected,
-    Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource, Usage,
+    Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelKind,
+    ModelSelected, Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
+    Usage,
 };
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Display, sync::mpsc::channel};
@@ -553,6 +568,10 @@
     <span class="doccomment">/// Number of times to repeat each test.
     </span><span class="attr">#[arg(long, short, default_value_t = <span class="number">5</span>)]
     </span>repetitions: usize,
+
+    <span class="doccomment">/// Number of device layers to load and run on the device. All others will be on the CPU.
+    </span><span class="attr">#[arg(short, long)]
+    </span>num_device_layers: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
 <span class="kw">fn </span>main() -&gt; anyhow::Result&lt;()&gt; {
@@ -600,7 +619,16 @@
         <span class="macro">warn!</span>(<span class="string">"Using flash attention with a quantized model has no effect!"</span>)
     }
     <span class="macro">info!</span>(<span class="string">"Model kind is: {}"</span>, loader.get_kind().as_ref());
-    <span class="kw">let </span>pipeline = loader.load_model(<span class="prelude-val">None</span>, token_source, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span>device, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+    <span class="kw">let </span>pipeline = loader.load_model(
+        <span class="prelude-val">None</span>,
+        token_source,
+        <span class="prelude-val">None</span>,
+        <span class="kw-2">&amp;</span>device,
+        <span class="bool-val">false</span>,
+        args.num_device_layers
+            .map(DeviceMapMetadata::from_num_device_layers)
+            .unwrap_or(DeviceMapMetadata::dummy()),
+    )<span class="question-mark">?</span>;
     <span class="macro">info!</span>(<span class="string">"Model loaded."</span>);
 
     <span class="kw">let </span>mistralrs = MistralRsBuilder::new(

@@ -392,6 +392,25 @@
 <a href="#390" id="390">390</a>
 <a href="#391" id="391">391</a>
 <a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
+<a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
+<a href="#400" id="400">400</a>
+<a href="#401" id="401">401</a>
+<a href="#402" id="402">402</a>
+<a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
+<a href="#405" id="405">405</a>
+<a href="#406" id="406">406</a>
+<a href="#407" id="407">407</a>
+<a href="#408" id="408">408</a>
+<a href="#409" id="409">409</a>
+<a href="#410" id="410">410</a>
+<a href="#411" id="411">411</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Phi model.
@@ -406,7 +425,11 @@
 };
 <span class="kw">use </span>serde::Deserialize;
 
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, NormalModel};
+<span class="kw">use crate</span>::{
+    device_map::DeviceMapper,
+    pipeline::{extract_logits, NormalModel},
+    DeviceMapMetadata,
+};
 
 <span class="kw">use super</span>::{flash_attn, repeat_kv, Cache};
 
@@ -673,8 +696,7 @@
     }
 }
 
-<span class="attr">#[derive(Clone)]
-</span><span class="kw">pub struct </span>Model {
+<span class="kw">pub struct </span>Model {
     embed_tokens: Embedding,
     layers: Vec&lt;DecoderLayer&gt;,
     final_layernorm: LayerNorm,
@@ -682,10 +704,16 @@
     <span class="kw">pub </span>cache: Cache,
     <span class="kw">pub </span>device: Device,
     <span class="kw">pub </span>max_seq_len: usize,
+    mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
 }
 
 <span class="kw">impl </span>Model {
-    <span class="kw">pub fn </span>new(cfg: <span class="kw-2">&amp;</span>Config, vb: VarBuilder, is_gptx: bool) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">pub fn </span>new(
+        cfg: <span class="kw-2">&amp;</span>Config,
+        vb: VarBuilder,
+        is_gptx: bool,
+        mapper: DeviceMapMetadata,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
         <span class="kw">let </span>embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp(<span class="string">"embed_tokens"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>final_layernorm = layer_norm(
@@ -695,8 +723,13 @@
         )<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
         <span class="kw">let </span>vb_m = vb_m.pp(<span class="string">"layers"</span>);
+        <span class="kw">let </span>mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())<span class="question-mark">?</span>;
         <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
-            <span class="kw">let </span>layer = DecoderLayer::new(cfg, vb_m.pp(layer_idx), is_gptx)<span class="question-mark">?</span>;
+            <span class="kw">let </span>layer = DecoderLayer::new(
+                cfg,
+                mapper.set_device(layer_idx, vb_m.pp(layer_idx)),
+                is_gptx,
+            )<span class="question-mark">?</span>;
             layers.push(layer)
         }
         <span class="kw">let </span>lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp(<span class="string">"lm_head"</span>))<span class="question-mark">?</span>;
@@ -708,6 +741,7 @@
             cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
             device: vb.device().clone(),
             max_seq_len: cfg.max_position_embeddings,
+            mapper,
         })
     }
 
@@ -727,14 +761,18 @@
         };
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
+            xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
             xs = layer.forward(
                 <span class="kw-2">&amp;</span>xs,
-                mask.as_ref(),
+                mask.as_ref()
+                    .map(|m| m.to_device(xs.device()).unwrap())
+                    .as_ref(),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 <span class="kw-2">&amp;mut </span>cache[i],
             )<span class="question-mark">?</span>;
         }
+        <span class="kw">let </span>xs = xs.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
         extract_logits(
             <span class="kw-2">&amp;</span>xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.final_layernorm)<span class="question-mark">?</span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>,
             context_lens,

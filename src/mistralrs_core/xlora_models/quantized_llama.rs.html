@@ -856,6 +856,22 @@
 <a href="#854" id="854">854</a>
 <a href="#855" id="855">855</a>
 <a href="#856" id="856">856</a>
+<a href="#857" id="857">857</a>
+<a href="#858" id="858">858</a>
+<a href="#859" id="859">859</a>
+<a href="#860" id="860">860</a>
+<a href="#861" id="861">861</a>
+<a href="#862" id="862">862</a>
+<a href="#863" id="863">863</a>
+<a href="#864" id="864">864</a>
+<a href="#865" id="865">865</a>
+<a href="#866" id="866">866</a>
+<a href="#867" id="867">867</a>
+<a href="#868" id="868">868</a>
+<a href="#869" id="869">869</a>
+<a href="#870" id="870">870</a>
+<a href="#871" id="871">871</a>
+<a href="#872" id="872">872</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -866,8 +882,10 @@
 <span class="kw">use </span>candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear};
 
+<span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::models::{repeat_kv, verify_sanity_gguf, Cache, QRmsNorm};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::extract_logits;
+<span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
 
 <span class="kw">use </span><span class="kw">super</span>::classifier::XLoraClassifier;
 <span class="kw">use super</span>::{verify_sanity_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -1025,15 +1043,14 @@
     n_kv_head: usize,
     head_dim: usize,
     rotary: RotaryEmbedding,
+    neg_inf: Tensor,
 }
 
-<span class="kw">fn </span>masked_fill(on_false: <span class="kw-2">&amp;</span>Tensor, mask: <span class="kw-2">&amp;</span>Tensor, on_true: f32) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<span class="kw">fn </span>masked_fill(on_false: <span class="kw-2">&amp;</span>Tensor, mask: <span class="kw-2">&amp;</span>Tensor, on_true: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
     <span class="kw">let </span>shape = mask.shape();
-    <span class="kw">let </span>on_true = Tensor::new(on_true, on_false.device())<span class="question-mark">?</span>.broadcast_as(shape.dims())<span class="question-mark">?</span>;
-    <span class="kw">let </span>m = mask.where_cond(<span class="kw-2">&amp;</span>on_true, on_false)<span class="question-mark">?</span>;
+    <span class="kw">let </span>m = mask.where_cond(<span class="kw-2">&amp;</span>on_true.broadcast_as(shape.dims())<span class="question-mark">?</span>, on_false)<span class="question-mark">?</span>;
     <span class="prelude-val">Ok</span>(m)
 }
-
 <span class="kw">impl </span>LayerWeights {
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>forward_attn(
@@ -1104,7 +1121,7 @@
             <span class="prelude-val">None </span>=&gt; att,
             <span class="prelude-val">Some</span>(mask) =&gt; {
                 <span class="kw">let </span>mask = mask.broadcast_as(att.shape())<span class="question-mark">?</span>;
-                masked_fill(<span class="kw-2">&amp;</span>att, <span class="kw-2">&amp;</span>mask, f32::NEG_INFINITY)<span class="question-mark">?
+                masked_fill(<span class="kw-2">&amp;</span>att, <span class="kw-2">&amp;</span>mask, <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf)<span class="question-mark">?
             </span>}
         };
         <span class="kw">let </span>att = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>att)<span class="question-mark">?</span>;
@@ -1131,6 +1148,7 @@
     <span class="kw">pub </span>cache: Cache,
     xlora_classifier: <span class="prelude-ty">Option</span>&lt;XLoraClassifier&gt;,
     <span class="kw">pub </span>max_seq_len: usize,
+    mapper: <span class="prelude-ty">Option</span>&lt;Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;&gt;,
 }
 
 <span class="kw">impl </span>ModelWeights {
@@ -1152,6 +1170,7 @@
             <span class="bool-val">false</span>,
             DType::F32,
         )<span class="question-mark">?</span>;
+        <span class="kw">let </span>neg_inf = Tensor::new(f32::NEG_INFINITY, <span class="kw-2">&amp;</span>ct.device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = ct.remove(<span class="string">"tok_embeddings.weight"</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(<span class="kw-2">&amp;</span>ct.device)<span class="question-mark">?</span>;
         <span class="kw">let </span>norm = QRmsNorm::new(ct.remove(<span class="string">"norm.weight"</span>)<span class="question-mark">?</span>, <span class="number">1e-5</span>)<span class="question-mark">?</span>;
@@ -1251,6 +1270,7 @@
                 n_kv_head: ct.hparams.n_head <span class="kw">as </span>usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) <span class="kw">as </span>usize,
                 rotary: rotary.clone(),
+                neg_inf: neg_inf.clone(),
             })
         }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
@@ -1266,7 +1286,8 @@
                     .unwrap()
             }),
             max_seq_len: MAX_SEQ_LEN <span class="kw">as </span>usize, <span class="comment">// Cannot determine from ggml.
-        </span>})
+            </span>mapper: <span class="prelude-val">None</span>,
+        })
     }
 
     <span class="attr">#[allow(clippy::too_many_arguments)]
@@ -1278,6 +1299,7 @@
         vb: <span class="kw-2">&amp;</span>VarBuilder,
         ordering: <span class="kw-2">&amp;</span>Ordering,
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
+        mapper: DeviceMapMetadata,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>md_get = |s: <span class="kw-2">&amp;</span>str| <span class="kw">match </span>ct.metadata.get(s) {
             <span class="prelude-val">None </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"cannot find {s} in metadata"</span>),
@@ -1308,15 +1330,6 @@
             .and_then(|m| m.to_f32())
             .unwrap_or(<span class="number">10000f32</span>);
         <span class="kw">let </span>head_dim = embedding_length / head_count;
-        <span class="kw">let </span>rotary = RotaryEmbedding::new_partial(
-            rope_freq_base,
-            head_dim,
-            rope_dim,
-            MAX_SEQ_LEN <span class="kw">as </span>usize,
-            device,
-            <span class="bool-val">false</span>,
-            DType::F32,
-        )<span class="question-mark">?</span>;
 
         <span class="kw">let </span>tok_embeddings = ct.tensor(reader, <span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(device)<span class="question-mark">?</span>;
@@ -1327,8 +1340,21 @@
         <span class="kw">let </span>output = ct.tensor(reader, <span class="string">"output.weight"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(block_count);
         <span class="kw">let </span><span class="kw-2">mut </span>count = <span class="number">0</span>;
+        <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device)<span class="question-mark">?</span>;
         <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..block_count {
             <span class="kw">let </span>prefix = <span class="macro">format!</span>(<span class="string">"blk.{layer_idx}"</span>);
+            <span class="kw">let </span>device = mapper.device_for(layer_idx).unwrap_or(device);
+            <span class="kw">let </span>rotary = RotaryEmbedding::new_partial(
+                rope_freq_base,
+                head_dim,
+                rope_dim,
+                MAX_SEQ_LEN <span class="kw">as </span>usize,
+                device,
+                <span class="bool-val">false</span>,
+                DType::F32,
+            )<span class="question-mark">?</span>;
+            <span class="kw">let </span>neg_inf = Tensor::new(f32::NEG_INFINITY, device)<span class="question-mark">?</span>;
+
             <span class="kw">let </span>attention_wq = ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_q.weight"</span>), device)<span class="question-mark">?</span>;
             <span class="kw">let </span>attention_wk = ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_k.weight"</span>), device)<span class="question-mark">?</span>;
             <span class="kw">let </span>attention_wv = ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_v.weight"</span>), device)<span class="question-mark">?</span>;
@@ -1474,6 +1500,7 @@
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
                 rotary: rotary.clone(),
+                neg_inf,
             })
         }
         <span class="kw">if </span>xlora_config.is_none() {
@@ -1518,6 +1545,7 @@
             max_seq_len: md_get(<span class="string">"llama.context_length"</span>)
                 .and_then(|m| m.to_u64())
                 .unwrap_or(MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize,
+            mapper: <span class="prelude-val">Some</span>(mapper),
         })
     }
 
@@ -1566,12 +1594,15 @@
             <span class="self">self</span>.cache.lock()
         };
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
+            <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>mapper) = <span class="self">self</span>.mapper {
+                layer_in = mapper.map(layer_in, i)<span class="question-mark">?</span>;
+            }
             <span class="kw">let </span>x = layer_in;
             <span class="kw">let </span>residual = <span class="kw-2">&amp;</span>x;
             <span class="kw">let </span>x = layer.attention_norm.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>;
             <span class="kw">let </span>attn = layer.forward_attn(
                 <span class="kw-2">&amp;</span>x,
-                <span class="kw-2">&amp;</span>mask,
+                <span class="kw-2">&amp;</span>mask.as_ref().map(|m| m.to_device(x.device()).unwrap()),
                 start_offsets,
                 start_offsets_kernel.clone(),
                 <span class="kw-2">&amp;mut </span>cache[i],
@@ -1597,8 +1628,9 @@
                 is_scaling_pass,
             )<span class="question-mark">?</span>;
             <span class="kw">let </span>x = (x + residual)<span class="question-mark">?</span>;
-            layer_in = x
+            layer_in = x;
         }
+        <span class="kw">let </span>layer_in = layer_in.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
         <span class="self">self</span>.norm.forward(<span class="kw-2">&amp;</span>layer_in)
     }
 

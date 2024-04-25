@@ -295,6 +295,19 @@
 <a href="#293" id="293">293</a>
 <a href="#294" id="294">294</a>
 <a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -303,6 +316,9 @@
 <span class="kw">use </span>candle_core::quantized::QTensor;
 <span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{Embedding, LayerNorm};
+
+<span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
+<span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
 
 <span class="kw">use </span><span class="kw">super</span>::repeat_kv;
 <span class="kw">use </span><span class="kw">super</span>::Cache;
@@ -439,7 +455,7 @@
     }
 }
 
-<span class="attr">#[derive(Debug, Clone)]
+<span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>ModelWeights {
     tok_embeddings: Embedding,
     layers: Vec&lt;LayerWeights&gt;,
@@ -449,6 +465,7 @@
     <span class="kw">pub </span>device: Device,
     <span class="kw">pub </span>cache: Cache,
     <span class="kw">pub </span>max_seq_len: usize,
+    mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
 }
 
 <span class="kw">fn </span>precomput_freqs_cis(
@@ -482,6 +499,7 @@
         ct: gguf_file::Content,
         reader: <span class="kw-2">&amp;mut </span>R,
         device: <span class="kw-2">&amp;</span>Device,
+        mapper: DeviceMapMetadata,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>md_get = |s: <span class="kw-2">&amp;</span>str| <span class="kw">match </span>ct.metadata.get(s) {
             <span class="prelude-val">None </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"cannot find {s} in metadata"</span>),
@@ -511,8 +529,11 @@
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>output = QLinear::new(<span class="kw-2">&amp;</span>ct, reader, <span class="string">"output"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(block_count);
+        <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device)<span class="question-mark">?</span>;
         <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..block_count {
             <span class="kw">let </span>prefix = <span class="macro">format!</span>(<span class="string">"blk.{layer_idx}"</span>);
+            <span class="kw">let </span>device = mapper.device_for(layer_idx).unwrap_or(device);
+
             <span class="kw">let </span>ffn_up = QLinear::new(<span class="kw-2">&amp;</span>ct, reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_up"</span>), device)<span class="question-mark">?</span>;
             <span class="kw">let </span>ffn_down = QLinear::new(<span class="kw-2">&amp;</span>ct, reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_down"</span>), device)<span class="question-mark">?</span>;
             <span class="kw">let </span>mlp = Mlp { ffn_up, ffn_down };
@@ -529,8 +550,8 @@
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
-                cos: cos.clone(),
-                sin: sin.clone(),
+                cos: cos.clone().to_device(device)<span class="question-mark">?</span>,
+                sin: sin.clone().to_device(device)<span class="question-mark">?</span>,
                 rope_dim,
                 neg_inf: neg_inf.clone(),
             })
@@ -544,6 +565,7 @@
             device: device.clone(),
             cache: Cache::new(block_count, <span class="bool-val">false</span>),
             max_seq_len,
+            mapper,
         })
     }
 
@@ -575,17 +597,21 @@
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.tok_embeddings.forward(xs)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
+            xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
             <span class="kw">let </span>residual = <span class="kw-2">&amp;</span>xs;
             <span class="kw">let </span>xs_norm = xs.apply(<span class="kw-2">&amp;</span>layer.attn_norm)<span class="question-mark">?</span>;
             <span class="kw">let </span>attn_outputs = layer.forward_attn(
                 <span class="kw-2">&amp;</span>xs_norm,
-                mask.as_ref(),
+                mask.as_ref()
+                    .map(|m| m.to_device(xs.device()).unwrap())
+                    .as_ref(),
                 seqlen_offsets,
                 cache.get_mut(i).unwrap(),
             )<span class="question-mark">?</span>;
             <span class="kw">let </span>feed_forward_hidden_states = layer.mlp.forward(<span class="kw-2">&amp;</span>xs_norm)<span class="question-mark">?</span>;
             xs = (attn_outputs + feed_forward_hidden_states + residual)<span class="question-mark">?
         </span>}
+        <span class="kw">let </span>xs = xs.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
         <span class="kw">let </span>xs = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.output_norm)<span class="question-mark">?</span>.i((.., seq_len - <span class="number">1</span>, ..))<span class="question-mark">?</span>;
         <span class="self">self</span>.output.forward(<span class="kw-2">&amp;</span>xs)
     }

@@ -481,6 +481,27 @@
 <a href="#479" id="479">479</a>
 <a href="#480" id="480">480</a>
 <a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a>
+<a href="#491" id="491">491</a>
+<a href="#492" id="492">492</a>
+<a href="#493" id="493">493</a>
+<a href="#494" id="494">494</a>
+<a href="#495" id="495">495</a>
+<a href="#496" id="496">496</a>
+<a href="#497" id="497">497</a>
+<a href="#498" id="498">498</a>
+<a href="#499" id="499">499</a>
+<a href="#500" id="500">500</a>
+<a href="#501" id="501">501</a>
+<a href="#502" id="502">502</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
@@ -492,7 +513,11 @@
 <span class="kw">use </span>serde::Deserialize;
 <span class="kw">use </span>std::sync::Arc;
 
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, NormalModel};
+<span class="kw">use crate</span>::{
+    device_map::DeviceMapper,
+    pipeline::{extract_logits, NormalModel},
+    DeviceMapMetadata,
+};
 
 <span class="kw">use super</span>::{flash_attn, repeat_kv, Cache, RmsNorm};
 
@@ -796,7 +821,7 @@
     }
 }
 
-<span class="attr">#[derive(Debug, Clone)]
+<span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec&lt;DecoderLayer&gt;,
@@ -807,26 +832,37 @@
     <span class="kw">pub </span>cache: Cache,
     dtype: DType,
     <span class="kw">pub </span>max_seq_len: usize,
+    mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
 }
 
 <span class="kw">impl </span>Model {
-    <span class="kw">pub fn </span>new(cfg: <span class="kw-2">&amp;</span>Config, vb: VarBuilder, is_gptx: bool) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">pub fn </span>new(
+        cfg: <span class="kw-2">&amp;</span>Config,
+        vb: VarBuilder,
+        is_gptx: bool,
+        mapper: DeviceMapMetadata,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
         <span class="kw">let </span>embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp(<span class="string">"embed_tokens"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        <span class="kw">let </span>rotary_emb = Arc::new(RotaryEmbedding::new(
-            cfg.rope_theta <span class="kw">as </span>f32,
-            head_dim,
-            cfg.max_position_embeddings,
-            vb_m.device(),
-            is_gptx,
-            vb.dtype(),
-        )<span class="question-mark">?</span>);
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
         <span class="kw">let </span>vb_l = vb_m.pp(<span class="string">"layers"</span>);
+        <span class="kw">let </span>mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())<span class="question-mark">?</span>;
         <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
-            <span class="kw">let </span>layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))<span class="question-mark">?</span>;
+            <span class="kw">let </span>rotary_emb = Arc::new(RotaryEmbedding::new(
+                cfg.rope_theta <span class="kw">as </span>f32,
+                head_dim,
+                cfg.max_position_embeddings,
+                mapper.device_for(layer_idx).unwrap_or(vb.device()),
+                is_gptx,
+                vb.dtype(),
+            )<span class="question-mark">?</span>);
+            <span class="kw">let </span>layer = DecoderLayer::new(
+                rotary_emb.clone(),
+                cfg,
+                mapper.set_device(layer_idx, vb_l.pp(layer_idx)),
+            )<span class="question-mark">?</span>;
             layers.push(layer)
         }
         <span class="kw">let </span>norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp(<span class="string">"norm"</span>))<span class="question-mark">?</span>;
@@ -841,6 +877,7 @@
             dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
             max_seq_len: cfg.max_position_embeddings,
+            mapper,
         })
     }
 
@@ -908,14 +945,19 @@
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
+            xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
             xs = layer.forward(
                 <span class="kw-2">&amp;</span>xs,
-                attention_mask.as_ref(),
+                attention_mask
+                    .as_ref()
+                    .map(|m| m.to_device(xs.device()).unwrap())
+                    .as_ref(),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 <span class="kw-2">&amp;mut </span>cache[i],
-            )<span class="question-mark">?
-        </span>}
+            )<span class="question-mark">?</span>;
+        }
+        <span class="kw">let </span>xs = xs.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
         extract_logits(<span class="kw-2">&amp;</span>xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.norm)<span class="question-mark">?</span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>, context_lens)
     }
 }

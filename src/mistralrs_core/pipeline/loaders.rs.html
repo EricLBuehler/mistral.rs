@@ -432,6 +432,27 @@
 <a href="#430" id="430">430</a>
 <a href="#431" id="431">431</a>
 <a href="#432" id="432">432</a>
+<a href="#433" id="433">433</a>
+<a href="#434" id="434">434</a>
+<a href="#435" id="435">435</a>
+<a href="#436" id="436">436</a>
+<a href="#437" id="437">437</a>
+<a href="#438" id="438">438</a>
+<a href="#439" id="439">439</a>
+<a href="#440" id="440">440</a>
+<a href="#441" id="441">441</a>
+<a href="#442" id="442">442</a>
+<a href="#443" id="443">443</a>
+<a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a>
+<a href="#450" id="450">450</a>
+<a href="#451" id="451">451</a>
+<a href="#452" id="452">452</a>
+<a href="#453" id="453">453</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::str::FromStr;
 
 <span class="kw">use </span>anyhow::Result;
@@ -444,6 +465,7 @@
 <span class="kw">use crate</span>::{
     models,
     xlora_models::{<span class="self">self</span>, XLoraConfig},
+    DeviceMapMetadata,
 };
 
 <span class="attr">#[pyclass]
@@ -516,11 +538,13 @@
         config: <span class="kw-2">&amp;</span>str,
         use_flash_attn: bool,
         vb: VarBuilder,
+        mapper: DeviceMapMetadata,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt; {
         <span class="prelude-val">Ok</span>(Box::new(models::mistral::Model::new(
             <span class="kw-2">&amp;</span>MistralBasicConfig::deserialize(config, use_flash_attn)<span class="question-mark">?</span>,
             vb,
             <span class="self">self</span>.is_gptx(),
+            mapper,
         )<span class="question-mark">?</span>))
     }
     <span class="kw">fn </span>load_xlora(
@@ -531,6 +555,7 @@
         lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         xlora_ordering: Ordering,
+        mapper: DeviceMapMetadata,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt; {
         <span class="prelude-val">Ok</span>(Box::new(xlora_models::XLoraMistral::new(
             <span class="kw-2">&amp;</span>MistralBasicConfig::deserialize(config, use_flash_attn)<span class="question-mark">?</span>,
@@ -539,6 +564,7 @@
             xlora_config,
             xlora_ordering,
             <span class="self">self</span>.is_gptx(),
+            mapper,
         )<span class="question-mark">?</span>))
     }
     <span class="kw">fn </span>is_gptx(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
@@ -601,11 +627,13 @@
         config: <span class="kw-2">&amp;</span>str,
         use_flash_attn: bool,
         vb: VarBuilder,
+        mapper: DeviceMapMetadata,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt; {
         <span class="prelude-val">Ok</span>(Box::new(models::gemma::Model::new(
             <span class="kw-2">&amp;</span>GemmaBasicConfig::deserialize(config, use_flash_attn)<span class="question-mark">?</span>,
             vb,
             <span class="self">self</span>.is_gptx(),
+            mapper,
         )<span class="question-mark">?</span>))
     }
     <span class="kw">fn </span>load_xlora(
@@ -616,6 +644,7 @@
         lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         xlora_ordering: Ordering,
+        mapper: DeviceMapMetadata,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt; {
         <span class="prelude-val">Ok</span>(Box::new(xlora_models::XLoraGemma::new(
             <span class="kw-2">&amp;</span>GemmaBasicConfig::deserialize(config, use_flash_attn)<span class="question-mark">?</span>,
@@ -624,6 +653,7 @@
             xlora_config,
             xlora_ordering,
             <span class="self">self</span>.is_gptx(),
+            mapper,
         )<span class="question-mark">?</span>))
     }
     <span class="kw">fn </span>is_gptx(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
@@ -677,11 +707,13 @@
         config: <span class="kw-2">&amp;</span>str,
         use_flash_attn: bool,
         vb: VarBuilder,
+        mapper: DeviceMapMetadata,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt; {
         <span class="prelude-val">Ok</span>(Box::new(models::llama::Llama::new(
             <span class="kw-2">&amp;</span>LlamaBasicConfig::deserialize(config, use_flash_attn)<span class="question-mark">?</span>,
             vb,
             <span class="self">self</span>.is_gptx(),
+            mapper,
         )<span class="question-mark">?</span>))
     }
     <span class="kw">fn </span>load_xlora(
@@ -692,6 +724,7 @@
         lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         xlora_ordering: Ordering,
+        mapper: DeviceMapMetadata,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt; {
         <span class="prelude-val">Ok</span>(Box::new(xlora_models::XLoraLlama::new(
             <span class="kw-2">&amp;</span>LlamaBasicConfig::deserialize(config, use_flash_attn)<span class="question-mark">?</span>,
@@ -700,6 +733,7 @@
             xlora_config,
             xlora_ordering,
             <span class="self">self</span>.is_gptx(),
+            mapper,
         )<span class="question-mark">?</span>))
     }
     <span class="kw">fn </span>is_gptx(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
@@ -756,11 +790,13 @@
         config: <span class="kw-2">&amp;</span>str,
         use_flash_attn: bool,
         vb: VarBuilder,
+        mapper: DeviceMapMetadata,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt; {
         <span class="prelude-val">Ok</span>(Box::new(models::mixtral::Model::new(
             <span class="kw-2">&amp;</span>MixtralBasicConfig::deserialize(config, use_flash_attn)<span class="question-mark">?</span>,
             vb,
             <span class="self">self</span>.is_gptx(),
+            mapper,
         )<span class="question-mark">?</span>))
     }
     <span class="kw">fn </span>load_xlora(
@@ -771,6 +807,7 @@
         lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         xlora_ordering: Ordering,
+        mapper: DeviceMapMetadata,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt; {
         <span class="prelude-val">Ok</span>(Box::new(xlora_models::XLoraMixtral::new(
             <span class="kw-2">&amp;</span>MixtralBasicConfig::deserialize(config, use_flash_attn)<span class="question-mark">?</span>,
@@ -779,6 +816,7 @@
             xlora_config,
             xlora_ordering,
             <span class="self">self</span>.is_gptx(),
+            mapper,
         )<span class="question-mark">?</span>))
     }
     <span class="kw">fn </span>is_gptx(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
@@ -835,11 +873,13 @@
         config: <span class="kw-2">&amp;</span>str,
         use_flash_attn: bool,
         vb: VarBuilder,
+        mapper: DeviceMapMetadata,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt; {
         <span class="prelude-val">Ok</span>(Box::new(models::phi2::Model::new(
             <span class="kw-2">&amp;</span>Phi2BasicConfig::deserialize(config, use_flash_attn)<span class="question-mark">?</span>,
             vb,
             <span class="self">self</span>.is_gptx(),
+            mapper,
         )<span class="question-mark">?</span>))
     }
     <span class="kw">fn </span>load_xlora(
@@ -850,6 +890,7 @@
         lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         xlora_ordering: Ordering,
+        mapper: DeviceMapMetadata,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt; {
         <span class="prelude-val">Ok</span>(Box::new(xlora_models::XLoraPhi2::new(
             <span class="kw-2">&amp;</span>Phi2BasicConfig::deserialize(config, use_flash_attn)<span class="question-mark">?</span>,
@@ -858,6 +899,7 @@
             xlora_config,
             xlora_ordering,
             <span class="self">self</span>.is_gptx(),
+            mapper,
         )<span class="question-mark">?</span>))
     }
     <span class="kw">fn </span>is_gptx(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {

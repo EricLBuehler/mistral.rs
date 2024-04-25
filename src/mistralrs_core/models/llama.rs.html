@@ -366,6 +366,24 @@
 <a href="#364" id="364">364</a>
 <a href="#365" id="365">365</a>
 <a href="#366" id="366">366</a>
+<a href="#367" id="367">367</a>
+<a href="#368" id="368">368</a>
+<a href="#369" id="369">369</a>
+<a href="#370" id="370">370</a>
+<a href="#371" id="371">371</a>
+<a href="#372" id="372">372</a>
+<a href="#373" id="373">373</a>
+<a href="#374" id="374">374</a>
+<a href="#375" id="375">375</a>
+<a href="#376" id="376">376</a>
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a>
+<a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a>
+<a href="#382" id="382">382</a>
+<a href="#383" id="383">383</a>
+<a href="#384" id="384">384</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -374,7 +392,11 @@
 <span class="kw">use </span>serde::Deserialize;
 <span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, NormalModel};
+<span class="kw">use crate</span>::{
+    device_map::DeviceMapper,
+    pipeline::{extract_logits, NormalModel},
+    DeviceMapMetadata,
+};
 
 <span class="kw">use super</span>::{flash_attn, repeat_kv, RmsNorm};
 
@@ -396,25 +418,23 @@
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">pub struct </span>Cache {
     masks: HashMap&lt;usize, Tensor&gt;,
-    device: Device,
 }
 
 <span class="kw">impl </span>Cache {
-    <span class="kw">pub fn </span>new(device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">pub fn </span>new() -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             masks: HashMap::new(),
-            device: device.clone(),
         })
     }
 
-    <span class="kw">fn </span>mask(<span class="kw-2">&amp;mut </span><span class="self">self</span>, t: usize) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+    <span class="kw">fn </span>mask(<span class="kw-2">&amp;mut </span><span class="self">self</span>, t: usize, device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">if let </span><span class="prelude-val">Some</span>(mask) = <span class="self">self</span>.masks.get(<span class="kw-2">&amp;</span>t) {
-            <span class="prelude-val">Ok</span>(mask.clone())
+            mask.to_device(device)
         } <span class="kw">else </span>{
             <span class="kw">let </span>mask: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..t)
                 .flat_map(|i| (<span class="number">0</span>..t).map(<span class="kw">move </span>|j| u8::from(j &gt; i)))
                 .collect();
-            <span class="kw">let </span>mask = Tensor::from_slice(<span class="kw-2">&amp;</span>mask, (t, t), <span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>mask = Tensor::from_slice(<span class="kw-2">&amp;</span>mask, (t, t), device)<span class="question-mark">?</span>;
             <span class="self">self</span>.masks.insert(t, mask.clone());
             <span class="prelude-val">Ok</span>(mask)
         }
@@ -503,7 +523,9 @@
             <span class="kw">let </span>k = k.to_dtype(DType::F32)<span class="question-mark">?</span>;
             <span class="kw">let </span>v = v.to_dtype(DType::F32)<span class="question-mark">?</span>;
             <span class="kw">let </span>att = (q.matmul(<span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>)<span class="question-mark">? </span>/ (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
-            <span class="kw">let </span>mask = cache.mask(seq_len)<span class="question-mark">?</span>.broadcast_as(att.shape())<span class="question-mark">?</span>;
+            <span class="kw">let </span>mask = cache
+                .mask(seq_len, att.device())<span class="question-mark">?
+                </span>.broadcast_as(att.shape())<span class="question-mark">?</span>;
             <span class="kw">let </span>att = masked_fill(<span class="kw-2">&amp;</span>att, <span class="kw-2">&amp;</span>mask, f32::NEG_INFINITY)<span class="question-mark">?</span>;
             <span class="kw">let </span>att = candle_nn::ops::softmax(<span class="kw-2">&amp;</span>att, D::Minus1)<span class="question-mark">?</span>;
             <span class="comment">// Convert to contiguous as matmul doesn't support strided vs for now.
@@ -630,7 +652,7 @@
     }
 }
 
-<span class="attr">#[derive(Debug, Clone)]
+<span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>Llama {
     wte: Embedding,
     blocks: Vec&lt;Block&gt;,
@@ -639,6 +661,7 @@
     <span class="kw">pub </span>kv_cache: <span class="kw">super</span>::Cache,
     <span class="kw">pub </span>device: Device,
     cache: Cache,
+    mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
 }
 
 <span class="kw">impl </span>Llama {
@@ -652,6 +675,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>x = <span class="self">self</span>.wte.forward(x)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.kv_cache.lock();
         <span class="kw">for </span>(block_idx, block) <span class="kw">in </span><span class="self">self</span>.blocks.iter().enumerate() {
+            x = <span class="self">self</span>.mapper.map(x, block_idx)<span class="question-mark">?</span>;
             x = block.forward(
                 <span class="kw-2">&amp;</span>x,
                 seqlen_offsets,
@@ -661,20 +685,31 @@
                 <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache,
             )<span class="question-mark">?</span>;
         }
+        <span class="kw">let </span>x = x.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
         <span class="kw">let </span>x = <span class="self">self</span>.ln_f.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>;
         <span class="kw">let </span>logits = <span class="self">self</span>.lm_head.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>;
         extract_logits(<span class="kw-2">&amp;</span>logits.to_dtype(DType::F32)<span class="question-mark">?</span>, context_lens)
     }
 
-    <span class="kw">pub fn </span>new(cfg: <span class="kw-2">&amp;</span>Config, vb: VarBuilder, is_gptx: bool) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">pub fn </span>new(
+        cfg: <span class="kw-2">&amp;</span>Config,
+        vb: VarBuilder,
+        is_gptx: bool,
+        mapper: DeviceMapMetadata,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>device = vb.device();
         <span class="kw">let </span>wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp(<span class="string">"model.embed_tokens"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp(<span class="string">"lm_head"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp(<span class="string">"model.norm"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())<span class="question-mark">?</span>;
         <span class="kw">let </span>blocks: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..cfg.num_hidden_layers)
             .map(|i| {
-                Block::load(vb.pp(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"model.layers.{i}"</span>)), cfg, is_gptx)
-                    .expect(<span class="string">"Failed to load block."</span>)
+                Block::load(
+                    mapper.set_device(i, vb.pp(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"model.layers.{i}"</span>))),
+                    cfg,
+                    is_gptx,
+                )
+                .expect(<span class="string">"Failed to load block."</span>)
             })
             .collect();
 
@@ -683,9 +718,10 @@
             blocks,
             ln_f,
             lm_head,
-            cache: Cache::new(device)<span class="question-mark">?</span>,
+            cache: Cache::new()<span class="question-mark">?</span>,
             kv_cache: <span class="kw">super</span>::Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
             device: device.clone(),
+            mapper,
         })
     }
 }
