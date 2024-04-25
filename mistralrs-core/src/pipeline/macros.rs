@@ -201,7 +201,7 @@ macro_rules! lora_model_loader {
             $use_flash_attn,
             vb,
             $paths.get_adapter_configs().as_ref().unwrap(),
-            Some($paths.get_classifier_config().as_ref().unwrap().clone()),
+            None,
             $paths.get_ordering().as_ref().unwrap().clone(),
             $mapper,
         )?
