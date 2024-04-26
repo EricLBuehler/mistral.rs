@@ -367,6 +367,7 @@ pub trait NormalModel {
         let tensors = self.get_tensors();
         let total_tensors = tensors.len();
         let mut n_quantized = 0;
+        info!("Applying in-situ quantization to {dtype:?}.");
         for tensor in tensors.into_iter().tqdm() {
             if let QMatMul::Tensor(t) = tensor {
                 n_quantized += 1;

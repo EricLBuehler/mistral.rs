@@ -80,11 +80,11 @@ impl Module for QLinear {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         if let Some(bias) = &self.bias {
             self.inner
-                .forward(xs)?
+                .forward(&xs.to_dtype(DType::F32)?)?
                 .broadcast_add(bias)?
                 .to_dtype(self.dtype)
         } else {
-            self.inner.forward(xs)?.to_dtype(self.dtype)
+            self.inner.forward(&xs.to_dtype(DType::F32)?)?.to_dtype(self.dtype)
         }
     }
 }
