@@ -143,9 +143,9 @@ impl Engine {
                     Self::set_none_cache(&mut *pipeline);
                     let logits = pipeline.forward(&scheduled.prompt, true);
                     let logits = handle_pipeline_forward_error!(
-                            "prompt",
-                            logits,
-                            &mut scheduled.prompt,
+                        "prompt",
+                        logits,
+                        &mut scheduled.prompt,
                         pipeline,
                         'lp,
                         self.prefix_cacher
