@@ -1,0 +1,28 @@
+[package]
+name = "mistralrs-pyo3"
+authors = ["Eric Buehler"]
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "mistralrs"
+crate-type = ["cdylib"]
+doc = false
+
+[dependencies]
+pyo3.workspace = true
+mistralrs-core = { version = "0.1.0", path = "../mistralrs-core", features=["$feature_name"] }
+serde.workspace = true
+serde_json.workspace = true
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.5.0", features=["$feature_name"] }
+indexmap.workspace = true
+accelerate-src = { workspace = true, optional = true }
+intel-mkl-src = { workspace = true, optional = true }
+either.workspace = true
+futures.workspace = true
