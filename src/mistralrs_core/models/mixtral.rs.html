@@ -502,24 +502,82 @@
 <a href="#500" id="500">500</a>
 <a href="#501" id="501">501</a>
 <a href="#502" id="502">502</a>
+<a href="#503" id="503">503</a>
+<a href="#504" id="504">504</a>
+<a href="#505" id="505">505</a>
+<a href="#506" id="506">506</a>
+<a href="#507" id="507">507</a>
+<a href="#508" id="508">508</a>
+<a href="#509" id="509">509</a>
+<a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a>
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
+<a href="#519" id="519">519</a>
+<a href="#520" id="520">520</a>
+<a href="#521" id="521">521</a>
+<a href="#522" id="522">522</a>
+<a href="#523" id="523">523</a>
+<a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
+<a href="#551" id="551">551</a>
+<a href="#552" id="552">552</a>
+<a href="#553" id="553">553</a>
+<a href="#554" id="554">554</a>
+<a href="#555" id="555">555</a>
+<a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
-</span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
-<span class="kw">use </span>candle_nn::{Activation, RotaryEmbedding, VarBuilder};
-<span class="kw">use </span>candle_transformers::models::with_tracing::{linear_no_bias, Linear};
+</span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
+<span class="kw">use </span>candle_nn::{linear_no_bias, Activation, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>serde::Deserialize;
 <span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
+    layers::RmsNorm,
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
 
-<span class="kw">use super</span>::{flash_attn, repeat_kv, Cache, RmsNorm};
+<span class="kw">use super</span>::{flash_attn, repeat_kv, Cache};
 
 <span class="doccomment">/// https://github.com/huggingface/transformers/blob/1a585c1222a56bcaecc070966d558d4a9d862e83/src/transformers/models/mixtral/configuration_mixtral.py#L113
 </span><span class="attr">#[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -542,10 +600,10 @@
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">struct </span>Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: QMatMul,
+    k_proj: QMatMul,
+    v_proj: QMatMul,
+    o_proj: QMatMul,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
@@ -567,10 +625,10 @@
         <span class="kw">let </span>v_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp(<span class="string">"v_proj"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>o_proj = linear_no_bias(num_heads * head_dim, hidden_sz, vb.pp(<span class="string">"o_proj"</span>))<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-            q_proj,
-            k_proj,
-            v_proj,
-            o_proj,
+            q_proj: QMatMul::Tensor(q_proj.weight().clone()),
+            k_proj: QMatMul::Tensor(k_proj.weight().clone()),
+            v_proj: QMatMul::Tensor(v_proj.weight().clone()),
+            o_proj: QMatMul::Tensor(o_proj.weight().clone()),
             num_heads,
             num_kv_heads,
             num_kv_groups,
@@ -591,9 +649,19 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, q_len, <span class="kw">_</span>) = xs.dims3()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>q = <span class="self">self</span>.q_proj.forward(xs)<span class="question-mark">?</span>;
-        <span class="kw">let </span>k = <span class="self">self</span>.k_proj.forward(xs)<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = <span class="self">self</span>.v_proj.forward(xs)<span class="question-mark">?</span>;
+        <span class="kw">let </span>original_dtype = xs.dtype();
+        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.clone();
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.q_proj, QMatMul::QTensor(<span class="kw">_</span>)) {
+            xs = xs.to_dtype(DType::F32)<span class="question-mark">?</span>;
+        }
+        <span class="kw">let </span><span class="kw-2">mut </span>q = <span class="self">self</span>.q_proj.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>k = <span class="self">self</span>.k_proj.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>v = <span class="self">self</span>.v_proj.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.q_proj, QMatMul::QTensor(<span class="kw">_</span>)) {
+            q = q.to_dtype(original_dtype)<span class="question-mark">?</span>;
+            k = k.to_dtype(original_dtype)<span class="question-mark">?</span>;
+            v = v.to_dtype(original_dtype)<span class="question-mark">?</span>;
+        }
 
         <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz * q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz * q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
@@ -628,7 +696,7 @@
         <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>attn_output = <span class="kw">if </span><span class="self">self</span>.use_flash_attn {
+        <span class="kw">let </span><span class="kw-2">mut </span>attn_output = <span class="kw">if </span><span class="self">self</span>.use_flash_attn {
             <span class="comment">// flash-attn expects (b_sz, seq_len, nheads, head_dim)
             </span><span class="kw">let </span>q = q.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
             <span class="kw">let </span>k = k.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
@@ -646,18 +714,25 @@
             <span class="kw">let </span>attn_weights = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>;
             attn_weights.matmul(<span class="kw-2">&amp;</span>v)<span class="question-mark">?
         </span>};
-        attn_output
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.q_proj, QMatMul::QTensor(<span class="kw">_</span>)) {
+            attn_output = attn_output.to_dtype(DType::F32)<span class="question-mark">?</span>;
+        }
+        <span class="kw">let </span><span class="kw-2">mut </span>res = attn_output
             .transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
             </span>.reshape((b_sz, q_len, <span class="self">self</span>.hidden_size))<span class="question-mark">?
-            </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.o_proj)
+            </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.o_proj)<span class="question-mark">?</span>;
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.q_proj, QMatMul::QTensor(<span class="kw">_</span>)) {
+            res = res.to_dtype(original_dtype)<span class="question-mark">?</span>;
+        }
+        <span class="prelude-val">Ok</span>(res)
     }
 }
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">struct </span>BlockSparseTop2MLP {
-    w1: Linear,
-    w2: Linear,
-    w3: Linear,
+    w1: QMatMul,
+    w2: QMatMul,
+    w3: QMatMul,
     act_fn: Activation,
 }
 
@@ -669,9 +744,9 @@
         <span class="kw">let </span>w2 = linear_no_bias(intermediate_sz, hidden_sz, vb.pp(<span class="string">"w2"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>w3 = linear_no_bias(hidden_sz, intermediate_sz, vb.pp(<span class="string">"w3"</span>))<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-            w1,
-            w2,
-            w3,
+            w1: QMatMul::Tensor(w1.weight().clone()),
+            w2: QMatMul::Tensor(w2.weight().clone()),
+            w3: QMatMul::Tensor(w3.weight().clone()),
             act_fn: cfg.hidden_act,
         })
     }
@@ -679,15 +754,24 @@
 
 <span class="kw">impl </span>Module <span class="kw">for </span>BlockSparseTop2MLP {
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">let </span>original_dtype = xs.dtype();
+        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.clone();
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.w1, QMatMul::QTensor(<span class="kw">_</span>)) {
+            xs = xs.to_dtype(DType::F32)<span class="question-mark">?</span>;
+        }
         <span class="kw">let </span>lhs = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.w1)<span class="question-mark">?</span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.act_fn)<span class="question-mark">?</span>;
         <span class="kw">let </span>rhs = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.w3)<span class="question-mark">?</span>;
-        (lhs * rhs)<span class="question-mark">?</span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.w2)
+        <span class="kw">let </span><span class="kw-2">mut </span>res = (lhs * rhs)<span class="question-mark">?</span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.w2)<span class="question-mark">?</span>;
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.w1, QMatMul::QTensor(<span class="kw">_</span>)) {
+            res = res.to_dtype(original_dtype)<span class="question-mark">?</span>;
+        }
+        <span class="prelude-val">Ok</span>(res)
     }
 }
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">struct </span>SparseMoeBlock {
-    gate: Linear,
+    gate: QMatMul,
     experts: Vec&lt;BlockSparseTop2MLP&gt;,
     num_experts_per_tok: usize,
 }
@@ -702,7 +786,7 @@
             experts.push(expert)
         }
         <span class="prelude-val">Ok</span>(SparseMoeBlock {
-            gate,
+            gate: QMatMul::Tensor(gate.weight().clone()),
             experts,
             num_experts_per_tok: cfg.num_experts_per_tok,
         })
@@ -713,7 +797,17 @@
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_size, seq_len, hidden_dim) = xs.dims3()<span class="question-mark">?</span>;
         <span class="kw">let </span>xs = xs.reshape(((), hidden_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span>router_logits = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.gate)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>original_dtype = xs.dtype();
+        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.clone();
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.gate, QMatMul::QTensor(<span class="kw">_</span>)) {
+            xs = xs.to_dtype(DType::F32)<span class="question-mark">?</span>;
+        }
+        <span class="kw">let </span><span class="kw-2">mut </span>router_logits = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.gate)<span class="question-mark">?</span>;
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.gate, QMatMul::QTensor(<span class="kw">_</span>)) {
+            router_logits = router_logits.to_dtype(original_dtype)<span class="question-mark">?</span>;
+        }
+
         <span class="kw">let </span>routing_weights = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>router_logits)<span class="question-mark">?</span>;
 
         <span class="comment">// In order to extract topk, we extract the data from the tensor and manipulate it
@@ -826,7 +920,7 @@
     embed_tokens: candle_nn::Embedding,
     layers: Vec&lt;DecoderLayer&gt;,
     norm: RmsNorm,
-    lm_head: Linear,
+    lm_head: QMatMul,
     sliding_window: usize,
     <span class="kw">pub </span>device: Device,
     <span class="kw">pub </span>cache: Cache,
@@ -871,7 +965,7 @@
             embed_tokens,
             layers,
             norm,
-            lm_head,
+            lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
             dtype: vb.dtype(),
@@ -958,7 +1052,12 @@
             )<span class="question-mark">?</span>;
         }
         <span class="kw">let </span>xs = xs.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
-        extract_logits(<span class="kw-2">&amp;</span>xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.norm)<span class="question-mark">?</span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>, context_lens)
+        extract_logits(
+            <span class="kw-2">&amp;</span>xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.norm)<span class="question-mark">?
+                </span>.to_dtype(DType::F32)<span class="question-mark">?
+                </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>,
+            context_lens,
+        )
     }
 }
 
@@ -1002,6 +1101,23 @@
     </span>}
     <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="self">self</span>.max_seq_len
+    }
+    <span class="kw">fn </span>get_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;mut </span>QMatMul&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
+        tensors.push(<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head);
+        <span class="kw">for </span>layer <span class="kw">in </span><span class="kw-2">&amp;mut </span><span class="self">self</span>.layers {
+            tensors.push(<span class="kw-2">&amp;mut </span>layer.self_attn.q_proj);
+            tensors.push(<span class="kw-2">&amp;mut </span>layer.self_attn.k_proj);
+            tensors.push(<span class="kw-2">&amp;mut </span>layer.self_attn.v_proj);
+            tensors.push(<span class="kw-2">&amp;mut </span>layer.self_attn.o_proj);
+            tensors.push(<span class="kw-2">&amp;mut </span>layer.block_sparse_moe.gate);
+            <span class="kw">for </span>expert <span class="kw">in </span><span class="kw-2">&amp;mut </span>layer.block_sparse_moe.experts {
+                tensors.push(<span class="kw-2">&amp;mut </span>expert.w1);
+                tensors.push(<span class="kw-2">&amp;mut </span>expert.w2);
+                tensors.push(<span class="kw-2">&amp;mut </span>expert.w3);
+            }
+        }
+        tensors
     }
 }
 </code></pre></div></section></main></body></html>

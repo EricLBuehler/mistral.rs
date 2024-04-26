@@ -249,6 +249,29 @@
 <a href="#247" id="247">247</a>
 <a href="#248" id="248">248</a>
 <a href="#249" id="249">249</a>
+<a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
+<a href="#253" id="253">253</a>
+<a href="#254" id="254">254</a>
+<a href="#255" id="255">255</a>
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a>
+<a href="#260" id="260">260</a>
+<a href="#261" id="261">261</a>
+<a href="#262" id="262">262</a>
+<a href="#263" id="263">263</a>
+<a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
+<a href="#269" id="269">269</a>
+<a href="#270" id="270">270</a>
+<a href="#271" id="271">271</a>
+<a href="#272" id="272">272</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{Json, State},
@@ -256,7 +279,7 @@
     routing::{get, post},
     Router,
 };
-<span class="kw">use </span>candle_core::Device;
+<span class="kw">use </span>candle_core::{quantized::GgmlDType, Device};
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>mistralrs_core::{
     get_tgt_non_granular_index, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs,
@@ -280,6 +303,24 @@
 
 <span class="kw">fn </span>parse_token_source(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;TokenSource, String&gt; {
     s.parse()
+}
+
+<span class="kw">fn </span>parse_isq(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;GgmlDType, String&gt; {
+    <span class="kw">match </span>s {
+        <span class="string">"Q4_0" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q4_0),
+        <span class="string">"Q4_1" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q4_1),
+        <span class="string">"Q5_0" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q5_0),
+        <span class="string">"Q5_1" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q5_1),
+        <span class="string">"Q8_0" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q8_1),
+        <span class="string">"Q8_1" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q4_0),
+        <span class="string">"Q2K" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q2K),
+        <span class="string">"Q3K" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q3K),
+        <span class="string">"Q4K" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q4K),
+        <span class="string">"Q5K" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q5K),
+        <span class="string">"Q6K" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q6K),
+        <span class="string">"Q8K" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q8K),
+        <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"GGML type {s} unknown"</span>)),
+    }
 }
 
 <span class="attr">#[derive(Parser)]
@@ -337,6 +378,10 @@
     <span class="doccomment">/// Number of device layers to load and run on the device. All others will be on the CPU.
     </span><span class="attr">#[arg(short, long)]
     </span>num_device_layers: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+
+    <span class="doccomment">/// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
+    </span><span class="attr">#[arg(long = <span class="string">"isq"</span>, value_parser = parse_isq)]
+    </span>in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
 }
 
 <span class="attr">#[utoipa::path(
@@ -465,6 +510,7 @@
         args.num_device_layers
             .map(DeviceMapMetadata::from_num_device_layers)
             .unwrap_or(DeviceMapMetadata::dummy()),
+        args.in_situ_quant,
     )<span class="question-mark">?</span>;
     <span class="macro">info!</span>(<span class="string">"Model loaded."</span>);
 

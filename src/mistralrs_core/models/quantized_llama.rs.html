@@ -461,6 +461,7 @@
 <a href="#459" id="459">459</a>
 <a href="#460" id="460">460</a>
 <a href="#461" id="461">461</a>
+<a href="#462" id="462">462</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -471,10 +472,11 @@
 <span class="kw">use </span>candle_nn::{Embedding, Module, RotaryEmbedding};
 
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
+<span class="kw">use </span><span class="kw">crate</span>::layers::QRmsNorm;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::extract_logits;
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
 
-<span class="kw">use super</span>::{repeat_kv, verify_sanity_gguf, Cache, QRmsNorm};
+<span class="kw">use super</span>::{repeat_kv, verify_sanity_gguf, Cache};
 
 <span class="kw">const </span>MAX_SEQ_LEN: u32 = <span class="number">4096</span>;
 

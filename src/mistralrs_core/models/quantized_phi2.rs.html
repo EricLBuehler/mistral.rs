@@ -282,32 +282,6 @@
 <a href="#280" id="280">280</a>
 <a href="#281" id="281">281</a>
 <a href="#282" id="282">282</a>
-<a href="#283" id="283">283</a>
-<a href="#284" id="284">284</a>
-<a href="#285" id="285">285</a>
-<a href="#286" id="286">286</a>
-<a href="#287" id="287">287</a>
-<a href="#288" id="288">288</a>
-<a href="#289" id="289">289</a>
-<a href="#290" id="290">290</a>
-<a href="#291" id="291">291</a>
-<a href="#292" id="292">292</a>
-<a href="#293" id="293">293</a>
-<a href="#294" id="294">294</a>
-<a href="#295" id="295">295</a>
-<a href="#296" id="296">296</a>
-<a href="#297" id="297">297</a>
-<a href="#298" id="298">298</a>
-<a href="#299" id="299">299</a>
-<a href="#300" id="300">300</a>
-<a href="#301" id="301">301</a>
-<a href="#302" id="302">302</a>
-<a href="#303" id="303">303</a>
-<a href="#304" id="304">304</a>
-<a href="#305" id="305">305</a>
-<a href="#306" id="306">306</a>
-<a href="#307" id="307">307</a>
-<a href="#308" id="308">308</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -316,6 +290,7 @@
 <span class="kw">use </span>candle_core::quantized::QTensor;
 <span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{Embedding, LayerNorm};
+<span class="kw">use </span>mistralrs_lora::layer::QLinear;
 
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
@@ -324,33 +299,6 @@
 <span class="kw">use </span><span class="kw">super</span>::Cache;
 
 <span class="kw">pub const </span>MAX_SEQ_LEN: usize = <span class="number">4096</span>;
-
-<span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">struct </span>QLinear {
-    inner: candle_core::quantized::QMatMul,
-    bias: Tensor,
-}
-
-<span class="kw">impl </span>QLinear {
-    <span class="kw">fn </span>new&lt;R: std::io::Read + std::io::Seek&gt;(
-        ct: <span class="kw-2">&amp;</span>gguf_file::Content,
-        r: <span class="kw-2">&amp;mut </span>R,
-        name: <span class="kw-2">&amp;</span>str,
-        device: <span class="kw-2">&amp;</span>Device,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>w = ct.tensor(r, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{name}.weight"</span>), device)<span class="question-mark">?</span>;
-        <span class="kw">let </span>b = ct.tensor(r, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{name}.bias"</span>), device)<span class="question-mark">?</span>;
-        <span class="kw">let </span>inner = candle_core::quantized::QMatMul::from_qtensor(w)<span class="question-mark">?</span>;
-        <span class="kw">let </span>bias = b.dequantize(device)<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ inner, bias })
-    }
-}
-
-<span class="kw">impl </span>Module <span class="kw">for </span>QLinear {
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="self">self</span>.inner.forward(xs)<span class="question-mark">?</span>.broadcast_add(<span class="kw-2">&amp;</span><span class="self">self</span>.bias)
-    }
-}
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">struct </span>Mlp {

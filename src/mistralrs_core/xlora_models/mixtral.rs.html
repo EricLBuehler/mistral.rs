@@ -804,12 +804,77 @@
 <a href="#802" id="802">802</a>
 <a href="#803" id="803">803</a>
 <a href="#804" id="804">804</a>
+<a href="#805" id="805">805</a>
+<a href="#806" id="806">806</a>
+<a href="#807" id="807">807</a>
+<a href="#808" id="808">808</a>
+<a href="#809" id="809">809</a>
+<a href="#810" id="810">810</a>
+<a href="#811" id="811">811</a>
+<a href="#812" id="812">812</a>
+<a href="#813" id="813">813</a>
+<a href="#814" id="814">814</a>
+<a href="#815" id="815">815</a>
+<a href="#816" id="816">816</a>
+<a href="#817" id="817">817</a>
+<a href="#818" id="818">818</a>
+<a href="#819" id="819">819</a>
+<a href="#820" id="820">820</a>
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
+<a href="#823" id="823">823</a>
+<a href="#824" id="824">824</a>
+<a href="#825" id="825">825</a>
+<a href="#826" id="826">826</a>
+<a href="#827" id="827">827</a>
+<a href="#828" id="828">828</a>
+<a href="#829" id="829">829</a>
+<a href="#830" id="830">830</a>
+<a href="#831" id="831">831</a>
+<a href="#832" id="832">832</a>
+<a href="#833" id="833">833</a>
+<a href="#834" id="834">834</a>
+<a href="#835" id="835">835</a>
+<a href="#836" id="836">836</a>
+<a href="#837" id="837">837</a>
+<a href="#838" id="838">838</a>
+<a href="#839" id="839">839</a>
+<a href="#840" id="840">840</a>
+<a href="#841" id="841">841</a>
+<a href="#842" id="842">842</a>
+<a href="#843" id="843">843</a>
+<a href="#844" id="844">844</a>
+<a href="#845" id="845">845</a>
+<a href="#846" id="846">846</a>
+<a href="#847" id="847">847</a>
+<a href="#848" id="848">848</a>
+<a href="#849" id="849">849</a>
+<a href="#850" id="850">850</a>
+<a href="#851" id="851">851</a>
+<a href="#852" id="852">852</a>
+<a href="#853" id="853">853</a>
+<a href="#854" id="854">854</a>
+<a href="#855" id="855">855</a>
+<a href="#856" id="856">856</a>
+<a href="#857" id="857">857</a>
+<a href="#858" id="858">858</a>
+<a href="#859" id="859">859</a>
+<a href="#860" id="860">860</a>
+<a href="#861" id="861">861</a>
+<a href="#862" id="862">862</a>
+<a href="#863" id="863">863</a>
+<a href="#864" id="864">864</a>
+<a href="#865" id="865">865</a>
+<a href="#866" id="866">866</a>
+<a href="#867" id="867">867</a>
+<a href="#868" id="868">868</a>
+<a href="#869" id="869">869</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
-</span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
+</span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 <span class="kw">use </span>std::sync::Arc;
@@ -818,7 +883,8 @@
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    models::{flash_attn, mixtral::Config, repeat_kv, Cache, RmsNorm},
+    layers::RmsNorm,
+    models::{flash_attn, mixtral::Config, repeat_kv, Cache},
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
@@ -835,7 +901,6 @@
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
-    hidden_size: usize,
     rotary_emb: Arc&lt;RotaryEmbedding&gt;,
     use_flash_attn: bool,
 }
@@ -895,7 +960,6 @@
             num_kv_heads,
             num_kv_groups,
             head_dim,
-            hidden_size: hidden_sz,
             rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
         })
@@ -915,24 +979,34 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, q_len, <span class="kw">_</span>) = xs.dims3()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>q = <span class="self">self</span>.q_proj.lora_forward(
-            xs,
+        <span class="kw">let </span>original_dtype = xs.dtype();
+        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.clone();
+        <span class="kw">if </span><span class="self">self</span>.q_proj.is_quant() {
+            xs = xs.to_dtype(DType::F32)<span class="question-mark">?</span>;
+        }
+        <span class="kw">let </span><span class="kw-2">mut </span>q = <span class="self">self</span>.q_proj.lora_forward(
+            <span class="kw-2">&amp;</span>xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>k = <span class="self">self</span>.k_proj.lora_forward(
-            xs,
+        <span class="kw">let </span><span class="kw-2">mut </span>k = <span class="self">self</span>.k_proj.lora_forward(
+            <span class="kw-2">&amp;</span>xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = <span class="self">self</span>.v_proj.lora_forward(
-            xs,
+        <span class="kw">let </span><span class="kw-2">mut </span>v = <span class="self">self</span>.v_proj.lora_forward(
+            <span class="kw-2">&amp;</span>xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )<span class="question-mark">?</span>;
+        <span class="kw">if </span><span class="self">self</span>.q_proj.is_quant() {
+            q = q.to_dtype(original_dtype)<span class="question-mark">?</span>;
+            k = k.to_dtype(original_dtype)<span class="question-mark">?</span>;
+            v = v.to_dtype(original_dtype)<span class="question-mark">?</span>;
+        }
 
         <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz * q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz * q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
@@ -967,7 +1041,7 @@
         <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>attn_output = <span class="kw">if </span><span class="self">self</span>.use_flash_attn {
+        <span class="kw">let </span><span class="kw-2">mut </span>attn_output = <span class="kw">if </span><span class="self">self</span>.use_flash_attn {
             <span class="comment">// flash-attn expects (b_sz, seq_len, nheads, head_dim)
             </span><span class="kw">let </span>q = q.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
             <span class="kw">let </span>k = k.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
@@ -985,14 +1059,19 @@
             <span class="kw">let </span>attn_weights = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>;
             attn_weights.matmul(<span class="kw-2">&amp;</span>v)<span class="question-mark">?
         </span>};
-        <span class="self">self</span>.o_proj.lora_forward(
-            <span class="kw-2">&amp;</span>attn_output
-                .transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-                </span>.reshape((b_sz, q_len, <span class="self">self</span>.hidden_size))<span class="question-mark">?</span>,
+        <span class="kw">if </span><span class="self">self</span>.q_proj.is_quant() {
+            attn_output = attn_output.to_dtype(DType::F32)<span class="question-mark">?</span>;
+        }
+        <span class="kw">let </span><span class="kw-2">mut </span>res = <span class="self">self</span>.o_proj.lora_forward(
+            <span class="kw-2">&amp;</span>attn_output.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>.reshape((b_sz, q_len, ()))<span class="question-mark">?</span>,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
-        )
+        )<span class="question-mark">?</span>;
+        <span class="kw">if </span><span class="self">self</span>.q_proj.is_quant() {
+            res = res.to_dtype(original_dtype)<span class="question-mark">?</span>;
+        }
+        <span class="prelude-val">Ok</span>(res)
     }
 }
 
@@ -1053,19 +1132,36 @@
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">let </span>original_dtype = xs.dtype();
+        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.clone();
+        <span class="kw">if </span><span class="self">self</span>.w1.is_quant() {
+            xs = xs.to_dtype(DType::F32)<span class="question-mark">?</span>;
+        }
         <span class="kw">let </span>lhs = <span class="self">self
             </span>.w1
-            .lora_forward(xs, scalings.clone(), global_scaling_weight, is_scaling_pass)<span class="question-mark">?
+            .lora_forward(
+                <span class="kw-2">&amp;</span>xs,
+                scalings.clone(),
+                global_scaling_weight,
+                is_scaling_pass,
+            )<span class="question-mark">?
             </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.act_fn)<span class="question-mark">?</span>;
-        <span class="kw">let </span>rhs =
-            <span class="self">self</span>.w3
-                .lora_forward(xs, scalings.clone(), global_scaling_weight, is_scaling_pass)<span class="question-mark">?</span>;
-        <span class="self">self</span>.w2.lora_forward(
+        <span class="kw">let </span>rhs = <span class="self">self</span>.w3.lora_forward(
+            <span class="kw-2">&amp;</span>xs,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>res = <span class="self">self</span>.w2.lora_forward(
             <span class="kw-2">&amp;</span>(lhs * rhs)<span class="question-mark">?</span>,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
-        )
+        )<span class="question-mark">?</span>;
+        <span class="kw">if </span><span class="self">self</span>.w1.is_quant() {
+            res = res.to_dtype(original_dtype)<span class="question-mark">?</span>;
+        }
+        <span class="prelude-val">Ok</span>(res)
     }
 }
 
@@ -1114,12 +1210,22 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_size, seq_len, hidden_dim) = xs.dims3()<span class="question-mark">?</span>;
         <span class="kw">let </span>xs = xs.reshape(((), hidden_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span>router_logits = <span class="self">self</span>.gate.lora_forward(
+
+        <span class="kw">let </span>original_dtype = xs.dtype();
+        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.clone();
+        <span class="kw">if </span><span class="self">self</span>.gate.is_quant() {
+            xs = xs.to_dtype(DType::F32)<span class="question-mark">?</span>;
+        }
+        <span class="kw">let </span><span class="kw-2">mut </span>router_logits = <span class="self">self</span>.gate.lora_forward(
             <span class="kw-2">&amp;</span>xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )<span class="question-mark">?</span>;
+        <span class="kw">if </span><span class="self">self</span>.gate.is_quant() {
+            router_logits = router_logits.to_dtype(original_dtype)<span class="question-mark">?</span>;
+        }
+
         <span class="kw">let </span>routing_weights = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>router_logits)<span class="question-mark">?</span>;
 
         <span class="comment">// In order to extract topk, we extract the data from the tensor and manipulate it
@@ -1255,7 +1361,7 @@
     embed_tokens: candle_nn::Embedding,
     layers: Vec&lt;DecoderLayer&gt;,
     norm: RmsNorm,
-    lm_head: candle_nn::Linear,
+    lm_head: QMatMul,
     sliding_window: usize,
     <span class="kw">pub </span>device: Device,
     <span class="kw">pub </span>cache: Cache,
@@ -1335,7 +1441,7 @@
             embed_tokens,
             layers,
             norm,
-            lm_head,
+            lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
             dtype: vb.dtype(),
@@ -1488,6 +1594,7 @@
                             <span class="prelude-val">None</span>,
                         )<span class="question-mark">?
                         </span>.contiguous()<span class="question-mark">?
+                        </span>.to_dtype(DType::F32)<span class="question-mark">?
                         </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>,
                     context_lens,
                 )
@@ -1505,6 +1612,7 @@
                             <span class="prelude-val">None</span>,
                         )<span class="question-mark">?
                         </span>.contiguous()<span class="question-mark">?
+                        </span>.to_dtype(DType::F32)<span class="question-mark">?
                         </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>,
                     context_lens,
                 )
@@ -1522,6 +1630,7 @@
                         <span class="prelude-val">None</span>,
                     )<span class="question-mark">?
                     </span>.contiguous()<span class="question-mark">?
+                    </span>.to_dtype(DType::F32)<span class="question-mark">?
                     </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>,
                 context_lens,
             )
@@ -1574,6 +1683,27 @@
     </span>}
     <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="self">self</span>.max_seq_len
+    }
+    <span class="kw">fn </span>get_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;mut </span>QMatMul&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
+        tensors.push(<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head);
+        <span class="kw">for </span>layer <span class="kw">in </span><span class="kw-2">&amp;mut </span><span class="self">self</span>.layers {
+            tensors.push(Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.q_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.k_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.v_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.o_proj).unwrap().inner());
+            tensors.push(
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.block_sparse_moe.gate)
+                    .unwrap()
+                    .inner(),
+            );
+            <span class="kw">for </span>expert <span class="kw">in </span><span class="kw-2">&amp;mut </span>layer.block_sparse_moe.experts {
+                tensors.push(Arc::get_mut(<span class="kw-2">&amp;mut </span>expert.w1).unwrap().inner());
+                tensors.push(Arc::get_mut(<span class="kw-2">&amp;mut </span>expert.w2).unwrap().inner());
+                tensors.push(Arc::get_mut(<span class="kw-2">&amp;mut </span>expert.w3).unwrap().inner());
+            }
+        }
+        tensors
     }
 }
 

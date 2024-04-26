@@ -235,6 +235,18 @@
 <a href="#233" id="233">233</a>
 <a href="#234" id="234">234</a>
 <a href="#235" id="235">235</a>
+<a href="#236" id="236">236</a>
+<a href="#237" id="237">237</a>
+<a href="#238" id="238">238</a>
+<a href="#239" id="239">239</a>
+<a href="#240" id="240">240</a>
+<a href="#241" id="241">241</a>
+<a href="#242" id="242">242</a>
+<a href="#243" id="243">243</a>
+<a href="#244" id="244">244</a>
+<a href="#245" id="245">245</a>
+<a href="#246" id="246">246</a>
+<a href="#247" id="247">247</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -250,6 +262,7 @@
     time::{SystemTime, UNIX_EPOCH},
 };
 
+<span class="kw">use </span>candle_core::quantized::GgmlDType;
 <span class="kw">use </span>engine::Engine;
 <span class="kw">pub use </span>mistralrs_lora::Ordering;
 <span class="kw">pub use </span>pipeline::Pipeline;
@@ -262,6 +275,7 @@
 <span class="kw">mod </span>model_selected;
 <span class="kw">pub use </span>model_selected::ModelSelected;
 
+<span class="kw">pub mod </span>layers;
 <span class="kw">mod </span>models;
 <span class="kw">mod </span>pipeline;
 <span class="kw">mod </span>prefix_cacher;
@@ -293,6 +307,7 @@
 /// engine.
 </span><span class="kw">pub struct </span>MistralRs {
     sender: Sender&lt;Request&gt;,
+    sender_isq: Sender&lt;GgmlDType&gt;,
     log: <span class="prelude-ty">Option</span>&lt;String&gt;,
     id: String,
     creation_time: u64,
@@ -381,9 +396,11 @@
         <span class="kw">let </span>disable_eos_stop = disable_eos_stop.unwrap_or(<span class="bool-val">false</span>);
 
         <span class="kw">let </span>(tx, rx) = channel();
+        <span class="kw">let </span>(isq_tx, isq_rx) = channel();
 
         <span class="kw">let </span>this = Arc::new(<span class="self">Self </span>{
             sender: tx,
+            sender_isq: isq_tx,
             log,
             id: pipeline.lock().unwrap().name(),
             creation_time: SystemTime::now()
@@ -396,6 +413,7 @@
         thread::spawn(<span class="kw">move </span>|| {
             <span class="kw">let </span><span class="kw-2">mut </span>engine = Engine::new(
                 rx,
+                isq_rx,
                 pipeline,
                 method,
                 truncate_sequence,
@@ -412,6 +430,12 @@
 
     <span class="kw">pub fn </span>get_sender(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Sender&lt;Request&gt; {
         <span class="self">self</span>.sender.clone()
+    }
+
+    <span class="doccomment">/// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
+    /// then nothing will happen.
+    </span><span class="kw">pub fn </span>send_re_isq(<span class="kw-2">&amp;</span><span class="self">self</span>, dtype: GgmlDType) {
+        <span class="self">self</span>.sender_isq.send(dtype).expect(<span class="string">"Engine is not present."</span>)
     }
 
     <span class="kw">pub fn </span>get_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {

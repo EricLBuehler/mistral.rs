@@ -875,6 +875,7 @@
 <a href="#873" id="873">873</a>
 <a href="#874" id="874">874</a>
 <a href="#875" id="875">875</a>
+<a href="#876" id="876">876</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -888,7 +889,8 @@
 <span class="kw">use </span>tracing::info;
 
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
-<span class="kw">use </span><span class="kw">crate</span>::models::{repeat_kv, verify_sanity_gguf, Cache, QRmsNorm};
+<span class="kw">use </span><span class="kw">crate</span>::layers::QRmsNorm;
+<span class="kw">use </span><span class="kw">crate</span>::models::{repeat_kv, verify_sanity_gguf, Cache};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::extract_logits;
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
 

@@ -477,6 +477,17 @@
 <a href="#475" id="475">475</a>
 <a href="#476" id="476">476</a>
 <a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
+<a href="#479" id="479">479</a>
+<a href="#480" id="480">480</a>
+<a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -494,7 +505,7 @@
     xlora_models::XLoraModelWeights <span class="kw">as </span>XLoraQLlama,
 };
 <span class="kw">use </span>anyhow::Result;
-<span class="kw">use </span>candle_core::quantized::ggml_file;
+<span class="kw">use </span>candle_core::quantized::{ggml_file, GgmlDType};
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
@@ -763,7 +774,13 @@
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
+        in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
+        <span class="kw">if </span>in_situ_quant.is_some() {
+            <span class="macro">anyhow::bail!</span>(
+                <span class="string">"You are trying to in-situ quantize a GGUF model. This will not do anything."
+            </span>);
+        }
         <span class="kw">if </span>!mapper.is_dummy() {
             <span class="macro">warn!</span>(<span class="string">"GGML models do not support device mapping. Device mapping will not work. Please consider using a GGUF model."</span>);
         }
@@ -952,6 +969,11 @@
     </span>}
     <span class="kw">fn </span>tok_trie(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>TokTrie {
         <span class="kw-2">&amp;</span><span class="self">self</span>.tok_trie
+    }
+    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _dtype: GgmlDType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="macro">anyhow::bail!</span>(
+            <span class="string">"You are trying to in-situ requantize a GGUF model. This will not do anything."
+        </span>)
     }
 }
 </code></pre></div></section></main></body></html>

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["get_lora_cfg","linear","linear_b","linear_no_bias"],"struct":["LoraConfig","LoraLinearConfig","Ordering","QLoraLinear"],"trait":["LinearLayerLike","Merge"]};
+window.SIDEBAR_ITEMS = {"fn":["get_lora_cfg","linear","linear_b","linear_no_bias"],"mod":["layer"],"struct":["LoraConfig","LoraLinearConfig","Ordering","QLoraLinear"],"trait":["LinearLayerLike","Merge"]};

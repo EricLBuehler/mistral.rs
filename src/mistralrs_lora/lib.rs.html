@@ -209,15 +209,25 @@
 <a href="#207" id="207">207</a>
 <a href="#208" id="208">208</a>
 <a href="#209" id="209">209</a>
+<a href="#210" id="210">210</a>
+<a href="#211" id="211">211</a>
+<a href="#212" id="212">212</a>
+<a href="#213" id="213">213</a>
+<a href="#214" id="214">214</a>
+<a href="#215" id="215">215</a>
+<a href="#216" id="216">216</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashSet, fmt::Debug, sync::Arc};
 
-<span class="kw">use </span>candle_core::{quantized::QTensor, IndexOp, <span class="prelude-ty">Result</span>, Shape, Tensor, D};
+<span class="kw">use </span>candle_core::{
+    quantized::{QMatMul, QTensor},
+    IndexOp, <span class="prelude-ty">Result</span>, Tensor, D,
+};
 <span class="kw">use </span>candle_nn::{Linear, Module, VarBuilder};
 <span class="kw">use </span>loralinear::LoraLinear;
 <span class="kw">pub use </span>qloralinear::QLoraLinear;
 <span class="kw">use </span>serde::Deserialize;
 
-<span class="kw">mod </span>frozenlinear;
+<span class="kw">pub mod </span>layer;
 <span class="kw">mod </span>loralinear;
 <span class="kw">mod </span>qloralinear;
 
@@ -282,9 +292,10 @@
 
 <span class="doccomment">/// Any layer that is linear-like.
 </span><span class="kw">pub trait </span>LinearLayerLike: Debug + Merge {
+    <span class="kw">fn </span>inner(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>QMatMul;
+    <span class="kw">fn </span>is_quant(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
     <span class="kw">fn </span>weight(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Tensor;
     <span class="kw">fn </span>bias(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;;
-    <span class="kw">fn </span>shape(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Shape;
     <span class="kw">fn </span>lora_forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         x: <span class="kw-2">&amp;</span>Tensor,
@@ -311,14 +322,14 @@
 }
 
 <span class="kw">impl </span>LinearLayerLike <span class="kw">for </span>Linear {
-    <span class="kw">fn </span>weight(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Tensor {
-        <span class="self">self</span>.weight()
+    <span class="kw">fn </span>inner(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>QMatMul {
+        <span class="macro">unreachable!</span>()
     }
     <span class="kw">fn </span>bias(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt; {
         <span class="self">self</span>.bias()
     }
-    <span class="kw">fn </span>shape(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Shape {
-        <span class="self">self</span>.weight().shape()
+    <span class="kw">fn </span>weight(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Tensor {
+        <span class="self">self</span>.weight()
     }
     <span class="kw">fn </span>lora_forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -329,6 +340,9 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="self">self</span>.forward(x)
     }
+    <span class="kw">fn </span>is_quant(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="bool-val">false
+    </span>}
 }
 
 <span class="kw">pub fn </span>linear(

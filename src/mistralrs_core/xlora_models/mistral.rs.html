@@ -704,19 +704,65 @@
 <a href="#702" id="702">702</a>
 <a href="#703" id="703">703</a>
 <a href="#704" id="704">704</a>
+<a href="#705" id="705">705</a>
+<a href="#706" id="706">706</a>
+<a href="#707" id="707">707</a>
+<a href="#708" id="708">708</a>
+<a href="#709" id="709">709</a>
+<a href="#710" id="710">710</a>
+<a href="#711" id="711">711</a>
+<a href="#712" id="712">712</a>
+<a href="#713" id="713">713</a>
+<a href="#714" id="714">714</a>
+<a href="#715" id="715">715</a>
+<a href="#716" id="716">716</a>
+<a href="#717" id="717">717</a>
+<a href="#718" id="718">718</a>
+<a href="#719" id="719">719</a>
+<a href="#720" id="720">720</a>
+<a href="#721" id="721">721</a>
+<a href="#722" id="722">722</a>
+<a href="#723" id="723">723</a>
+<a href="#724" id="724">724</a>
+<a href="#725" id="725">725</a>
+<a href="#726" id="726">726</a>
+<a href="#727" id="727">727</a>
+<a href="#728" id="728">728</a>
+<a href="#729" id="729">729</a>
+<a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a>
+<a href="#733" id="733">733</a>
+<a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a>
+<a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a>
+<a href="#742" id="742">742</a>
+<a href="#743" id="743">743</a>
+<a href="#744" id="744">744</a>
+<a href="#745" id="745">745</a>
+<a href="#746" id="746">746</a>
+<a href="#747" id="747">747</a>
+<a href="#748" id="748">748</a>
+<a href="#749" id="749">749</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
-</span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
+</span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{Activation, RotaryEmbedding, VarBuilder};
-<span class="kw">use </span>mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
+<span class="kw">use </span>mistralrs_lora::{layer::QLinear, linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>tqdm::Iter;
 <span class="kw">use </span>tracing::info;
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    models::{flash_attn, mistral::Config, repeat_kv, Cache, RmsNorm},
+    layers::RmsNorm,
+    models::{flash_attn, mistral::Config, repeat_kv, Cache},
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
@@ -781,22 +827,36 @@
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">let </span>original_dtype = xs.dtype();
+        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.clone();
+        <span class="kw">if </span><span class="self">self</span>.gate_proj.is_quant() {
+            xs = xs.to_dtype(DType::F32)<span class="question-mark">?</span>;
+        }
         <span class="kw">let </span>lhs = <span class="self">self
             </span>.gate_proj
-            .lora_forward(xs, scalings.clone(), global_scaling_weight, is_scaling_pass)<span class="question-mark">?
+            .lora_forward(
+                <span class="kw-2">&amp;</span>xs,
+                scalings.clone(),
+                global_scaling_weight,
+                is_scaling_pass,
+            )<span class="question-mark">?
             </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.act_fn)<span class="question-mark">?</span>;
         <span class="kw">let </span>rhs = <span class="self">self</span>.up_proj.lora_forward(
-            xs,
+            <span class="kw-2">&amp;</span>xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )<span class="question-mark">?</span>;
-        <span class="self">self</span>.down_proj.lora_forward(
+        <span class="kw">let </span><span class="kw-2">mut </span>res = <span class="self">self</span>.down_proj.lora_forward(
             <span class="kw-2">&amp;</span>(lhs * rhs)<span class="question-mark">?</span>,
             scalings,
             global_scaling_weight,
             is_scaling_pass,
-        )
+        )<span class="question-mark">?</span>;
+        <span class="kw">if </span><span class="self">self</span>.gate_proj.is_quant() {
+            res = res.to_dtype(original_dtype)<span class="question-mark">?</span>;
+        }
+        <span class="prelude-val">Ok</span>(res)
     }
 }
 
@@ -810,7 +870,6 @@
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
-    hidden_size: usize,
     rotary_emb: Arc&lt;RotaryEmbedding&gt;,
     use_flash_attn: bool,
 }
@@ -870,7 +929,6 @@
             num_kv_heads,
             num_kv_groups,
             head_dim,
-            hidden_size: hidden_sz,
             rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
         })
@@ -890,24 +948,34 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, q_len, <span class="kw">_</span>) = xs.dims3()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>q = <span class="self">self</span>.q_proj.lora_forward(
-            xs,
+        <span class="kw">let </span>original_dtype = xs.dtype();
+        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.clone();
+        <span class="kw">if </span><span class="self">self</span>.q_proj.is_quant() {
+            xs = xs.to_dtype(DType::F32)<span class="question-mark">?</span>;
+        }
+        <span class="kw">let </span><span class="kw-2">mut </span>q = <span class="self">self</span>.q_proj.lora_forward(
+            <span class="kw-2">&amp;</span>xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>k = <span class="self">self</span>.k_proj.lora_forward(
-            xs,
+        <span class="kw">let </span><span class="kw-2">mut </span>k = <span class="self">self</span>.k_proj.lora_forward(
+            <span class="kw-2">&amp;</span>xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = <span class="self">self</span>.v_proj.lora_forward(
-            xs,
+        <span class="kw">let </span><span class="kw-2">mut </span>v = <span class="self">self</span>.v_proj.lora_forward(
+            <span class="kw-2">&amp;</span>xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )<span class="question-mark">?</span>;
+        <span class="kw">if </span><span class="self">self</span>.q_proj.is_quant() {
+            q = q.to_dtype(original_dtype)<span class="question-mark">?</span>;
+            k = k.to_dtype(original_dtype)<span class="question-mark">?</span>;
+            v = v.to_dtype(original_dtype)<span class="question-mark">?</span>;
+        }
 
         <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz * q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz * q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
@@ -942,7 +1010,7 @@
         <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>attn_output = <span class="kw">if </span><span class="self">self</span>.use_flash_attn {
+        <span class="kw">let </span><span class="kw-2">mut </span>attn_output = <span class="kw">if </span><span class="self">self</span>.use_flash_attn {
             <span class="comment">// flash-attn expects (b_sz, seq_len, nheads, head_dim)
             </span><span class="kw">let </span>q = q.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
             <span class="kw">let </span>k = k.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
@@ -960,14 +1028,19 @@
             <span class="kw">let </span>attn_weights = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>;
             attn_weights.matmul(<span class="kw-2">&amp;</span>v)<span class="question-mark">?
         </span>};
-        <span class="self">self</span>.o_proj.lora_forward(
-            <span class="kw-2">&amp;</span>attn_output
-                .transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-                </span>.reshape((b_sz, q_len, <span class="self">self</span>.hidden_size))<span class="question-mark">?</span>,
-            scalings,
+        <span class="kw">if </span><span class="self">self</span>.q_proj.is_quant() {
+            attn_output = attn_output.to_dtype(DType::F32)<span class="question-mark">?</span>;
+        }
+        <span class="kw">let </span><span class="kw-2">mut </span>res = <span class="self">self</span>.o_proj.lora_forward(
+            <span class="kw-2">&amp;</span>attn_output.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>.reshape((b_sz, q_len, ()))<span class="question-mark">?</span>,
+            scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
-        )
+        )<span class="question-mark">?</span>;
+        <span class="kw">if </span><span class="self">self</span>.q_proj.is_quant() {
+            res = res.to_dtype(original_dtype)<span class="question-mark">?</span>;
+        }
+        <span class="prelude-val">Ok</span>(res)
     }
 }
 
@@ -1046,7 +1119,7 @@
     embed_tokens: candle_nn::Embedding,
     layers: Vec&lt;DecoderLayer&gt;,
     norm: RmsNorm,
-    lm_head: candle_nn::Linear,
+    lm_head: QLinear,
     sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     dtype: DType,
     <span class="kw">pub </span>device: Device,
@@ -1127,7 +1200,7 @@
             embed_tokens,
             layers,
             norm,
-            lm_head,
+            lm_head: QLinear::from_linear(lm_head),
             sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
             dtype: vb.dtype(),
@@ -1288,6 +1361,7 @@
                             <span class="prelude-val">None</span>,
                         )<span class="question-mark">?
                         </span>.contiguous()<span class="question-mark">?
+                        </span>.to_dtype(DType::F32)<span class="question-mark">?
                         </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>,
                     context_lens,
                 )
@@ -1305,6 +1379,7 @@
                             <span class="prelude-val">None</span>,
                         )<span class="question-mark">?
                         </span>.contiguous()<span class="question-mark">?
+                        </span>.to_dtype(DType::F32)<span class="question-mark">?
                         </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>,
                     context_lens,
                 )
@@ -1322,6 +1397,7 @@
                         <span class="prelude-val">None</span>,
                     )<span class="question-mark">?
                     </span>.contiguous()<span class="question-mark">?
+                    </span>.to_dtype(DType::F32)<span class="question-mark">?
                     </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>,
                 context_lens,
             )
@@ -1374,6 +1450,20 @@
     </span>}
     <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="self">self</span>.max_seq_len
+    }
+    <span class="kw">fn </span>get_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;mut </span>QMatMul&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
+        tensors.push(<span class="self">self</span>.lm_head.inner());
+        <span class="kw">for </span>layer <span class="kw">in </span><span class="kw-2">&amp;mut </span><span class="self">self</span>.layers {
+            tensors.push(Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.q_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.k_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.v_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.o_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.down_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.gate_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.up_proj).unwrap().inner());
+        }
+        tensors
     }
 }
 

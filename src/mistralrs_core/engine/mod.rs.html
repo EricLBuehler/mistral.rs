@@ -761,6 +761,14 @@
 <a href="#759" id="759">759</a>
 <a href="#760" id="760">760</a>
 <a href="#761" id="761">761</a>
+<a href="#762" id="762">762</a>
+<a href="#763" id="763">763</a>
+<a href="#764" id="764">764</a>
+<a href="#765" id="765">765</a>
+<a href="#766" id="766">766</a>
+<a href="#767" id="767">767</a>
+<a href="#768" id="768">768</a>
+<a href="#769" id="769">769</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
@@ -776,7 +784,7 @@
     response::CompletionChoice,
     CompletionResponse, RequestMessage,
 };
-<span class="kw">use </span>candle_core::{<span class="prelude-ty">Result</span>, Tensor};
+<span class="kw">use </span>candle_core::{quantized::GgmlDType, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>tracing::warn;
 
 <span class="kw">use crate</span>::{
@@ -798,6 +806,7 @@
 
 <span class="kw">pub struct </span>Engine {
     rx: Receiver&lt;Request&gt;,
+    isq_rx: Receiver&lt;GgmlDType&gt;,
     pipeline: Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
     scheduler: Scheduler&lt;VecDeque&lt;Sequence&gt;&gt;,
     id: usize,
@@ -812,6 +821,7 @@
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>new(
         rx: Receiver&lt;Request&gt;,
+        isq_rx: Receiver&lt;GgmlDType&gt;,
         pipeline: Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
         method: SchedulerMethod,
         truncate_sequence: bool,
@@ -824,6 +834,7 @@
         <span class="kw">let </span>is_xlora = <span class="macro">get_mut_arcmutex!</span>(pipeline).is_xlora();
         <span class="self">Self </span>{
             rx,
+            isq_rx,
             pipeline,
             scheduler: Scheduler::new(method),
             id: <span class="number">0</span>,
@@ -850,6 +861,11 @@
             }
             <span class="kw">let </span><span class="kw-2">mut </span>scheduled = <span class="self">self</span>.scheduler.schedule();
             <span class="kw">let </span><span class="kw-2">mut </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
+            <span class="kw">if let </span><span class="prelude-val">Ok</span>(dtype) = <span class="self">self</span>.isq_rx.try_recv() {
+                <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = pipeline.re_isq_model(dtype) {
+                    <span class="macro">warn!</span>(<span class="string">"ISQ requantization failed: {e:?}"</span>);
+                }
+            }
 
             <span class="kw">if </span>scheduled.completion.len() &gt; <span class="number">0 </span>{
                 <span class="comment">// Run the completion seqs

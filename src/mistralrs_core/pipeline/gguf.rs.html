@@ -534,6 +534,17 @@
 <a href="#532" id="532">532</a>
 <a href="#533" id="533">533</a>
 <a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -551,7 +562,7 @@
     sequence::Sequence, utils::tokens::get_token, xlora_models::XLoraModelWeights <span class="kw">as </span>XLoraQLlama,
 };
 <span class="kw">use </span>anyhow::{bail, <span class="prelude-ty">Result</span>};
-<span class="kw">use </span>candle_core::quantized::gguf_file;
+<span class="kw">use </span>candle_core::quantized::{gguf_file, GgmlDType};
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
@@ -854,7 +865,13 @@
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
+        in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
+        <span class="kw">if </span>in_situ_quant.is_some() {
+            <span class="macro">anyhow::bail!</span>(
+                <span class="string">"You are trying to in-situ quantize a GGUF model. This will not do anything."
+            </span>);
+        }
         <span class="kw">let </span><span class="kw-2">mut </span>file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())<span class="question-mark">?</span>;
         <span class="kw">let </span>model = gguf_file::Content::read(<span class="kw-2">&amp;mut </span>file)
             .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))<span class="question-mark">?</span>;
@@ -1066,6 +1083,11 @@
     </span>}
     <span class="kw">fn </span>tok_trie(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>TokTrie {
         <span class="kw-2">&amp;</span><span class="self">self</span>.tok_trie
+    }
+    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _dtype: GgmlDType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="macro">anyhow::bail!</span>(
+            <span class="string">"You are trying to in-situ requantize a GGML model. This will not do anything."
+        </span>)
     }
 }
 </code></pre></div></section></main></body></html>

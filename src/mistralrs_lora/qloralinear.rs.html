@@ -284,11 +284,15 @@
 <a href="#282" id="282">282</a>
 <a href="#283" id="283">283</a>
 <a href="#284" id="284">284</a>
+<a href="#285" id="285">285</a>
+<a href="#286" id="286">286</a>
+<a href="#287" id="287">287</a>
+<a href="#288" id="288">288</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{iter::zip, ops::Mul};
 
 <span class="kw">use </span>candle_core::{
     quantized::{QMatMul, QTensor},
-    DType, Module, <span class="prelude-ty">Result</span>, Shape, Tensor,
+    DType, Module, <span class="prelude-ty">Result</span>, Tensor,
 };
 <span class="kw">use </span>candle_nn::{init, Dropout, Linear, VarBuilder};
 <span class="kw">use </span>either::Either;
@@ -309,7 +313,8 @@
     merged: bool,
 }
 
-<span class="kw">impl </span>QLoraLinear {
+<span class="doccomment">/// Specialized QLoRA for no bias
+</span><span class="kw">impl </span>QLoraLinear {
     <span class="kw">pub fn </span>new(
         old: QMatMul,
         linear_config: <span class="kw-2">&amp;</span>LoraLinearConfig,
@@ -476,9 +481,12 @@
     <span class="kw">fn </span>weight(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Tensor {
         <span class="macro">unimplemented!</span>()
     }
-    <span class="kw">fn </span>shape(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Shape {
-        <span class="macro">unimplemented!</span>()
+    <span class="kw">fn </span>inner(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>QMatMul {
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>.old
     }
+    <span class="kw">fn </span>is_quant(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="bool-val">true
+    </span>}
     <span class="kw">fn </span>lora_forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         input: <span class="kw-2">&amp;</span>Tensor,

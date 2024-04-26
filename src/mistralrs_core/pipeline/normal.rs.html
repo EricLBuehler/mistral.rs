@@ -419,6 +419,15 @@
 <a href="#417" id="417">417</a>
 <a href="#418" id="418">418</a>
 <a href="#419" id="419">419</a>
+<a href="#420" id="420">420</a>
+<a href="#421" id="421">421</a>
+<a href="#422" id="422">422</a>
+<a href="#423" id="423">423</a>
+<a href="#424" id="424">424</a>
+<a href="#425" id="425">425</a>
+<a href="#426" id="426">426</a>
+<a href="#427" id="427">427</a>
+<a href="#428" id="428">428</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
     Phi3Loader, Qwen2Loader,
@@ -442,6 +451,7 @@
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
 };
 <span class="kw">use </span>anyhow::Result;
+<span class="kw">use </span>candle_core::quantized::GgmlDType;
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
@@ -667,6 +677,7 @@
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
+        in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>config = std::fs::read_to_string(paths.get_config_filename())<span class="question-mark">?</span>;
         <span class="kw">let </span>default_dtype = <span class="kw">if </span>device.is_cuda() {
@@ -678,7 +689,7 @@
         <span class="macro">info!</span>(<span class="string">"Model config: {config}"</span>);
 
         <span class="kw">let </span><span class="kw-2">mut </span>is_lora = <span class="bool-val">false</span>;
-        <span class="kw">let </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
+        <span class="kw">let </span><span class="kw-2">mut </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
             ModelKind::QuantizedGGUF =&gt; <span class="macro">unreachable!</span>(),
             ModelKind::QuantizedGGML =&gt; <span class="macro">unreachable!</span>(),
             ModelKind::Normal =&gt; <span class="macro">normal_model_loader!</span>(
@@ -727,6 +738,10 @@
             Tokenizer::from_file(paths.get_tokenizer_filename()).map_err(anyhow::Error::msg)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>chat_template: ChatTemplate = <span class="macro">deserialize_chat_template!</span>(paths, <span class="self">self</span>);
+
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(in_situ_quant) = in_situ_quant {
+            model.quantize(in_situ_quant)<span class="question-mark">?</span>;
+        }
 
         <span class="prelude-val">Ok</span>(Box::new(Mutex::new(NormalPipeline {
             model,
@@ -836,6 +851,9 @@
     }
     <span class="kw">fn </span>tok_trie(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>TokTrie {
         <span class="kw-2">&amp;</span><span class="self">self</span>.tok_trie
+    }
+    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: GgmlDType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="self">self</span>.model.quantize(dtype).map_err(anyhow::Error::msg)
     }
 }
 </code></pre></div></section></main></body></html>

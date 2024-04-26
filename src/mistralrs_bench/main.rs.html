@@ -340,6 +340,7 @@
 <a href="#338" id="338">338</a>
 <a href="#339" id="339">339</a>
 <a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
@@ -628,6 +629,7 @@
         args.num_device_layers
             .map(DeviceMapMetadata::from_num_device_layers)
             .unwrap_or(DeviceMapMetadata::dummy()),
+        <span class="prelude-val">None</span>,
     )<span class="question-mark">?</span>;
     <span class="macro">info!</span>(<span class="string">"Model loaded."</span>);
 

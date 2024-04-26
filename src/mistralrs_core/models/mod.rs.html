@@ -97,8 +97,6 @@
 <a href="#95" id="95">95</a>
 <a href="#96" id="96">96</a>
 <a href="#97" id="97">97</a>
-<a href="#98" id="98">98</a>
-<a href="#99" id="99">99</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
 
 <span class="kw">use </span>candle_core::{<span class="prelude-ty">Result</span>, Tensor};
@@ -106,7 +104,6 @@
 <span class="kw">use </span><span class="kw">crate</span>::get_mut_arcmutex;
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>gemma;
-<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>layers;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>llama;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>mistral;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>mixtral;
@@ -115,7 +112,6 @@
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>quantized_llama;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>quantized_phi2;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>qwen2;
-<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>layers::<span class="kw-2">*</span>;
 
 <span class="kw">pub type </span>LayerCaches = Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt;;
 
