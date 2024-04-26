@@ -117,9 +117,18 @@ impl Engine {
                     logits
                 };
 
+                let sampled_result = Self::sample_seqs(
+                    self.pipeline.clone(),
+                    &mut scheduled.completion,
+                    logits,
+                    &mut self.prefix_cacher,
+                    self.disable_eos_stop,
+                    rng.clone(),
+                )
+                .await;
                 handle_pipeline_forward_error!(
                     "sampling",
-                    Self::sample_seqs(self.pipeline.clone(), &mut scheduled.completion, logits, &mut self.prefix_cacher, self.disable_eos_stop, rng.clone()).await,
+                    sampled_result,
                     &mut scheduled.completion,
                     get_mut_arcmutex!(self.pipeline),
                     'lp,
@@ -150,9 +159,19 @@ impl Engine {
                     }
                     logits
                 };
+
+                let sampled_result = Self::sample_seqs(
+                    self.pipeline.clone(),
+                    &mut scheduled.prompt,
+                    logits,
+                    &mut self.prefix_cacher,
+                    self.disable_eos_stop,
+                    rng.clone(),
+                )
+                .await;
                 handle_pipeline_forward_error!(
                     "sampling",
-                    Self::sample_seqs(self.pipeline.clone(), &mut scheduled.prompt, logits, &mut self.prefix_cacher,self.disable_eos_stop, rng.clone()).await,
+                    sampled_result,
                     &mut scheduled.prompt,
                     get_mut_arcmutex!(self.pipeline),
                     'lp,
@@ -223,31 +242,41 @@ impl Engine {
         let logits_seq = logits.to_device(&Device::Cpu)?.chunk(seqs_len, 0)?;
         debug_assert_eq!(logits_seq.len(), seqs_len);
 
-        let tok_trie = get_mut_arcmutex!(pipeline).tok_trie();
-        let sampled_tasks: Vec<_> = {
+        let (tok_trie, repeat_last_n, device, eos_tok, max_seq_len, pipeline_name) = {
             let pipeline = get_mut_arcmutex!(pipeline);
             let repeat_last_n = pipeline.get_repeat_last_n();
             let device = pipeline.device().clone();
-            zip(logits_seq, seqs.iter_mut())
-                .map(|(logits_per_seq, seq)| {
-                    let return_logprobs = seq.return_logprobs();
-                    pipeline_sample(
-                        logits_per_seq,
-                        seq,
-                        return_logprobs,
-                        repeat_last_n,
-                        device.clone(),
-                        tok_trie.clone(),
-                        rng.clone(),
-                    )
-                })
-                .collect()
-        };
-        let sampleds = future::join_all(sampled_tasks).await;
-
-        let mut pipeline = get_mut_arcmutex!(pipeline);
-        for (sampled, seq) in zip(sampleds, seqs.iter_mut()) {
+            let tok_trie = pipeline.tok_trie();
             let eos_tok = pipeline.eos_tok().to_vec();
+            let max_seq_len = pipeline.get_max_seq_len();
+            let pipeline_name = pipeline.name();
+            (
+                tok_trie,
+                repeat_last_n,
+                device,
+                eos_tok,
+                max_seq_len,
+                pipeline_name,
+            )
+        };
+
+        let sampling_futures: Vec<_> = zip(logits_seq, seqs.iter_mut())
+            .map(|(logits_per_seq, seq)| {
+                let return_logprobs = seq.return_logprobs();
+                pipeline_sample(
+                    logits_per_seq,
+                    seq,
+                    return_logprobs,
+                    repeat_last_n,
+                    device.clone(),
+                    tok_trie.clone(),
+                    rng.clone(),
+                )
+            })
+            .collect();
+        let sampled_vec = future::join_all(sampling_futures).await;
+
+        for (sampled, seq) in zip(sampled_vec, seqs.iter_mut()) {
             let next_token = handle_seq_error_stateaware_ok!(sampled, seq);
             let next_token_id = next_token.token;
 
@@ -256,10 +285,10 @@ impl Engine {
             } else {
                 Some(eos_tok.as_ref())
             };
-            let is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
+            let is_done = seq.is_done(next_token_id, eos_tok, max_seq_len);
             seq.add_token(
                 next_token.clone(),
-                pipeline.tok_trie().decode(&[next_token_id]),
+                tok_trie.decode(&[next_token_id]),
                 &is_done,
             );
             // Handle streaming requests
@@ -292,14 +321,15 @@ impl Engine {
                             prefix_cacher.add_sequence(seq);
                             prefix_cacher.evict_to_cpu()?;
                             seq.set_state(SequenceState::Done(reason));
-                            pipeline.reset_non_granular_state();
+                            get_mut_arcmutex!(pipeline).reset_non_granular_state();
                         }
 
                         seq.get_mut_group()
-                            .maybe_send_streaming_response(seq, pipeline.name());
+                            .maybe_send_streaming_response(seq, pipeline_name.clone());
                     }
                 }
             } else if let Some(reason) = is_done {
+                let mut pipeline = get_mut_arcmutex!(pipeline);
                 Self::finish_seq(&mut *pipeline, seq, reason, prefix_cacher)?;
                 pipeline.reset_non_granular_state();
             }
