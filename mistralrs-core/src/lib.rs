@@ -5,11 +5,12 @@ use std::{
     error::Error,
     fs::OpenOptions,
     io::Write,
-    sync::{Arc, Mutex},
+    sync::Arc,
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::mpsc::{channel, Sender};
+use tokio::sync::Mutex;
 
 use engine::Engine;
 pub use mistralrs_lora::Ordering;
@@ -147,7 +148,7 @@ impl MistralRs {
         let this = Arc::new(Self {
             sender: tx,
             log,
-            id: pipeline.lock().unwrap().name(),
+            id: get_mut_arcmutex!(pipeline).name(),
             creation_time: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("Time travel has occurred!")
@@ -187,7 +188,7 @@ impl MistralRs {
     }
 
     pub fn next_request_id(&self) -> usize {
-        let l = self.next_request_id.lock().unwrap();
+        let l = get_mut_arcmutex!(self.next_request_id);
         let last = &mut *l.borrow_mut();
         let last_v = *last;
         *last += 1;

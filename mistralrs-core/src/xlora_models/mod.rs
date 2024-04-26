@@ -8,7 +8,7 @@ mod phi2;
 mod phi3;
 mod quantized_llama;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use candle_core::{DType, Device, Result, Tensor};
 pub use config::XLoraConfig;
@@ -20,6 +20,7 @@ pub use mixtral::XLoraModel as XLoraMixtral;
 pub use phi2::Model as XLoraPhi2;
 pub use phi3::Model as XLoraPhi3;
 pub use quantized_llama::ModelWeights as XLoraModelWeights;
+use tokio::sync::Mutex;
 
 use crate::{get_mut_arcmutex, models::Cache};
 

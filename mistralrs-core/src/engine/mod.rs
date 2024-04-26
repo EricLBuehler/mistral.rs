@@ -9,14 +9,13 @@ use futures::future;
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
 use std::{
-    cell::RefCell,
     collections::{HashMap, VecDeque},
     iter::zip,
-    rc::Rc,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::mpsc::Receiver;
+use tokio::sync::Mutex;
 use tracing::warn;
 
 use crate::{
@@ -804,7 +803,7 @@ impl Engine {
             }
         };
 
-        let group = Rc::new(RefCell::new(SequenceGroup::new(
+        let group = Arc::new(Mutex::new(SequenceGroup::new(
             request.sampling_params.n_choices,
             request.is_streaming,
             is_chat,

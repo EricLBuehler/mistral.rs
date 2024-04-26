@@ -1,17 +1,15 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{
-    collections::HashMap,
-    iter::zip,
-    sync::{Arc, Mutex},
-};
-
 use candle_core::{bail, Device, Error, Result, Tensor, D};
 use pyo3::pyclass;
 use rand::distributions::{Distribution, WeightedIndex};
 use rand_isaac::Isaac64Rng;
 use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, iter::zip, sync::Arc};
 use tokenizers::Tokenizer;
+use tokio::sync::Mutex;
+
+use crate::get_mut_arcmutex;
 
 #[derive(Clone, Debug)]
 /// Stop sequences or ids.
@@ -168,7 +166,7 @@ impl Sampler {
     ) -> Result<Logprobs> {
         let distr = WeightedIndex::new(&*probs).map_err(Error::wrap)?;
 
-        let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
+        let mut mut_ref_rng = &mut *get_mut_arcmutex!(rng);
         let next_token = distr.sample(&mut mut_ref_rng); // "Find the first item which has a weight *higher* than the chosen weight."
         let logprob = probs[next_token].log(10.0);
 
@@ -327,7 +325,7 @@ mod tests {
         use rand::SeedableRng;
         use rand_isaac::Isaac64Rng;
         use std::sync::Arc;
-        use std::sync::Mutex;
+        use tokio::sync::Mutex;
 
         let sampler = Sampler::new(None, 10, get_tokenizer().into(), None, None, None, 32, 0.1);
         let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();

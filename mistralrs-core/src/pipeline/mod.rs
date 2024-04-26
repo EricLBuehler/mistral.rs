@@ -24,8 +24,9 @@ pub use loaders::{
 use mistralrs_lora::{LoraConfig, Ordering};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 use std::sync::Arc;
-use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
+use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr};
 use tokenizers::Tokenizer;
+use tokio::sync::Mutex;
 use tracing::warn;
 
 use anyhow::Result;

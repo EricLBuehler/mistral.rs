@@ -147,7 +147,8 @@ macro_rules! handle_pipeline_forward_error {
                                 e.to_string(),
                                 partial_completion_response
                             ))
-                            .await        .unwrap();
+                            .await
+                            .unwrap();
                     } else {
                         let partial_completion_response = CompletionResponse {
                             id: seq.id().to_string(),
@@ -164,7 +165,8 @@ macro_rules! handle_pipeline_forward_error {
                                 e.to_string(),
                                 partial_completion_response
                             ))
-                            .await     .unwrap();
+                            .await
+                            .unwrap();
                     }
                 }
                 for seq in $seq_slice.iter_mut() {
@@ -185,7 +187,7 @@ macro_rules! handle_pipeline_forward_error {
 macro_rules! get_mut_group {
     ($this:expr) => {
         loop {
-            if let Ok(inner) = $this.group.try_borrow_mut() {
+            if let Ok(inner) = $this.group.try_lock() {
                 break inner;
             }
         }

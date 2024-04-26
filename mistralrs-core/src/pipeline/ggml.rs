@@ -25,8 +25,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::Mutex;
 use tokenizers::Tokenizer;
+use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 enum Model {

@@ -1,10 +1,9 @@
 use std::{
-    cell::{Cell, RefCell, RefMut},
-    rc::Rc,
+    cell::Cell,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::mpsc::Sender;
+use tokio::sync::{mpsc::Sender, Mutex, MutexGuard};
 
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
@@ -92,7 +91,7 @@ pub struct Sequence {
     // GPU things
     pub prompt_tok_per_sec: f32,
     pub prompt_timestamp: Option<u128>,
-    group: Rc<RefCell<SequenceGroup>>,
+    group: Arc<Mutex<SequenceGroup>>,
     state: Cell<SequenceState>,
 }
 impl Sequence {
@@ -109,7 +108,7 @@ impl Sequence {
         max_len: Option<usize>,
         return_logprobs: bool,
         is_xlora: bool,
-        group: Rc<RefCell<SequenceGroup>>,
+        group: Arc<Mutex<SequenceGroup>>,
         response_index: usize,
         creation_time: u64,
         recognizer: SequenceRecognizer,
@@ -397,7 +396,7 @@ impl Sequence {
         self.response_index
     }
 
-    pub fn get_mut_group(&self) -> RefMut<'_, SequenceGroup> {
+    pub fn get_mut_group(&self) -> MutexGuard<'_, SequenceGroup> {
         get_mut_group!(self)
     }
 
