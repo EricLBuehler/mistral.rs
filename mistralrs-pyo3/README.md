@@ -2,9 +2,33 @@
 
 `mistralrs` is a Python package which provides an API for `mistral.rs`. We build `mistralrs` with the `maturin` build manager.
 
-## Installation
+## Installation from PyPi
+1) `mistralrs` depends on the `openssl` library.
+
+To install it on Ubuntu:
+```
+sudo apt install libssl-dev
+sudo apt install pkg-config
+```
+
+2) Install it!
+
+- CUDA
+  `pip install mistralrs-cuda`
+- Metal
+  `pip install mistralrs-metal`
+- Apple Accelerate
+  `pip install mistralrs-accelerate`
+- Intel MKL
+  `pip install mistralrs-mkl`
+- Without accelerators
+  `pip install mistralrs`
+
+All installations will install the `mistralrs` package. The suffix on the package installed by `pip` only controls the feature activation.
+
+## Installation from source
 1) Install required packages
-    - `libssl` (ex., `sudo apt install libssl-dev`)
+    - `openssl` (ex., `sudo apt install libssl-dev`)
     - `pkg-config` (ex., `sudo apt install pkg-config`)
 
 2) Install Rust: https://rustup.rs/
