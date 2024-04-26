@@ -5,7 +5,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use candle_core::Device;
+use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
 use mistralrs_core::{
     get_tgt_non_granular_index, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs,
@@ -29,6 +29,24 @@ use utoipa_swagger_ui::SwaggerUi;
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
+}
+
+fn parse_isq(s: &str) -> Result<GgmlDType, String> {
+    match s {
+        "Q4_0" => Ok(GgmlDType::Q4_0),
+        "Q4_1" => Ok(GgmlDType::Q4_1),
+        "Q5_0" => Ok(GgmlDType::Q5_0),
+        "Q5_1" => Ok(GgmlDType::Q5_1),
+        "Q8_0" => Ok(GgmlDType::Q8_1),
+        "Q8_1" => Ok(GgmlDType::Q4_0),
+        "Q2K" => Ok(GgmlDType::Q2K),
+        "Q3K" => Ok(GgmlDType::Q3K),
+        "Q4K" => Ok(GgmlDType::Q4K),
+        "Q5K" => Ok(GgmlDType::Q5K),
+        "Q6K" => Ok(GgmlDType::Q6K),
+        "Q8K" => Ok(GgmlDType::Q8K),
+        _ => Err(format!("GGML type {s} unknown")),
+    }
 }
 
 #[derive(Parser)]
@@ -86,6 +104,10 @@ struct Args {
     /// Number of device layers to load and run on the device. All others will be on the CPU.
     #[arg(short, long)]
     num_device_layers: Option<usize>,
+
+    /// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
+    #[arg(long = "isq", value_parser = parse_isq)]
+    in_situ_quant: Option<GgmlDType>,
 }
 
 #[utoipa::path(
@@ -214,6 +236,7 @@ async fn main() -> Result<()> {
         args.num_device_layers
             .map(DeviceMapMetadata::from_num_device_layers)
             .unwrap_or(DeviceMapMetadata::dummy()),
+        args.in_situ_quant,
     )?;
     info!("Model loaded.");
 

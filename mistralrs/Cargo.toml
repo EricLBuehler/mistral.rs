@@ -35,3 +35,7 @@ required-features = []
 [[example]]
 name = "quantized"
 required-features = []
+
+[[example]]
+name = "isq"
+required-features = []

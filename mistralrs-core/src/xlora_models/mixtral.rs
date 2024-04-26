@@ -3,7 +3,7 @@
 /// Mixtral Model
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 use std::sync::Arc;
@@ -12,7 +12,8 @@ use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    models::{flash_attn, mixtral::Config, repeat_kv, Cache, RmsNorm},
+    layers::RmsNorm,
+    models::{flash_attn, mixtral::Config, repeat_kv, Cache},
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
@@ -29,7 +30,6 @@ struct Attention {
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
-    hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
     use_flash_attn: bool,
 }
@@ -89,7 +89,6 @@ impl Attention {
             num_kv_heads,
             num_kv_groups,
             head_dim,
-            hidden_size: hidden_sz,
             rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
         })
@@ -109,24 +108,34 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let q = self.q_proj.lora_forward(
-            xs,
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.q_proj.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        let mut q = self.q_proj.lora_forward(
+            &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let k = self.k_proj.lora_forward(
-            xs,
+        let mut k = self.k_proj.lora_forward(
+            &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let v = self.v_proj.lora_forward(
-            xs,
+        let mut v = self.v_proj.lora_forward(
+            &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
+        if self.q_proj.is_quant() {
+            q = q.to_dtype(original_dtype)?;
+            k = k.to_dtype(original_dtype)?;
+            v = v.to_dtype(original_dtype)?;
+        }
 
         let mut q = q.reshape((b_sz * q_len, self.num_heads, self.head_dim))?;
         let mut k = k.reshape((b_sz * q_len, self.num_kv_heads, self.head_dim))?;
@@ -161,7 +170,7 @@ impl Attention {
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        let attn_output = if self.use_flash_attn {
+        let mut attn_output = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
@@ -179,14 +188,19 @@ impl Attention {
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
             attn_weights.matmul(&v)?
         };
-        self.o_proj.lora_forward(
-            &attn_output
-                .transpose(1, 2)?
-                .reshape((b_sz, q_len, self.hidden_size))?,
+        if self.q_proj.is_quant() {
+            attn_output = attn_output.to_dtype(DType::F32)?;
+        }
+        let mut res = self.o_proj.lora_forward(
+            &attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
-        )
+        )?;
+        if self.q_proj.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -247,19 +261,36 @@ impl BlockSparseTop2MLP {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.w1.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
         let lhs = self
             .w1
-            .lora_forward(xs, scalings.clone(), global_scaling_weight, is_scaling_pass)?
+            .lora_forward(
+                &xs,
+                scalings.clone(),
+                global_scaling_weight,
+                is_scaling_pass,
+            )?
             .apply(&self.act_fn)?;
-        let rhs =
-            self.w3
-                .lora_forward(xs, scalings.clone(), global_scaling_weight, is_scaling_pass)?;
-        self.w2.lora_forward(
+        let rhs = self.w3.lora_forward(
+            &xs,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )?;
+        let mut res = self.w2.lora_forward(
             &(lhs * rhs)?,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
-        )
+        )?;
+        if self.w1.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -308,12 +339,22 @@ impl SparseMoeBlock {
     ) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs = xs.reshape(((), hidden_dim))?;
-        let router_logits = self.gate.lora_forward(
+
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.gate.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        let mut router_logits = self.gate.lora_forward(
             &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
+        if self.gate.is_quant() {
+            router_logits = router_logits.to_dtype(original_dtype)?;
+        }
+
         let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
 
         // In order to extract topk, we extract the data from the tensor and manipulate it
@@ -449,7 +490,7 @@ pub struct XLoraModel {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: candle_nn::Linear,
+    lm_head: QMatMul,
     sliding_window: usize,
     pub device: Device,
     pub cache: Cache,
@@ -529,7 +570,7 @@ impl XLoraModel {
             embed_tokens,
             layers,
             norm,
-            lm_head,
+            lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
             dtype: vb.dtype(),
@@ -682,6 +723,7 @@ impl XLoraModel {
                             None,
                         )?
                         .contiguous()?
+                        .to_dtype(DType::F32)?
                         .apply(&self.lm_head)?,
                     context_lens,
                 )
@@ -699,6 +741,7 @@ impl XLoraModel {
                             None,
                         )?
                         .contiguous()?
+                        .to_dtype(DType::F32)?
                         .apply(&self.lm_head)?,
                     context_lens,
                 )
@@ -716,6 +759,7 @@ impl XLoraModel {
                         None,
                     )?
                     .contiguous()?
+                    .to_dtype(DType::F32)?
                     .apply(&self.lm_head)?,
                 context_lens,
             )
@@ -768,6 +812,27 @@ impl NormalModel for XLoraModel {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+        let mut tensors = Vec::new();
+        tensors.push(&mut self.lm_head);
+        for layer in &mut self.layers {
+            tensors.push(Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.v_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.o_proj).unwrap().inner());
+            tensors.push(
+                Arc::get_mut(&mut layer.block_sparse_moe.gate)
+                    .unwrap()
+                    .inner(),
+            );
+            for expert in &mut layer.block_sparse_moe.experts {
+                tensors.push(Arc::get_mut(&mut expert.w1).unwrap().inner());
+                tensors.push(Arc::get_mut(&mut expert.w2).unwrap().inner());
+                tensors.push(Arc::get_mut(&mut expert.w3).unwrap().inner());
+            }
+        }
+        tensors
     }
 }
 

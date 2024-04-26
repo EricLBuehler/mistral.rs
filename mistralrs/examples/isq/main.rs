@@ -1,6 +1,6 @@
 use std::sync::{mpsc::channel, Arc};
 
-use candle_core::Device;
+use candle_core::{quantized::GgmlDType, Device};
 use mistralrs::{
     Constraint, DeviceMapMetadata, MistralRs, MistralRsBuilder, NormalLoaderBuilder,
     NormalLoaderType, NormalSpecificConfig, Request, RequestMessage, Response, SamplingParams,
@@ -27,7 +27,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         &Device::cuda_if_available(0)?,
         false,
         DeviceMapMetadata::dummy(),
-        None,
+        Some(GgmlDType::Q4K), // In-situ quantize the model into q4k
     )?;
     // Create the MistralRs, which is a runner
     Ok(MistralRsBuilder::new(pipeline, SchedulerMethod::Fixed(5.try_into().unwrap())).build())

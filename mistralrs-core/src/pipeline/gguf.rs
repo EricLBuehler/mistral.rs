@@ -15,7 +15,7 @@ use crate::{
     sequence::Sequence, utils::tokens::get_token, xlora_models::XLoraModelWeights as XLoraQLlama,
 };
 use anyhow::{bail, Result};
-use candle_core::quantized::gguf_file;
+use candle_core::quantized::{gguf_file, GgmlDType};
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
@@ -318,7 +318,13 @@ impl Loader for GGUFLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
+        in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        if in_situ_quant.is_some() {
+            anyhow::bail!(
+                "You are trying to in-situ quantize a GGUF model. This will not do anything."
+            );
+        }
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
         let model = gguf_file::Content::read(&mut file)
             .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
@@ -530,5 +536,10 @@ impl Pipeline for GGUFPipeline {
     }
     fn tok_trie(&self) -> Arc<TokTrie> {
         self.tok_trie.clone()
+    }
+    fn re_isq_model(&mut self, _dtype: GgmlDType) -> Result<()> {
+        anyhow::bail!(
+            "You are trying to in-situ requantize a GGML model. This will not do anything."
+        )
     }
 }

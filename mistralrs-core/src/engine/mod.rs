@@ -13,6 +13,7 @@ use crate::{
     response::CompletionChoice,
     sample_async, sampler, CompletionResponse, RequestMessage,
 };
+use candle_core::{quantized::GgmlDType, Result, Tensor};
 use candle_core::{DType, Device, Result, Tensor};
 use futures::future;
 use rand::SeedableRng;
@@ -38,6 +39,7 @@ const SEED: u64 = 0;
 
 pub struct Engine {
     rx: Receiver<Request>,
+    isq_rx: Receiver<GgmlDType>,
     pipeline: Arc<Mutex<dyn Pipeline>>,
     scheduler: Scheduler<VecDeque<Sequence>>,
     id: usize,
@@ -52,6 +54,7 @@ impl Engine {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         rx: Receiver<Request>,
+        isq_rx: Receiver<GgmlDType>,
         pipeline: Arc<Mutex<dyn Pipeline>>,
         method: SchedulerMethod,
         truncate_sequence: bool,
@@ -64,6 +67,7 @@ impl Engine {
         let is_xlora = get_mut_arcmutex!(pipeline).is_xlora();
         Self {
             rx,
+            isq_rx,
             pipeline,
             scheduler: Scheduler::new(method),
             id: 0,
@@ -90,6 +94,11 @@ impl Engine {
                 self.add_request(request);
             }
             let mut scheduled = self.scheduler.schedule();
+            if let Ok(dtype) = self.isq_rx.try_recv() {
+                if let Err(e) = pipeline.re_isq_model(dtype) {
+                    warn!("ISQ requantization failed: {e:?}");
+                }
+            }
 
             if scheduled.completion.len() > 0 {
                 let logits = {
@@ -383,8 +392,15 @@ impl Engine {
                             get_mut_arcmutex!(pipeline).reset_non_granular_state();
                         }
 
-                        seq.get_mut_group()
-                            .maybe_send_streaming_response(seq, pipeline_name.clone());
+                        if seq
+                            .get_mut_group()
+                            .maybe_send_streaming_response(seq, pipeline_name.clone())
+                            .is_err()
+                        {
+                            // If we can't send the response, cancel the sequence
+                            seq.set_state(SequenceState::Done(StopReason::Canceled));
+                            pipeline.reset_non_granular_state();
+                        }
                     }
                 }
             } else if let Some(reason) = is_done {
@@ -429,7 +445,8 @@ impl Engine {
             StopReason::Length(_)
             | StopReason::ModelLength(_)
             | StopReason::Eos
-            | StopReason::StopTok(_) => String::from_utf8_lossy(seq.completion_bytes())
+            | StopReason::StopTok(_)
+            | StopReason::Canceled => String::from_utf8_lossy(seq.completion_bytes())
                 .trim_start()
                 .to_string(),
             StopReason::StopString {

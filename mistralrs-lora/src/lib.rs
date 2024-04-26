@@ -1,12 +1,15 @@
 use std::{collections::HashSet, fmt::Debug, sync::Arc};
 
-use candle_core::{quantized::QTensor, IndexOp, Result, Shape, Tensor, D};
+use candle_core::{
+    quantized::{QMatMul, QTensor},
+    IndexOp, Result, Tensor, D,
+};
 use candle_nn::{Linear, Module, VarBuilder};
 use loralinear::LoraLinear;
 pub use qloralinear::QLoraLinear;
 use serde::Deserialize;
 
-mod frozenlinear;
+pub mod layer;
 mod loralinear;
 mod qloralinear;
 
@@ -71,9 +74,10 @@ impl LoraConfig {
 
 /// Any layer that is linear-like.
 pub trait LinearLayerLike: Debug + Merge {
+    fn inner(&mut self) -> &mut QMatMul;
+    fn is_quant(&self) -> bool;
     fn weight(&self) -> &Tensor;
     fn bias(&self) -> Option<&Tensor>;
-    fn shape(&self) -> &Shape;
     fn lora_forward(
         &self,
         x: &Tensor,
@@ -100,14 +104,14 @@ impl Merge for Linear {
 }
 
 impl LinearLayerLike for Linear {
-    fn weight(&self) -> &Tensor {
-        self.weight()
+    fn inner(&mut self) -> &mut QMatMul {
+        unreachable!()
     }
     fn bias(&self) -> Option<&Tensor> {
         self.bias()
     }
-    fn shape(&self) -> &Shape {
-        self.weight().shape()
+    fn weight(&self) -> &Tensor {
+        self.weight()
     }
     fn lora_forward(
         &self,
@@ -117,6 +121,9 @@ impl LinearLayerLike for Linear {
         _is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         self.forward(x)
+    }
+    fn is_quant(&self) -> bool {
+        false
     }
 }
 

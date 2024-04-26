@@ -5,11 +5,11 @@
 /// There is an alternative implementation of the phi model in mixformers.rs.
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
-use candle_core::{DType, Device, Module, Result, Tensor};
+use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor};
 use candle_nn::{
-    embedding, layer_norm, linear, Activation, Embedding, LayerNorm, Linear, RotaryEmbedding,
-    VarBuilder,
+    embedding, layer_norm, linear, Activation, Embedding, LayerNorm, RotaryEmbedding, VarBuilder,
 };
+use mistralrs_lora::layer::QLinear;
 use serde::Deserialize;
 
 use crate::{
@@ -52,8 +52,8 @@ impl Config {
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
-    fc1: Linear,
-    fc2: Linear,
+    fc1: QLinear,
+    fc2: QLinear,
     act: Activation,
 }
 
@@ -62,8 +62,8 @@ impl MLP {
         let fc1 = linear(cfg.hidden_size, cfg.intermediate_size, vb.pp("fc1"))?;
         let fc2 = linear(cfg.intermediate_size, cfg.hidden_size, vb.pp("fc2"))?;
         Ok(Self {
-            fc1,
-            fc2,
+            fc1: QLinear::from_linear(fc1),
+            fc2: QLinear::from_linear(fc2),
             // This does not match the mixformers implementation where Gelu is used rather than
             // GeluNew.
             act: cfg.hidden_act,
@@ -73,16 +73,25 @@ impl MLP {
 
 impl Module for MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.apply(&self.fc1)?.apply(&self.act)?.apply(&self.fc2)
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.fc1.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        let mut res = xs.apply(&self.fc1)?.apply(&self.act)?.apply(&self.fc2)?;
+        if self.fc1.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
 #[derive(Clone)]
 struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    dense: Linear,
+    q_proj: QLinear,
+    k_proj: QLinear,
+    v_proj: QLinear,
+    dense: QLinear,
     q_layernorm: Option<LayerNorm>,
     k_layernorm: Option<LayerNorm>,
     rotary_emb: RotaryEmbedding,
@@ -135,10 +144,10 @@ impl Attention {
         };
         let softmax_scale = 1f64 / (head_dim as f64).sqrt();
         Ok(Self {
-            q_proj,
-            k_proj,
-            v_proj,
-            dense,
+            q_proj: QLinear::from_linear(q_proj),
+            k_proj: QLinear::from_linear(k_proj),
+            v_proj: QLinear::from_linear(v_proj),
+            dense: QLinear::from_linear(dense),
             q_layernorm,
             k_layernorm,
             rotary_emb,
@@ -159,9 +168,20 @@ impl Attention {
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (b_size, seq_len, _n_embd) = xs.dims3()?;
-        let q = self.q_proj.forward(xs)?;
-        let k = self.k_proj.forward(xs)?;
-        let v = self.v_proj.forward(xs)?;
+
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.q_proj.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        let mut q = self.q_proj.forward(&xs)?;
+        let mut k = self.k_proj.forward(&xs)?;
+        let mut v = self.v_proj.forward(&xs)?;
+        if self.q_proj.is_quant() {
+            q = q.to_dtype(original_dtype)?;
+            k = k.to_dtype(original_dtype)?;
+            v = v.to_dtype(original_dtype)?;
+        }
 
         let q = match &self.q_layernorm {
             None => q,
@@ -210,7 +230,7 @@ impl Attention {
         let k = repeat_kv(k, self.num_heads / self.num_kv_heads)?.contiguous()?;
         let v = repeat_kv(v, self.num_heads / self.num_kv_heads)?.contiguous()?;
 
-        let attn_output = if self.use_flash_attn {
+        let mut attn_output = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
@@ -234,11 +254,17 @@ impl Attention {
                 candle_nn::ops::softmax_last_dim(&attn_weights)?.to_dtype(v.dtype())?;
             attn_weights.matmul(&v)?
         };
-
-        let attn_output = attn_output
+        if self.q_proj.is_quant() {
+            attn_output = attn_output.to_dtype(DType::F32)?;
+        }
+        let mut res = attn_output
             .transpose(1, 2)?
-            .reshape((b_size, seq_len, ()))?;
-        attn_output.apply(&self.dense)
+            .reshape((b_size, seq_len, ()))?
+            .apply(&self.dense)?;
+        if self.q_proj.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -287,7 +313,7 @@ pub struct Model {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
     final_layernorm: LayerNorm,
-    lm_head: Linear,
+    lm_head: QLinear,
     pub cache: Cache,
     pub device: Device,
     pub max_seq_len: usize,
@@ -324,7 +350,7 @@ impl Model {
             embed_tokens,
             layers,
             final_layernorm,
-            lm_head,
+            lm_head: QLinear::from_linear(lm_head),
             cache: Cache::new(cfg.num_hidden_layers, false),
             device: vb.device().clone(),
             max_seq_len: cfg.max_position_embeddings,
@@ -361,7 +387,9 @@ impl Model {
         }
         let xs = xs.to_device(&self.device)?;
         extract_logits(
-            &xs.apply(&self.final_layernorm)?.apply(&self.lm_head)?,
+            &xs.apply(&self.final_layernorm)?
+                .to_dtype(DType::F32)?
+                .apply(&self.lm_head)?,
             context_lens,
         )
     }
@@ -407,5 +435,18 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+        let mut tensors = Vec::new();
+        tensors.push(self.lm_head.inner());
+        for layer in &mut self.layers {
+            tensors.push(layer.self_attn.q_proj.inner());
+            tensors.push(layer.self_attn.k_proj.inner());
+            tensors.push(layer.self_attn.v_proj.inner());
+            tensors.push(layer.self_attn.dense.inner());
+            tensors.push(layer.mlp.fc1.inner());
+            tensors.push(layer.mlp.fc2.inner());
+        }
+        tensors
     }
 }

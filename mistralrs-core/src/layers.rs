@@ -8,7 +8,7 @@ use candle_nn::{
     Module, VarBuilder,
 };
 
-use super::phi3;
+use crate::models::phi3;
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {

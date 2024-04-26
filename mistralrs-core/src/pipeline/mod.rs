@@ -6,6 +6,8 @@ mod macros;
 mod normal;
 use crate::aici::toktree::TokTrie;
 use crate::DeviceMapMetadata;
+use crate::{get_bias_if_not_allowed, sampler::Logprobs, sequence::SequenceRecognizer};
+use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
 use candle_nn::VarBuilder;
 use chat_template::{apply_chat_template_to, ChatTemplate};
 use core::fmt;
@@ -26,7 +28,8 @@ pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 use std::sync::Arc;
 use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
 use tokenizers::Tokenizer;
-use tracing::warn;
+use tqdm::Iter;
+use tracing::{info, warn};
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -147,6 +150,7 @@ impl AsRef<str> for ModelKind {
 ///     &Device::cuda_if_available(0).unwrap(),
 ///     false,
 ///     DeviceMapMetadata::dummy(),
+///     None,
 /// ).unwrap();
 /// ```
 pub trait Loader {
@@ -165,11 +169,12 @@ pub trait Loader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
+        in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
 
     /// If `revision` is None, then it defaults to `main`.
     /// If `dtype` is None, then it defaults to the model default (usually BF16).
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model(
         &self,
         revision: Option<String>,
@@ -178,9 +183,10 @@ pub trait Loader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
+        in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths = self.download_model(revision, token_source, silent)?;
-        self._setup_model(&*paths, dtype, device, silent, mapper)
+        self._setup_model(&*paths, dtype, device, silent, mapper, in_situ_quant)
     }
 
     fn get_id(&self) -> &str;
@@ -254,6 +260,8 @@ pub trait Pipeline: Send + Sync {
         }
     }
     fn get_repeat_last_n(&self) -> usize;
+
+    fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()>;
 }
 
 pub trait ConfigMarker {}
@@ -305,6 +313,22 @@ pub trait NormalModel {
     fn device(&self) -> &Device;
     fn cache(&self) -> &Cache;
     fn max_seq_len(&self) -> usize;
+    fn get_tensors(&mut self) -> Vec<&mut QMatMul>;
+    /// Quantize the model in-situ.
+    fn quantize(&mut self, dtype: GgmlDType) -> candle_core::Result<()> {
+        let tensors = self.get_tensors();
+        let total_tensors = tensors.len();
+        let mut n_quantized = 0;
+        info!("Applying in-situ quantization to {dtype:?}.");
+        for tensor in tensors.into_iter().tqdm() {
+            if let QMatMul::Tensor(t) = tensor {
+                n_quantized += 1;
+                *tensor = QMatMul::QTensor(Arc::new(QTensor::quantize(&*t, dtype)?));
+            }
+        }
+        info!("Applied in-situ quantization into {dtype:?} to {n_quantized} tensors out of {total_tensors} total tensors.");
+        Ok(())
+    }
 }
 
 struct InputMetadata {

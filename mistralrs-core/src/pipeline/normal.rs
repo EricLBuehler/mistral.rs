@@ -21,6 +21,7 @@ use crate::{
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
 };
 use anyhow::Result;
+use candle_core::quantized::GgmlDType;
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
@@ -246,6 +247,7 @@ impl Loader for NormalLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
+        in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         let default_dtype = if device.is_cuda() {
@@ -257,7 +259,7 @@ impl Loader for NormalLoader {
         info!("Model config: {config}");
 
         let mut is_lora = false;
-        let model = match self.kind {
+        let mut model = match self.kind {
             ModelKind::QuantizedGGUF => unreachable!(),
             ModelKind::QuantizedGGML => unreachable!(),
             ModelKind::Normal => normal_model_loader!(
@@ -306,6 +308,10 @@ impl Loader for NormalLoader {
             Tokenizer::from_file(paths.get_tokenizer_filename()).map_err(anyhow::Error::msg)?;
 
         let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
+
+        if let Some(in_situ_quant) = in_situ_quant {
+            model.quantize(in_situ_quant)?;
+        }
 
         Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
@@ -415,5 +421,8 @@ impl Pipeline for NormalPipeline {
     }
     fn tok_trie(&self) -> Arc<TokTrie> {
         self.tok_trie.clone()
+    }
+    fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()> {
+        self.model.quantize(dtype).map_err(anyhow::Error::msg)
     }
 }
