@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use candle_core::{
     quantized::{gguf_file, QMatMul, QTensor},
-    Device, Result, Tensor,
+    DType, Device, Result, Tensor,
 };
 use candle_nn::{Linear, Module};
 
@@ -10,6 +10,7 @@ use candle_nn::{Linear, Module};
 pub struct QLinear {
     inner: QMatMul,
     bias: Option<Tensor>,
+    dtype: DType,
 }
 
 impl QLinear {
@@ -26,6 +27,7 @@ impl QLinear {
         Ok(Self {
             inner,
             bias: Some(bias),
+            dtype: DType::F32,
         })
     }
 
@@ -33,20 +35,35 @@ impl QLinear {
         Self {
             inner: QMatMul::Tensor(linear.weight().clone()),
             bias: Some(linear.bias().unwrap().clone()),
+            dtype: if linear.weight().device().is_cuda() {
+                DType::BF16
+            } else {
+                DType::F32
+            },
         }
     }
 
     pub fn from_parts(w: Tensor, b: Option<Tensor>) -> Self {
+        let dtype = if w.device().is_cuda() {
+            DType::BF16
+        } else {
+            DType::F32
+        };
         Self {
             inner: QMatMul::Tensor(w),
             bias: b,
+            dtype,
         }
     }
 
     pub fn from_qparts(w: QTensor, b: Option<Tensor>) -> Self {
+        if let Some(ref b) = b {
+            assert_eq!(b.dtype(), DType::F32);
+        }
         Self {
             inner: QMatMul::QTensor(Arc::new(w)),
             bias: b,
+            dtype: DType::F32,
         }
     }
 
@@ -62,9 +79,12 @@ impl QLinear {
 impl Module for QLinear {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         if let Some(bias) = &self.bias {
-            self.inner.forward(xs)?.broadcast_add(bias)
+            self.inner
+                .forward(xs)?
+                .broadcast_add(bias)?
+                .to_dtype(self.dtype)
         } else {
-            self.inner.forward(xs)
+            self.inner.forward(xs)?.to_dtype(self.dtype)
         }
     }
 }
