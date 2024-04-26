@@ -490,7 +490,7 @@ pub struct XLoraModel {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: candle_nn::Linear,
+    lm_head: QMatMul,
     sliding_window: usize,
     pub device: Device,
     pub cache: Cache,
@@ -570,7 +570,7 @@ impl XLoraModel {
             embed_tokens,
             layers,
             norm,
-            lm_head,
+            lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
             dtype: vb.dtype(),
@@ -815,7 +815,7 @@ impl NormalModel for XLoraModel {
     }
     fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
         let mut tensors = Vec::new();
-        tensors.push(self.lm_head.inner());
+        tensors.push(&mut self.lm_head);
         for layer in &mut self.layers {
             tensors.push(Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner());
             tensors.push(Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner());

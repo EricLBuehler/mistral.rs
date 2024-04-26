@@ -150,6 +150,7 @@ impl AsRef<str> for ModelKind {
 ///     &Device::cuda_if_available(0).unwrap(),
 ///     false,
 ///     DeviceMapMetadata::dummy(),
+///     None,
 /// ).unwrap();
 /// ```
 pub trait Loader {
