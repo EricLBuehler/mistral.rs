@@ -88,6 +88,7 @@ impl Engine {
     pub async fn run(&mut self) {
         let mut last_run = Instant::now();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
+        let mut last_completion_ids: Vec<usize> = vec![];
         'lp: loop {
             while let Ok(request) = self.rx.try_recv() {
                 self.add_request(request);
@@ -100,10 +101,13 @@ impl Engine {
             }
 
             if scheduled.completion.len() > 0 {
+                let current_completion_ids: Vec<usize> =
+                    scheduled.completion.iter().map(|seq| *seq.id()).collect();
                 let logits = {
                     let mut pipeline = get_mut_arcmutex!(self.pipeline);
                     // Run the completion seqs
-                    if !self.no_kv_cache {
+                    // Run the completion seqs
+                    if !self.no_kv_cache && last_completion_ids != current_completion_ids {
                         Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
                     }
                     let logits = pipeline.forward(&scheduled.completion, false);
@@ -141,6 +145,7 @@ impl Engine {
                     'lp,
                     self.prefix_cacher
                 );
+                last_completion_ids = current_completion_ids;
             }
 
             if scheduled.prompt.len() > 0 {
@@ -196,6 +201,7 @@ impl Engine {
                     seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
                     seq.prompt_timestamp = Some(now);
                 }
+                last_completion_ids = vec![];
             }
 
             if self.is_debug {
