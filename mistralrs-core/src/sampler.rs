@@ -38,7 +38,6 @@ pub struct SamplingParams {
 /// Sampler for sampling.
 #[derive(Clone)]
 pub struct Sampler {
-    // rng: rand::rngs::StdRng,
     temperature: Option<f64>,
     top_n_logprobs: usize,
     tokenizer: Arc<Tokenizer>,
@@ -169,7 +168,7 @@ impl Sampler {
     ) -> Result<Logprobs> {
         let distr = WeightedIndex::new(&*probs).map_err(Error::wrap)?;
 
-        let mut mut_ref_rng = &mut *rng.lock().unwrap();
+        let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
         let next_token = distr.sample(&mut mut_ref_rng); // "Find the first item which has a weight *higher* than the chosen weight."
         let logprob = probs[next_token].log(10.0);
 
@@ -321,28 +320,21 @@ mod tests {
         Tokenizer::from_file(tokenizer_filename).unwrap()
     }
 
-    // #[test]
-    // fn test_argmax() {
-    //     use super::Sampler;
-    //     use candle_core::{Device, Tensor};
+    #[test]
+    fn test_argmax() {
+        use super::Sampler;
+        use candle_core::{Device, Tensor};
+        use rand::SeedableRng;
+        use rand_isaac::Isaac64Rng;
+        use std::sync::Arc;
+        use std::sync::Mutex;
 
-    //     let mut sampler = Sampler::new(
-    //         0,
-    //         None,
-    //         10,
-    //         get_tokenizer().into(),
-    //         None,
-    //         None,
-    //         None,
-    //         32,
-    //         0.1,
-    //     );
-
-    //     let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
-    //     let mut rng = Isaac64Rng::from(42);
-    //     let res = sampler.sample(logits, None, false, &mut rng).unwrap();
-    //     assert_eq!(res.token, 1023);
-    //     assert_eq!(res.top_logprobs, None);
-    //     assert_eq!(res.logprob, 1023f64.log(10.) as f32)
-    // }
+        let sampler = Sampler::new(None, 10, get_tokenizer().into(), None, None, None, 32, 0.1);
+        let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
+        let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
+        let res = sampler.sample(logits, None, false, rng).unwrap();
+        assert_eq!(res.token, 1023);
+        assert_eq!(res.top_logprobs, None);
+        assert_eq!(res.logprob, 1023f64.log(10.) as f32)
+    }
 }
