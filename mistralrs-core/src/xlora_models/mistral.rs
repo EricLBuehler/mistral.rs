@@ -1,16 +1,17 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
-use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
+use mistralrs_lora::{layer::QLinear, linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 use std::sync::Arc;
 use tqdm::Iter;
 use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    models::{flash_attn, mistral::Config, repeat_kv, Cache, RmsNorm},
+    layers::RmsNorm,
+    models::{flash_attn, mistral::Config, repeat_kv, Cache},
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
@@ -75,22 +76,36 @@ impl MLP {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.gate_proj.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
         let lhs = self
             .gate_proj
-            .lora_forward(xs, scalings.clone(), global_scaling_weight, is_scaling_pass)?
+            .lora_forward(
+                &xs,
+                scalings.clone(),
+                global_scaling_weight,
+                is_scaling_pass,
+            )?
             .apply(&self.act_fn)?;
         let rhs = self.up_proj.lora_forward(
-            xs,
+            &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        self.down_proj.lora_forward(
+        let mut res = self.down_proj.lora_forward(
             &(lhs * rhs)?,
             scalings,
             global_scaling_weight,
             is_scaling_pass,
-        )
+        )?;
+        if self.gate_proj.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -104,7 +119,6 @@ struct Attention {
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
-    hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
     use_flash_attn: bool,
 }
@@ -164,7 +178,6 @@ impl Attention {
             num_kv_heads,
             num_kv_groups,
             head_dim,
-            hidden_size: hidden_sz,
             rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
         })
@@ -184,24 +197,34 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let q = self.q_proj.lora_forward(
-            xs,
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.q_proj.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        let mut q = self.q_proj.lora_forward(
+            &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let k = self.k_proj.lora_forward(
-            xs,
+        let mut k = self.k_proj.lora_forward(
+            &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let v = self.v_proj.lora_forward(
-            xs,
+        let mut v = self.v_proj.lora_forward(
+            &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
+        if self.q_proj.is_quant() {
+            q = q.to_dtype(original_dtype)?;
+            k = k.to_dtype(original_dtype)?;
+            v = v.to_dtype(original_dtype)?;
+        }
 
         let mut q = q.reshape((b_sz * q_len, self.num_heads, self.head_dim))?;
         let mut k = k.reshape((b_sz * q_len, self.num_kv_heads, self.head_dim))?;
@@ -236,7 +259,7 @@ impl Attention {
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        let attn_output = if self.use_flash_attn {
+        let mut attn_output = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
@@ -254,14 +277,19 @@ impl Attention {
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
             attn_weights.matmul(&v)?
         };
-        self.o_proj.lora_forward(
-            &attn_output
-                .transpose(1, 2)?
-                .reshape((b_sz, q_len, self.hidden_size))?,
-            scalings,
+        if self.q_proj.is_quant() {
+            attn_output = attn_output.to_dtype(DType::F32)?;
+        }
+        let mut res = self.o_proj.lora_forward(
+            &attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?,
+            scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
-        )
+        )?;
+        if self.q_proj.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -340,7 +368,7 @@ pub struct XLoraModel {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: candle_nn::Linear,
+    lm_head: QLinear,
     sliding_window: Option<usize>,
     dtype: DType,
     pub device: Device,
@@ -421,7 +449,7 @@ impl XLoraModel {
             embed_tokens,
             layers,
             norm,
-            lm_head,
+            lm_head: QLinear::from_linear(lm_head),
             sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
             dtype: vb.dtype(),
@@ -582,6 +610,7 @@ impl XLoraModel {
                             None,
                         )?
                         .contiguous()?
+                        .to_dtype(DType::F32)?
                         .apply(&self.lm_head)?,
                     context_lens,
                 )
@@ -599,6 +628,7 @@ impl XLoraModel {
                             None,
                         )?
                         .contiguous()?
+                        .to_dtype(DType::F32)?
                         .apply(&self.lm_head)?,
                     context_lens,
                 )
@@ -616,6 +646,7 @@ impl XLoraModel {
                         None,
                     )?
                     .contiguous()?
+                    .to_dtype(DType::F32)?
                     .apply(&self.lm_head)?,
                 context_lens,
             )
@@ -668,6 +699,20 @@ impl NormalModel for XLoraModel {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+        let mut tensors = Vec::new();
+        tensors.push(self.lm_head.inner());
+        for layer in &mut self.layers {
+            tensors.push(Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.v_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.o_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.mlp.down_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.mlp.gate_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.mlp.up_proj).unwrap().inner());
+        }
+        tensors
     }
 }
 

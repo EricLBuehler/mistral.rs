@@ -149,7 +149,7 @@ struct GemmaBasicConfig {
 }
 
 impl GemmaBasicConfig {
-    fn deserialize(slice: &str, _use_flash_attn: bool) -> Result<models::gemma::Config> {
+    fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::gemma::Config> {
         let basic_config: Self = serde_json::from_str(slice)?;
         Ok(models::gemma::Config {
             vocab_size: basic_config.vocab_size,
@@ -165,6 +165,7 @@ impl GemmaBasicConfig {
             rope_theta: basic_config.rope_theta,
             attention_bias: basic_config.attention_bias,
             head_dim: basic_config.head_dim,
+            use_flash_attn,
         })
     }
 }

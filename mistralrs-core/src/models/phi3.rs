@@ -2,18 +2,19 @@
 
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{linear_no_bias, Linear, VarBuilder};
+use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_nn::{linear_no_bias, VarBuilder};
 use either::Either;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     device_map::DeviceMapper,
+    layers::{PhiRotaryEmbedding, RmsNorm},
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
 
-use super::{flash_attn, repeat_kv, Cache, PhiRotaryEmbedding, RmsNorm};
+use super::{flash_attn, repeat_kv, Cache};
 
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -43,8 +44,8 @@ impl Config {
 
 #[derive(Debug, Clone)]
 struct Attention {
-    qkv_proj: Linear,
-    o_proj: Linear,
+    qkv_proj: QMatMul,
+    o_proj: QMatMul,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
@@ -62,8 +63,8 @@ impl Attention {
         let qkv_proj = linear_no_bias(cfg.hidden_size, op_size, vb.pp("qkv_proj"))?;
         let o_proj = linear_no_bias(num_heads * head_dim, cfg.hidden_size, vb.pp("o_proj"))?;
         Ok(Self {
-            qkv_proj,
-            o_proj,
+            qkv_proj: QMatMul::Tensor(qkv_proj.weight().clone()),
+            o_proj: QMatMul::Tensor(o_proj.weight().clone()),
             rotary_emb,
             num_heads,
             num_kv_heads,
@@ -83,7 +84,15 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let qkv = self.qkv_proj.forward(xs)?;
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        let mut qkv = self.qkv_proj.forward(&xs)?;
+        if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
+            qkv = qkv.to_dtype(original_dtype)?;
+        }
         let query_pos = self.num_heads * self.head_dim;
         let q = qkv.narrow(D::Minus1, 0, query_pos)?;
         let k = qkv.narrow(D::Minus1, query_pos, self.num_kv_heads * self.head_dim)?;
@@ -118,7 +127,7 @@ impl Attention {
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        let attn_output = if self.use_flash_attn {
+        let mut attn_output = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
@@ -136,17 +145,24 @@ impl Attention {
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
             attn_weights.matmul(&v)?
         };
-        attn_output
+        if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
+            attn_output = attn_output.to_dtype(DType::F32)?;
+        }
+        let mut res = attn_output
             .transpose(1, 2)?
             .reshape((b_sz, q_len, ()))?
-            .apply(&self.o_proj)
+            .apply(&self.o_proj)?;
+        if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
 #[derive(Debug, Clone)]
 struct Mlp {
-    gate_up_proj: Linear,
-    down_proj: Linear,
+    gate_up_proj: QMatMul,
+    down_proj: QMatMul,
     act_fn: candle_nn::Activation,
     i_size: usize,
 }
@@ -158,8 +174,8 @@ impl Mlp {
         let gate_up_proj = linear_no_bias(hidden_size, 2 * i_size, vb.pp("gate_up_proj"))?;
         let down_proj = linear_no_bias(i_size, hidden_size, vb.pp("down_proj"))?;
         Ok(Self {
-            gate_up_proj,
-            down_proj,
+            gate_up_proj: QMatMul::Tensor(gate_up_proj.weight().clone()),
+            down_proj: QMatMul::Tensor(down_proj.weight().clone()),
             act_fn: cfg.hidden_act,
             i_size,
         })
@@ -168,11 +184,20 @@ impl Mlp {
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if matches!(self.gate_up_proj, QMatMul::QTensor(_)) {
+            xs = xs.to_dtype(DType::F32)?;
+        }
         let up_states = xs.apply(&self.gate_up_proj)?;
         let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
         let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
         let up_states = (up_states * gate.apply(&self.act_fn))?;
-        up_states.apply(&self.down_proj)
+        let mut res = up_states.apply(&self.down_proj)?;
+        if matches!(self.gate_up_proj, QMatMul::QTensor(_)) {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -232,7 +257,7 @@ pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: Linear,
+    lm_head: QMatMul,
     dtype: DType,
     pub device: Device,
     pub cache: Cache,
@@ -272,7 +297,7 @@ impl Model {
             embed_tokens,
             layers,
             norm,
-            lm_head,
+            lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             device: vb.device().clone(),
             dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, false),
@@ -348,7 +373,12 @@ impl Model {
                 &mut cache[i],
             )?
         }
-        extract_logits(&xs.apply(&self.norm)?.apply(&self.lm_head)?, context_lens)
+        extract_logits(
+            &xs.apply(&self.norm)?
+                .to_dtype(DType::F32)?
+                .apply(&self.lm_head)?,
+            context_lens,
+        )
     }
 }
 
@@ -392,5 +422,16 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+        let mut tensors = Vec::new();
+        tensors.push(&mut self.lm_head);
+        for layer in &mut self.layers {
+            tensors.push(&mut layer.self_attn.qkv_proj);
+            tensors.push(&mut layer.self_attn.o_proj);
+            tensors.push(&mut layer.mlp.down_proj);
+            tensors.push(&mut layer.mlp.gate_up_proj);
+        }
+        tensors
     }
 }

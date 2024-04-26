@@ -286,6 +286,7 @@ fn main() -> anyhow::Result<()> {
         args.num_device_layers
             .map(DeviceMapMetadata::from_num_device_layers)
             .unwrap_or(DeviceMapMetadata::dummy()),
+        None,
     )?;
     info!("Model loaded.");
 

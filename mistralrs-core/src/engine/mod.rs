@@ -13,7 +13,7 @@ use crate::{
     response::CompletionChoice,
     CompletionResponse, RequestMessage,
 };
-use candle_core::{Result, Tensor};
+use candle_core::{quantized::GgmlDType, Result, Tensor};
 use tracing::warn;
 
 use crate::{
@@ -35,6 +35,7 @@ const SEED: u64 = 0;
 
 pub struct Engine {
     rx: Receiver<Request>,
+    isq_rx: Receiver<GgmlDType>,
     pipeline: Box<Mutex<dyn Pipeline>>,
     scheduler: Scheduler<VecDeque<Sequence>>,
     id: usize,
@@ -49,6 +50,7 @@ impl Engine {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         rx: Receiver<Request>,
+        isq_rx: Receiver<GgmlDType>,
         pipeline: Box<Mutex<dyn Pipeline>>,
         method: SchedulerMethod,
         truncate_sequence: bool,
@@ -61,6 +63,7 @@ impl Engine {
         let is_xlora = get_mut_arcmutex!(pipeline).is_xlora();
         Self {
             rx,
+            isq_rx,
             pipeline,
             scheduler: Scheduler::new(method),
             id: 0,
@@ -87,6 +90,11 @@ impl Engine {
             }
             let mut scheduled = self.scheduler.schedule();
             let mut pipeline = get_mut_arcmutex!(self.pipeline);
+            if let Ok(dtype) = self.isq_rx.try_recv() {
+                if let Err(e) = pipeline.re_isq_model(dtype) {
+                    warn!("ISQ requantization failed: {e:?}");
+                }
+            }
 
             if scheduled.completion.len() > 0 {
                 // Run the completion seqs

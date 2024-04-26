@@ -13,6 +13,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use candle_core::quantized::GgmlDType;
 use engine::Engine;
 pub use mistralrs_lora::Ordering;
 pub use pipeline::Pipeline;
@@ -25,6 +26,7 @@ pub use model_loader::{get_tgt_non_granular_index, LoaderBuilder};
 mod model_selected;
 pub use model_selected::ModelSelected;
 
+pub mod layers;
 mod models;
 mod pipeline;
 mod prefix_cacher;
@@ -56,6 +58,7 @@ use serde::Serialize;
 /// engine.
 pub struct MistralRs {
     sender: Sender<Request>,
+    sender_isq: Sender<GgmlDType>,
     log: Option<String>,
     id: String,
     creation_time: u64,
@@ -144,9 +147,11 @@ impl MistralRs {
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
 
         let (tx, rx) = channel();
+        let (isq_tx, isq_rx) = channel();
 
         let this = Arc::new(Self {
             sender: tx,
+            sender_isq: isq_tx,
             log,
             id: pipeline.lock().unwrap().name(),
             creation_time: SystemTime::now()
@@ -159,6 +164,7 @@ impl MistralRs {
         thread::spawn(move || {
             let mut engine = Engine::new(
                 rx,
+                isq_rx,
                 pipeline,
                 method,
                 truncate_sequence,
@@ -175,6 +181,12 @@ impl MistralRs {
 
     pub fn get_sender(&self) -> Sender<Request> {
         self.sender.clone()
+    }
+
+    /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
+    /// then nothing will happen.
+    pub fn send_re_isq(&self, dtype: GgmlDType) {
+        self.sender_isq.send(dtype).expect("Engine is not present.")
     }
 
     pub fn get_id(&self) -> String {

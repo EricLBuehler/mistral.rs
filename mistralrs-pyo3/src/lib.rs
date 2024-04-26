@@ -1,6 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 
-use candle_core::Result;
+use candle_core::{quantized::GgmlDType, Result};
 use either::Either;
 use indexmap::IndexMap;
 use message::{Message, Role};
@@ -57,6 +57,24 @@ fn get_device() -> Result<Device> {
     Ok(res)
 }
 
+fn parse_isq(s: &str) -> std::result::Result<GgmlDType, String> {
+    match s {
+        "Q4_0" => Ok(GgmlDType::Q4_0),
+        "Q4_1" => Ok(GgmlDType::Q4_1),
+        "Q5_0" => Ok(GgmlDType::Q5_0),
+        "Q5_1" => Ok(GgmlDType::Q5_1),
+        "Q8_0" => Ok(GgmlDType::Q8_1),
+        "Q8_1" => Ok(GgmlDType::Q4_0),
+        "Q2K" => Ok(GgmlDType::Q2K),
+        "Q3K" => Ok(GgmlDType::Q3K),
+        "Q4K" => Ok(GgmlDType::Q4K),
+        "Q5K" => Ok(GgmlDType::Q5K),
+        "Q6K" => Ok(GgmlDType::Q6K),
+        "Q8K" => Ok(GgmlDType::Q8K),
+        _ => Err(format!("GGML type {s} unknown")),
+    }
+}
+
 #[pyclass]
 /// An object wrapping the underlying Rust system to handle requests and process conversations.
 struct Runner {
@@ -68,7 +86,16 @@ static NEXT_REQUEST_ID: Mutex<RefCell<usize>> = Mutex::new(RefCell::new(0));
 #[pymethods]
 impl Runner {
     #[new]
-    #[pyo3(signature = (which, max_seqs = 16, no_kv_cache = false, prefix_cache_n = 16, token_source = "cache", chat_template = None, num_device_layers = None))]
+    #[pyo3(signature = (
+        which,
+        max_seqs = 16,
+        no_kv_cache = false,
+        prefix_cache_n = 16,
+        token_source = "cache",
+        chat_template = None,
+        num_device_layers = None,
+        in_situ_quant = None
+    ))]
     fn new(
         which: Which,
         max_seqs: usize,
@@ -77,6 +104,7 @@ impl Runner {
         token_source: &str,
         chat_template: Option<String>,
         num_device_layers: Option<usize>,
+        in_situ_quant: Option<String>,
     ) -> PyResult<Self> {
         const REPEAT_LAST_N_DEFAULT: usize = 64;
         const GQA_DEFAULT: usize = 1;
@@ -346,6 +374,11 @@ impl Runner {
         };
 
         let device = get_device().map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let isq = if let Some(isq) = in_situ_quant {
+            Some(parse_isq(&isq).map_err(|e| PyValueError::new_err(e.to_string()))?)
+        } else {
+            None
+        };
         let pipeline = loader
             .load_model(
                 None,
@@ -357,6 +390,7 @@ impl Runner {
                 num_device_layers
                     .map(DeviceMapMetadata::from_num_device_layers)
                     .unwrap_or(DeviceMapMetadata::dummy()),
+                isq,
             )
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
@@ -566,6 +600,14 @@ impl Runner {
                 Response::ModelError(_, _) => unreachable!(),
             }
         })
+    }
+
+    /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
+    /// then nothing will happen.
+    fn send_re_isq(&self, dtype: String) -> PyResult<()> {
+        self.runner
+            .send_re_isq(parse_isq(&dtype).map_err(|e| PyValueError::new_err(e.to_string()))?);
+        Ok(())
     }
 }
 

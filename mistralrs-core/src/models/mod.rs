@@ -5,7 +5,6 @@ use candle_core::{Result, Tensor};
 use crate::get_mut_arcmutex;
 
 pub(crate) mod gemma;
-pub(crate) mod layers;
 pub(crate) mod llama;
 pub(crate) mod mistral;
 pub(crate) mod mixtral;
@@ -14,7 +13,6 @@ pub(crate) mod phi3;
 pub(crate) mod quantized_llama;
 pub(crate) mod quantized_phi2;
 pub(crate) mod qwen2;
-pub(crate) use layers::*;
 
 pub type LayerCaches = Vec<Option<(Tensor, Tensor)>>;
 

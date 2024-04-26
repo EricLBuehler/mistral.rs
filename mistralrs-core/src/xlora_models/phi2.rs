@@ -7,11 +7,11 @@ use std::sync::Arc;
 /// There is an alternative implementation of the phi model in mixformers.rs.
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
 use candle_nn::{
-    embedding, layer_norm, Activation, Embedding, LayerNorm, Linear, RotaryEmbedding, VarBuilder,
+    embedding, layer_norm, Activation, Embedding, LayerNorm, RotaryEmbedding, VarBuilder,
 };
-use mistralrs_lora::{linear, LinearLayerLike, LoraConfig, Ordering};
+use mistralrs_lora::{layer::QLinear, linear, LinearLayerLike, LoraConfig, Ordering};
 use tqdm::Iter;
 use tracing::info;
 
@@ -72,15 +72,29 @@ impl MLP {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        self.fc2.lora_forward(
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.fc1.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        let mut res = self.fc2.lora_forward(
             &self
                 .fc1
-                .lora_forward(xs, scalings.clone(), global_scaling_weight, is_scaling_pass)?
+                .lora_forward(
+                    &xs,
+                    scalings.clone(),
+                    global_scaling_weight,
+                    is_scaling_pass,
+                )?
                 .apply(&self.act)?,
             scalings,
             global_scaling_weight,
             is_scaling_pass,
-        )
+        )?;
+        if self.fc1.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -205,24 +219,34 @@ impl Attention {
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         let (b_size, seq_len, _n_embd) = xs.dims3()?;
-        let q = self.q_proj.lora_forward(
-            xs,
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.q_proj.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        let mut q = self.q_proj.lora_forward(
+            &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let k = self.k_proj.lora_forward(
-            xs,
+        let mut k = self.k_proj.lora_forward(
+            &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let v = self.v_proj.lora_forward(
-            xs,
+        let mut v = self.v_proj.lora_forward(
+            &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
+        if self.q_proj.is_quant() {
+            q = q.to_dtype(original_dtype)?;
+            k = k.to_dtype(original_dtype)?;
+            v = v.to_dtype(original_dtype)?;
+        }
 
         let q = match &self.q_layernorm {
             None => q,
@@ -296,15 +320,22 @@ impl Attention {
             attn_weights.matmul(&v)?
         };
 
-        let attn_output = attn_output
+        let mut attn_output = attn_output
             .transpose(1, 2)?
             .reshape((b_size, seq_len, ()))?;
-        self.dense.lora_forward(
+        if self.q_proj.is_quant() {
+            attn_output = attn_output.to_dtype(DType::F32)?;
+        }
+        let mut res = self.dense.lora_forward(
             &attn_output,
             scalings,
             global_scaling_weight,
             is_scaling_pass,
-        )
+        )?;
+        if self.q_proj.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -373,7 +404,7 @@ pub struct Model {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
     final_layernorm: LayerNorm,
-    lm_head: Linear,
+    lm_head: QLinear,
     pub cache: Cache,
     pub device: Device,
     pub max_seq_len: usize,
@@ -440,7 +471,7 @@ impl Model {
             embed_tokens,
             layers,
             final_layernorm,
-            lm_head,
+            lm_head: QLinear::from_linear(lm_head),
             cache: Cache::new(cfg.num_hidden_layers, true),
             device: vb.device().clone(),
             max_seq_len: cfg.max_position_embeddings,
@@ -543,6 +574,7 @@ impl Model {
                             None,
                         )?
                         .contiguous()?
+                        .to_dtype(DType::F32)?
                         .apply(&self.lm_head)?,
                     context_lens,
                 )
@@ -560,6 +592,7 @@ impl Model {
                             None,
                         )?
                         .contiguous()?
+                        .to_dtype(DType::F32)?
                         .apply(&self.lm_head)?,
                     context_lens,
                 )
@@ -577,6 +610,7 @@ impl Model {
                         None,
                     )?
                     .contiguous()?
+                    .to_dtype(DType::F32)?
                     .apply(&self.lm_head)?,
                 context_lens,
             )
@@ -629,6 +663,19 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+        let mut tensors = Vec::new();
+        tensors.push(self.lm_head.inner());
+        for layer in &mut self.layers {
+            tensors.push(Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.v_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.dense).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.mlp.fc1).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.mlp.fc2).unwrap().inner());
+        }
+        tensors
     }
 }
 
