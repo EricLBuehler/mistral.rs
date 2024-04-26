@@ -262,8 +262,15 @@ impl Engine {
                             pipeline.reset_non_granular_state();
                         }
 
-                        seq.get_mut_group()
-                            .maybe_send_streaming_response(seq, pipeline.name());
+                        if seq
+                            .get_mut_group()
+                            .maybe_send_streaming_response(seq, pipeline.name())
+                            .is_err()
+                        {
+                            // If we can't send the response, cancel the sequence
+                            seq.set_state(SequenceState::Done(StopReason::Canceled));
+                            pipeline.reset_non_granular_state();
+                        }
                     }
                 }
             } else if let Some(reason) = is_done {
@@ -307,7 +314,8 @@ impl Engine {
             StopReason::Length(_)
             | StopReason::ModelLength(_)
             | StopReason::Eos
-            | StopReason::StopTok(_) => String::from_utf8_lossy(seq.completion_bytes())
+            | StopReason::StopTok(_)
+            | StopReason::Canceled => String::from_utf8_lossy(seq.completion_bytes())
                 .trim_start()
                 .to_string(),
             StopReason::StopString {
