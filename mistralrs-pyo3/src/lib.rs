@@ -357,6 +357,7 @@ impl Runner {
                 num_device_layers
                     .map(DeviceMapMetadata::from_num_device_layers)
                     .unwrap_or(DeviceMapMetadata::dummy()),
+                None,
             )
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
 

@@ -168,11 +168,12 @@ pub trait Loader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
+        in_situ_quant: Option<GgmlDType>,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>>;
 
     /// If `revision` is None, then it defaults to `main`.
     /// If `dtype` is None, then it defaults to the model default (usually BF16).
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model(
         &self,
         revision: Option<String>,
@@ -181,9 +182,10 @@ pub trait Loader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
+        in_situ_quant: Option<GgmlDType>,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths = self.download_model(revision, token_source, silent)?;
-        self._setup_model(&*paths, dtype, device, silent, mapper)
+        self._setup_model(&*paths, dtype, device, silent, mapper, in_situ_quant)
     }
 
     fn get_id(&self) -> &str;

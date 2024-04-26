@@ -27,6 +27,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         &Device::cuda_if_available(0)?,
         false,
         DeviceMapMetadata::dummy(),
+        None,
     )?;
     // Create the MistralRs, which is a runner
     Ok(MistralRsBuilder::new(pipeline, SchedulerMethod::Fixed(5.try_into().unwrap())).build())

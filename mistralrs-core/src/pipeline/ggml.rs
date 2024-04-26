@@ -15,7 +15,7 @@ use crate::{
     xlora_models::XLoraModelWeights as XLoraQLlama,
 };
 use anyhow::Result;
-use candle_core::quantized::ggml_file;
+use candle_core::quantized::{ggml_file, GgmlDType};
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
@@ -284,7 +284,11 @@ impl Loader for GGMLLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
+        in_situ_quant: Option<GgmlDType>,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
+        if in_situ_quant.is_some() {
+            warn!("You are trying to in-situ quantize a GGUF model. This will no do anything.");
+        }
         if !mapper.is_dummy() {
             warn!("GGML models do not support device mapping. Device mapping will not work. Please consider using a GGUF model.");
         }

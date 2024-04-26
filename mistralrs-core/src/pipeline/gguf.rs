@@ -15,7 +15,7 @@ use crate::{
     sequence::Sequence, utils::tokens::get_token, xlora_models::XLoraModelWeights as XLoraQLlama,
 };
 use anyhow::{bail, Result};
-use candle_core::quantized::gguf_file;
+use candle_core::quantized::{gguf_file, GgmlDType};
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::{LoraConfig, Ordering};
@@ -27,7 +27,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokenizers::Tokenizer;
-use tracing::info;
+use tracing::{info, warn};
 
 enum Model {
     Llama(QLlama),
@@ -318,7 +318,11 @@ impl Loader for GGUFLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
+        in_situ_quant: Option<GgmlDType>,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
+        if in_situ_quant.is_some() {
+            warn!("You are trying to in-situ quantize a GGUF model. This will no do anything.");
+        }
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
         let model = gguf_file::Content::read(&mut file)
             .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
