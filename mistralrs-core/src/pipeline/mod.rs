@@ -311,6 +311,7 @@ pub trait Pipeline: Send + Sync {
         }
         Ok(second_logprobs_response)
     }
+    fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()>;
 }
 
 pub trait ConfigMarker {}

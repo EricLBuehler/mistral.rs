@@ -287,7 +287,9 @@ impl Loader for GGMLLoader {
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
-            warn!("You are trying to in-situ quantize a GGUF model. This will no do anything.");
+            anyhow::bail!(
+                "You are trying to in-situ quantize a GGUF model. This will not do anything."
+            );
         }
         if !mapper.is_dummy() {
             warn!("GGML models do not support device mapping. Device mapping will not work. Please consider using a GGUF model.");
@@ -477,5 +479,10 @@ impl Pipeline for GGMLPipeline {
     }
     fn tok_trie(&self) -> &TokTrie {
         &self.tok_trie
+    }
+    fn re_isq_model(&mut self, _dtype: GgmlDType) -> Result<()> {
+        anyhow::bail!(
+            "You are trying to in-situ requantize a GGUF model. This will not do anything."
+        )
     }
 }

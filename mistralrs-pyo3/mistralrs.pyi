@@ -187,6 +187,11 @@ class Runner:
         Send a chat completion request to the mistral.rs engine, returning the response object.
         """
 
+    def send_re_isq(self, dtype: str) -> CompletionResponse:
+        """
+        Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML then nothing will happen.
+        """
+
 @dataclass
 class Role(Enum):
     """

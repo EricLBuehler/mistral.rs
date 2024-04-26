@@ -422,4 +422,7 @@ impl Pipeline for NormalPipeline {
     fn tok_trie(&self) -> &TokTrie {
         &self.tok_trie
     }
+    fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()> {
+        self.model.quantize(dtype).map_err(anyhow::Error::msg)
+    }
 }

@@ -601,6 +601,14 @@ impl Runner {
             }
         })
     }
+
+    /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
+    /// then nothing will happen.
+    fn send_re_isq(&self, dtype: String) -> PyResult<()> {
+        self.runner
+            .send_re_isq(parse_isq(&dtype).map_err(|e| PyValueError::new_err(e.to_string()))?);
+        Ok(())
+    }
 }
 
 #[pyclass]

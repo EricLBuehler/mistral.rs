@@ -27,7 +27,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokenizers::Tokenizer;
-use tracing::{info, warn};
+use tracing::info;
 
 enum Model {
     Llama(QLlama),
@@ -321,7 +321,9 @@ impl Loader for GGUFLoader {
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
-            warn!("You are trying to in-situ quantize a GGUF model. This will no do anything.");
+            anyhow::bail!(
+                "You are trying to in-situ quantize a GGUF model. This will not do anything."
+            );
         }
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
         let model = gguf_file::Content::read(&mut file)
@@ -534,5 +536,10 @@ impl Pipeline for GGUFPipeline {
     }
     fn tok_trie(&self) -> &TokTrie {
         &self.tok_trie
+    }
+    fn re_isq_model(&mut self, _dtype: GgmlDType) -> Result<()> {
+        anyhow::bail!(
+            "You are trying to in-situ requantize a GGML model. This will not do anything."
+        )
     }
 }
