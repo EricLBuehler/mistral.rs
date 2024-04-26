@@ -71,6 +71,10 @@ impl QLinear {
         &mut self.inner
     }
 
+    pub fn is_quant(&self) -> bool {
+        matches!(self.inner, QMatMul::QTensor(_))
+    }
+
     pub fn bias(&self) -> Option<&Tensor> {
         self.bias.as_ref()
     }

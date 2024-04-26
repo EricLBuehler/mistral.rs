@@ -84,7 +84,15 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let qkv = self.qkv_proj.forward(xs)?;
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        let mut qkv = self.qkv_proj.forward(&xs)?;
+        if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
+            qkv = qkv.to_dtype(original_dtype)?;
+        }
         let query_pos = self.num_heads * self.head_dim;
         let q = qkv.narrow(D::Minus1, 0, query_pos)?;
         let k = qkv.narrow(D::Minus1, query_pos, self.num_kv_heads * self.head_dim)?;
@@ -119,7 +127,7 @@ impl Attention {
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        let attn_output = if self.use_flash_attn {
+        let mut attn_output = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
@@ -137,10 +145,17 @@ impl Attention {
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
             attn_weights.matmul(&v)?
         };
-        attn_output
+        if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
+            attn_output = attn_output.to_dtype(DType::F32)?;
+        }
+        let mut res = attn_output
             .transpose(1, 2)?
             .reshape((b_sz, q_len, ()))?
-            .apply(&self.o_proj)
+            .apply(&self.o_proj)?;
+        if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -169,11 +184,20 @@ impl Mlp {
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if matches!(self.gate_up_proj, QMatMul::QTensor(_)) {
+            xs = xs.to_dtype(DType::F32)?;
+        }
         let up_states = xs.apply(&self.gate_up_proj)?;
         let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
         let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
         let up_states = (up_states * gate.apply(&self.act_fn))?;
-        up_states.apply(&self.down_proj)
+        let mut res = up_states.apply(&self.down_proj)?;
+        if matches!(self.gate_up_proj, QMatMul::QTensor(_)) {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -349,7 +373,12 @@ impl Model {
                 &mut cache[i],
             )?
         }
-        extract_logits(&xs.apply(&self.norm)?.apply(&self.lm_head)?, context_lens)
+        extract_logits(
+            &xs.apply(&self.norm)?
+                .to_dtype(DType::F32)?
+                .apply(&self.lm_head)?,
+            context_lens,
+        )
     }
 }
 

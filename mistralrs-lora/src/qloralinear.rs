@@ -194,6 +194,9 @@ impl LinearLayerLike for QLoraLinear {
     fn inner(&mut self) -> &mut QMatMul {
         &mut self.old
     }
+    fn is_quant(&self) -> bool {
+        true
+    }
     fn lora_forward(
         &self,
         input: &Tensor,

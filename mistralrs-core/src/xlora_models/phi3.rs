@@ -88,12 +88,20 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let qkv = self.qkv_proj.lora_forward(
-            xs,
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.qkv_proj.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        let mut qkv = self.qkv_proj.lora_forward(
+            &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
+        if self.qkv_proj.is_quant() {
+            qkv = qkv.to_dtype(original_dtype)?;
+        }
         let query_pos = self.num_heads * self.head_dim;
         let q = qkv.narrow(D::Minus1, 0, query_pos)?;
         let k = qkv.narrow(D::Minus1, query_pos, self.num_kv_heads * self.head_dim)?;
@@ -128,7 +136,7 @@ impl Attention {
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        let attn_output = if self.use_flash_attn {
+        let mut attn_output = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
@@ -146,12 +154,19 @@ impl Attention {
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
             attn_weights.matmul(&v)?
         };
-        self.o_proj.lora_forward(
+        if self.qkv_proj.is_quant() {
+            attn_output = attn_output.to_dtype(DType::F32)?;
+        }
+        let mut res = self.o_proj.lora_forward(
             &attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?,
-            scalings,
+            scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
-        )
+        )?;
+        if self.qkv_proj.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -204,8 +219,13 @@ impl Mlp {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.gate_up_proj.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
         let up_states = self.gate_up_proj.lora_forward(
-            xs,
+            &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
@@ -213,8 +233,16 @@ impl Mlp {
         let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
         let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
         let up_states = (up_states * gate.apply(&self.act_fn))?;
-        self.down_proj
-            .lora_forward(&up_states, scalings, global_scaling_weight, is_scaling_pass)
+        let mut res = self.down_proj.lora_forward(
+            &up_states,
+            scalings,
+            global_scaling_weight,
+            is_scaling_pass,
+        )?;
+        if self.gate_up_proj.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -502,6 +530,7 @@ impl Model {
                             None,
                         )?
                         .contiguous()?
+                        .to_dtype(DType::F32)?
                         .apply(&self.lm_head)?,
                     context_lens,
                 )
@@ -519,6 +548,7 @@ impl Model {
                             None,
                         )?
                         .contiguous()?
+                        .to_dtype(DType::F32)?
                         .apply(&self.lm_head)?,
                     context_lens,
                 )
@@ -536,6 +566,7 @@ impl Model {
                         None,
                     )?
                     .contiguous()?
+                    .to_dtype(DType::F32)?
                     .apply(&self.lm_head)?,
                 context_lens,
             )

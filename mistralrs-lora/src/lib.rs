@@ -75,6 +75,7 @@ impl LoraConfig {
 /// Any layer that is linear-like.
 pub trait LinearLayerLike: Debug + Merge {
     fn inner(&mut self) -> &mut QMatMul;
+    fn is_quant(&self) -> bool;
     fn weight(&self) -> &Tensor;
     fn bias(&self) -> Option<&Tensor>;
     fn lora_forward(
@@ -120,6 +121,9 @@ impl LinearLayerLike for Linear {
         _is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         self.forward(x)
+    }
+    fn is_quant(&self) -> bool {
+        false
     }
 }
 

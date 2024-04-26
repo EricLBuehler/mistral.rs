@@ -77,24 +77,35 @@ impl CausalSelfAttention {
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
-        let q = self.q_proj.lora_forward(
-            x,
+
+        let original_dtype = x.dtype();
+        let mut x = x.clone();
+        if self.q_proj.is_quant() {
+            x = x.to_dtype(DType::F32)?;
+        }
+        let mut q = self.q_proj.lora_forward(
+            &x,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let k = self.k_proj.lora_forward(
-            x,
+        let mut k = self.k_proj.lora_forward(
+            &x,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let v = self.v_proj.lora_forward(
-            x,
+        let mut v = self.v_proj.lora_forward(
+            &x,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
+        if self.q_proj.is_quant() {
+            q = q.to_dtype(original_dtype)?;
+            k = k.to_dtype(original_dtype)?;
+            v = v.to_dtype(original_dtype)?;
+        }
 
         let mut q = q.reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.num_key_value_heads, self.head_dim))?;
@@ -158,14 +169,20 @@ impl CausalSelfAttention {
             // Convert to contiguous as matmul doesn't support strided vs for now.
             att.matmul(&v.contiguous()?)?.to_dtype(in_dtype)?
         };
-        let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
-        let y = self.o_proj.lora_forward(
-            &y,
+        let mut y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
+        if self.q_proj.is_quant() {
+            y = y.to_dtype(DType::F32)?;
+        }
+        let mut res = self.o_proj.lora_forward(
+            &y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        Ok(y)
+        if self.q_proj.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 
     fn load(
@@ -228,19 +245,32 @@ impl Mlp {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
+        let original_dtype = x.dtype();
+        let mut x = x.clone();
+        if self.c_fc1.is_quant() {
+            x = x.to_dtype(DType::F32)?;
+        }
         let x = (candle_nn::ops::silu(&self.c_fc1.lora_forward(
-            x,
+            &x,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?)? * self.c_fc2.lora_forward(
-            x,
+            &x,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?)?;
-        self.c_proj
-            .lora_forward(&x, scalings.clone(), global_scaling_weight, is_scaling_pass)
+        let mut res = self.c_proj.lora_forward(
+            &x,
+            scalings.clone(),
+            global_scaling_weight,
+            is_scaling_pass,
+        )?;
+        if self.c_fc1.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 
     fn load(
@@ -432,6 +462,7 @@ impl XLoraLlama {
                             None,
                         )?
                         .contiguous()?
+                        .to_dtype(DType::F32)?
                         .apply(&self.lm_head)?,
                     context_lens,
                 )
@@ -449,6 +480,7 @@ impl XLoraLlama {
                             None,
                         )?
                         .contiguous()?
+                        .to_dtype(DType::F32)?
                         .apply(&self.lm_head)?,
                     context_lens,
                 )
@@ -466,6 +498,7 @@ impl XLoraLlama {
                         None,
                     )?
                     .contiguous()?
+                    .to_dtype(DType::F32)?
                     .apply(&self.lm_head)?,
                 context_lens,
             )

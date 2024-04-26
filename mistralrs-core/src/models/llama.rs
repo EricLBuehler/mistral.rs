@@ -81,9 +81,20 @@ impl CausalSelfAttention {
         cache: &mut Cache,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
-        let q = self.q_proj.forward(x)?;
-        let k = self.k_proj.forward(x)?;
-        let v = self.v_proj.forward(x)?;
+
+        let original_dtype = x.dtype();
+        let mut x = x.clone();
+        if matches!(self.q_proj, QMatMul::QTensor(_)) {
+            x = x.to_dtype(DType::F32)?;
+        }
+        let mut q = self.q_proj.forward(&x)?;
+        let mut k = self.k_proj.forward(&x)?;
+        let mut v = self.v_proj.forward(&x)?;
+        if matches!(self.q_proj, QMatMul::QTensor(_)) {
+            q = q.to_dtype(original_dtype)?;
+            k = k.to_dtype(original_dtype)?;
+            v = v.to_dtype(original_dtype)?;
+        }
 
         let mut q = q.reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.num_key_value_heads, self.head_dim))?;
@@ -126,7 +137,7 @@ impl CausalSelfAttention {
         let k = repeat_kv(k, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
         let v = repeat_kv(v, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
 
-        let y = if self.use_flash_attn {
+        let mut y = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
@@ -147,8 +158,14 @@ impl CausalSelfAttention {
             // Convert to contiguous as matmul doesn't support strided vs for now.
             att.matmul(&v.contiguous()?)?.to_dtype(in_dtype)?
         };
+        if matches!(self.q_proj, QMatMul::QTensor(_)) {
+            y = y.to_dtype(DType::F32)?;
+        }
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
-        let y = self.o_proj.forward(&y)?;
+        let mut y = self.o_proj.forward(&y)?;
+        if matches!(self.q_proj, QMatMul::QTensor(_)) {
+            y = y.to_dtype(original_dtype)?;
+        }
         Ok(y)
     }
 
@@ -199,8 +216,17 @@ struct Mlp {
 
 impl Mlp {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x = (candle_nn::ops::silu(&self.c_fc1.forward(x)?)? * self.c_fc2.forward(x)?)?;
-        self.c_proj.forward(&x)
+        let original_dtype = x.dtype();
+        let mut x = x.clone();
+        if matches!(self.c_fc1, QMatMul::QTensor(_)) {
+            x = x.to_dtype(DType::F32)?;
+        }
+        let x = (candle_nn::ops::silu(&self.c_fc1.forward(&x)?)? * self.c_fc2.forward(&x)?)?;
+        let mut res = self.c_proj.forward(&x)?;
+        if matches!(self.c_fc1, QMatMul::QTensor(_)) {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
@@ -302,9 +328,9 @@ impl Llama {
             )?;
         }
         let x = x.to_device(&self.device)?;
-        let x = self.ln_f.forward(&x)?;
+        let x = self.ln_f.forward(&x)?.to_dtype(DType::F32)?;
         let logits = self.lm_head.forward(&x)?;
-        extract_logits(&logits.to_dtype(DType::F32)?, context_lens)
+        extract_logits(&logits, context_lens)
     }
 
     pub fn new(

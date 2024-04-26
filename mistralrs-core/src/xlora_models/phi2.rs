@@ -72,15 +72,29 @@ impl MLP {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        self.fc2.lora_forward(
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.fc1.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        let mut res = self.fc2.lora_forward(
             &self
                 .fc1
-                .lora_forward(xs, scalings.clone(), global_scaling_weight, is_scaling_pass)?
+                .lora_forward(
+                    &xs,
+                    scalings.clone(),
+                    global_scaling_weight,
+                    is_scaling_pass,
+                )?
                 .apply(&self.act)?,
             scalings,
             global_scaling_weight,
             is_scaling_pass,
-        )
+        )?;
+        if self.fc1.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -205,24 +219,34 @@ impl Attention {
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         let (b_size, seq_len, _n_embd) = xs.dims3()?;
-        let q = self.q_proj.lora_forward(
-            xs,
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.q_proj.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        let mut q = self.q_proj.lora_forward(
+            &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let k = self.k_proj.lora_forward(
-            xs,
+        let mut k = self.k_proj.lora_forward(
+            &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let v = self.v_proj.lora_forward(
-            xs,
+        let mut v = self.v_proj.lora_forward(
+            &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
+        if self.q_proj.is_quant() {
+            q = q.to_dtype(original_dtype)?;
+            k = k.to_dtype(original_dtype)?;
+            v = v.to_dtype(original_dtype)?;
+        }
 
         let q = match &self.q_layernorm {
             None => q,
@@ -296,15 +320,22 @@ impl Attention {
             attn_weights.matmul(&v)?
         };
 
-        let attn_output = attn_output
+        let mut attn_output = attn_output
             .transpose(1, 2)?
             .reshape((b_size, seq_len, ()))?;
-        self.dense.lora_forward(
+        if self.q_proj.is_quant() {
+            attn_output = attn_output.to_dtype(DType::F32)?;
+        }
+        let mut res = self.dense.lora_forward(
             &attn_output,
             scalings,
             global_scaling_weight,
             is_scaling_pass,
-        )
+        )?;
+        if self.q_proj.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -543,6 +574,7 @@ impl Model {
                             None,
                         )?
                         .contiguous()?
+                        .to_dtype(DType::F32)?
                         .apply(&self.lm_head)?,
                     context_lens,
                 )
@@ -560,6 +592,7 @@ impl Model {
                             None,
                         )?
                         .contiguous()?
+                        .to_dtype(DType::F32)?
                         .apply(&self.lm_head)?,
                     context_lens,
                 )
@@ -577,6 +610,7 @@ impl Model {
                         None,
                     )?
                     .contiguous()?
+                    .to_dtype(DType::F32)?
                     .apply(&self.lm_head)?,
                 context_lens,
             )
