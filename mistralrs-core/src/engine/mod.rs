@@ -84,6 +84,7 @@ impl Engine {
 
     pub fn run(&mut self) {
         let mut last_run = Instant::now();
+        let mut last_completion: Vec<usize> = vec![];
         'lp: loop {
             while let Ok(request) = self.rx.try_recv() {
                 self.add_request(request);
@@ -97,8 +98,10 @@ impl Engine {
             }
 
             if scheduled.completion.len() > 0 {
+                let current_completion: Vec<usize> =
+                    scheduled.completion.iter().map(|seq| *seq.id()).collect();
                 // Run the completion seqs
-                if !self.no_kv_cache {
+                if !self.no_kv_cache && last_completion != current_completion {
                     Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
                 }
                 let logits = pipeline.forward(&scheduled.completion, false);
@@ -125,6 +128,7 @@ impl Engine {
                     'lp,
                     self.prefix_cacher
                 );
+                last_completion = scheduled.completion.iter().map(|seq| *seq.id()).collect();
             }
 
             if scheduled.prompt.len() > 0 {
@@ -166,6 +170,7 @@ impl Engine {
                     seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
                     seq.prompt_timestamp = Some(now);
                 }
+                last_completion = vec![];
             }
 
             if self.is_debug {
