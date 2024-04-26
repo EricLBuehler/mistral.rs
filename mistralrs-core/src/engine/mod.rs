@@ -14,7 +14,7 @@ use crate::{
     response::CompletionChoice,
     CompletionResponse, RequestMessage,
 };
-use candle_core::{Result, Tensor};
+use candle_core::{Device, Result, Tensor};
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
 use tracing::warn;
@@ -213,7 +213,7 @@ impl Engine {
         rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<()> {
         let seqs_len = seqs.len();
-        let logits_seq = logits.chunk(seqs_len, 0).unwrap();
+        let logits_seq = logits.to_device(&Device::Cpu)?.chunk(seqs_len, 0)?;
         debug_assert_eq!(logits_seq.len(), seqs_len);
         let eos_tok = pipeline.eos_tok().to_vec();
         let sampled_tasks: Vec<_> = zip(logits_seq, seqs.iter_mut())
