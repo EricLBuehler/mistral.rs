@@ -228,6 +228,7 @@ impl Engine {
             }
         }
     }
+    #[allow(clippy::too_many_arguments)]
     async fn sample_sequence(
         logits: Tensor,
         seq: &mut Sequence,
