@@ -21,6 +21,7 @@ macro_rules! handle_seq_error {
                 use $crate::response::Response;
                 $response
                     .send(Response::InternalError(e.into()))
+                    .await
                     .expect("Expected receiver.");
                 return;
             }
@@ -37,6 +38,7 @@ macro_rules! handle_seq_error_ok {
                 use $crate::response::Response;
                 $response
                     .send(Response::InternalError(e.into()))
+                    .await
                     .expect("Expected receiver.");
                 return Ok(());
             }
@@ -72,6 +74,7 @@ macro_rules! handle_seq_error_stateaware_ok {
                 use $crate::sequence::SequenceState;
                 $seq.responder()
                     .send(Response::InternalError(e.into()))
+                    .await
                     .expect("Expected receiver.");
                 $seq.set_state(SequenceState::Error);
                 return Ok(());
@@ -144,7 +147,7 @@ macro_rules! handle_pipeline_forward_error {
                                 e.to_string(),
                                 partial_completion_response
                             ))
-                            .unwrap();
+                            .await        .unwrap();
                     } else {
                         let partial_completion_response = CompletionResponse {
                             id: seq.id().to_string(),
@@ -161,7 +164,7 @@ macro_rules! handle_pipeline_forward_error {
                                 e.to_string(),
                                 partial_completion_response
                             ))
-                            .unwrap();
+                            .await     .unwrap();
                     }
                 }
                 for seq in $seq_slice.iter_mut() {

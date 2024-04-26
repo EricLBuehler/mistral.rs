@@ -1,15 +1,3 @@
-use std::{
-    env,
-    error::Error,
-    pin::Pin,
-    sync::{
-        mpsc::{channel, Receiver, Sender},
-        Arc,
-    },
-    task::{Context, Poll},
-    time::Duration,
-};
-
 use crate::openai::{ChatCompletionRequest, Grammar, StopTokens};
 use anyhow::Result;
 use axum::{
@@ -27,6 +15,15 @@ use mistralrs_core::{
     SamplingParams, StopTokens as InternalStopTokens,
 };
 use serde::Serialize;
+use std::{
+    env,
+    error::Error,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
+};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 #[derive(Debug)]
 struct ModelErrorMessage(String);
@@ -217,11 +214,11 @@ pub async fn chatcompletions(
     State(state): State<Arc<MistralRs>>,
     Json(oairequest): Json<ChatCompletionRequest>,
 ) -> ChatCompletionResponder {
-    let (tx, rx) = channel();
+    let (tx, mut rx) = channel(10_000);
     let request = parse_request(oairequest, state.clone(), tx);
     let is_streaming = request.is_streaming;
     let sender = state.get_sender();
-    sender.send(request).unwrap();
+    sender.send(request).await.unwrap();
 
     if is_streaming {
         let streamer = Streamer {
@@ -242,7 +239,7 @@ pub async fn chatcompletions(
             ),
         )
     } else {
-        let response = rx.recv().unwrap();
+        let response = rx.recv().await.unwrap();
 
         match response {
             Response::InternalError(e) => {

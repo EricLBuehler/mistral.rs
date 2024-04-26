@@ -1,13 +1,15 @@
 use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
+use futures::executor::block_on;
 use mistralrs_core::{
     Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelKind,
     ModelSelected, Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
     Usage,
 };
+use std::fmt::Display;
 use std::sync::Arc;
-use std::{fmt::Display, sync::mpsc::channel};
+use tokio::sync::mpsc::channel;
 use tracing::{info, warn};
 
 enum TestName {
@@ -63,7 +65,7 @@ fn run_bench(
         n_choices: 1,
     };
     let sender = mistralrs.get_sender();
-    let (tx, rx) = channel();
+    let (tx, mut rx) = channel(10_000);
 
     let req = Request {
         id: mistralrs.next_request_id(),
@@ -80,11 +82,11 @@ fn run_bench(
 
     for _ in 0..repetitions {
         for _ in 0..concurrency {
-            sender.send(req.clone()).expect("Expected receiver.");
+            block_on(sender.send(req.clone())).expect("Expected receiver.");
         }
         for _ in 0..concurrency {
-            match rx.recv() {
-                Ok(r) => match r {
+            match block_on(rx.recv()) {
+                Some(r) => match r {
                     Response::InternalError(e) => {
                         unreachable!("Got an internal error: {e:?}");
                     }
@@ -103,7 +105,7 @@ fn run_bench(
                         usages.push(res.usage);
                     }
                 },
-                Err(e) => unreachable!("Expected a Done response, got: {:?}", e),
+                None => unreachable!("Expected a Done response, got none",),
             }
         }
     }

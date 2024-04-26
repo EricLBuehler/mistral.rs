@@ -5,13 +5,11 @@ use std::{
     error::Error,
     fs::OpenOptions,
     io::Write,
-    sync::{
-        mpsc::{channel, Sender},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::mpsc::{channel, Sender};
 
 use engine::Engine;
 pub use mistralrs_lora::Ordering;
@@ -144,7 +142,7 @@ impl MistralRs {
         let prefix_cache_n = prefix_cache_n.unwrap_or(16);
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
 
-        let (tx, rx) = channel();
+        let (tx, rx) = channel(10_000);
 
         let this = Arc::new(Self {
             sender: tx,

@@ -2,6 +2,7 @@
 
 use candle_core::Result;
 use either::Either;
+use futures::executor::block_on;
 use indexmap::IndexMap;
 use message::{Message, Role};
 use std::{
@@ -9,9 +10,10 @@ use std::{
     collections::HashMap,
     fmt::Debug,
     str::FromStr,
-    sync::{mpsc::channel, Arc, Mutex},
+    sync::{Arc, Mutex},
 };
 use stream::ChatCompletionStreamer;
+use tokio::sync::mpsc::channel;
 
 use candle_core::Device;
 use mistralrs_core::{
@@ -380,7 +382,7 @@ impl Runner {
         &mut self,
         request: Py<ChatCompletionRequest>,
     ) -> PyResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
-        let (tx, rx) = channel();
+        let (tx, mut rx) = channel(10_000);
         Python::with_gil(|py| {
             let request = request.bind(py).borrow();
             let stop_toks = request
@@ -462,12 +464,12 @@ impl Runner {
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
             let sender = self.runner.get_sender();
-            sender.send(model_request).unwrap();
+            block_on(sender.send(model_request)).unwrap();
 
             if request.stream {
                 Ok(Either::Right(ChatCompletionStreamer::from_rx(rx)))
             } else {
-                let response = rx.recv().unwrap();
+                let response = block_on(rx.recv()).unwrap();
 
                 match response {
                     Response::ValidationError(e) | Response::InternalError(e) => {
@@ -488,7 +490,7 @@ impl Runner {
         &mut self,
         request: Py<CompletionRequest>,
     ) -> PyResult<CompletionResponse> {
-        let (tx, rx) = channel();
+        let (tx, mut rx) = channel(10_000);
         Python::with_gil(|py| {
             let request = request.bind(py).borrow();
             let stop_toks = request
@@ -550,8 +552,8 @@ impl Runner {
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
             let sender = self.runner.get_sender();
-            sender.send(model_request).unwrap();
-            let response = rx.recv().unwrap();
+            block_on(sender.send(model_request)).unwrap();
+            let response = block_on(rx.recv()).unwrap();
 
             match response {
                 Response::ValidationError(e) | Response::InternalError(e) => {

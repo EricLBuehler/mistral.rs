@@ -1,9 +1,10 @@
 use std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
-    sync::{mpsc::Sender, Arc},
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::mpsc::Sender;
 
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
@@ -473,7 +474,7 @@ impl SequenceGroup {
         }
     }
 
-    pub fn maybe_send_done_response(
+    pub async fn maybe_send_done_response(
         &self,
         response: ChatCompletionResponse,
         sender: Sender<Response>,
@@ -481,11 +482,12 @@ impl SequenceGroup {
         if self.choices.len() == self.n_choices {
             sender
                 .send(Response::Done(response))
+                .await
                 .expect("Expected receiver.");
         }
     }
 
-    pub fn maybe_send_streaming_response(&mut self, seq: &Sequence, model: String) {
+    pub async fn maybe_send_streaming_response(&mut self, seq: &Sequence, model: String) {
         if self.streaming_chunks.len() == self.n_choices && self.is_streaming {
             let mut swap_streaming_chunks = vec![];
 
@@ -500,11 +502,12 @@ impl SequenceGroup {
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "chat.completion.chunk".to_string(),
                 }))
+                .await
                 .expect("Expected receiver.");
         }
     }
 
-    pub fn maybe_send_completion_done_response(
+    pub async fn maybe_send_completion_done_response(
         &self,
         response: CompletionResponse,
         sender: Sender<Response>,
@@ -512,6 +515,7 @@ impl SequenceGroup {
         if self.completion_choices.len() == self.n_choices {
             sender
                 .send(Response::CompletionDone(response))
+                .await
                 .expect("Expected receiver.");
         }
     }
