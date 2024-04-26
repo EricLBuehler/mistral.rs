@@ -128,7 +128,7 @@ impl Engine {
                     'lp,
                     self.prefix_cacher
                 );
-                last_completion = scheduled.completion.iter().map(|seq| *seq.id()).collect();
+                last_completion = current_completion;
             }
 
             if scheduled.prompt.len() > 0 {
