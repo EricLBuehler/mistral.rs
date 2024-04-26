@@ -201,3 +201,24 @@ macro_rules! get_bias_if_not_allowed {
         }
     };
 }
+
+#[macro_export]
+macro_rules! sample_async {
+    (
+        $use_async_pool: expr,
+        $sampler: expr,
+        $logits: expr,
+        $ctx: expr,
+        $return_logprobs: expr,
+        $rng: expr
+     ) => {
+        if $use_async_pool {
+            tokio_rayon::spawn(move || {
+                $sampler.sample($logits, Some(&$ctx), $return_logprobs, $rng)
+            })
+            .await?
+        } else {
+            $sampler.sample($logits, Some(&$ctx), $return_logprobs, $rng)?
+        }
+    };
+}

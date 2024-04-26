@@ -11,7 +11,7 @@ use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
     get_bias_if_not_allowed, handle_seq_error_ok, handle_seq_error_stateaware_ok,
     response::CompletionChoice,
-    sampler, CompletionResponse, RequestMessage,
+    sample_async, sampler, CompletionResponse, RequestMessage,
 };
 use candle_core::{DType, Device, Result, Tensor};
 use futures::future;
@@ -228,13 +228,12 @@ impl Engine {
             }
         }
     }
-    #[allow(clippy::too_many_arguments)]
+
     async fn sample_sequence(
         logits: Tensor,
         seq: &mut Sequence,
         return_logprobs: bool,
         repeat_last_n: usize,
-        device: Device,
         tok_trie: Arc<TokTrie>,
         rng: Arc<Mutex<Isaac64Rng>>,
         use_async_pool: bool,
@@ -246,14 +245,14 @@ impl Engine {
         let logits_clone = logits.clone();
         let ctx_clone = seq.get_toks()[start_at..].to_vec();
         let rng_clone = rng.clone();
-        let first_lobprobs_response = if use_async_pool {
-            tokio_rayon::spawn(move || {
-                sampler.sample(logits_clone, Some(&ctx_clone), return_logprobs, rng_clone)
-            })
-            .await?
-        } else {
-            sampler.sample(logits_clone, Some(&ctx_clone), return_logprobs, rng_clone)?
-        };
+        let first_lobprobs_response = sample_async!(
+            use_async_pool,
+            sampler,
+            logits_clone,
+            ctx_clone,
+            return_logprobs,
+            rng_clone
+        );
 
         let bias_if_not_allowed = match &mut seq.recognizer {
             SequenceRecognizer::Regex(ref mut rx) => {
@@ -268,11 +267,19 @@ impl Engine {
             Some(token_set) => {
                 let mut acc = vec![-f32::INFINITY; tok_trie.vocab_size()];
                 token_set.apply_to(&mut acc);
-                let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), &device)?)?;
-                let ctxt = seq.get_toks()[start_at..].to_vec();
+                let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), &Device::Cpu)?)?;
 
-                seq.sampler()
-                    .sample(new_logits, Some(&ctxt), return_logprobs, rng)?
+                let ctx_clone = seq.get_toks()[start_at..].to_vec();
+                let rng_clone = rng.clone();
+                let sampler = seq.sampler();
+                sample_async!(
+                    use_async_pool,
+                    sampler,
+                    new_logits,
+                    ctx_clone,
+                    return_logprobs,
+                    rng_clone
+                )
             }
             None => first_lobprobs_response,
         };
@@ -300,22 +307,14 @@ impl Engine {
         let logits_seq = logits.to_device(&Device::Cpu)?.chunk(seqs_len, 0)?;
         debug_assert_eq!(logits_seq.len(), seqs_len);
 
-        let (tok_trie, repeat_last_n, device, eos_tok, max_seq_len, pipeline_name) = {
+        let (tok_trie, repeat_last_n, eos_tok, max_seq_len, pipeline_name) = {
             let pipeline = get_mut_arcmutex!(pipeline);
             let repeat_last_n = pipeline.get_repeat_last_n();
-            let device = pipeline.device().clone();
             let tok_trie = pipeline.tok_trie();
             let eos_tok = pipeline.eos_tok().to_vec();
             let max_seq_len = pipeline.get_max_seq_len();
             let pipeline_name = pipeline.name();
-            (
-                tok_trie,
-                repeat_last_n,
-                device,
-                eos_tok,
-                max_seq_len,
-                pipeline_name,
-            )
+            (tok_trie, repeat_last_n, eos_tok, max_seq_len, pipeline_name)
         };
 
         let use_async_pool = seqs_len > 1;
@@ -328,7 +327,6 @@ impl Engine {
                     seq,
                     return_logprobs,
                     repeat_last_n,
-                    device.clone(),
                     tok_trie.clone(),
                     rng.clone(),
                     use_async_pool,
