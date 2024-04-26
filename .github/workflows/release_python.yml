@@ -37,7 +37,7 @@ jobs:
       
       - name: Install dependencies
         run: |
-          sudo apt install libssl-dev
+          sudo apt install openssl
           sudo apt install pkg-config
       
       - name: Create source distribution
@@ -82,7 +82,7 @@ jobs:
       
       - name: Install dependencies
         run: |
-          sudo apt install libssl-dev
+          sudo apt install openssl
           sudo apt install pkg-config
       
       - name: Build wheel
