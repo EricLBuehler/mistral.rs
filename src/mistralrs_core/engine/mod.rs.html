@@ -769,6 +769,14 @@
 <a href="#767" id="767">767</a>
 <a href="#768" id="768">768</a>
 <a href="#769" id="769">769</a>
+<a href="#770" id="770">770</a>
+<a href="#771" id="771">771</a>
+<a href="#772" id="772">772</a>
+<a href="#773" id="773">773</a>
+<a href="#774" id="774">774</a>
+<a href="#775" id="775">775</a>
+<a href="#776" id="776">776</a>
+<a href="#777" id="777">777</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
@@ -1041,8 +1049,15 @@
                             pipeline.reset_non_granular_state();
                         }
 
-                        seq.get_mut_group()
-                            .maybe_send_streaming_response(seq, pipeline.name());
+                        <span class="kw">if </span>seq
+                            .get_mut_group()
+                            .maybe_send_streaming_response(seq, pipeline.name())
+                            .is_err()
+                        {
+                            <span class="comment">// If we can't send the response, cancel the sequence
+                            </span>seq.set_state(SequenceState::Done(StopReason::Canceled));
+                            pipeline.reset_non_granular_state();
+                        }
                     }
                 }
             } <span class="kw">else if let </span><span class="prelude-val">Some</span>(reason) = is_done {
@@ -1086,7 +1101,8 @@
             StopReason::Length(<span class="kw">_</span>)
             | StopReason::ModelLength(<span class="kw">_</span>)
             | StopReason::Eos
-            | StopReason::StopTok(<span class="kw">_</span>) =&gt; String::from_utf8_lossy(seq.completion_bytes())
+            | StopReason::StopTok(<span class="kw">_</span>)
+            | StopReason::Canceled =&gt; String::from_utf8_lossy(seq.completion_bytes())
                 .trim_start()
                 .to_string(),
             StopReason::StopString {
