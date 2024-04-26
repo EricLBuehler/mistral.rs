@@ -155,6 +155,7 @@ class Runner:
         token_source: str = "cache",
         chat_template: str | None = None,
         num_device_layers: int | None = None,
+        in_situ_quant: str | None = None,
     ) -> None:
         """
         Load a model.
@@ -169,6 +170,7 @@ class Runner:
             The JINJA template should have `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
             It is used if the automatic deserialization fails. If this ends with `.json` (ie., it is a file) then that template is loaded.
         - `num_device_layers` sets the number of layers to load and run on the device.
+        - `in_situ_quant` sets the optional in-situ quantization for models that are not quantized (not GGUF or GGML).
         """
         ...
 
