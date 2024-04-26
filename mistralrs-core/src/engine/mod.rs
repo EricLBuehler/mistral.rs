@@ -236,6 +236,7 @@ impl Engine {
         device: Device,
         tok_trie: Arc<TokTrie>,
         rng: Arc<Mutex<Isaac64Rng>>,
+        use_async_pool: bool,
     ) -> Result<sampler::Logprobs> {
         let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
         let start_at = seq.get_toks().len().saturating_sub(repeat_last_n);
@@ -244,10 +245,14 @@ impl Engine {
         let logits_clone = logits.clone();
         let ctx_clone = seq.get_toks()[start_at..].to_vec();
         let rng_clone = rng.clone();
-        let first_lobprobs_response = tokio_rayon::spawn(move || {
-            sampler.sample(logits_clone, Some(&ctx_clone), return_logprobs, rng_clone)
-        })
-        .await?;
+        let first_lobprobs_response = if use_async_pool {
+            tokio_rayon::spawn(move || {
+                sampler.sample(logits_clone, Some(&ctx_clone), return_logprobs, rng_clone)
+            })
+            .await?
+        } else {
+            sampler.sample(logits_clone, Some(&ctx_clone), return_logprobs, rng_clone)?
+        };
 
         let bias_if_not_allowed = match &mut seq.recognizer {
             SequenceRecognizer::Regex(ref mut rx) => {
@@ -312,6 +317,8 @@ impl Engine {
             )
         };
 
+        let use_async_pool = seqs_len > 1;
+
         let sampling_futures: Vec<_> = zip(logits_seq, seqs.iter_mut())
             .map(|(logits_per_seq, seq)| {
                 let return_logprobs = seq.return_logprobs();
@@ -323,6 +330,7 @@ impl Engine {
                     device.clone(),
                     tok_trie.clone(),
                     rng.clone(),
+                    use_async_pool,
                 )
             })
             .collect();
