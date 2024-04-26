@@ -2,7 +2,7 @@ use std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
     sync::mpsc::{SendError, Sender},
-    sync::{mpsc::Sender, Arc},
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 

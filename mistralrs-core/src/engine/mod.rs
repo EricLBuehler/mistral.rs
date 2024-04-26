@@ -13,8 +13,7 @@ use crate::{
     response::CompletionChoice,
     sample_async, sampler, CompletionResponse, RequestMessage,
 };
-use candle_core::{quantized::GgmlDType, Result, Tensor};
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
 use futures::future;
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
@@ -95,7 +94,7 @@ impl Engine {
             }
             let mut scheduled = self.scheduler.schedule();
             if let Ok(dtype) = self.isq_rx.try_recv() {
-                if let Err(e) = pipeline.re_isq_model(dtype) {
+                if let Err(e) = get_mut_arcmutex!(self.pipeline).re_isq_model(dtype) {
                     warn!("ISQ requantization failed: {e:?}");
                 }
             }
@@ -399,7 +398,7 @@ impl Engine {
                         {
                             // If we can't send the response, cancel the sequence
                             seq.set_state(SequenceState::Done(StopReason::Canceled));
-                            pipeline.reset_non_granular_state();
+                            get_mut_arcmutex!(pipeline).reset_non_granular_state();
                         }
                     }
                 }

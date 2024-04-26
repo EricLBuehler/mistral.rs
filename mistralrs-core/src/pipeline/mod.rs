@@ -6,7 +6,6 @@ mod macros;
 mod normal;
 use crate::aici::toktree::TokTrie;
 use crate::DeviceMapMetadata;
-use crate::{get_bias_if_not_allowed, sampler::Logprobs, sequence::SequenceRecognizer};
 use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
 use candle_nn::VarBuilder;
 use chat_template::{apply_chat_template_to, ChatTemplate};
