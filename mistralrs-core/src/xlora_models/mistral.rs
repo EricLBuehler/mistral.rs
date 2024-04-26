@@ -1,16 +1,17 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
-use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
+use mistralrs_lora::{layer::QLinear, linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 use std::sync::Arc;
 use tqdm::Iter;
 use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    models::{flash_attn, mistral::Config, repeat_kv, Cache, RmsNorm},
+    layers::RmsNorm,
+    models::{flash_attn, mistral::Config, repeat_kv, Cache},
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
@@ -340,7 +341,7 @@ pub struct XLoraModel {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: candle_nn::Linear,
+    lm_head: QLinear,
     sliding_window: Option<usize>,
     dtype: DType,
     pub device: Device,
@@ -421,7 +422,7 @@ impl XLoraModel {
             embed_tokens,
             layers,
             norm,
-            lm_head,
+            lm_head: QLinear::from_linear(lm_head),
             sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
             dtype: vb.dtype(),
@@ -668,6 +669,20 @@ impl NormalModel for XLoraModel {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+        let mut tensors = Vec::new();
+        tensors.push(self.lm_head.inner());
+        for layer in &mut self.layers {
+            tensors.push(Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.v_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.o_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.mlp.down_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.mlp.gate_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.mlp.up_proj).unwrap().inner());
+        }
+        tensors
     }
 }
 

@@ -1,16 +1,18 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{linear, linear_no_bias, Activation, Linear, RotaryEmbedding, VarBuilder};
+use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_nn::{linear, linear_no_bias, Activation, RotaryEmbedding, VarBuilder};
+use mistralrs_lora::layer::QLinear;
 use std::sync::Arc;
 
 use crate::{
     device_map::DeviceMapper,
+    layers::RmsNorm,
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
 
-use super::{flash_attn, repeat_kv, Cache, RmsNorm};
+use super::{flash_attn, repeat_kv, Cache};
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
@@ -34,9 +36,9 @@ pub struct Config {
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
+    gate_proj: QMatMul,
+    up_proj: QMatMul,
+    down_proj: QMatMul,
     act_fn: Activation,
 }
 
@@ -48,9 +50,9 @@ impl MLP {
         let up_proj = linear_no_bias(hidden_sz, intermediate_sz, vb.pp("up_proj"))?;
         let down_proj = linear_no_bias(intermediate_sz, hidden_sz, vb.pp("down_proj"))?;
         Ok(Self {
-            gate_proj,
-            up_proj,
-            down_proj,
+            gate_proj: QMatMul::Tensor(gate_proj.weight().clone()),
+            up_proj: QMatMul::Tensor(up_proj.weight().clone()),
+            down_proj: QMatMul::Tensor(down_proj.weight().clone()),
             act_fn: cfg.hidden_act,
         })
     }
@@ -66,10 +68,10 @@ impl Module for MLP {
 
 #[derive(Debug, Clone)]
 struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: QLinear,
+    k_proj: QLinear,
+    v_proj: QLinear,
+    o_proj: QMatMul,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
@@ -91,10 +93,10 @@ impl Attention {
         let v_proj = linear(hidden_sz, num_kv_heads * head_dim, vb.pp("v_proj"))?;
         let o_proj = linear_no_bias(num_heads * head_dim, hidden_sz, vb.pp("o_proj"))?;
         Ok(Self {
-            q_proj,
-            k_proj,
-            v_proj,
-            o_proj,
+            q_proj: QLinear::from_linear(q_proj),
+            k_proj: QLinear::from_linear(k_proj),
+            v_proj: QLinear::from_linear(v_proj),
+            o_proj: QMatMul::Tensor(o_proj.weight().clone()),
             num_heads,
             num_kv_heads,
             num_kv_groups,
@@ -233,7 +235,7 @@ pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: Linear,
+    lm_head: QMatMul,
     sliding_window: usize,
     dtype: DType,
     pub device: Device,
@@ -278,7 +280,7 @@ impl Model {
             embed_tokens,
             layers,
             norm,
-            lm_head,
+            lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
             dtype: vb.dtype(),
@@ -408,5 +410,19 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+        let mut tensors = Vec::new();
+        tensors.push(&mut self.lm_head);
+        for layer in &mut self.layers {
+            tensors.push(layer.self_attn.q_proj.inner());
+            tensors.push(layer.self_attn.k_proj.inner());
+            tensors.push(layer.self_attn.v_proj.inner());
+            tensors.push(&mut layer.self_attn.o_proj);
+            tensors.push(&mut layer.mlp.down_proj);
+            tensors.push(&mut layer.mlp.gate_proj);
+            tensors.push(&mut layer.mlp.up_proj);
+        }
+        tensors
     }
 }

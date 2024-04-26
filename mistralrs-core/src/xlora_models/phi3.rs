@@ -2,21 +2,22 @@
 
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{Linear, VarBuilder};
-use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
+use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_nn::VarBuilder;
+use mistralrs_lora::{layer::QLinear, linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 use std::sync::Arc;
 use tqdm::Iter;
 use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
+    layers::{PhiRotaryEmbedding, RmsNorm},
     models::phi3::Config,
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
 
-use crate::models::{flash_attn, repeat_kv, Cache, PhiRotaryEmbedding, RmsNorm};
+use crate::models::{flash_attn, repeat_kv, Cache};
 
 use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
 
@@ -292,7 +293,7 @@ pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: Linear,
+    lm_head: QLinear,
     dtype: DType,
     pub device: Device,
     pub cache: Cache,
@@ -359,7 +360,7 @@ impl Model {
             embed_tokens,
             layers,
             norm,
-            lm_head,
+            lm_head: QLinear::from_linear(lm_head),
             device: vb.device().clone(),
             dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, true),
@@ -583,10 +584,21 @@ impl NormalModel for Model {
         &self.device
     }
     fn is_xlora(&self) -> bool {
-        false
+        true
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+        let mut tensors = Vec::new();
+        tensors.push(self.lm_head.inner());
+        for layer in &mut self.layers {
+            tensors.push(Arc::get_mut(&mut layer.self_attn.qkv_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.o_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.mlp.down_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.mlp.gate_up_proj).unwrap().inner());
+        }
+        tensors
     }
 }
 

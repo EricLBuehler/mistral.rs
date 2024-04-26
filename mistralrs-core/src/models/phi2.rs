@@ -5,11 +5,11 @@
 /// There is an alternative implementation of the phi model in mixformers.rs.
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
-use candle_core::{DType, Device, Module, Result, Tensor};
+use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor};
 use candle_nn::{
-    embedding, layer_norm, linear, Activation, Embedding, LayerNorm, Linear, RotaryEmbedding,
-    VarBuilder,
+    embedding, layer_norm, linear, Activation, Embedding, LayerNorm, RotaryEmbedding, VarBuilder,
 };
+use mistralrs_lora::layer::QLinear;
 use serde::Deserialize;
 
 use crate::{
@@ -52,8 +52,8 @@ impl Config {
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
-    fc1: Linear,
-    fc2: Linear,
+    fc1: QLinear,
+    fc2: QLinear,
     act: Activation,
 }
 
@@ -62,8 +62,8 @@ impl MLP {
         let fc1 = linear(cfg.hidden_size, cfg.intermediate_size, vb.pp("fc1"))?;
         let fc2 = linear(cfg.intermediate_size, cfg.hidden_size, vb.pp("fc2"))?;
         Ok(Self {
-            fc1,
-            fc2,
+            fc1: QLinear::from_linear(fc1),
+            fc2: QLinear::from_linear(fc2),
             // This does not match the mixformers implementation where Gelu is used rather than
             // GeluNew.
             act: cfg.hidden_act,
@@ -79,10 +79,10 @@ impl Module for MLP {
 
 #[derive(Clone)]
 struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    dense: Linear,
+    q_proj: QLinear,
+    k_proj: QLinear,
+    v_proj: QLinear,
+    dense: QLinear,
     q_layernorm: Option<LayerNorm>,
     k_layernorm: Option<LayerNorm>,
     rotary_emb: RotaryEmbedding,
@@ -135,10 +135,10 @@ impl Attention {
         };
         let softmax_scale = 1f64 / (head_dim as f64).sqrt();
         Ok(Self {
-            q_proj,
-            k_proj,
-            v_proj,
-            dense,
+            q_proj: QLinear::from_linear(q_proj),
+            k_proj: QLinear::from_linear(k_proj),
+            v_proj: QLinear::from_linear(v_proj),
+            dense: QLinear::from_linear(dense),
             q_layernorm,
             k_layernorm,
             rotary_emb,
@@ -287,7 +287,7 @@ pub struct Model {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
     final_layernorm: LayerNorm,
-    lm_head: Linear,
+    lm_head: QLinear,
     pub cache: Cache,
     pub device: Device,
     pub max_seq_len: usize,
@@ -324,7 +324,7 @@ impl Model {
             embed_tokens,
             layers,
             final_layernorm,
-            lm_head,
+            lm_head: QLinear::from_linear(lm_head),
             cache: Cache::new(cfg.num_hidden_layers, false),
             device: vb.device().clone(),
             max_seq_len: cfg.max_position_embeddings,
@@ -407,5 +407,18 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+        let mut tensors = Vec::new();
+        tensors.push(self.lm_head.inner());
+        for layer in &mut self.layers {
+            tensors.push(layer.self_attn.q_proj.inner());
+            tensors.push(layer.self_attn.k_proj.inner());
+            tensors.push(layer.self_attn.v_proj.inner());
+            tensors.push(layer.self_attn.dense.inner());
+            tensors.push(layer.mlp.fc1.inner());
+            tensors.push(layer.mlp.fc2.inner());
+        }
+        tensors
     }
 }

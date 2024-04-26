@@ -3,19 +3,19 @@
 /// Mixtral Model
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
-use candle_transformers::models::with_tracing::{linear_no_bias, Linear};
+use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_nn::{linear_no_bias, Activation, RotaryEmbedding, VarBuilder};
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::{
     device_map::DeviceMapper,
+    layers::RmsNorm,
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
 
-use super::{flash_attn, repeat_kv, Cache, RmsNorm};
+use super::{flash_attn, repeat_kv, Cache};
 
 /// https://github.com/huggingface/transformers/blob/1a585c1222a56bcaecc070966d558d4a9d862e83/src/transformers/models/mixtral/configuration_mixtral.py#L113
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -38,10 +38,10 @@ pub struct Config {
 
 #[derive(Debug, Clone)]
 struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: QMatMul,
+    k_proj: QMatMul,
+    v_proj: QMatMul,
+    o_proj: QMatMul,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
@@ -63,10 +63,10 @@ impl Attention {
         let v_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("v_proj"))?;
         let o_proj = linear_no_bias(num_heads * head_dim, hidden_sz, vb.pp("o_proj"))?;
         Ok(Self {
-            q_proj,
-            k_proj,
-            v_proj,
-            o_proj,
+            q_proj: QMatMul::Tensor(q_proj.weight().clone()),
+            k_proj: QMatMul::Tensor(k_proj.weight().clone()),
+            v_proj: QMatMul::Tensor(v_proj.weight().clone()),
+            o_proj: QMatMul::Tensor(o_proj.weight().clone()),
             num_heads,
             num_kv_heads,
             num_kv_groups,
@@ -151,9 +151,9 @@ impl Attention {
 
 #[derive(Debug, Clone)]
 struct BlockSparseTop2MLP {
-    w1: Linear,
-    w2: Linear,
-    w3: Linear,
+    w1: QMatMul,
+    w2: QMatMul,
+    w3: QMatMul,
     act_fn: Activation,
 }
 
@@ -165,9 +165,9 @@ impl BlockSparseTop2MLP {
         let w2 = linear_no_bias(intermediate_sz, hidden_sz, vb.pp("w2"))?;
         let w3 = linear_no_bias(hidden_sz, intermediate_sz, vb.pp("w3"))?;
         Ok(Self {
-            w1,
-            w2,
-            w3,
+            w1: QMatMul::Tensor(w1.weight().clone()),
+            w2: QMatMul::Tensor(w2.weight().clone()),
+            w3: QMatMul::Tensor(w3.weight().clone()),
             act_fn: cfg.hidden_act,
         })
     }
@@ -183,7 +183,7 @@ impl Module for BlockSparseTop2MLP {
 
 #[derive(Debug, Clone)]
 struct SparseMoeBlock {
-    gate: Linear,
+    gate: QMatMul,
     experts: Vec<BlockSparseTop2MLP>,
     num_experts_per_tok: usize,
 }
@@ -198,7 +198,7 @@ impl SparseMoeBlock {
             experts.push(expert)
         }
         Ok(SparseMoeBlock {
-            gate,
+            gate: QMatMul::Tensor(gate.weight().clone()),
             experts,
             num_experts_per_tok: cfg.num_experts_per_tok,
         })
@@ -322,7 +322,7 @@ pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: Linear,
+    lm_head: QMatMul,
     sliding_window: usize,
     pub device: Device,
     pub cache: Cache,
@@ -367,7 +367,7 @@ impl Model {
             embed_tokens,
             layers,
             norm,
-            lm_head,
+            lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
             dtype: vb.dtype(),
@@ -498,5 +498,22 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+        let mut tensors = Vec::new();
+        tensors.push(&mut self.lm_head);
+        for layer in &mut self.layers {
+            tensors.push(&mut layer.self_attn.q_proj);
+            tensors.push(&mut layer.self_attn.k_proj);
+            tensors.push(&mut layer.self_attn.v_proj);
+            tensors.push(&mut layer.self_attn.o_proj);
+            tensors.push(&mut layer.block_sparse_moe.gate);
+            for expert in &mut layer.block_sparse_moe.experts {
+                tensors.push(&mut expert.w1);
+                tensors.push(&mut expert.w2);
+                tensors.push(&mut expert.w3);
+            }
+        }
+        tensors
     }
 }

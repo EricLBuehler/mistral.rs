@@ -2,7 +2,7 @@ use std::{iter::zip, ops::Mul};
 
 use candle_core::{
     quantized::{QMatMul, QTensor},
-    DType, Module, Result, Shape, Tensor,
+    DType, Module, Result, Tensor,
 };
 use candle_nn::{init, Dropout, Linear, VarBuilder};
 use either::Either;
@@ -23,6 +23,7 @@ pub struct QLoraLinear {
     merged: bool,
 }
 
+/// Specialized QLoRA for no bias
 impl QLoraLinear {
     pub fn new(
         old: QMatMul,
@@ -190,8 +191,8 @@ impl LinearLayerLike for QLoraLinear {
     fn weight(&self) -> &Tensor {
         unimplemented!()
     }
-    fn shape(&self) -> &Shape {
-        unimplemented!()
+    fn inner(&mut self) -> &mut QMatMul {
+        &mut self.old
     }
     fn lora_forward(
         &self,

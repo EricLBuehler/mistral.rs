@@ -3,7 +3,7 @@
 /// Mixtral Model
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 use std::sync::Arc;
@@ -12,7 +12,8 @@ use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    models::{flash_attn, mixtral::Config, repeat_kv, Cache, RmsNorm},
+    layers::RmsNorm,
+    models::{flash_attn, mixtral::Config, repeat_kv, Cache},
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
@@ -768,6 +769,27 @@ impl NormalModel for XLoraModel {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+        let mut tensors = Vec::new();
+        tensors.push(self.lm_head.inner());
+        for layer in &mut self.layers {
+            tensors.push(Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.v_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.o_proj).unwrap().inner());
+            tensors.push(
+                Arc::get_mut(&mut layer.block_sparse_moe.gate)
+                    .unwrap()
+                    .inner(),
+            );
+            for expert in &mut layer.block_sparse_moe.experts {
+                tensors.push(Arc::get_mut(&mut expert.w1).unwrap().inner());
+                tensors.push(Arc::get_mut(&mut expert.w2).unwrap().inner());
+                tensors.push(Arc::get_mut(&mut expert.w3).unwrap().inner());
+            }
+        }
+        tensors
     }
 }
 

@@ -7,6 +7,7 @@ mod normal;
 use crate::aici::toktree::TokTrie;
 use crate::DeviceMapMetadata;
 use crate::{get_bias_if_not_allowed, sampler::Logprobs, sequence::SequenceRecognizer};
+use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
 use candle_nn::VarBuilder;
 use chat_template::{apply_chat_template_to, ChatTemplate};
 use core::fmt;
@@ -27,7 +28,8 @@ pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 use std::sync::Arc;
 use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
 use tokenizers::Tokenizer;
-use tracing::warn;
+use tqdm::Iter;
+use tracing::{info, warn};
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -357,6 +359,21 @@ pub trait NormalModel {
     fn device(&self) -> &Device;
     fn cache(&self) -> &Cache;
     fn max_seq_len(&self) -> usize;
+    fn get_tensors(&mut self) -> Vec<&mut QMatMul>;
+    /// Quantize the model in-situ.
+    fn quantize(&mut self, dtype: GgmlDType) -> candle_core::Result<()> {
+        let tensors = self.get_tensors();
+        let total_tensors = tensors.len();
+        let mut n_quantized = 0;
+        for tensor in tensors.into_iter().tqdm() {
+            if let QMatMul::Tensor(t) = tensor {
+                n_quantized += 1;
+                *tensor = QMatMul::QTensor(Arc::new(QTensor::quantize(&*t, dtype)?));
+            }
+        }
+        info!("Applied in-situ quantization into {dtype:?} to {n_quantized} tensors out of {total_tensors} total tensors.");
+        Ok(())
+    }
 }
 
 struct InputMetadata {

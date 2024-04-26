@@ -1,18 +1,21 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, Result, Tensor, D};
+use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
-use mistralrs_lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering};
+use mistralrs_lora::{
+    layer::QLinear, linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering,
+};
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
 use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
+    layers::RmsNorm,
     models::{
         self, flash_attn,
         llama::{Config, MAX_SEQ_LEN},
-        repeat_kv, LayerCaches, RmsNorm,
+        repeat_kv, LayerCaches,
     },
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
@@ -335,7 +338,7 @@ pub struct XLoraLlama {
     wte: Embedding,
     blocks: Vec<Block>,
     ln_f: RmsNorm,
-    lm_head: candle_nn::Linear,
+    lm_head: QLinear,
     pub kv_cache: models::Cache,
     pub device: Device,
     cache: Cache,
@@ -532,7 +535,7 @@ impl XLoraLlama {
             wte,
             blocks,
             ln_f,
-            lm_head,
+            lm_head: QLinear::from_linear(lm_head),
             cache: Cache::new()?,
             kv_cache: models::Cache::new(cfg.num_hidden_layers, true),
             device: device.clone(),
@@ -590,6 +593,20 @@ impl NormalModel for XLoraLlama {
     }
     fn max_seq_len(&self) -> usize {
         MAX_SEQ_LEN
+    }
+    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+        let mut tensors = Vec::new();
+        tensors.push(self.lm_head.inner());
+        for layer in &mut self.blocks {
+            tensors.push(Arc::get_mut(&mut layer.attn.q_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.attn.k_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.attn.v_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.attn.o_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.mlp.c_fc1).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.mlp.c_fc2).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.mlp.c_proj).unwrap().inner());
+        }
+        tensors
     }
 }
 

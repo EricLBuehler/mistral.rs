@@ -1,18 +1,20 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
-use candle_transformers::models::with_tracing::{linear_no_bias as linear, Linear};
+use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor, D};
+use candle_nn::{
+    embedding, linear_no_bias as linear, Embedding, Module, RotaryEmbedding, VarBuilder,
+};
 use serde::Deserialize;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     device_map::DeviceMapper,
+    layers::RmsNorm,
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
 
-use super::{flash_attn, repeat_kv, RmsNorm};
+use super::{flash_attn, repeat_kv};
 
 pub const MAX_SEQ_LEN: usize = 4096;
 
@@ -57,10 +59,10 @@ impl Cache {
 
 #[derive(Debug, Clone)]
 struct CausalSelfAttention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: QMatMul,
+    k_proj: QMatMul,
+    v_proj: QMatMul,
+    o_proj: QMatMul,
     num_attention_heads: usize,
     num_key_value_heads: usize,
     head_dim: usize,
@@ -168,10 +170,10 @@ impl CausalSelfAttention {
             vb.dtype(),
         )?);
         Ok(Self {
-            q_proj,
-            k_proj,
-            v_proj,
-            o_proj,
+            q_proj: QMatMul::Tensor(q_proj.weight().clone()),
+            k_proj: QMatMul::Tensor(k_proj.weight().clone()),
+            v_proj: QMatMul::Tensor(v_proj.weight().clone()),
+            o_proj: QMatMul::Tensor(o_proj.weight().clone()),
             num_attention_heads: cfg.num_attention_heads,
             num_key_value_heads: cfg.num_key_value_heads,
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
@@ -190,9 +192,9 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 
 #[derive(Debug, Clone)]
 struct Mlp {
-    c_fc1: Linear,
-    c_fc2: Linear,
-    c_proj: Linear,
+    c_fc1: QMatMul,
+    c_fc2: QMatMul,
+    c_proj: QMatMul,
 }
 
 impl Mlp {
@@ -208,9 +210,9 @@ impl Mlp {
         let c_fc2 = linear(h_size, i_size, vb.pp("up_proj"))?;
         let c_proj = linear(i_size, h_size, vb.pp("down_proj"))?;
         Ok(Self {
-            c_fc1,
-            c_fc2,
-            c_proj,
+            c_fc1: QMatMul::Tensor(c_fc1.weight().clone()),
+            c_fc2: QMatMul::Tensor(c_fc2.weight().clone()),
+            c_proj: QMatMul::Tensor(c_proj.weight().clone()),
         })
     }
 }
@@ -271,7 +273,7 @@ pub struct Llama {
     wte: Embedding,
     blocks: Vec<Block>,
     ln_f: RmsNorm,
-    lm_head: Linear,
+    lm_head: QMatMul,
     pub kv_cache: super::Cache,
     pub device: Device,
     cache: Cache,
@@ -331,7 +333,7 @@ impl Llama {
             wte,
             blocks,
             ln_f,
-            lm_head,
+            lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             cache: Cache::new()?,
             kv_cache: super::Cache::new(cfg.num_hidden_layers, false),
             device: device.clone(),
@@ -380,5 +382,19 @@ impl NormalModel for Llama {
     }
     fn max_seq_len(&self) -> usize {
         MAX_SEQ_LEN
+    }
+    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+        let mut tensors = Vec::new();
+        tensors.push(&mut self.lm_head);
+        for layer in &mut self.blocks {
+            tensors.push(&mut layer.attn.q_proj);
+            tensors.push(&mut layer.attn.k_proj);
+            tensors.push(&mut layer.attn.v_proj);
+            tensors.push(&mut layer.attn.o_proj);
+            tensors.push(&mut layer.mlp.c_fc1);
+            tensors.push(&mut layer.mlp.c_fc2);
+            tensors.push(&mut layer.mlp.c_proj);
+        }
+        tensors
     }
 }

@@ -7,11 +7,11 @@ use std::sync::Arc;
 /// There is an alternative implementation of the phi model in mixformers.rs.
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
 use candle_nn::{
-    embedding, layer_norm, Activation, Embedding, LayerNorm, Linear, RotaryEmbedding, VarBuilder,
+    embedding, layer_norm, Activation, Embedding, LayerNorm, RotaryEmbedding, VarBuilder,
 };
-use mistralrs_lora::{linear, LinearLayerLike, LoraConfig, Ordering};
+use mistralrs_lora::{layer::QLinear, linear, LinearLayerLike, LoraConfig, Ordering};
 use tqdm::Iter;
 use tracing::info;
 
@@ -373,7 +373,7 @@ pub struct Model {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
     final_layernorm: LayerNorm,
-    lm_head: Linear,
+    lm_head: QLinear,
     pub cache: Cache,
     pub device: Device,
     pub max_seq_len: usize,
@@ -440,7 +440,7 @@ impl Model {
             embed_tokens,
             layers,
             final_layernorm,
-            lm_head,
+            lm_head: QLinear::from_linear(lm_head),
             cache: Cache::new(cfg.num_hidden_layers, true),
             device: vb.device().clone(),
             max_seq_len: cfg.max_position_embeddings,
@@ -629,6 +629,19 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+        let mut tensors = Vec::new();
+        tensors.push(self.lm_head.inner());
+        for layer in &mut self.layers {
+            tensors.push(Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.v_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.dense).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.mlp.fc1).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.mlp.fc2).unwrap().inner());
+        }
+        tensors
     }
 }
 

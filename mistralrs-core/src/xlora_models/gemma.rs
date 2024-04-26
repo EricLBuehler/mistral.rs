@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{RotaryEmbedding, VarBuilder};
-use mistralrs_lora::{linear_b as linear, LinearLayerLike, LoraConfig, Ordering};
+use mistralrs_lora::{layer::QLinear, linear_b as linear, LinearLayerLike, LoraConfig, Ordering};
 use tqdm::Iter;
 use tracing::info;
 
@@ -369,7 +369,7 @@ pub struct XLoraModel {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: candle_nn::Linear,
+    lm_head: QLinear,
     dtype: DType,
     hidden_size: usize,
     pub device: Device,
@@ -449,7 +449,7 @@ impl XLoraModel {
             embed_tokens,
             layers,
             norm,
-            lm_head,
+            lm_head: QLinear::from_linear(lm_head),
             device: vb.device().clone(),
             dtype: vb.dtype(),
             hidden_size: cfg.hidden_size,
@@ -687,6 +687,20 @@ impl NormalModel for XLoraModel {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+        let mut tensors = Vec::new();
+        tensors.push(self.lm_head.inner());
+        for layer in &mut self.layers {
+            tensors.push(Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.v_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.self_attn.o_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.mlp.down_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.mlp.gate_proj).unwrap().inner());
+            tensors.push(Arc::get_mut(&mut layer.mlp.up_proj).unwrap().inner());
+        }
+        tensors
     }
 }
 

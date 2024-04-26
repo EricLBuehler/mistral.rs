@@ -2,8 +2,9 @@
 
 use std::sync::Arc;
 
-use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{linear_b as linear, Activation, Linear, RotaryEmbedding, VarBuilder};
+use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
+use candle_nn::{linear_b as linear, Activation, RotaryEmbedding, VarBuilder};
+use mistralrs_lora::layer::QLinear;
 
 use crate::{
     device_map::DeviceMapper,
@@ -82,9 +83,9 @@ impl Module for RmsNorm {
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
+    gate_proj: QLinear,
+    up_proj: QLinear,
+    down_proj: QLinear,
     act_fn: candle_nn::Activation,
 }
 
@@ -96,9 +97,9 @@ impl MLP {
         let up_proj = linear(hidden_sz, intermediate_sz, false, vb.pp("up_proj"))?;
         let down_proj = linear(intermediate_sz, hidden_sz, false, vb.pp("down_proj"))?;
         Ok(Self {
-            gate_proj,
-            up_proj,
-            down_proj,
+            gate_proj: QLinear::from_linear(gate_proj),
+            up_proj: QLinear::from_linear(up_proj),
+            down_proj: QLinear::from_linear(down_proj),
             act_fn: cfg.hidden_act()?,
         })
     }
@@ -114,10 +115,10 @@ impl Module for MLP {
 
 #[derive(Debug, Clone)]
 struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: QLinear,
+    k_proj: QLinear,
+    v_proj: QLinear,
+    o_proj: QLinear,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
@@ -138,10 +139,10 @@ impl Attention {
         let v_proj = linear(hidden_sz, num_kv_heads * head_dim, bias, vb.pp("v_proj"))?;
         let o_proj = linear(num_heads * head_dim, hidden_sz, bias, vb.pp("o_proj"))?;
         Ok(Self {
-            q_proj,
-            k_proj,
-            v_proj,
-            o_proj,
+            q_proj: QLinear::from_linear(q_proj),
+            k_proj: QLinear::from_linear(k_proj),
+            v_proj: QLinear::from_linear(v_proj),
+            o_proj: QLinear::from_linear(o_proj),
             num_heads,
             num_kv_heads,
             num_kv_groups,
@@ -271,7 +272,7 @@ pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: Linear,
+    lm_head: QMatMul,
     dtype: DType,
     hidden_size: usize,
     pub device: Device,
@@ -310,7 +311,7 @@ impl Model {
             layers.push(layer)
         }
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
-        let lm_head = Linear::new(embed_tokens.embeddings().clone(), None);
+        let lm_head = QMatMul::Tensor(embed_tokens.embeddings().clone());
         Ok(Self {
             embed_tokens,
             layers,
@@ -420,5 +421,19 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+        let mut tensors = Vec::new();
+        tensors.push(&mut self.lm_head);
+        for layer in &mut self.layers {
+            tensors.push(layer.self_attn.q_proj.inner());
+            tensors.push(layer.self_attn.k_proj.inner());
+            tensors.push(layer.self_attn.v_proj.inner());
+            tensors.push(layer.self_attn.o_proj.inner());
+            tensors.push(layer.mlp.down_proj.inner());
+            tensors.push(layer.mlp.gate_proj.inner());
+            tensors.push(layer.mlp.up_proj.inner());
+        }
+        tensors
     }
 }

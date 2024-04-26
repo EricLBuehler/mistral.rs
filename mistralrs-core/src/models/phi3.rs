@@ -2,18 +2,19 @@
 
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{linear_no_bias, Linear, VarBuilder};
+use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_nn::{linear_no_bias, VarBuilder};
 use either::Either;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     device_map::DeviceMapper,
+    layers::{PhiRotaryEmbedding, RmsNorm},
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
 
-use super::{flash_attn, repeat_kv, Cache, PhiRotaryEmbedding, RmsNorm};
+use super::{flash_attn, repeat_kv, Cache};
 
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -43,8 +44,8 @@ impl Config {
 
 #[derive(Debug, Clone)]
 struct Attention {
-    qkv_proj: Linear,
-    o_proj: Linear,
+    qkv_proj: QMatMul,
+    o_proj: QMatMul,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
@@ -62,8 +63,8 @@ impl Attention {
         let qkv_proj = linear_no_bias(cfg.hidden_size, op_size, vb.pp("qkv_proj"))?;
         let o_proj = linear_no_bias(num_heads * head_dim, cfg.hidden_size, vb.pp("o_proj"))?;
         Ok(Self {
-            qkv_proj,
-            o_proj,
+            qkv_proj: QMatMul::Tensor(qkv_proj.weight().clone()),
+            o_proj: QMatMul::Tensor(o_proj.weight().clone()),
             rotary_emb,
             num_heads,
             num_kv_heads,
@@ -145,8 +146,8 @@ impl Attention {
 
 #[derive(Debug, Clone)]
 struct Mlp {
-    gate_up_proj: Linear,
-    down_proj: Linear,
+    gate_up_proj: QMatMul,
+    down_proj: QMatMul,
     act_fn: candle_nn::Activation,
     i_size: usize,
 }
@@ -158,8 +159,8 @@ impl Mlp {
         let gate_up_proj = linear_no_bias(hidden_size, 2 * i_size, vb.pp("gate_up_proj"))?;
         let down_proj = linear_no_bias(i_size, hidden_size, vb.pp("down_proj"))?;
         Ok(Self {
-            gate_up_proj,
-            down_proj,
+            gate_up_proj: QMatMul::Tensor(gate_up_proj.weight().clone()),
+            down_proj: QMatMul::Tensor(down_proj.weight().clone()),
             act_fn: cfg.hidden_act,
             i_size,
         })
@@ -232,7 +233,7 @@ pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: Linear,
+    lm_head: QMatMul,
     dtype: DType,
     pub device: Device,
     pub cache: Cache,
@@ -272,7 +273,7 @@ impl Model {
             embed_tokens,
             layers,
             norm,
-            lm_head,
+            lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             device: vb.device().clone(),
             dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, false),
@@ -392,5 +393,16 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+        let mut tensors = Vec::new();
+        tensors.push(&mut self.lm_head);
+        for layer in &mut self.layers {
+            tensors.push(&mut layer.self_attn.qkv_proj);
+            tensors.push(&mut layer.self_attn.o_proj);
+            tensors.push(&mut layer.mlp.down_proj);
+            tensors.push(&mut layer.mlp.gate_up_proj);
+        }
+        tensors
     }
 }
