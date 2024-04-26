@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [polars, polars-lts-cpu, polars-u64-idx]
+        package: [mistralrs]
 
     steps:
       - name: Checkout
@@ -54,7 +54,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [polars, polars-lts-cpu, polars-u64-idx]
+        package: [mistralrs]
         os: [ubuntu-latest, macos-latest, windows-32gb-ram]
         architecture: [x86-64, aarch64]
         exclude:
