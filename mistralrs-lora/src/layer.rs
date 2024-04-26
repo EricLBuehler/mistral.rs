@@ -84,7 +84,9 @@ impl Module for QLinear {
                 .broadcast_add(bias)?
                 .to_dtype(self.dtype)
         } else {
-            self.inner.forward(&xs.to_dtype(DType::F32)?)?.to_dtype(self.dtype)
+            self.inner
+                .forward(&xs.to_dtype(DType::F32)?)?
+                .to_dtype(self.dtype)
         }
     }
 }
