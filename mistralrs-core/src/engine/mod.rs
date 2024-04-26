@@ -8,13 +8,12 @@ use std::{
 };
 
 use crate::{
-    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
-    handle_seq_error_ok, handle_seq_error_stateaware_ok,
-    pipeline::pipeline_sample,
+    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
+    get_bias_if_not_allowed, handle_seq_error_ok, handle_seq_error_stateaware_ok,
     response::CompletionChoice,
-    CompletionResponse, RequestMessage,
+    sampler, CompletionResponse, RequestMessage,
 };
-use candle_core::{Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use futures::future;
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
@@ -229,7 +228,60 @@ impl Engine {
             }
         }
     }
+    async fn sample_sequence(
+        logits: Tensor,
+        seq: &mut Sequence,
+        return_logprobs: bool,
+        repeat_last_n: usize,
+        device: Device,
+        tok_trie: Arc<TokTrie>,
+        rng: Arc<Mutex<Isaac64Rng>>,
+    ) -> Result<sampler::Logprobs> {
+        let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
+        let start_at = seq.get_toks().len().saturating_sub(repeat_last_n);
 
+        let sampler = seq.sampler();
+        let logits_clone = logits.clone();
+        let ctx_clone = seq.get_toks()[start_at..].to_vec();
+        let rng_clone = rng.clone();
+        let first_lobprobs_response = tokio_rayon::spawn(move || {
+            sampler.sample(logits_clone, Some(&ctx_clone), return_logprobs, rng_clone)
+        })
+        .await?;
+
+        let bias_if_not_allowed = match &mut seq.recognizer {
+            SequenceRecognizer::Regex(ref mut rx) => {
+                get_bias_if_not_allowed!(tok_trie, rx.as_mut(), first_lobprobs_response.token)
+            }
+            SequenceRecognizer::Cfg(ref mut cfg) => {
+                get_bias_if_not_allowed!(tok_trie, cfg.as_mut(), first_lobprobs_response.token)
+            }
+            SequenceRecognizer::None => None,
+        };
+        let second_logprobs_response = match bias_if_not_allowed {
+            Some(token_set) => {
+                let mut acc = vec![-f32::INFINITY; tok_trie.vocab_size()];
+                token_set.apply_to(&mut acc);
+                let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), &device)?)?;
+                let ctxt = seq.get_toks()[start_at..].to_vec();
+
+                seq.sampler()
+                    .sample(new_logits, Some(&ctxt), return_logprobs, rng)?
+            }
+            None => first_lobprobs_response,
+        };
+
+        match seq.recognizer {
+            SequenceRecognizer::Regex(ref mut rx) => {
+                tok_trie.append_token(rx.as_mut(), second_logprobs_response.token);
+            }
+            SequenceRecognizer::Cfg(ref mut cfg) => {
+                tok_trie.append_token(cfg.as_mut(), second_logprobs_response.token);
+            }
+            SequenceRecognizer::None => {}
+        }
+        Ok(second_logprobs_response)
+    }
     async fn sample_seqs(
         pipeline: Arc<Mutex<dyn Pipeline>>,
         seqs: &mut [&mut Sequence],
@@ -263,7 +315,7 @@ impl Engine {
         let sampling_futures: Vec<_> = zip(logits_seq, seqs.iter_mut())
             .map(|(logits_per_seq, seq)| {
                 let return_logprobs = seq.return_logprobs();
-                pipeline_sample(
+                Self::sample_sequence(
                     logits_per_seq,
                     seq,
                     return_logprobs,
