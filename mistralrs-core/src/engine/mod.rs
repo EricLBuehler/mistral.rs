@@ -15,6 +15,7 @@ use crate::{
     CompletionResponse, RequestMessage,
 };
 use candle_core::{Device, Result, Tensor};
+use futures::future;
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
 use tracing::warn;
@@ -38,7 +39,7 @@ const SEED: u64 = 0;
 
 pub struct Engine {
     rx: Receiver<Request>,
-    pipeline: Box<Mutex<dyn Pipeline>>,
+    pipeline: Arc<Mutex<dyn Pipeline>>,
     scheduler: Scheduler<VecDeque<Sequence>>,
     id: usize,
     truncate_sequence: bool,
@@ -52,7 +53,7 @@ impl Engine {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         rx: Receiver<Request>,
-        pipeline: Box<Mutex<dyn Pipeline>>,
+        pipeline: Arc<Mutex<dyn Pipeline>>,
         method: SchedulerMethod,
         truncate_sequence: bool,
         no_kv_cache: bool,
@@ -90,63 +91,70 @@ impl Engine {
                 self.add_request(request);
             }
             let mut scheduled = self.scheduler.schedule();
-            let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
             if scheduled.completion.len() > 0 {
-                // Run the completion seqs
-                if !self.no_kv_cache {
-                    Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
-                }
-                let logits = pipeline.forward(&scheduled.completion, false);
-                let logits = handle_pipeline_forward_error!(
-                    "completion",
-                    logits,
-                    &mut scheduled.completion,
-                    pipeline,
-                    'lp,
-                    self.prefix_cacher
-                );
+                let logits = {
+                    let mut pipeline = get_mut_arcmutex!(self.pipeline);
+                    // Run the completion seqs
+                    if !self.no_kv_cache {
+                        Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
+                    }
+                    let logits = pipeline.forward(&scheduled.completion, false);
+                    let logits = handle_pipeline_forward_error!(
+                        "completion",
+                        logits,
+                        &mut scheduled.completion,
+                        pipeline,
+                        'lp,
+                        self.prefix_cacher
+                    );
 
-                if !self.no_kv_cache {
-                    Self::clone_out_cache(&mut *pipeline, &mut scheduled.completion);
-                } else {
-                    Self::set_none_cache(&mut *pipeline);
-                }
+                    if !self.no_kv_cache {
+                        Self::clone_out_cache(&mut *pipeline, &mut scheduled.completion);
+                    } else {
+                        Self::set_none_cache(&mut *pipeline);
+                    }
+                    logits
+                };
 
                 handle_pipeline_forward_error!(
                     "sampling",
-                    Self::sample_seqs(&mut *pipeline, &mut scheduled.completion, logits, &mut self.prefix_cacher, self.disable_eos_stop, rng.clone()).await,
+                    Self::sample_seqs(self.pipeline.clone(), &mut scheduled.completion, logits, &mut self.prefix_cacher, self.disable_eos_stop, rng.clone()).await,
                     &mut scheduled.completion,
-                    pipeline,
+                    get_mut_arcmutex!(self.pipeline),
                     'lp,
                     self.prefix_cacher
                 );
             }
 
             if scheduled.prompt.len() > 0 {
-                // Run the prompt seqs
-                Self::set_none_cache(&mut *pipeline);
-                let logits = pipeline.forward(&scheduled.prompt, true);
-                let logits = handle_pipeline_forward_error!(
-                    "prompt",
-                    logits,
-                    &mut scheduled.prompt,
-                    pipeline,
-                    'lp,
-                    self.prefix_cacher
-                );
+                let logits = {
+                    let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
-                if !self.no_kv_cache {
-                    Self::clone_out_cache(&mut *pipeline, &mut scheduled.prompt);
-                } else {
+                    // Run the prompt seqs
                     Self::set_none_cache(&mut *pipeline);
-                }
+                    let logits = pipeline.forward(&scheduled.prompt, true);
+                    let logits = handle_pipeline_forward_error!(
+                            "prompt",
+                            logits,
+                            &mut scheduled.prompt,
+                        pipeline,
+                        'lp,
+                        self.prefix_cacher
+                    );
 
+                    if !self.no_kv_cache {
+                        Self::clone_out_cache(&mut *pipeline, &mut scheduled.prompt);
+                    } else {
+                        Self::set_none_cache(&mut *pipeline);
+                    }
+                    logits
+                };
                 handle_pipeline_forward_error!(
                     "sampling",
-                    Self::sample_seqs(&mut *pipeline, &mut scheduled.prompt, logits, &mut self.prefix_cacher,self.disable_eos_stop, rng.clone()).await,
+                    Self::sample_seqs(self.pipeline.clone(), &mut scheduled.prompt, logits, &mut self.prefix_cacher,self.disable_eos_stop, rng.clone()).await,
                     &mut scheduled.prompt,
-                    pipeline,
+                    get_mut_arcmutex!(self.pipeline),
                     'lp,
                     self.prefix_cacher
                 );
@@ -191,7 +199,6 @@ impl Engine {
                     );
                 }
             }
-            drop(pipeline);
             if scheduled.prompt.len() == 0
                 && scheduled.completion.len() == 0
                 && self.scheduler.waiting_len() == 0
@@ -205,7 +212,7 @@ impl Engine {
     }
 
     async fn sample_seqs(
-        pipeline: &mut dyn Pipeline,
+        pipeline: Arc<Mutex<dyn Pipeline>>,
         seqs: &mut [&mut Sequence],
         logits: Tensor,
         prefix_cacher: &mut PrefixCacheManager,
@@ -215,27 +222,32 @@ impl Engine {
         let seqs_len = seqs.len();
         let logits_seq = logits.to_device(&Device::Cpu)?.chunk(seqs_len, 0)?;
         debug_assert_eq!(logits_seq.len(), seqs_len);
-        let eos_tok = pipeline.eos_tok().to_vec();
-        let sampled_tasks: Vec<_> = zip(logits_seq, seqs.iter_mut())
-            .map(|(logits_per_seq, seq)| {
-                let return_logprobs = seq.return_logprobs();
-                pipeline_sample(
-                    logits_per_seq,
-                    seq,
-                    return_logprobs,
-                    pipeline.get_repeat_last_n(),
-                    pipeline.device(),
-                    pipeline.tok_trie(),
-                    rng.clone(),
-                )
-            })
-            .collect();
 
-        use futures::future;
-
+        let tok_trie = get_mut_arcmutex!(pipeline).tok_trie();
+        let sampled_tasks: Vec<_> = {
+            let pipeline = get_mut_arcmutex!(pipeline);
+            let repeat_last_n = pipeline.get_repeat_last_n();
+            let device = pipeline.device().clone();
+            zip(logits_seq, seqs.iter_mut())
+                .map(|(logits_per_seq, seq)| {
+                    let return_logprobs = seq.return_logprobs();
+                    pipeline_sample(
+                        logits_per_seq,
+                        seq,
+                        return_logprobs,
+                        repeat_last_n,
+                        device.clone(),
+                        tok_trie.clone(),
+                        rng.clone(),
+                    )
+                })
+                .collect()
+        };
         let sampleds = future::join_all(sampled_tasks).await;
 
+        let mut pipeline = get_mut_arcmutex!(pipeline);
         for (sampled, seq) in zip(sampleds, seqs.iter_mut()) {
+            let eos_tok = pipeline.eos_tok().to_vec();
             let next_token = handle_seq_error_stateaware_ok!(sampled, seq);
             let next_token_id = next_token.token;
 
@@ -288,7 +300,7 @@ impl Engine {
                     }
                 }
             } else if let Some(reason) = is_done {
-                Self::finish_seq(pipeline, seq, reason, prefix_cacher)?;
+                Self::finish_seq(&mut *pipeline, seq, reason, prefix_cacher)?;
                 pipeline.reset_non_granular_state();
             }
         }

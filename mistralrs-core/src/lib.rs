@@ -67,7 +67,7 @@ pub struct MistralRs {
 /// an Engine and a MistralRs instance. The Engine runs on a separate thread, and the MistralRs
 /// instance stays on the calling thread.
 pub struct MistralRsBuilder {
-    pipeline: Box<Mutex<dyn Pipeline>>,
+    pipeline: Arc<Mutex<dyn Pipeline>>,
     method: SchedulerMethod,
     log: Option<String>,
     truncate_sequence: Option<bool>,
@@ -78,7 +78,7 @@ pub struct MistralRsBuilder {
 }
 
 impl MistralRsBuilder {
-    pub fn new(pipeline: Box<Mutex<dyn Pipeline>>, method: SchedulerMethod) -> Self {
+    pub fn new(pipeline: Arc<Mutex<dyn Pipeline>>, method: SchedulerMethod) -> Self {
         Self {
             pipeline,
             method,

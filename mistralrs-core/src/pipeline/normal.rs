@@ -79,7 +79,7 @@ impl ModelPaths for NormalModelPaths<PathBuf> {
 pub struct NormalPipeline {
     model: Box<dyn NormalModel + Send + Sync>,
     tokenizer: Arc<Tokenizer>,
-    tok_trie: TokTrie,
+    tok_trie: Arc<TokTrie>,
     config: NormalSpecificConfig,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
@@ -246,7 +246,7 @@ impl Loader for NormalLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-    ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         let default_dtype = if device.is_cuda() {
             DType::BF16
@@ -307,10 +307,10 @@ impl Loader for NormalLoader {
 
         let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
 
-        Ok(Box::new(Mutex::new(NormalPipeline {
+        Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
             eos_tok: calculate_eos_tokens(&chat_template, &tokenizer),
-            tok_trie: build_tok_trie(tokenizer.clone()),
+            tok_trie: build_tok_trie(tokenizer.clone()).into(),
             tokenizer: tokenizer.into(),
             config: self.config,
             no_kv_cache: self.no_kv_cache,
@@ -413,7 +413,7 @@ impl Pipeline for NormalPipeline {
     fn get_non_granular_state(&self) -> &Option<NonGranularState> {
         &self.non_granular_state
     }
-    fn tok_trie(&self) -> &TokTrie {
-        &self.tok_trie
+    fn tok_trie(&self) -> Arc<TokTrie> {
+        self.tok_trie.clone()
     }
 }

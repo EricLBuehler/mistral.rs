@@ -167,7 +167,7 @@ pub trait Loader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-    ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>>;
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
 
     /// If `revision` is None, then it defaults to `main`.
     /// If `dtype` is None, then it defaults to the model default (usually BF16).
@@ -180,7 +180,7 @@ pub trait Loader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-    ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths = self.download_model(revision, token_source, silent)?;
         self._setup_model(&*paths, dtype, device, silent, mapper)
     }
@@ -206,7 +206,7 @@ pub trait Pipeline: Send + Sync {
     fn num_hidden_layers(&self) -> usize;
     fn cache(&self) -> &Cache;
     fn tokenizer(&self) -> Arc<Tokenizer>;
-    fn tok_trie(&self) -> &TokTrie;
+    fn tok_trie(&self) -> Arc<TokTrie>;
     fn eos_tok(&self) -> &[u32];
     fn name(&self) -> String;
     fn get_max_seq_len(&self) -> usize;
@@ -263,8 +263,8 @@ pub(crate) async fn pipeline_sample(
     seq: &mut Sequence,
     return_logprobs: bool,
     repeat_last_n: usize,
-    device: &Device,
-    tok_trie: &TokTrie,
+    device: Device,
+    tok_trie: Arc<TokTrie>,
     rng: Arc<Mutex<Isaac64Rng>>,
 ) -> Result<Logprobs> {
     let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
@@ -292,7 +292,7 @@ pub(crate) async fn pipeline_sample(
         Some(token_set) => {
             let mut acc = vec![-f32::INFINITY; tok_trie.vocab_size()];
             token_set.apply_to(&mut acc);
-            let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), device)?)?;
+            let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), &device)?)?;
             let ctxt = seq.get_toks()[start_at..].to_vec();
 
             seq.sampler()
