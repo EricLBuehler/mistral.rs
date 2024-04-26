@@ -17,6 +17,7 @@ COPY mistralrs mistralrs
 COPY mistralrs-core mistralrs-core
 COPY mistralrs-lora mistralrs-lora
 COPY mistralrs-pyo3 mistralrs-pyo3
+COPY mistralrs-bench mistralrs-bench
 COPY mistralrs-server mistralrs-server
 COPY Cargo.toml ./
 

@@ -6,10 +6,11 @@ COPY mistralrs mistralrs
 COPY mistralrs-core mistralrs-core
 COPY mistralrs-lora mistralrs-lora
 COPY mistralrs-pyo3 mistralrs-pyo3
+COPY mistralrs-bench mistralrs-bench
 COPY mistralrs-server mistralrs-server
 COPY Cargo.toml ./
 
-RUN cargo build --release --workspace --exclude mistralrs-pyo3
+RUN cargo build --release --workspace --exclude mistralrs-pyo3 --exclude mistralrs-bench
 
 FROM debian:bookworm-slim as base
 
