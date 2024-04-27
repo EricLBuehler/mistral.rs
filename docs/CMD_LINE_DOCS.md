@@ -1,5 +1,5 @@
 # Mistral.rs Command line docs
-## `./mistralrs-server --help`
+## `./mistralrs_server --help`
 
 ```bash
 Fast and easy LLM serving.
@@ -97,7 +97,7 @@ Options:
 
 ## For X-LoRA and quantized models
 
-This is an example which is roughly the same for all adapter + quantized models. This is specifically for: `./mistralrs-server x-lora-gguf --help`
+This is an example which is roughly the same for all adapter + quantized models. This is specifically for: `./mistralrs_server x-lora-gguf --help`
 
 ```bash
 Select a GGUF model with X-LoRA
