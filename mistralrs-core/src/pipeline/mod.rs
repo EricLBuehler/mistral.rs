@@ -197,10 +197,10 @@ pub trait Loader {
 }
 
 pub trait Pipeline: Send + Sync {
-    fn forward(
+    fn forward_prompt(&mut self, input_seqs: &mut Sequence) -> Result<Tensor, candle_core::Error>;
+    fn forward_completion(
         &mut self,
         input_seqs: &[&mut Sequence],
-        is_prompt: bool,
     ) -> Result<Tensor, candle_core::Error>;
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
         let encoding = self
@@ -219,6 +219,9 @@ pub trait Pipeline: Send + Sync {
     fn get_max_seq_len(&self) -> usize;
     fn is_xlora(&self) -> bool;
     fn has_no_kv_cache(&self) -> bool;
+    fn get_prefill_chunk_size(&self) -> usize {
+        512
+    }
     fn apply_chat_template(
         &self,
         messages: Vec<IndexMap<String, String>>,
@@ -371,18 +374,15 @@ pub struct InputMetadata {
     pub context_lens: Vec<usize>,
 }
 
-pub fn get_prompt_input_batched(
-    input_seqs: &[&mut Sequence],
+fn calculate_inputs_prompt_batched(
+    seq: &mut Sequence,
     device: &Device,
     chunk_size: usize,
 ) -> Result<Vec<InputMetadata>> {
-    assert!(input_seqs.len() == 1);
-    let seq = &input_seqs[0];
-
     let mut acc = vec![];
 
     for (chunk_index, chunk) in seq.get_toks().chunks(chunk_size).enumerate() {
-        let input = Tensor::new(chunk, &device)?.unsqueeze(0)?;
+        let input = Tensor::new(chunk, device)?.unsqueeze(0)?;
         let pos_idx = chunk_index * chunk_size;
         let positions = vec![pos_idx];
 
@@ -490,14 +490,13 @@ struct ModelInputs {
     context_lens: Vec<usize>,
 }
 
-fn calculate_inputs(
+fn calculate_inputs_completion(
     input_seqs: &[&mut Sequence],
-    is_prompt: bool,
     is_xlora: bool,
     device: &Device,
     no_kv_cache: bool,
 ) -> Result<ModelInputs> {
-    if is_xlora && !is_prompt {
+    if is_xlora {
         let InputMetadata {
             input: input_ids_full,
             positions: seqlen_offsets_full,
@@ -517,38 +516,6 @@ fn calculate_inputs(
             seqlen_offsets_full: Some(seqlen_offsets_full),
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel_full),
-            context_lens,
-        })
-    } else if is_xlora && is_prompt {
-        let InputMetadata {
-            input: input_ids,
-            positions: seqlen_offsets,
-            positions_kernel: seqlen_offsets_kernel,
-            context_lens,
-        } = get_prompt_input(input_seqs, device)?;
-        Ok(ModelInputs {
-            input_ids: input_ids.clone(),
-            input_ids_full: Some(input_ids),
-            seqlen_offsets: seqlen_offsets.clone(),
-            seqlen_offsets_full: Some(seqlen_offsets),
-            seqlen_offsets_kernel: seqlen_offsets_kernel.clone(),
-            seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel),
-            context_lens,
-        })
-    } else if is_prompt {
-        let InputMetadata {
-            input: input_ids,
-            positions: seqlen_offsets,
-            positions_kernel: seqlen_offsets_kernel,
-            context_lens,
-        } = get_prompt_input(input_seqs, device)?;
-        Ok(ModelInputs {
-            input_ids,
-            input_ids_full: None,
-            seqlen_offsets,
-            seqlen_offsets_full: None,
-            seqlen_offsets_kernel,
-            seqlen_offsets_kernel_full: None,
             context_lens,
         })
     } else {
