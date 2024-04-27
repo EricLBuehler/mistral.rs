@@ -27,8 +27,11 @@ macro_rules! api_dir_list {
 #[macro_export]
 macro_rules! api_read_file {
     ($api:expr, $file:expr, $model_id:expr) => {
-        $api.get($file)
-            .unwrap_or(std::fs::read_to_string($model_id.join($file))?.into())
+        $api.get($file).unwrap_or(
+            std::fs::read_to_string($model_id.join($file))
+                .unwrap_or_else(|_| panic!("File {} not found at model id {:?}", $file, $model_id))
+                .into(),
+        )
     };
 }
 
