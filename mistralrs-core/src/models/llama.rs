@@ -33,7 +33,7 @@ pub struct Config {
 
 #[derive(Debug, Clone)]
 pub struct Cache {
-    masks: HashMap<usize, Tensor>,
+    masks: HashMap<(usize, usize), Tensor>,
 }
 
 impl Cache {
@@ -43,15 +43,15 @@ impl Cache {
         })
     }
 
-    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
-        if let Some(mask) = self.masks.get(&t) {
-            mask.to_device(device)
+    fn mask(&mut self, t: usize, u: usize, device: &Device) -> Result<Tensor> {
+        if let Some(mask) = self.masks.get(&(t, u)) {
+            Ok(mask.clone())
         } else {
             let mask: Vec<_> = (0..t)
-                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
+                .flat_map(|i| (0..u).map(move |j| u8::from(j + t > i + u)))
                 .collect();
-            let mask = Tensor::from_slice(&mask, (t, t), device)?;
-            self.masks.insert(t, mask.clone());
+            let mask = Tensor::from_slice(&mask, (t, u), device)?;
+            self.masks.insert((t, u), mask.clone());
             Ok(mask)
         }
     }
@@ -150,9 +150,14 @@ impl CausalSelfAttention {
             let k = k.to_dtype(DType::F32)?;
             let v = v.to_dtype(DType::F32)?;
             let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-            let mask = cache
-                .mask(seq_len, att.device())?
-                .broadcast_as(att.shape())?;
+            let mask = {
+                let masks = seqlen_offsets
+                    .iter()
+                    .map(|index_pos| cache.mask(seq_len, index_pos + seq_len, x.device()))
+                    .collect::<Result<Vec<_>>>()?;
+                let tensor = Tensor::stack(&masks, 0)?;
+                tensor.unsqueeze(1)?
+            };
             let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
             let att = candle_nn::ops::softmax(&att, D::Minus1)?;
             // Convert to contiguous as matmul doesn't support strided vs for now.
