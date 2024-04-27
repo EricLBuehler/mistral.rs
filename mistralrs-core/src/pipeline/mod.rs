@@ -19,7 +19,7 @@ use hf_hub::{
     Repo, RepoType,
 };
 use indexmap::IndexMap;
-use indicatif::{ParallelProgressIterator, ProgressBar};
+use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 pub use loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
     Phi3Loader, Qwen2Loader,
@@ -378,6 +378,13 @@ pub trait NormalModel {
         let n_quantized = AtomicUsize::new(0);
         info!("Applying in-situ quantization into {dtype:?} to {total_tensors} in parallel.");
         let bar = ProgressBar::new(total_tensors as u64);
+        bar.set_style(
+            ProgressStyle::default_bar()
+                .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+
         tensors
             .into_par_iter()
             .progress_with(bar)
