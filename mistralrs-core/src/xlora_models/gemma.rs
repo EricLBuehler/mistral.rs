@@ -783,19 +783,40 @@ impl NormalModel for XLoraModel {
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
     }
-    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
-        tensors.push(self.lm_head.inner());
-        for layer in &mut self.layers {
-            tensors.push(Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner());
-            tensors.push(Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner());
-            tensors.push(Arc::get_mut(&mut layer.self_attn.v_proj).unwrap().inner());
-            tensors.push(Arc::get_mut(&mut layer.self_attn.o_proj).unwrap().inner());
-            tensors.push(Arc::get_mut(&mut layer.mlp.down_proj).unwrap().inner());
-            tensors.push(Arc::get_mut(&mut layer.mlp.gate_proj).unwrap().inner());
-            tensors.push(Arc::get_mut(&mut layer.mlp.up_proj).unwrap().inner());
+        tensors.push((self.lm_head.inner(), None));
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.v_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.o_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.down_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.gate_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.up_proj).unwrap().inner(),
+                Some(i),
+            ));
         }
-        tensors
+        (tensors, &*self.mapper)
     }
 }
 

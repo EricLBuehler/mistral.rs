@@ -490,18 +490,18 @@ impl NormalModel for Model {
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
     }
-    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
-        tensors.push(&mut self.lm_head);
-        for layer in &mut self.layers {
-            tensors.push(layer.self_attn.q_proj.inner());
-            tensors.push(layer.self_attn.k_proj.inner());
-            tensors.push(layer.self_attn.v_proj.inner());
-            tensors.push(layer.self_attn.o_proj.inner());
-            tensors.push(layer.mlp.down_proj.inner());
-            tensors.push(layer.mlp.gate_proj.inner());
-            tensors.push(layer.mlp.up_proj.inner());
+        tensors.push((&mut self.lm_head, None));
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            tensors.push((layer.self_attn.q_proj.inner(), Some(i)));
+            tensors.push((layer.self_attn.k_proj.inner(), Some(i)));
+            tensors.push((layer.self_attn.v_proj.inner(), Some(i)));
+            tensors.push((layer.self_attn.o_proj.inner(), Some(i)));
+            tensors.push((layer.mlp.down_proj.inner(), Some(i)));
+            tensors.push((layer.mlp.gate_proj.inner(), Some(i)));
+            tensors.push((layer.mlp.up_proj.inner(), Some(i)));
         }
-        tensors
+        (tensors, &*self.mapper)
     }
 }

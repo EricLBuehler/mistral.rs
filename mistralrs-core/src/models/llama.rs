@@ -443,18 +443,18 @@ impl NormalModel for Llama {
     fn max_seq_len(&self) -> usize {
         MAX_SEQ_LEN
     }
-    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
-        tensors.push(&mut self.lm_head);
-        for layer in &mut self.blocks {
-            tensors.push(&mut layer.attn.q_proj);
-            tensors.push(&mut layer.attn.k_proj);
-            tensors.push(&mut layer.attn.v_proj);
-            tensors.push(&mut layer.attn.o_proj);
-            tensors.push(&mut layer.mlp.c_fc1);
-            tensors.push(&mut layer.mlp.c_fc2);
-            tensors.push(&mut layer.mlp.c_proj);
+        tensors.push((&mut self.lm_head, None));
+        for (i, layer) in self.blocks.iter_mut().enumerate() {
+            tensors.push((&mut layer.attn.q_proj, Some(i)));
+            tensors.push((&mut layer.attn.k_proj, Some(i)));
+            tensors.push((&mut layer.attn.v_proj, Some(i)));
+            tensors.push((&mut layer.attn.o_proj, Some(i)));
+            tensors.push((&mut layer.mlp.c_fc1, Some(i)));
+            tensors.push((&mut layer.mlp.c_fc2, Some(i)));
+            tensors.push((&mut layer.mlp.c_proj, Some(i)));
         }
-        tensors
+        (tensors, &*self.mapper)
     }
 }

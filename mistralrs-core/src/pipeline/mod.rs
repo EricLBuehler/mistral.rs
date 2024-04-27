@@ -5,6 +5,7 @@ mod loaders;
 mod macros;
 mod normal;
 use crate::aici::toktree::TokTrie;
+use crate::device_map::DeviceMapper;
 use crate::{api_dir_list, api_get_file, DeviceMapMetadata};
 use crate::{get_bias_if_not_allowed, sampler::Logprobs, sequence::SequenceRecognizer};
 use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
@@ -26,7 +27,7 @@ pub use loaders::{
 };
 use mistralrs_lora::{LoraConfig, Ordering};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -370,10 +371,10 @@ pub trait NormalModel {
     fn device(&self) -> &Device;
     fn cache(&self) -> &Cache;
     fn max_seq_len(&self) -> usize;
-    fn get_tensors(&mut self) -> Vec<&mut QMatMul>;
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper);
     /// Quantize the model in-situ.
     fn quantize(&mut self, dtype: GgmlDType, device: Device) -> candle_core::Result<()> {
-        let tensors = self.get_tensors();
+        let (tensors, mapper) = self.get_tensors();
         let total_tensors = tensors.len();
         let n_quantized = AtomicUsize::new(0);
         info!(
@@ -387,10 +388,21 @@ pub trait NormalModel {
                 .progress_chars("#>-"),
         );
 
+        let mut devices = Vec::new();
+        for (_, layer) in &tensors {
+            let device = if let Some(layer) = layer {
+                mapper.device_for(*layer, false).unwrap_or(&device)
+            } else {
+                &device
+            };
+            devices.push(device.clone());
+        }
+
         tensors
             .into_par_iter()
+            .zip(devices)
             .progress_with(bar)
-            .for_each(|tensor| {
+            .for_each(|((tensor, _), device)| {
                 if let QMatMul::Tensor(t) = tensor {
                     n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let t = t.to_device(&device).unwrap();

@@ -730,19 +730,34 @@ impl NormalModel for XLoraLlama {
     fn max_seq_len(&self) -> usize {
         MAX_SEQ_LEN
     }
-    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
-        tensors.push(self.lm_head.inner());
-        for layer in &mut self.blocks {
-            tensors.push(Arc::get_mut(&mut layer.attn.q_proj).unwrap().inner());
-            tensors.push(Arc::get_mut(&mut layer.attn.k_proj).unwrap().inner());
-            tensors.push(Arc::get_mut(&mut layer.attn.v_proj).unwrap().inner());
-            tensors.push(Arc::get_mut(&mut layer.attn.o_proj).unwrap().inner());
-            tensors.push(Arc::get_mut(&mut layer.mlp.c_fc1).unwrap().inner());
-            tensors.push(Arc::get_mut(&mut layer.mlp.c_fc2).unwrap().inner());
-            tensors.push(Arc::get_mut(&mut layer.mlp.c_proj).unwrap().inner());
+        tensors.push((self.lm_head.inner(), None));
+        for (i, layer) in self.blocks.iter_mut().enumerate() {
+            tensors.push((
+                Arc::get_mut(&mut layer.attn.q_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.attn.k_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.attn.v_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.attn.o_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((Arc::get_mut(&mut layer.mlp.c_fc1).unwrap().inner(), Some(i)));
+            tensors.push((Arc::get_mut(&mut layer.mlp.c_fc2).unwrap().inner(), Some(i)));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.c_proj).unwrap().inner(),
+                Some(i),
+            ));
         }
-        tensors
+        (tensors, &*self.mapper)
     }
 }
 
