@@ -64,7 +64,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95
 - Phi 3
 - Qwen 2
 
-Please see [this section](README#supported-models) for details on quantization and LoRA support.
+Please see [this section](#supported-models) for details on quantization and LoRA support.
 
 ## APIs and Integrations
 **Rust Library API**
@@ -233,11 +233,13 @@ Mistral.rs can automatically download models from HF Hub. To access gated models
 This is passed in the following ways:
 - Command line:
 ```bash
-./mistralrs_server --port 1234 --token-source none plain -m mistralai/Mistral-7B-Instruct-v0.1 -a mistral
+./mistralrs_server --token-source none -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
 ```
 - Python:
 
 [Here](examples/python/token_source.py) is an example of setting the token source.
+
+If token cannot be loaded, no token will be used (i.e. effectively using `none`).
 
 **Loading from local files:**
 

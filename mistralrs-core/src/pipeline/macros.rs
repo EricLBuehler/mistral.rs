@@ -8,8 +8,21 @@ macro_rules! api_dir_list {
                     .map(|x| x.rfilename.clone())
                     .collect::<Vec<String>>()
             })
-            .unwrap_or(
-                std::fs::read_dir($model_id)?
+            .unwrap_or_else(|e| {
+                // If we do not get a 404, it was something else.
+                let format = format!("{e:?}");
+                if let hf_hub::api::sync::ApiError::RequestError(resp) = e {
+                    if resp.into_response().is_some_and(|r| r.status() != 404) {
+                        panic!("{format}");
+                    }
+                }
+
+                let listing = std::fs::read_dir($model_id);
+                if listing.is_err() {
+                    panic!("Cannot list directory {:?}", $model_id)
+                }
+                let listing = listing.unwrap();
+                listing
                     .into_iter()
                     .map(|s| {
                         s.unwrap()
@@ -18,8 +31,8 @@ macro_rules! api_dir_list {
                             .expect("Could not convert to str")
                             .to_string()
                     })
-                    .collect::<Vec<String>>(),
-            )
+                    .collect::<Vec<String>>()
+            })
             .into_iter()
     };
 }
@@ -27,7 +40,15 @@ macro_rules! api_dir_list {
 #[macro_export]
 macro_rules! api_get_file {
     ($api:expr, $file:expr, $model_id:expr) => {
-        $api.get($file).unwrap_or_else(|_| {
+        $api.get($file).unwrap_or_else(|e| {
+            // If we do not get a 404, it was something else.
+            let format = format!("{e:?}");
+            if let hf_hub::api::sync::ApiError::RequestError(resp) = e {
+                if resp.into_response().is_some_and(|r| r.status() != 404) {
+                    panic!("{format}");
+                }
+            }
+
             let path = $model_id.join($file);
             if !path.exists() {
                 panic!("File \"{}\" not found at model id {:?}", $file, $model_id)
