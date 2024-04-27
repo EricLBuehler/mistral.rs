@@ -3,8 +3,9 @@ use super::loaders::{
     Phi3Loader, Qwen2Loader,
 };
 use super::{
-    calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
-    NormalModel, NormalModelLoader, Pipeline, TokenSource, XLoraPaths,
+    calculate_inputs_completion, calculate_inputs_prompt_batched, get_model_paths, get_xlora_paths,
+    Loader, ModelInputs, ModelKind, ModelPaths, NormalModel, NormalModelLoader, Pipeline,
+    TokenSource, XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -342,10 +343,39 @@ impl Loader for NormalLoader {
 }
 
 impl Pipeline for NormalPipeline {
-    fn forward(
+    fn forward_prompt(&mut self, input_toks: &mut Sequence) -> Result<Tensor, candle_core::Error> {
+        let device = self.device().clone();
+        let chunk_size = self.get_prefill_chunk_size();
+
+        let batches = calculate_inputs_prompt_batched(input_toks, &device, chunk_size).unwrap();
+        let mut xs = None;
+        for batch in batches {
+            xs = Some(match self.model.is_xlora() {
+                false => self.model.forward(
+                    &batch.input,
+                    &batch.positions,
+                    batch.positions_kernel,
+                    batch.context_lens,
+                ),
+                true => self.model.xlora_forward(
+                    &batch.input,
+                    &batch.input,
+                    &batch.positions,
+                    &batch.positions,
+                    batch.positions_kernel.clone(),
+                    batch.positions_kernel,
+                    self.no_kv_cache,
+                    &self.non_granular_state,
+                    batch.context_lens,
+                ),
+            });
+        }
+        let logits = xs.expect("No batches")?;
+        logits.squeeze(0)
+    }
+    fn forward_completion(
         &mut self,
         input_toks: &[&mut Sequence],
-        is_prompt: bool,
     ) -> Result<Tensor, candle_core::Error> {
         let ModelInputs {
             input_ids,
@@ -355,9 +385,8 @@ impl Pipeline for NormalPipeline {
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full,
             context_lens,
-        } = calculate_inputs(
+        } = calculate_inputs_completion(
             input_toks,
-            is_prompt,
             self.is_xlora(),
             self.device(),
             self.no_kv_cache,

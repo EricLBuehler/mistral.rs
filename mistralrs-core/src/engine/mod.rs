@@ -104,7 +104,7 @@ impl Engine {
                 if !self.no_kv_cache && last_completion_ids != current_completion_ids {
                     Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
                 }
-                let logits = pipeline.forward(&scheduled.completion, false);
+                let logits = pipeline.forward_completion(&scheduled.completion);
                 let logits = handle_pipeline_forward_error!(
                     "completion",
                     logits,
@@ -133,22 +133,28 @@ impl Engine {
 
             if scheduled.prompt.len() > 0 {
                 // Run the prompt seqs
-                Self::set_none_cache(&mut *pipeline);
-                let logits = pipeline.forward(&scheduled.prompt, true);
-                let logits = handle_pipeline_forward_error!(
-                    "prompt",
-                    logits,
-                    &mut scheduled.prompt,
-                    pipeline,
-                    'lp,
-                    self.prefix_cacher
-                );
-
-                if !self.no_kv_cache {
-                    Self::clone_out_cache(&mut *pipeline, &mut scheduled.prompt);
-                } else {
+                let mut logits_vec = vec![];
+                for prompt in scheduled.prompt.as_mut() {
                     Self::set_none_cache(&mut *pipeline);
+                    let logits = pipeline.forward_prompt(prompt);
+                    let logits = handle_pipeline_forward_error!(
+                        "prompt",
+                        logits,
+                        &mut scheduled.prompt,
+                        pipeline,
+                        'lp,
+                        self.prefix_cacher
+                    );
+                    logits_vec.push(logits);
+
+                    if !self.no_kv_cache {
+                        Self::clone_out_cache(&mut *pipeline, &mut [prompt]);
+                    } else {
+                        Self::set_none_cache(&mut *pipeline);
+                    }
                 }
+
+                let logits = Tensor::stack(&logits_vec, 0).unwrap();
 
                 handle_pipeline_forward_error!(
                     "sampling",

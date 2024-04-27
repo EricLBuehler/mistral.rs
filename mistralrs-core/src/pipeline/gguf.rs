@@ -1,12 +1,12 @@
 use super::{
-    calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
-    Pipeline, TokenSource, XLoraPaths,
+    calculate_inputs_completion, calculate_inputs_prompt_batched, get_model_paths, get_xlora_paths,
+    Loader, ModelInputs, ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::models::Cache;
 use crate::pipeline::chat_template::calculate_eos_tokens;
-use crate::pipeline::{get_prompt_input_batched, ChatTemplate};
+use crate::pipeline::ChatTemplate;
 use crate::utils::varbuilder_utils::from_mmaped_safetensors;
 use crate::xlora_models::{NonGranularState, XLoraConfig};
 use crate::{deserialize_chat_template, get_paths, DeviceMapMetadata};
@@ -441,10 +441,42 @@ impl Loader for GGUFLoader {
 }
 
 impl Pipeline for GGUFPipeline {
-    fn forward(
+    fn forward_prompt(&mut self, input_toks: &mut Sequence) -> Result<Tensor, candle_core::Error> {
+        let device = self.device().clone();
+        let chunk_size = self.get_prefill_chunk_size();
+
+        let batches = calculate_inputs_prompt_batched(input_toks, &device, chunk_size).unwrap();
+        let mut xs = None;
+        for batch in batches {
+            xs = Some(match self.model {
+                Model::Llama(ref mut model) => model.forward(
+                    &batch.input,
+                    &batch.positions,
+                    batch.positions_kernel,
+                    batch.context_lens,
+                ),
+                Model::Phi2(ref mut model) => {
+                    model.forward(&batch.input, &batch.positions, batch.context_lens)
+                }
+                Model::XLoraLlama(ref mut model) => model.forward(
+                    &batch.input,
+                    &batch.input,
+                    &batch.positions,
+                    &batch.positions,
+                    batch.positions_kernel.clone(),
+                    batch.positions_kernel,
+                    self.no_kv_cache,
+                    &self.non_granular_state,
+                    batch.context_lens,
+                ),
+            });
+        }
+        let logits = xs.expect("No batches")?;
+        logits.squeeze(0)
+    }
+    fn forward_completion(
         &mut self,
         input_toks: &[&mut Sequence],
-        is_prompt: bool,
     ) -> Result<Tensor, candle_core::Error> {
         let ModelInputs {
             input_ids,
@@ -454,40 +486,20 @@ impl Pipeline for GGUFPipeline {
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full,
             context_lens,
-        } = calculate_inputs(
+        } = calculate_inputs_completion(
             input_toks,
-            is_prompt,
             self.is_xlora(),
             self.device(),
             self.no_kv_cache,
         )
         .unwrap();
         match self.model {
-            Model::Llama(ref mut model) => {
-                let chunk_size = 512;
-                if is_prompt && input_toks.len() == 1 && input_toks[0].len() > chunk_size {
-                    // If have 1 input and it is a prompt, it might require batched prefill
-                    let batches =
-                        get_prompt_input_batched(input_toks, &model.device, chunk_size).unwrap();
-                    let mut xs = None;
-                    for batch in batches {
-                        xs = Some(model.forward(
-                            &batch.input,
-                            &batch.positions,
-                            batch.positions_kernel,
-                            batch.context_lens,
-                        ));
-                    }
-                    xs.expect("No batches")
-                } else {
-                    model.forward(
-                        &input_ids,
-                        &seqlen_offsets,
-                        seqlen_offsets_kernel,
-                        context_lens,
-                    )
-                }
-            }
+            Model::Llama(ref mut model) => model.forward(
+                &input_ids,
+                &seqlen_offsets,
+                seqlen_offsets_kernel,
+                context_lens,
+            ),
             Model::Phi2(ref mut model) => model.forward(&input_ids, &seqlen_offsets, context_lens),
             Model::XLoraLlama(ref mut model) => model.forward(
                 &input_ids,
