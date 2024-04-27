@@ -185,6 +185,7 @@ impl CausalSelfAttention {
         Ok(res)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn load(
         vb: VarBuilder,
         cfg: &Config,
@@ -192,14 +193,49 @@ impl CausalSelfAttention {
         count: &mut usize,
         ord: &Ordering,
         is_gptx: bool,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
     ) -> Result<Self> {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
-        let q_proj = linear(size_in, size_q, vb.pp("q_proj"), lora_config, count, ord)?;
-        let k_proj = linear(size_in, size_kv, vb.pp("k_proj"), lora_config, count, ord)?;
-        let v_proj = linear(size_in, size_kv, vb.pp("v_proj"), lora_config, count, ord)?;
-        let o_proj = linear(size_q, size_in, vb.pp("o_proj"), lora_config, count, ord)?;
+        let q_proj = linear(
+            size_in,
+            size_q,
+            mapper.set_device(layer_idx, vb.pp("q_proj"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("q_proj"), false),
+            lora_config,
+            count,
+            ord,
+        )?;
+        let k_proj = linear(
+            size_in,
+            size_kv,
+            mapper.set_device(layer_idx, vb.pp("k_proj"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("k_proj"), false),
+            lora_config,
+            count,
+            ord,
+        )?;
+        let v_proj = linear(
+            size_in,
+            size_kv,
+            mapper.set_device(layer_idx, vb.pp("v_proj"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("v_proj"), false),
+            lora_config,
+            count,
+            ord,
+        )?;
+        let o_proj = linear(
+            size_q,
+            size_in,
+            mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("o_proj"), false),
+            lora_config,
+            count,
+            ord,
+        )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let rotary_emb = Arc::new(RotaryEmbedding::new(
             cfg.rope_theta,
@@ -273,18 +309,46 @@ impl Mlp {
         Ok(res)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn load(
         vb: VarBuilder,
         cfg: &Config,
         lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
     ) -> Result<Self> {
         let h_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
-        let c_fc1 = linear(h_size, i_size, vb.pp("gate_proj"), lora_config, count, ord)?;
-        let c_fc2 = linear(h_size, i_size, vb.pp("up_proj"), lora_config, count, ord)?;
-        let c_proj = linear(i_size, h_size, vb.pp("down_proj"), lora_config, count, ord)?;
+        let c_fc1 = linear(
+            h_size,
+            i_size,
+            mapper.set_device(layer_idx, vb.pp("gate_proj"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("gate_proj"), false),
+            lora_config,
+            count,
+            ord,
+        )?;
+        let c_fc2 = linear(
+            h_size,
+            i_size,
+            mapper.set_device(layer_idx, vb.pp("up_proj"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("up_proj"), false),
+            lora_config,
+            count,
+            ord,
+        )?;
+        let c_proj = linear(
+            i_size,
+            h_size,
+            mapper.set_device(layer_idx, vb.pp("down_proj"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("down_proj"), false),
+            lora_config,
+            count,
+            ord,
+        )?;
         Ok(Self {
             c_fc1,
             c_fc2,
@@ -338,6 +402,7 @@ impl Block {
         Ok(x)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn load(
         vb: VarBuilder,
         cfg: &Config,
@@ -345,15 +410,40 @@ impl Block {
         count: &mut usize,
         ord: &Ordering,
         is_gptx: bool,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
     ) -> Result<Self> {
-        let attn =
-            CausalSelfAttention::load(vb.pp("self_attn"), cfg, lora_config, count, ord, is_gptx)?;
-        let mlp = Mlp::load(vb.pp("mlp"), cfg, lora_config, count, ord)?;
-        let rms_1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let attn = CausalSelfAttention::load(
+            vb.pp("self_attn"),
+            cfg,
+            lora_config,
+            count,
+            ord,
+            is_gptx,
+            mapper,
+            layer_idx,
+            loading_isq,
+        )?;
+        let mlp = Mlp::load(
+            vb.pp("mlp"),
+            cfg,
+            lora_config,
+            count,
+            ord,
+            mapper,
+            layer_idx,
+            loading_isq,
+        )?;
+        let rms_1 = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
+        )?;
         let rms_2 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            vb.pp("post_attention_layernorm"),
+            mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
         Ok(Self {
             rms_1,
@@ -511,23 +601,39 @@ impl XLoraLlama {
         xlora_ordering: Ordering,
         is_gptx: bool,
         mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        real_device: Device,
     ) -> Result<Self> {
-        let device = vb.device();
         let dtype = vb.dtype();
-        let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
-        let lm_head = candle_nn::linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
-        let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
-        let mut count = 0;
         let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
+        let wte = embedding(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            mapper.set_nm_device(vb.pp("model.embed_tokens"), loading_isq),
+        )?;
+        let lm_head = candle_nn::linear(
+            cfg.hidden_size,
+            cfg.vocab_size,
+            mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
+        )?;
+        let ln_f = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_nm_device(vb.pp("model.norm"), loading_isq),
+        )?;
+        let mut count = 0;
         let mut blocks: Vec<_> = (0..cfg.num_hidden_layers)
             .map(|i| {
                 Block::load(
-                    mapper.set_device(i, vb.pp(&format!("model.layers.{i}"))),
+                    vb.pp(&format!("model.layers.{i}")),
                     cfg,
                     lora_config,
                     &mut count,
                     &xlora_ordering,
                     is_gptx,
+                    &*mapper,
+                    i,
+                    loading_isq,
                 )
                 .expect("Failed to load block.")
             })
@@ -568,7 +674,7 @@ impl XLoraLlama {
             lm_head: QLinear::from_linear(lm_head),
             cache: Cache::new()?,
             kv_cache: models::Cache::new(cfg.num_hidden_layers, true),
-            device: device.clone(),
+            device: real_device,
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
             }),

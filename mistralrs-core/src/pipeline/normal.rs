@@ -258,6 +258,12 @@ impl Loader for NormalLoader {
 
         info!("Model config: {config}");
 
+        let load_device = if in_situ_quant.is_none() {
+            device.clone()
+        } else {
+            Device::Cpu
+        };
+
         let mut is_lora = false;
         let mut model = match self.kind {
             ModelKind::QuantizedGGUF => unreachable!(),
@@ -266,23 +272,27 @@ impl Loader for NormalLoader {
                 paths,
                 dtype,
                 default_dtype,
-                device,
+                &load_device,
                 config,
                 self.inner,
                 self.config.use_flash_attn,
                 silent,
-                mapper
+                mapper,
+                in_situ_quant.is_some(),
+                device.clone()
             ),
             ModelKind::XLoraNormal => xlora_model_loader!(
                 paths,
                 dtype,
                 default_dtype,
-                device,
+                &load_device,
                 config,
                 self.inner,
                 self.config.use_flash_attn,
                 silent,
-                mapper
+                mapper,
+                in_situ_quant.is_some(),
+                device.clone()
             ),
             ModelKind::LoraNormal => {
                 is_lora = true;
@@ -290,12 +300,14 @@ impl Loader for NormalLoader {
                     paths,
                     dtype,
                     default_dtype,
-                    device,
+                    &load_device,
                     config,
                     self.inner,
                     self.config.use_flash_attn,
                     silent,
-                    mapper
+                    mapper,
+                    in_situ_quant.is_some(),
+                    device.clone()
                 )
             }
             ModelKind::XLoraGGUF => unreachable!(),
@@ -310,7 +322,7 @@ impl Loader for NormalLoader {
         let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
 
         if let Some(in_situ_quant) = in_situ_quant {
-            model.quantize(in_situ_quant)?;
+            model.quantize(in_situ_quant, device.clone())?;
         }
 
         Ok(Box::new(Mutex::new(NormalPipeline {
@@ -423,6 +435,9 @@ impl Pipeline for NormalPipeline {
         &self.tok_trie
     }
     fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()> {
-        self.model.quantize(dtype).map_err(anyhow::Error::msg)
+        let device = self.device().clone();
+        self.model
+            .quantize(dtype, device)
+            .map_err(anyhow::Error::msg)
     }
 }

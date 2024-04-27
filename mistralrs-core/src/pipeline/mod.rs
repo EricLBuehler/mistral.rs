@@ -324,6 +324,8 @@ pub trait NormalModelLoader {
         use_flash_attn: bool,
         vb: VarBuilder,
         mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        device: Device,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     #[allow(clippy::too_many_arguments)]
     fn load_xlora(
@@ -335,6 +337,8 @@ pub trait NormalModelLoader {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        device: Device,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn is_gptx(&self) -> bool;
 }
@@ -366,7 +370,7 @@ pub trait NormalModel {
     fn max_seq_len(&self) -> usize;
     fn get_tensors(&mut self) -> Vec<&mut QMatMul>;
     /// Quantize the model in-situ.
-    fn quantize(&mut self, dtype: GgmlDType) -> candle_core::Result<()> {
+    fn quantize(&mut self, dtype: GgmlDType, device: Device) -> candle_core::Result<()> {
         let tensors = self.get_tensors();
         let total_tensors = tensors.len();
         let mut n_quantized = 0;
@@ -374,7 +378,8 @@ pub trait NormalModel {
         for tensor in tensors.into_iter().tqdm() {
             if let QMatMul::Tensor(t) = tensor {
                 n_quantized += 1;
-                *tensor = QMatMul::QTensor(Arc::new(QTensor::quantize(&*t, dtype)?));
+                let t = t.to_device(&device)?;
+                *tensor = QMatMul::QTensor(Arc::new(QTensor::quantize(&t, dtype)?));
             }
         }
         info!("Applied in-situ quantization into {dtype:?} to {n_quantized} tensors out of {total_tensors} total tensors.");

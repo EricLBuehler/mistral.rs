@@ -33,17 +33,22 @@ struct MLP {
 }
 
 impl MLP {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         cfg: &Config,
         vb: VarBuilder,
         lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
     ) -> Result<Self> {
         let fc1 = linear(
             cfg.hidden_size,
             cfg.intermediate_size,
-            vb.pp("fc1"),
+            mapper.set_device(layer_idx, vb.pp("fc1"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("fc1"), false),
             lora_config,
             count,
             ord,
@@ -51,7 +56,8 @@ impl MLP {
         let fc2 = linear(
             cfg.intermediate_size,
             cfg.hidden_size,
-            vb.pp("fc2"),
+            mapper.set_device(layer_idx, vb.pp("fc2"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("fc2"), false),
             lora_config,
             count,
             ord,
@@ -129,6 +135,7 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 }
 
 impl Attention {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         cfg: &Config,
         vb: VarBuilder,
@@ -136,6 +143,9 @@ impl Attention {
         count: &mut usize,
         ord: &Ordering,
         is_gptx: bool,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
     ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads();
@@ -143,7 +153,8 @@ impl Attention {
         let q_proj = linear(
             cfg.hidden_size,
             num_heads * head_dim,
-            vb.pp("q_proj"),
+            mapper.set_device(layer_idx, vb.pp("q_proj"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("q_proj"), false),
             lora_config,
             count,
             ord,
@@ -151,7 +162,8 @@ impl Attention {
         let k_proj = linear(
             cfg.hidden_size,
             num_kv_heads * head_dim,
-            vb.pp("k_proj"),
+            mapper.set_device(layer_idx, vb.pp("k_proj"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("k_proj"), false),
             lora_config,
             count,
             ord,
@@ -159,7 +171,8 @@ impl Attention {
         let v_proj = linear(
             cfg.hidden_size,
             num_kv_heads * head_dim,
-            vb.pp("v_proj"),
+            mapper.set_device(layer_idx, vb.pp("v_proj"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("v_proj"), false),
             lora_config,
             count,
             ord,
@@ -167,7 +180,8 @@ impl Attention {
         let dense = linear(
             num_heads * head_dim,
             cfg.hidden_size,
-            vb.pp("dense"),
+            mapper.set_device(layer_idx, vb.pp("dense"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("dense"), false),
             lora_config,
             count,
             ord,
@@ -347,6 +361,7 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         cfg: &Config,
         vb: VarBuilder,
@@ -354,13 +369,35 @@ impl DecoderLayer {
         count: &mut usize,
         ord: &Ordering,
         is_gptx: bool,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
     ) -> Result<Self> {
-        let self_attn = Attention::new(cfg, vb.pp("self_attn"), lora_config, count, ord, is_gptx)?;
-        let mlp = MLP::new(cfg, vb.pp("mlp"), lora_config, count, ord)?;
+        let self_attn = Attention::new(
+            cfg,
+            vb.pp("self_attn"),
+            lora_config,
+            count,
+            ord,
+            is_gptx,
+            mapper,
+            layer_idx,
+            loading_isq,
+        )?;
+        let mlp = MLP::new(
+            cfg,
+            vb.pp("mlp"),
+            lora_config,
+            count,
+            ord,
+            mapper,
+            layer_idx,
+            loading_isq,
+        )?;
         let input_layernorm = layer_norm(
             cfg.hidden_size,
             cfg.layer_norm_eps,
-            vb.pp("input_layernorm"),
+            mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
         Ok(Self {
             self_attn,
@@ -414,6 +451,7 @@ pub struct Model {
 }
 
 impl Model {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         cfg: &Config,
         vb: VarBuilder,
@@ -422,26 +460,35 @@ impl Model {
         xlora_ordering: Ordering,
         is_gptx: bool,
         mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        real_device: Device,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
-        let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
+        let embed_tokens = embedding(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), loading_isq),
+        )?;
         let final_layernorm = layer_norm(
             cfg.hidden_size,
             cfg.layer_norm_eps,
-            vb_m.pp("final_layernorm"),
+            mapper.set_nm_device(vb_m.pp("final_layernorm"), loading_isq),
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_m = vb_m.pp("layers");
         let mut count = 0;
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
         for layer_idx in 0..cfg.num_hidden_layers {
             let layer = DecoderLayer::new(
                 cfg,
-                mapper.set_device(layer_idx, vb_m.pp(layer_idx)),
+                vb_m.pp(layer_idx),
                 lora_config,
                 &mut count,
                 &xlora_ordering,
                 is_gptx,
+                &*mapper,
+                layer_idx,
+                loading_isq,
             )?;
             layers.push(layer)
         }
@@ -473,7 +520,7 @@ impl Model {
             final_layernorm,
             lm_head: QLinear::from_linear(lm_head),
             cache: Cache::new(cfg.num_hidden_layers, true),
-            device: vb.device().clone(),
+            device: real_device,
             max_seq_len: cfg.max_position_embeddings,
             dtype: vb.dtype(),
             xlora_classifier: xlora_config.map(|xlora_config| {

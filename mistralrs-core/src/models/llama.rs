@@ -276,14 +276,29 @@ impl Block {
         Ok(x)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config, is_gptx: bool) -> Result<Self> {
-        let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg, is_gptx)?;
-        let mlp = Mlp::load(vb.pp("mlp"), cfg)?;
-        let rms_1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+    fn load(
+        vb: VarBuilder,
+        cfg: &Config,
+        is_gptx: bool,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
+    ) -> Result<Self> {
+        let attn = CausalSelfAttention::load(
+            mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
+            cfg,
+            is_gptx,
+        )?;
+        let mlp = Mlp::load(mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq), cfg)?;
+        let rms_1 = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_nm_device(vb.pp("input_layernorm"), false),
+        )?;
         let rms_2 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            vb.pp("post_attention_layernorm"),
+            mapper.set_nm_device(vb.pp("post_attention_layernorm"), false),
         )?;
         Ok(Self {
             rms_1,
@@ -341,18 +356,34 @@ impl Llama {
         vb: VarBuilder,
         is_gptx: bool,
         mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        real_device: Device,
     ) -> Result<Self> {
-        let device = vb.device();
-        let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
-        let lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
-        let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
         let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
+        let wte = embedding(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            mapper.set_nm_device(vb.pp("model.embed_tokens"), loading_isq),
+        )?;
+        let lm_head = linear(
+            cfg.hidden_size,
+            cfg.vocab_size,
+            mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
+        )?;
+        let ln_f = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_nm_device(vb.pp("model.norm"), loading_isq),
+        )?;
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)
             .map(|i| {
                 Block::load(
-                    mapper.set_device(i, vb.pp(&format!("model.layers.{i}"))),
+                    vb.pp(&format!("model.layers.{i}")),
                     cfg,
                     is_gptx,
+                    &*mapper,
+                    i,
+                    loading_isq,
                 )
                 .expect("Failed to load block.")
             })
@@ -365,7 +396,7 @@ impl Llama {
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             cache: Cache::new()?,
             kv_cache: super::Cache::new(cfg.num_hidden_layers, false),
-            device: device.clone(),
+            device: real_device,
             mapper,
         })
     }
