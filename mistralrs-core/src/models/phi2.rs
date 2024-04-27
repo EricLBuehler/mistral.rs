@@ -351,7 +351,7 @@ impl Model {
                 cfg.head_dim(),
                 (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
                 cfg.max_position_embeddings,
-                mapper.device_for(layer_idx, false).unwrap_or(vb.device()),
+                mapper.device_for(layer_idx, false).unwrap_or(&real_device),
                 is_gptx,
                 vb.dtype(),
             )?;

@@ -306,7 +306,7 @@ impl Model {
                 cfg.rope_theta as f32,
                 head_dim,
                 cfg.max_position_embeddings,
-                mapper.device_for(layer_idx, false).unwrap_or(vb.device()),
+                mapper.device_for(layer_idx, false).unwrap_or(&real_device),
                 is_gptx,
                 vb.dtype(),
             )?);

@@ -301,7 +301,7 @@ impl Model {
             let rotary_emb = Arc::new(PhiRotaryEmbedding::new(
                 vb.dtype(),
                 cfg,
-                mapper.device_for(layer_idx, false).unwrap_or(vb.device()),
+                mapper.device_for(layer_idx, false).unwrap_or(&real_device),
             )?);
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),

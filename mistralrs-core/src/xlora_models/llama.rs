@@ -621,7 +621,7 @@ impl XLoraLlama {
                         cfg.rope_theta,
                         head_dim,
                         MAX_SEQ_LEN,
-                        mapper.device_for(i, false).unwrap_or(vb.device()),
+                        mapper.device_for(i, false).unwrap_or(&real_device),
                         is_gptx,
                         vb.dtype(),
                     )
