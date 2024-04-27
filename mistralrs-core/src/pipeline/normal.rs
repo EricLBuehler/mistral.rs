@@ -250,8 +250,10 @@ impl Loader for NormalLoader {
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
-        let default_dtype = if device.is_cuda() {
+        let default_dtype = if device.is_cuda() && mapper.is_dummy() {
             DType::BF16
+        } else if !mapper.is_dummy() {
+            DType::F16
         } else {
             DType::F32
         };

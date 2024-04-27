@@ -420,6 +420,7 @@ impl Model {
                 &mut cache[i],
             )?
         }
+        let xs = xs.to_device(&self.device)?;
         let mut xs = xs.apply(&self.norm)?;
         if matches!(self.lm_head, QMatMul::QTensor(_)) {
             xs = xs.to_dtype(DType::F32)?;
