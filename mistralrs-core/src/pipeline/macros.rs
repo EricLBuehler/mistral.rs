@@ -25,7 +25,7 @@ macro_rules! api_dir_list {
 }
 
 #[macro_export]
-macro_rules! api_read_file {
+macro_rules! api_get_file {
     ($api:expr, $file:expr, $model_id:expr) => {
         $api.get($file).unwrap_or_else(|_| {
             let path = $model_id.join($file);
@@ -122,10 +122,10 @@ macro_rules! get_paths {
             info!("Using tokenizer.json at `{p}`");
             PathBuf::from_str(p)?
         } else {
-            $crate::api_read_file!(api, "tokenizer.json", model_id)
+            $crate::api_get_file!(api, "tokenizer.json", model_id)
         };
 
-        let config_filename = $crate::api_read_file!(api, "config.json", model_id);
+        let config_filename = $crate::api_get_file!(api, "config.json", model_id);
 
         let filenames = get_model_paths(
             revision.clone(),
@@ -150,7 +150,7 @@ macro_rules! get_paths {
             &$this.xlora_order,
         )?;
 
-        let template_filename = $crate::api_read_file!(api, "tokenizer_config.json", model_id);
+        let template_filename = $crate::api_get_file!(api, "tokenizer_config.json", model_id);
 
         Ok(Box::new($path_name {
             tokenizer_filename,

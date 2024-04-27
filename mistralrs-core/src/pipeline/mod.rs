@@ -5,7 +5,7 @@ mod loaders;
 mod macros;
 mod normal;
 use crate::aici::toktree::TokTrie;
-use crate::{api_dir_list, api_read_file, DeviceMapMetadata};
+use crate::{api_dir_list, api_get_file, DeviceMapMetadata};
 use crate::{get_bias_if_not_allowed, sampler::Logprobs, sequence::SequenceRecognizer};
 use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
 use candle_nn::VarBuilder;
@@ -602,7 +602,7 @@ fn get_xlora_paths(
             warn!("Detected multiple X-LoRA configs: {xlora_configs:?}");
         }
 
-        let classifier_path = api_read_file!(api, xlora_classifier, model_id);
+        let classifier_path = api_get_file!(api, xlora_classifier, model_id);
 
         let mut xlora_config: Option<XLoraConfig> = None;
         let mut last_err: Option<serde_json::Error> = None;
@@ -610,7 +610,7 @@ fn get_xlora_paths(
             if xlora_configs.len() != 1 {
                 warn!("Selecting config: `{}`", config_path);
             }
-            let config_path = api_read_file!(api, config_path, model_id);
+            let config_path = api_get_file!(api, config_path, model_id);
             let conf = fs::read_to_string(config_path)?;
             let deser: Result<XLoraConfig, serde_json::Error> = serde_json::from_str(&conf);
             match deser {
@@ -649,9 +649,9 @@ fn get_xlora_paths(
         let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
         for (file, name) in adapter_files {
             if let Some(paths) = adapters_paths.get_mut(&name) {
-                paths.push(api.get(&file)?);
+                paths.push(api_get_file!(api, &file, model_id));
             } else {
-                adapters_paths.insert(name, vec![api.get(&file)?]);
+                adapters_paths.insert(name, vec![api_get_file!(api, &file, model_id)]);
             }
         }
         let mut adapters_configs = Vec::new();
@@ -732,13 +732,13 @@ fn get_model_paths(
                     revision.clone(),
                 ));
                 let model_id = Path::new(&id);
-                Ok(vec![api_read_file!(qapi, name, model_id)])
+                Ok(vec![api_get_file!(qapi, name, model_id)])
             }
         },
         None => {
             let mut filenames = vec![];
             for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
-                filenames.push(api_read_file!(api, &rfilename, model_id));
+                filenames.push(api_get_file!(api, &rfilename, model_id));
             }
             Ok(filenames)
         }
