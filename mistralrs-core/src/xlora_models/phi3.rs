@@ -430,8 +430,16 @@ impl Model {
                     .merge_weights()?;
             }
         }
-        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, mapper.set_nm_device(vb_m.pp("norm"), false))?;
-        let lm_head = candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, mapper.set_nm_device(vb.pp("lm_head"), loading_isq),)?;
+        let norm = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_nm_device(vb_m.pp("norm"), false),
+        )?;
+        let lm_head = candle_nn::linear_no_bias(
+            cfg.hidden_size,
+            cfg.vocab_size,
+            mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
+        )?;
         Ok(Self {
             embed_tokens,
             layers,

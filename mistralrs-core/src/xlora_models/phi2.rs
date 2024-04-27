@@ -513,7 +513,11 @@ impl Model {
                 Arc::get_mut(&mut layer.mlp.fc2).unwrap().merge_weights()?;
             }
         }
-        let lm_head = candle_nn::linear(cfg.hidden_size, cfg.vocab_size, mapper.set_nm_device(vb.pp("lm_head"), loading_isq))?;
+        let lm_head = candle_nn::linear(
+            cfg.hidden_size,
+            cfg.vocab_size,
+            mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
+        )?;
         Ok(Self {
             embed_tokens,
             layers,

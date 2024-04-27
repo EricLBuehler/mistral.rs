@@ -534,7 +534,11 @@ impl XLoraModel {
                     .merge_weights()?;
             }
         }
-        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, mapper.set_nm_device(vb_m.pp("norm"), false))?;
+        let norm = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_nm_device(vb_m.pp("norm"), false),
+        )?;
         let lm_head = candle_nn::Linear::new(embed_tokens.embeddings().clone(), None);
         Ok(Self {
             embed_tokens,

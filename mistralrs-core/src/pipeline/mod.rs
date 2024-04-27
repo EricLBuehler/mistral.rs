@@ -376,7 +376,9 @@ pub trait NormalModel {
         let tensors = self.get_tensors();
         let total_tensors = tensors.len();
         let n_quantized = AtomicUsize::new(0);
-        info!("Applying in-situ quantization into {dtype:?} to {total_tensors} tensors in parallel.");
+        info!(
+            "Applying in-situ quantization into {dtype:?} to {total_tensors} tensors in parallel."
+        );
         let bar = ProgressBar::new(total_tensors as u64);
         bar.set_style(
             ProgressStyle::default_bar()

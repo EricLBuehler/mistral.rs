@@ -118,7 +118,12 @@ impl DeviceMapper for DummyDeviceMapper {
     fn map(&self, input: Tensor, _: usize) -> Result<Tensor> {
         Ok(input)
     }
-    fn set_device<'a>(&self, _: usize, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a> {
+    fn set_device<'a>(
+        &self,
+        _: usize,
+        varbuilder: VarBuilder<'a>,
+        loading_isq: bool,
+    ) -> VarBuilder<'a> {
         if loading_isq {
             varbuilder
         } else {
