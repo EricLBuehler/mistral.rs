@@ -8,7 +8,7 @@ fn parse_arch(x: &str) -> Result<NormalLoaderType, String> {
 
 #[derive(Debug, Subcommand)]
 pub enum ModelSelected {
-    /// Select a plain model
+    /// Select a plain model, without quantization or adapters
     Plain {
         /// Model ID to load from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
@@ -22,6 +22,7 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
 
+        /// The architecture of the model.
         #[arg(short, long, value_parser = parse_arch)]
         arch: NormalLoaderType,
     },
@@ -53,6 +54,7 @@ pub enum ModelSelected {
         #[arg(long)]
         tgt_non_granular_index: Option<usize>,
 
+        /// The architecture of the model.
         #[arg(short, long, value_parser = parse_arch)]
         arch: NormalLoaderType,
     },
@@ -79,6 +81,7 @@ pub enum ModelSelected {
         #[arg(short, long)]
         order: String,
 
+        /// The architecture of the model.
         #[arg(short, long, value_parser = parse_arch)]
         arch: NormalLoaderType,
     },

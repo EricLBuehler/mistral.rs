@@ -10,6 +10,16 @@ These are API docs for the `mistralrs` package.
 ## `Which`
 
 Each `*_model_id` may be a HF hub repo or a local path.
+
+Additionally, for models without quantization, the model architecture should be provided as the `arch` parameter in contrast to GGUF models which encode the architecture in the file. It should be one of the following:
+- `mistral`
+- `gemma`
+- `mixtral`
+- `llama`
+- `phi2`
+- `phi3`
+- `qwen2`
+
 ```py
 class Which(Enum):
     class Plain:
