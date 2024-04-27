@@ -117,7 +117,7 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 }
 
 impl Attention {
-    fn new(cfg: &Config, vb: VarBuilder, is_gptx: bool) -> Result<Self> {
+    fn new(cfg: &Config, vb: VarBuilder, rope: RotaryEmbedding) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads();
         let head_dim = cfg.head_dim();
@@ -125,16 +125,6 @@ impl Attention {
         let k_proj = linear(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?;
         let v_proj = linear(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?;
         let dense = linear(num_heads * head_dim, cfg.hidden_size, vb.pp("dense"))?;
-        // Alternative rope scalings are not supported.
-        let rotary_emb = RotaryEmbedding::new_partial(
-            cfg.rope_theta,
-            cfg.head_dim(),
-            (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
-            cfg.max_position_embeddings,
-            vb.device(),
-            is_gptx,
-            vb.dtype(),
-        )?;
         let (q_layernorm, k_layernorm) = if cfg.qk_layernorm {
             let q_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp("q_layernorm"))?;
             let k_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp("k_layernorm"))?;
@@ -150,7 +140,7 @@ impl Attention {
             dense: QLinear::from_linear(dense),
             q_layernorm,
             k_layernorm,
-            rotary_emb,
+            rotary_emb: rope,
             softmax_scale,
             num_heads,
             num_kv_heads,
@@ -279,15 +269,15 @@ impl DecoderLayer {
     fn new(
         cfg: &Config,
         vb: VarBuilder,
-        is_gptx: bool,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        rotary_emb: RotaryEmbedding,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             cfg,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
-            is_gptx,
+            rotary_emb,
         )?;
         let mlp = MLP::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
         let input_layernorm = layer_norm(
@@ -355,13 +345,23 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_m = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
+            // Alternative rope scalings are not supported.
+            let rotary_emb = RotaryEmbedding::new_partial(
+                cfg.rope_theta,
+                cfg.head_dim(),
+                (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
+                cfg.max_position_embeddings,
+                mapper.device_for(layer_idx, false).unwrap_or(vb.device()),
+                is_gptx,
+                vb.dtype(),
+            )?;
             let layer = DecoderLayer::new(
                 cfg,
                 vb_m.pp(layer_idx),
-                is_gptx,
                 &*mapper,
                 layer_idx,
                 loading_isq,
+                rotary_emb,
             )?;
             layers.push(layer)
         }

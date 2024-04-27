@@ -142,10 +142,10 @@ impl Attention {
         lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
-        is_gptx: bool,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        rope: RotaryEmbedding,
     ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads();
@@ -186,16 +186,6 @@ impl Attention {
             count,
             ord,
         )?;
-        // Alternative rope scalings are not supported.
-        let rotary_emb = RotaryEmbedding::new_partial(
-            cfg.rope_theta,
-            cfg.head_dim(),
-            (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
-            cfg.max_position_embeddings,
-            vb.device(),
-            is_gptx,
-            vb.dtype(),
-        )?;
         let (q_layernorm, k_layernorm) = if cfg.qk_layernorm {
             let q_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp("q_layernorm"))?;
             let k_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp("k_layernorm"))?;
@@ -211,7 +201,7 @@ impl Attention {
             dense,
             q_layernorm,
             k_layernorm,
-            rotary_emb,
+            rotary_emb: rope,
             softmax_scale,
             num_heads,
             num_kv_heads,
@@ -368,10 +358,10 @@ impl DecoderLayer {
         lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
-        is_gptx: bool,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        rope: RotaryEmbedding,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             cfg,
@@ -379,10 +369,10 @@ impl DecoderLayer {
             lora_config,
             count,
             ord,
-            is_gptx,
             mapper,
             layer_idx,
             loading_isq,
+            rope,
         )?;
         let mlp = MLP::new(
             cfg,
@@ -479,16 +469,26 @@ impl Model {
         let vb_m = vb_m.pp("layers");
         let mut count = 0;
         for layer_idx in 0..cfg.num_hidden_layers {
+            // Alternative rope scalings are not supported.
+            let rotary_emb = RotaryEmbedding::new_partial(
+                cfg.rope_theta,
+                cfg.head_dim(),
+                (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
+                cfg.max_position_embeddings,
+                mapper.device_for(layer_idx, false).unwrap_or(vb.device()),
+                is_gptx,
+                vb.dtype(),
+            )?;
             let layer = DecoderLayer::new(
                 cfg,
                 vb_m.pp(layer_idx),
                 lora_config,
                 &mut count,
                 &xlora_ordering,
-                is_gptx,
                 &*mapper,
                 layer_idx,
                 loading_isq,
+                rotary_emb,
             )?;
             layers.push(layer)
         }

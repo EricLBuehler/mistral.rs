@@ -169,7 +169,7 @@ impl CausalSelfAttention {
         Ok(y)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config, is_gptx: bool) -> Result<Self> {
+    fn load(vb: VarBuilder, cfg: &Config, rope: Arc<RotaryEmbedding>) -> Result<Self> {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
@@ -177,15 +177,6 @@ impl CausalSelfAttention {
         let k_proj = linear(size_in, size_kv, vb.pp("k_proj"))?;
         let v_proj = linear(size_in, size_kv, vb.pp("v_proj"))?;
         let o_proj = linear(size_q, size_in, vb.pp("o_proj"))?;
-        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        let rotary_emb = Arc::new(RotaryEmbedding::new(
-            cfg.rope_theta,
-            head_dim,
-            MAX_SEQ_LEN,
-            vb.device(),
-            is_gptx,
-            vb.dtype(),
-        )?);
         Ok(Self {
             q_proj: QMatMul::Tensor(q_proj.weight().clone()),
             k_proj: QMatMul::Tensor(k_proj.weight().clone()),
@@ -195,7 +186,7 @@ impl CausalSelfAttention {
             num_key_value_heads: cfg.num_key_value_heads,
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             use_flash_attn: cfg.use_flash_attn,
-            rotary_emb,
+            rotary_emb: rope,
         })
     }
 }
@@ -279,15 +270,15 @@ impl Block {
     fn load(
         vb: VarBuilder,
         cfg: &Config,
-        is_gptx: bool,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        rope: Arc<RotaryEmbedding>,
     ) -> Result<Self> {
         let attn = CausalSelfAttention::load(
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
             cfg,
-            is_gptx,
+            rope,
         )?;
         let mlp = Mlp::load(mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq), cfg)?;
         let rms_1 = RmsNorm::new(
@@ -375,15 +366,27 @@ impl Llama {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb.pp("model.norm"), false),
         )?;
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)
             .map(|i| {
+                let rotary_emb = Arc::new(
+                    RotaryEmbedding::new(
+                        cfg.rope_theta,
+                        head_dim,
+                        MAX_SEQ_LEN,
+                        mapper.device_for(i, false).unwrap_or(vb.device()),
+                        is_gptx,
+                        vb.dtype(),
+                    )
+                    .expect("Failed to create RoPE"),
+                );
                 Block::load(
                     vb.pp(&format!("model.layers.{i}")),
                     cfg,
-                    is_gptx,
                     &*mapper,
                     i,
                     loading_isq,
+                    rotary_emb,
                 )
                 .expect("Failed to load block.")
             })

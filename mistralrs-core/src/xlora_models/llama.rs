@@ -192,10 +192,10 @@ impl CausalSelfAttention {
         lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
-        is_gptx: bool,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        rope: Arc<RotaryEmbedding>,
     ) -> Result<Self> {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
@@ -236,15 +236,6 @@ impl CausalSelfAttention {
             count,
             ord,
         )?;
-        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        let rotary_emb = Arc::new(RotaryEmbedding::new(
-            cfg.rope_theta,
-            head_dim,
-            MAX_SEQ_LEN,
-            vb.device(),
-            is_gptx,
-            vb.dtype(),
-        )?);
         Ok(Self {
             q_proj,
             k_proj,
@@ -254,7 +245,7 @@ impl CausalSelfAttention {
             num_key_value_heads: cfg.num_key_value_heads,
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             use_flash_attn: cfg.use_flash_attn,
-            rotary_emb,
+            rotary_emb: rope,
         })
     }
 }
@@ -409,10 +400,10 @@ impl Block {
         lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
-        is_gptx: bool,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        rope: Arc<RotaryEmbedding>,
     ) -> Result<Self> {
         let attn = CausalSelfAttention::load(
             vb.pp("self_attn"),
@@ -420,10 +411,10 @@ impl Block {
             lora_config,
             count,
             ord,
-            is_gptx,
             mapper,
             layer_idx,
             loading_isq,
+            rope,
         )?;
         let mlp = Mlp::load(
             vb.pp("mlp"),
@@ -622,18 +613,30 @@ impl XLoraLlama {
             mapper.set_nm_device(vb.pp("model.norm"), false),
         )?;
         let mut count = 0;
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let mut blocks: Vec<_> = (0..cfg.num_hidden_layers)
             .map(|i| {
+                let rotary_emb = Arc::new(
+                    RotaryEmbedding::new(
+                        cfg.rope_theta,
+                        head_dim,
+                        MAX_SEQ_LEN,
+                        mapper.device_for(i, false).unwrap_or(vb.device()),
+                        is_gptx,
+                        vb.dtype(),
+                    )
+                    .expect("Failed to create RoPE"),
+                );
                 Block::load(
                     vb.pp(&format!("model.layers.{i}")),
                     cfg,
                     lora_config,
                     &mut count,
                     &xlora_ordering,
-                    is_gptx,
                     &*mapper,
                     i,
                     loading_isq,
+                    rotary_emb,
                 )
                 .expect("Failed to load block.")
             })
