@@ -19,6 +19,7 @@ use hf_hub::{
     Repo, RepoType,
 };
 use indexmap::IndexMap;
+use indicatif::{ParallelProgressIterator, ProgressBar};
 pub use loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
     Phi3Loader, Qwen2Loader,
@@ -375,14 +376,18 @@ pub trait NormalModel {
         let tensors = self.get_tensors();
         let total_tensors = tensors.len();
         let n_quantized = AtomicUsize::new(0);
-        info!("Applying in-situ quantization to {dtype:?}.");
-        tensors.into_par_iter().for_each(|tensor| {
-            if let QMatMul::Tensor(t) = tensor {
-                n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let t = t.to_device(&device).unwrap();
-                *tensor = QMatMul::QTensor(Arc::new(QTensor::quantize(&t, dtype).unwrap()));
-            }
-        });
+        info!("Applying in-situ quantization into {dtype:?} to {total_tensors} in parallel.");
+        let bar = ProgressBar::new(total_tensors as u64);
+        tensors
+            .into_par_iter()
+            .progress_with(bar)
+            .for_each(|tensor| {
+                if let QMatMul::Tensor(t) = tensor {
+                    n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let t = t.to_device(&device).unwrap();
+                    *tensor = QMatMul::QTensor(Arc::new(QTensor::quantize(&t, dtype).unwrap()));
+                }
+            });
         info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors.");
         Ok(())
     }
