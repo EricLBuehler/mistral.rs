@@ -3,8 +3,8 @@ requires = ["maturin==1.4"]
 build-backend = "maturin"
 
 [project]
-name = "mistralrs"
-version = "0.1.13"
+name = "$name"
+version = "0.1.12"
 requires-python = ">=3.8"
 classifiers = [
     "Programming Language :: Rust",
