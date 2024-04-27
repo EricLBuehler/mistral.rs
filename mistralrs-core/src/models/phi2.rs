@@ -341,7 +341,7 @@ impl Model {
         real_device: Device,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
         let embed_tokens = embedding(
             cfg.vocab_size,
             cfg.hidden_size,

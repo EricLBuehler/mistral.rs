@@ -359,7 +359,7 @@ impl Llama {
         loading_isq: bool,
         real_device: Device,
     ) -> Result<Self> {
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
