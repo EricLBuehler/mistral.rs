@@ -6,7 +6,7 @@ use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::models::Cache;
 use crate::pipeline::chat_template::calculate_eos_tokens;
-use crate::pipeline::ChatTemplate;
+use crate::pipeline::{get_prompt_input_batched, ChatTemplate};
 use crate::utils::varbuilder_utils::from_mmaped_safetensors;
 use crate::xlora_models::{NonGranularState, XLoraConfig};
 use crate::{deserialize_chat_template, get_paths, DeviceMapMetadata};
@@ -463,12 +463,31 @@ impl Pipeline for GGUFPipeline {
         )
         .unwrap();
         match self.model {
-            Model::Llama(ref mut model) => model.forward(
-                &input_ids,
-                &seqlen_offsets,
-                seqlen_offsets_kernel,
-                context_lens,
-            ),
+            Model::Llama(ref mut model) => {
+                let chunk_size = 512;
+                if is_prompt && input_toks.len() == 1 && input_toks[0].len() > chunk_size {
+                    // If have 1 input and it is a prompt, it might require batched prefill
+                    let batches =
+                        get_prompt_input_batched(input_toks, &model.device, chunk_size).unwrap();
+                    let mut xs = None;
+                    for batch in batches {
+                        xs = Some(model.forward(
+                            &batch.input,
+                            &batch.positions,
+                            batch.positions_kernel,
+                            batch.context_lens,
+                        ));
+                    }
+                    xs.expect("No batches")
+                } else {
+                    model.forward(
+                        &input_ids,
+                        &seqlen_offsets,
+                        seqlen_offsets_kernel,
+                        context_lens,
+                    )
+                }
+            }
             Model::Phi2(ref mut model) => model.forward(&input_ids, &seqlen_offsets, context_lens),
             Model::XLoraLlama(ref mut model) => model.forward(
                 &input_ids,
