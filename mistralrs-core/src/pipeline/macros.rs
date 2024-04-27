@@ -1,4 +1,38 @@
 #[macro_export]
+macro_rules! api_dir_list {
+    ($api:expr, $model_id:expr) => {
+        $api.info()
+            .map(|repo| {
+                repo.siblings
+                    .iter()
+                    .map(|x| x.rfilename.clone())
+                    .collect::<Vec<String>>()
+            })
+            .unwrap_or(
+                std::fs::read_dir($model_id)?
+                    .into_iter()
+                    .map(|s| {
+                        s.unwrap()
+                            .path()
+                            .to_str()
+                            .expect("Could not convert to str")
+                            .to_string()
+                    })
+                    .collect::<Vec<String>>(),
+            )
+            .into_iter()
+    };
+}
+
+#[macro_export]
+macro_rules! api_read_file {
+    ($api:expr, $file:expr, $model_id:expr) => {
+        $api.get($file)
+            .unwrap_or(std::fs::read_to_string($model_id.join($file))?.into())
+    };
+}
+
+#[macro_export]
 macro_rules! deserialize_chat_template {
     ($paths:expr, $this:ident) => {{
         use tracing::info;
@@ -77,15 +111,16 @@ macro_rules! get_paths {
             RepoType::Model,
             revision.clone(),
         ));
+        let model_id = std::path::Path::new(&$this.model_id);
 
         let tokenizer_filename = if let Some(ref p) = $this.tokenizer_json {
             info!("Using tokenizer.json at `{p}`");
             PathBuf::from_str(p)?
         } else {
-            api.get("tokenizer.json")?
+            crate::api_read_file!(api, "tokenizer.json", model_id)
         };
 
-        let config_filename = api.get("config.json")?;
+        let config_filename = crate::api_read_file!(api, "config.json", model_id);
 
         let filenames = get_model_paths(
             revision.clone(),
@@ -93,6 +128,7 @@ macro_rules! get_paths {
             &$quantized_model_id,
             &$quantized_filename,
             &api,
+            &model_id,
         )?;
 
         let XLoraPaths {
@@ -109,7 +145,7 @@ macro_rules! get_paths {
             &$this.xlora_order,
         )?;
 
-        let template_filename = api.get("tokenizer_config.json")?;
+        let template_filename = crate::api_read_file!(api, "tokenizer_config.json", model_id);
 
         Ok(Box::new($path_name {
             tokenizer_filename,

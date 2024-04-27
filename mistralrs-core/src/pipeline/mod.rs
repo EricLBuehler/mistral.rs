@@ -5,7 +5,7 @@ mod loaders;
 mod macros;
 mod normal;
 use crate::aici::toktree::TokTrie;
-use crate::DeviceMapMetadata;
+use crate::{api_dir_list, api_read_file, DeviceMapMetadata};
 use crate::{get_bias_if_not_allowed, sampler::Logprobs, sequence::SequenceRecognizer};
 use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
 use candle_nn::VarBuilder;
@@ -25,6 +25,7 @@ pub use loaders::{
 };
 use mistralrs_lora::{LoraConfig, Ordering};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
+use std::path::Path;
 use std::sync::Arc;
 use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
 use tokenizers::Tokenizer;
@@ -584,11 +585,9 @@ fn get_xlora_paths(
             RepoType::Model,
             revision,
         ));
-        let xlora_classifier = &api
-            .info()?
-            .siblings
-            .iter()
-            .map(|x| x.rfilename.clone())
+        let model_id = Path::new(&xlora_id);
+
+        let xlora_classifier = &api_dir_list!(api, model_id)
             .filter(|x| x.contains("xlora_classifier.safetensors"))
             .collect::<Vec<_>>();
         if xlora_classifier.len() != 1 {
@@ -596,18 +595,14 @@ fn get_xlora_paths(
             warn!("Selected classifier: `{}`", &xlora_classifier[0]);
         }
         let xlora_classifier = &xlora_classifier[0];
-        let xlora_configs = &api
-            .info()?
-            .siblings
-            .iter()
-            .map(|x| x.rfilename.clone())
+        let xlora_configs = &api_dir_list!(api, model_id)
             .filter(|x| x.contains("xlora_config.json"))
             .collect::<Vec<_>>();
         if xlora_configs.len() != 1 {
             warn!("Detected multiple X-LoRA configs: {xlora_configs:?}");
         }
 
-        let classifier_path = api.get(xlora_classifier)?;
+        let classifier_path = api_read_file!(api, xlora_classifier, model_id);
 
         let mut xlora_config: Option<XLoraConfig> = None;
         let mut last_err: Option<serde_json::Error> = None;
@@ -615,7 +610,7 @@ fn get_xlora_paths(
             if xlora_configs.len() != 1 {
                 warn!("Selecting config: `{}`", config_path);
             }
-            let config_path = api.get(config_path)?;
+            let config_path = api_read_file!(api, config_path, model_id);
             let conf = fs::read_to_string(config_path)?;
             let deser: Result<XLoraConfig, serde_json::Error> = serde_json::from_str(&conf);
             match deser {
@@ -638,11 +633,7 @@ fn get_xlora_paths(
             )
         });
 
-        let adapter_files = api
-            .info()?
-            .siblings
-            .iter()
-            .map(|x| x.rfilename.clone())
+        let adapter_files = api_dir_list!(api, model_id)
             .filter_map(|name| {
                 for adapter_name in xlora_order.as_ref().unwrap().adapters.as_ref().unwrap() {
                     if name.contains(adapter_name) {
@@ -725,6 +716,7 @@ fn get_model_paths(
     quantized_model_id: &Option<String>,
     quantized_filename: &Option<String>,
     api: &ApiRepo,
+    model_id: &Path,
 ) -> Result<Vec<PathBuf>> {
     match &quantized_filename {
         Some(name) => match quantized_model_id.as_ref().unwrap().as_str() {
@@ -739,20 +731,14 @@ fn get_model_paths(
                     RepoType::Model,
                     revision.clone(),
                 ));
-                Ok(vec![qapi.get(name).unwrap()])
+                let model_id = Path::new(&id);
+                Ok(vec![api_read_file!(qapi, name, model_id)])
             }
         },
         None => {
             let mut filenames = vec![];
-            for rfilename in api
-                .info()?
-                .siblings
-                .iter()
-                .map(|x| x.rfilename.clone())
-                .filter(|x| x.ends_with(".safetensors"))
-            {
-                let filename = api.get(&rfilename)?;
-                filenames.push(filename);
+            for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
+                filenames.push(api_read_file!(api, &rfilename, model_id));
             }
             Ok(filenames)
         }
