@@ -20,7 +20,7 @@ macro_rules! handle_seq_error {
             Err(e) => {
                 use $crate::response::Response;
                 $response
-                    .send(Response::InternalError(e.into()))
+                    .blocking_send(Response::InternalError(e.into()))
                     .expect("Expected receiver.");
                 return;
             }
@@ -36,7 +36,7 @@ macro_rules! handle_seq_error_ok {
             Err(e) => {
                 use $crate::response::Response;
                 $response
-                    .send(Response::InternalError(e.into()))
+                    .blocking_send(Response::InternalError(e.into()))
                     .expect("Expected receiver.");
                 return Ok(());
             }
@@ -71,7 +71,7 @@ macro_rules! handle_seq_error_stateaware_ok {
                 use $crate::response::Response;
                 use $crate::sequence::SequenceState;
                 $seq.responder()
-                    .send(Response::InternalError(e.into()))
+                    .blocking_send(Response::InternalError(e.into()))
                     .expect("Expected receiver.");
                 $seq.set_state(SequenceState::Error);
                 return Ok(());
@@ -139,7 +139,7 @@ macro_rules! handle_pipeline_forward_error {
                         };
 
                         seq.responder()
-                            .send(Response::ModelError(
+                            .blocking_send(Response::ModelError(
                                 e.to_string(),
                                 partial_completion_response
                             ))
@@ -156,7 +156,7 @@ macro_rules! handle_pipeline_forward_error {
                         };
 
                         seq.responder()
-                            .send(Response::CompletionModelError(
+                            .blocking_send(Response::CompletionModelError(
                                 e.to_string(),
                                 partial_completion_response
                             ))

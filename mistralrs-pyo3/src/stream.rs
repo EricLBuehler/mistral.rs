@@ -1,4 +1,4 @@
-use std::sync::mpsc::Receiver;
+use tokio::sync::mpsc::Receiver;
 
 use mistralrs_core::{ChatCompletionChunkResponse, Response};
 use pyo3::{exceptions::PyValueError, pyclass, pymethods, PyRef, PyRefMut, PyResult};
@@ -24,8 +24,8 @@ impl ChatCompletionStreamer {
         if this.is_done {
             return None;
         }
-        match this.rx.recv() {
-            Ok(resp) => match resp {
+        match this.rx.blocking_recv() {
+            Some(resp) => match resp {
                 Response::ModelError(msg, _) => Some(Err(PyValueError::new_err(msg.to_string()))),
                 Response::ValidationError(e) => Some(Err(PyValueError::new_err(e.to_string()))),
                 Response::InternalError(e) => Some(Err(PyValueError::new_err(e.to_string()))),
@@ -39,7 +39,7 @@ impl ChatCompletionStreamer {
                 Response::CompletionDone(_) => unreachable!(),
                 Response::CompletionModelError(_, _) => unreachable!(),
             },
-            Err(e) => Some(Err(PyValueError::new_err(e.to_string()))),
+            None => Some(Err(PyValueError::new_err("Received None".to_string()))),
         }
     }
 }

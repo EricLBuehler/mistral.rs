@@ -2,8 +2,9 @@ use indexmap::IndexMap;
 use mistralrs_core::{Constraint, MistralRs, Request, RequestMessage, Response, SamplingParams};
 use std::{
     io::{self, Write},
-    sync::{mpsc::channel, Arc},
+    sync::Arc,
 };
+use tokio::sync::mpsc::channel;
 use tracing::{error, info};
 
 pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
@@ -35,7 +36,7 @@ pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
         user_message.insert("content".to_string(), prompt);
         messages.push(user_message);
 
-        let (tx, rx) = channel();
+        let (tx, mut rx) = channel(10_000);
         let req = Request {
             id: mistralrs.next_request_id(),
             messages: RequestMessage::Chat(messages.clone()),
@@ -46,7 +47,7 @@ pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
             constraint: Constraint::None,
             suffix: None,
         };
-        sender.send(req).unwrap();
+        sender.blocking_send(req).unwrap();
 
         let mut assistant_output = String::new();
         loop {

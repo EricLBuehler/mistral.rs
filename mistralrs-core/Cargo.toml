@@ -47,6 +47,7 @@ bytemuck = "1.15.0"
 pyo3.workspace = true
 rayon = "1.10.0"
 indicatif = { version = "0.17.8", features = ["rayon"] }
+tokio.workspace = true
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
