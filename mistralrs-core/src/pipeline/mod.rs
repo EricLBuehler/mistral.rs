@@ -25,11 +25,12 @@ pub use loaders::{
 };
 use mistralrs_lora::{LoraConfig, Ordering};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::path::Path;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
 use tokenizers::Tokenizer;
-use tqdm::Iter;
 use tracing::{info, warn};
 
 use anyhow::Result;
@@ -373,16 +374,16 @@ pub trait NormalModel {
     fn quantize(&mut self, dtype: GgmlDType, device: Device) -> candle_core::Result<()> {
         let tensors = self.get_tensors();
         let total_tensors = tensors.len();
-        let mut n_quantized = 0;
+        let n_quantized = AtomicUsize::new(0);
         info!("Applying in-situ quantization to {dtype:?}.");
-        for tensor in tensors.into_iter().tqdm() {
+        tensors.into_par_iter().for_each(|tensor| {
             if let QMatMul::Tensor(t) = tensor {
-                n_quantized += 1;
-                let t = t.to_device(&device)?;
-                *tensor = QMatMul::QTensor(Arc::new(QTensor::quantize(&t, dtype)?));
+                n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let t = t.to_device(&device).unwrap();
+                *tensor = QMatMul::QTensor(Arc::new(QTensor::quantize(&t, dtype).unwrap()));
             }
-        }
-        info!("Applied in-situ quantization into {dtype:?} to {n_quantized} tensors out of {total_tensors} total tensors.");
+        });
+        info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors.");
         Ok(())
     }
 }
