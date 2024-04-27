@@ -385,7 +385,7 @@ impl Model {
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), loading_isq),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
@@ -430,8 +430,8 @@ impl Model {
                     .merge_weights()?;
             }
         }
-        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
-        let lm_head = candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
+        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, mapper.set_nm_device(vb_m.pp("norm"), false))?;
+        let lm_head = candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, mapper.set_nm_device(vb.pp("lm_head"), loading_isq),)?;
         Ok(Self {
             embed_tokens,
             layers,

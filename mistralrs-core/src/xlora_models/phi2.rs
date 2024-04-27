@@ -468,12 +468,12 @@ impl Model {
         let embed_tokens = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), loading_isq),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
         )?;
         let final_layernorm = layer_norm(
             cfg.hidden_size,
             cfg.layer_norm_eps,
-            mapper.set_nm_device(vb_m.pp("final_layernorm"), loading_isq),
+            mapper.set_nm_device(vb_m.pp("final_layernorm"), false),
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_m = vb_m.pp("layers");
@@ -513,7 +513,7 @@ impl Model {
                 Arc::get_mut(&mut layer.mlp.fc2).unwrap().merge_weights()?;
             }
         }
-        let lm_head = candle_nn::linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
+        let lm_head = candle_nn::linear(cfg.hidden_size, cfg.vocab_size, mapper.set_nm_device(vb.pp("lm_head"), loading_isq))?;
         Ok(Self {
             embed_tokens,
             layers,

@@ -292,12 +292,12 @@ impl Model {
         real_device: Device,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
         let embed_tokens =
-            candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
+            candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, mapper.set_nm_device(vb_m.pp("embed_tokens"),false))?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let vb_l = vb_m.pp("layers");
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
         for layer_idx in 0..cfg.num_hidden_layers {
             let rotary_emb = Arc::new(RotaryEmbedding::new(
                 cfg.rope_theta as f32,
@@ -322,7 +322,7 @@ impl Model {
         let norm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_nm_device(vb_m.pp("norm"), loading_isq),
+            mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
         let lm_head = linear_no_bias(
             cfg.hidden_size,

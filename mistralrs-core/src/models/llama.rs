@@ -343,7 +343,7 @@ impl Llama {
             )?;
         }
         let x = x.to_device(&self.device)?;
-        let mut x = self.ln_f.forward(&x)?.to_dtype(DType::F32)?;
+        let mut x = self.ln_f.forward(&x)?;
         if matches!(self.lm_head, QMatMul::QTensor(_)) {
             x = x.to_dtype(DType::F32)?;
         }
@@ -363,7 +363,7 @@ impl Llama {
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb.pp("model.embed_tokens"), loading_isq),
+            mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
         )?;
         let lm_head = linear(
             cfg.hidden_size,
@@ -373,7 +373,7 @@ impl Llama {
         let ln_f = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_nm_device(vb.pp("model.norm"), loading_isq),
+            mapper.set_nm_device(vb.pp("model.norm"), false),
         )?;
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)
             .map(|i| {

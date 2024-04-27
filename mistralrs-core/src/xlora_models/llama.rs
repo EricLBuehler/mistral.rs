@@ -609,7 +609,7 @@ impl XLoraLlama {
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb.pp("model.embed_tokens"), loading_isq),
+            mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
         )?;
         let lm_head = candle_nn::linear(
             cfg.hidden_size,
@@ -619,7 +619,7 @@ impl XLoraLlama {
         let ln_f = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_nm_device(vb.pp("model.norm"), loading_isq),
+            mapper.set_nm_device(vb.pp("model.norm"), false),
         )?;
         let mut count = 0;
         let mut blocks: Vec<_> = (0..cfg.num_hidden_layers)

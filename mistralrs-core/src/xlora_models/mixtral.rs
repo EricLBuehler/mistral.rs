@@ -571,7 +571,7 @@ impl XLoraModel {
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), loading_isq),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
@@ -631,7 +631,7 @@ impl XLoraModel {
         let norm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_nm_device(vb_m.pp("norm"), loading_isq),
+            mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
         let lm_head = candle_nn::linear_no_bias(
             cfg.hidden_size,

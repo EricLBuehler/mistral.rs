@@ -345,12 +345,12 @@ impl Model {
         let embed_tokens = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), loading_isq),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
         )?;
         let final_layernorm = layer_norm(
             cfg.hidden_size,
             cfg.layer_norm_eps,
-            mapper.set_nm_device(vb_m.pp("final_layernorm"), loading_isq),
+            mapper.set_nm_device(vb_m.pp("final_layernorm"), false),
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_m = vb_m.pp("layers");
