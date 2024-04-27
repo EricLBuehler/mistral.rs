@@ -7,6 +7,7 @@ use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 
+use crate::cublaslt::{fused_batch_matmul, fused_matmul, CublasLt};
 use crate::device_map::DeviceMapper;
 use crate::layers::QRmsNorm;
 use crate::pipeline::extract_logits;
@@ -23,12 +24,39 @@ struct Mlp {
     feed_forward_w3: QMatMul,
 }
 
+fn lt_mul(x: &Tensor, w: &QMatMul, lt: CublasLt) -> Result<Tensor> {
+    // w.forward(x)
+    match w {
+        QMatMul::QTensor(ref qt) => {
+            let w = qt.dequantize(x.device())?;
+
+            let w = match *x.dims() {
+                [b1, b2, _, _] => w.broadcast_left((b1, b2))?,
+                [bsize, _, _] => w.broadcast_left(bsize)?,
+                _ => w,
+            };
+            fused_batch_matmul(&w, &x, None, None, None, None, None, lt)
+
+            // let w = match *x.dims() {
+            //     [b1, b2, _, _] => w.broadcast_left((b1, b2))?.t()?,
+            //     [bsize, _, _] => w.broadcast_left(bsize)?.t()?,
+            //     _ => w.t()?,
+            // };
+            // x.matmul(&w)
+        }
+        QMatMul::Tensor(_) => todo!(),
+    }
+}
+
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let w1 = self.feed_forward_w1.forward(xs)?;
-        let w3 = self.feed_forward_w3.forward(xs)?;
-        self.feed_forward_w2
-            .forward(&(candle_nn::ops::silu(&w1)? * w3)?)
+        // let w1 = self.feed_forward_w1.forward(xs)?;
+        let w1 = lt_mul(xs, &self.feed_forward_w1, CublasLt::new(xs.device())?)?;
+        // let w3 = self.feed_forward_w3.forward(xs)?;
+        let w3 = lt_mul(xs, &self.feed_forward_w3, CublasLt::new(xs.device())?)?;
+        let y = &(candle_nn::ops::silu(&w1)? * w3)?;
+        // self.feed_forward_w2.forward(y)
+        lt_mul(y, &self.feed_forward_w2, CublasLt::new(xs.device())?)
     }
 }
 
@@ -144,9 +172,15 @@ impl LayerWeights {
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
-        let q = self.attention_wq.forward(x)?;
-        let k = self.attention_wk.forward(x)?;
-        let v = self.attention_wv.forward(x)?;
+
+        let lt = CublasLt::new(x.device())?;
+        let q = lt_mul(x, &self.attention_wq, lt.clone())?;
+        let k = lt_mul(x, &self.attention_wk, lt.clone())?;
+        let v = lt_mul(x, &self.attention_wv, lt.clone())?;
+
+        // let q = self.attention_wq.forward(x)?;
+        // let k = self.attention_wk.forward(x)?;
+        // let v = self.attention_wv.forward(x)?;
 
         let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
@@ -192,7 +226,8 @@ impl LayerWeights {
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = att.matmul(&v.contiguous()?)?;
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
-        let y = self.attention_wo.forward(&y)?;
+        // let y = self.attention_wo.forward(&y)?;
+        let y = lt_mul(&y, &self.attention_wo, lt)?;
         Ok(y)
     }
 }
