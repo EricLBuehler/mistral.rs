@@ -221,7 +221,9 @@ To install mistral.rs, one should ensure they have Rust installed by following [
     You can install Python support by following the guide [here](/mistralrs-pyo3/README.md).
 
 ### Getting models
-Mistral.rs will automatically download models from HF hub. To access gated models, you should provide a token source. They may be one of:
+**Loading from HF Hub:**
+
+Mistral.rs can automatically download models from HF Hub. To access gated models, you should provide a token source. They may be one of:
 - `literal:<value>`: Load from a specified literal
 - `env:<value>`: Load from a specified environment variable
 - `path:<value>`: Load from a specified file
@@ -235,7 +237,9 @@ This is passed in the following ways:
 ```
 - Python:
 
-Example [here](examples/python/token_source.py).
+[Here](examples/python/token_source.py) is an example of setting the token source.
+
+**Loading from local files:**
 
 You can also instruct mistral.rs to load models locally by modifying the `*_model_id` arguments or options:
 ```bash
