@@ -64,7 +64,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95
 - Phi 3
 - Qwen 2
 
-Please see [this section](README#supported-models) for details on quantization and LoRA support.
+Please see [this section](#supported-models) for details on quantization and LoRA support.
 
 ## APIs and Integrations
 **Rust Library API**
