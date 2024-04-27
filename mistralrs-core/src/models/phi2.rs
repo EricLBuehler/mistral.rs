@@ -386,12 +386,11 @@ impl Model {
             )?;
         }
         let xs = xs.to_device(&self.device)?;
-        extract_logits(
-            &xs.apply(&self.final_layernorm)?
-                .to_dtype(DType::F32)?
-                .apply(&self.lm_head)?,
-            context_lens,
-        )
+        let mut xs = xs.apply(&self.final_layernorm)?;
+        if self.lm_head.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        extract_logits(&xs.apply(&self.lm_head)?, context_lens)
     }
 }
 

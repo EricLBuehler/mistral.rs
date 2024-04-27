@@ -373,12 +373,11 @@ impl Model {
                 &mut cache[i],
             )?
         }
-        extract_logits(
-            &xs.apply(&self.norm)?
-                .to_dtype(DType::F32)?
-                .apply(&self.lm_head)?,
-            context_lens,
-        )
+        let mut xs = xs.apply(&self.norm)?;
+        if matches!(self.lm_head, QMatMul::QTensor(_)) {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        extract_logits(&xs.apply(&self.lm_head)?, context_lens)
     }
 }
 

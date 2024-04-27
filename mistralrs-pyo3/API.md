@@ -8,6 +8,8 @@ These are API docs for the `mistralrs` package.
 - Example: [here](#example)
 
 ## `Which`
+
+Each `*_model_id` may be a HF hub repo or a local path.
 ```py
 class Which(Enum):
     class Plain:

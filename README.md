@@ -231,13 +231,29 @@ Mistral.rs will automatically download models from HF hub. To access gated model
 This is passed in the following ways:
 - Command line:
 ```bash
-./mistralrs-server --port 1234 gguf -m mistralai/Mistral-7B-Instruct-v0.1
+./mistralrs-server --port 1234 plain -m mistralai/Mistral-7B-Instruct-v0.1 -a mistral
 ```
 - Python:
 
 Example [here](examples/python/token_source.py).
 
-*Loading locally will be added shortly*.
+You can also instruct mistral.rs to load models locally by modifying the `*_model_id` arguments or options:
+```bash
+./mistralrs-server --port 1234 plain -m . -a mistral
+```
+
+The following files must be present in the paths for the options below:
+- `--model-id` (server) or `model_id` (python) or `--tok-model-id` (server) or `tok_model_id` (python): 
+  - `config.json`
+  - `tokenizer_config.json`
+  - `tokenizer.json` (if not specified separately)
+  - `.safetensors` files.
+- `--quantized-model-id` (server) or `quantized_model_id` (python):
+  - Specified `.gguf` or `.ggml` file.
+- `--x-lora-model-id` (server) or `xlora_model_id` (python):
+  - `xlora_classifier.safetensors`
+  - `xlora_config.json`
+  - Adapters `.safetensors` and `adapter_config.json` files in their respective directories
 
 ### Run
 
