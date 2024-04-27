@@ -287,6 +287,12 @@
 <a href="#285" id="285">285</a>
 <a href="#286" id="286">286</a>
 <a href="#287" id="287">287</a>
+<a href="#288" id="288">288</a>
+<a href="#289" id="289">289</a>
+<a href="#290" id="290">290</a>
+<a href="#291" id="291">291</a>
+<a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>clap::Subcommand;
 
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::NormalLoaderType;
@@ -299,7 +305,7 @@
 </span><span class="kw">pub enum </span>ModelSelected {
     <span class="doccomment">/// Select a plain model
     </span>Plain {
-        <span class="doccomment">/// Model ID to load from
+        <span class="doccomment">/// Model ID to load from. This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short, long)]
         </span>model_id: String,
 
@@ -317,7 +323,7 @@
 
     <span class="doccomment">/// Select an X-LoRA architecture
     </span>XLora {
-        <span class="doccomment">/// Force a base model ID to load from instead of using the ordering file.
+        <span class="doccomment">/// Force a base model ID to load from instead of using the ordering file. This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short, long)]
         </span>model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
@@ -325,7 +331,7 @@
         </span><span class="attr">#[arg(short, long)]
         </span>tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Model ID to load X-LoRA from.
+        <span class="doccomment">/// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short, long)]
         </span>xlora_model_id: String,
 
@@ -348,7 +354,7 @@
 
     <span class="doccomment">/// Select a LoRA architecture
     </span>Lora {
-        <span class="doccomment">/// Force a base model ID to load from instead of using the ordering file.
+        <span class="doccomment">/// Force a base model ID to load from instead of using the ordering file. This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short, long)]
         </span>model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
@@ -356,7 +362,7 @@
         </span><span class="attr">#[arg(short, long)]
         </span>tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Model ID to load X-LoRA from.
+        <span class="doccomment">/// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short, long)]
         </span>adapters_model_id: String,
 
@@ -374,7 +380,7 @@
 
     <span class="doccomment">/// Select a GGUF model.
     </span>GGUF {
-        <span class="doccomment">/// Model ID to load the tokenizer from
+        <span class="doccomment">/// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short, long)]
         </span>tok_model_id: String,
 
@@ -383,6 +389,7 @@
         </span>tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short = <span class="string">'m'</span>, long)]
         </span>quantized_model_id: String,
 
@@ -397,7 +404,7 @@
 
     <span class="doccomment">/// Select a GGUF model with X-LoRA.
     </span>XLoraGGUF {
-        <span class="doccomment">/// Model ID to load the tokenizer from
+        <span class="doccomment">/// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short, long)]
         </span>tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
@@ -406,6 +413,7 @@
         </span>tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short = <span class="string">'m'</span>, long)]
         </span>quantized_model_id: String,
 
@@ -417,7 +425,7 @@
         </span><span class="attr">#[arg(long, default_value_t = <span class="number">64</span>)]
         </span>repeat_last_n: usize,
 
-        <span class="doccomment">/// Model ID to load X-LoRA from.
+        <span class="doccomment">/// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short, long)]
         </span>xlora_model_id: String,
 
@@ -433,7 +441,7 @@
 
     <span class="doccomment">/// Select a GGUF model with LoRA.
     </span>LoraGGUF {
-        <span class="doccomment">/// Model ID to load the tokenizer from
+        <span class="doccomment">/// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short, long)]
         </span>tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
@@ -442,6 +450,7 @@
         </span>tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short = <span class="string">'m'</span>, long)]
         </span>quantized_model_id: String,
 
@@ -453,7 +462,7 @@
         </span><span class="attr">#[arg(long, default_value_t = <span class="number">64</span>)]
         </span>repeat_last_n: usize,
 
-        <span class="doccomment">/// Model ID to load X-LoRA from.
+        <span class="doccomment">/// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short, long)]
         </span>adapters_model_id: String,
 
@@ -469,7 +478,7 @@
 
     <span class="doccomment">/// Select a GGML model.
     </span>GGML {
-        <span class="doccomment">/// Model ID to load the tokenizer from
+        <span class="doccomment">/// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short, long)]
         </span>tok_model_id: String,
 
@@ -478,6 +487,7 @@
         </span>tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short = <span class="string">'m'</span>, long)]
         </span>quantized_model_id: String,
 
@@ -496,7 +506,7 @@
 
     <span class="doccomment">/// Select a GGML model with X-LoRA.
     </span>XLoraGGML {
-        <span class="doccomment">/// Model ID to load the tokenizer from
+        <span class="doccomment">/// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short, long)]
         </span>tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
@@ -505,6 +515,7 @@
         </span>tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short = <span class="string">'m'</span>, long)]
         </span>quantized_model_id: String,
 
@@ -516,7 +527,7 @@
         </span><span class="attr">#[arg(long, default_value_t = <span class="number">64</span>)]
         </span>repeat_last_n: usize,
 
-        <span class="doccomment">/// Model ID to load X-LoRA from.
+        <span class="doccomment">/// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short, long)]
         </span>xlora_model_id: String,
 
@@ -536,7 +547,7 @@
 
     <span class="doccomment">/// Select a GGML model with LoRA.
     </span>LoraGGML {
-        <span class="doccomment">/// Model ID to load the tokenizer from
+        <span class="doccomment">/// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short, long)]
         </span>tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
@@ -545,6 +556,7 @@
         </span>tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
         <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short = <span class="string">'m'</span>, long)]
         </span>quantized_model_id: String,
 
@@ -556,7 +568,7 @@
         </span><span class="attr">#[arg(long, default_value_t = <span class="number">64</span>)]
         </span>repeat_last_n: usize,
 
-        <span class="doccomment">/// Model ID to load X-LoRA from.
+        <span class="doccomment">/// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short, long)]
         </span>adapters_model_id: String,
 

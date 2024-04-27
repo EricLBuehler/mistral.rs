@@ -820,20 +820,6 @@
 <a href="#818" id="818">818</a>
 <a href="#819" id="819">819</a>
 <a href="#820" id="820">820</a>
-<a href="#821" id="821">821</a>
-<a href="#822" id="822">822</a>
-<a href="#823" id="823">823</a>
-<a href="#824" id="824">824</a>
-<a href="#825" id="825">825</a>
-<a href="#826" id="826">826</a>
-<a href="#827" id="827">827</a>
-<a href="#828" id="828">828</a>
-<a href="#829" id="829">829</a>
-<a href="#830" id="830">830</a>
-<a href="#831" id="831">831</a>
-<a href="#832" id="832">832</a>
-<a href="#833" id="833">833</a>
-<a href="#834" id="834">834</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>chat_template;
 <span class="kw">mod </span>ggml;
 <span class="kw">mod </span>gguf;
@@ -841,7 +827,7 @@
 <span class="kw">mod </span>macros;
 <span class="kw">mod </span>normal;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
-<span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
+<span class="kw">use crate</span>::{api_dir_list, api_get_file, DeviceMapMetadata};
 <span class="kw">use crate</span>::{get_bias_if_not_allowed, sampler::Logprobs, sequence::SequenceRecognizer};
 <span class="kw">use </span>candle_core::quantized::{GgmlDType, QMatMul, QTensor};
 <span class="kw">use </span>candle_nn::VarBuilder;
@@ -861,6 +847,7 @@
 };
 <span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
 <span class="kw">pub use </span>normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
+<span class="kw">use </span>std::path::Path;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
 <span class="kw">use </span>tokenizers::Tokenizer;
@@ -1420,11 +1407,9 @@
             RepoType::Model,
             revision,
         ));
-        <span class="kw">let </span>xlora_classifier = <span class="kw-2">&amp;</span>api
-            .info()<span class="question-mark">?
-            </span>.siblings
-            .iter()
-            .map(|x| x.rfilename.clone())
+        <span class="kw">let </span>model_id = Path::new(<span class="kw-2">&amp;</span>xlora_id);
+
+        <span class="kw">let </span>xlora_classifier = <span class="kw-2">&amp;</span><span class="macro">api_dir_list!</span>(api, model_id)
             .filter(|x| x.contains(<span class="string">"xlora_classifier.safetensors"</span>))
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
         <span class="kw">if </span>xlora_classifier.len() != <span class="number">1 </span>{
@@ -1432,18 +1417,14 @@
             <span class="macro">warn!</span>(<span class="string">"Selected classifier: `{}`"</span>, <span class="kw-2">&amp;</span>xlora_classifier[<span class="number">0</span>]);
         }
         <span class="kw">let </span>xlora_classifier = <span class="kw-2">&amp;</span>xlora_classifier[<span class="number">0</span>];
-        <span class="kw">let </span>xlora_configs = <span class="kw-2">&amp;</span>api
-            .info()<span class="question-mark">?
-            </span>.siblings
-            .iter()
-            .map(|x| x.rfilename.clone())
+        <span class="kw">let </span>xlora_configs = <span class="kw-2">&amp;</span><span class="macro">api_dir_list!</span>(api, model_id)
             .filter(|x| x.contains(<span class="string">"xlora_config.json"</span>))
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
         <span class="kw">if </span>xlora_configs.len() != <span class="number">1 </span>{
             <span class="macro">warn!</span>(<span class="string">"Detected multiple X-LoRA configs: {xlora_configs:?}"</span>);
         }
 
-        <span class="kw">let </span>classifier_path = api.get(xlora_classifier)<span class="question-mark">?</span>;
+        <span class="kw">let </span>classifier_path = <span class="macro">api_get_file!</span>(api, xlora_classifier, Path::new(<span class="string">""</span>));
 
         <span class="kw">let </span><span class="kw-2">mut </span>xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt; = <span class="prelude-val">None</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>last_err: <span class="prelude-ty">Option</span>&lt;serde_json::Error&gt; = <span class="prelude-val">None</span>;
@@ -1451,7 +1432,7 @@
             <span class="kw">if </span>xlora_configs.len() != <span class="number">1 </span>{
                 <span class="macro">warn!</span>(<span class="string">"Selecting config: `{}`"</span>, config_path);
             }
-            <span class="kw">let </span>config_path = api.get(config_path)<span class="question-mark">?</span>;
+            <span class="kw">let </span>config_path = <span class="macro">api_get_file!</span>(api, config_path, Path::new(<span class="string">""</span>));
             <span class="kw">let </span>conf = fs::read_to_string(config_path)<span class="question-mark">?</span>;
             <span class="kw">let </span>deser: <span class="prelude-ty">Result</span>&lt;XLoraConfig, serde_json::Error&gt; = serde_json::from_str(<span class="kw-2">&amp;</span>conf);
             <span class="kw">match </span>deser {
@@ -1474,11 +1455,7 @@
             )
         });
 
-        <span class="kw">let </span>adapter_files = api
-            .info()<span class="question-mark">?
-            </span>.siblings
-            .iter()
-            .map(|x| x.rfilename.clone())
+        <span class="kw">let </span>adapter_files = <span class="macro">api_dir_list!</span>(api, model_id)
             .filter_map(|name| {
                 <span class="kw">for </span>adapter_name <span class="kw">in </span>xlora_order.as_ref().unwrap().adapters.as_ref().unwrap() {
                     <span class="kw">if </span>name.contains(adapter_name) {
@@ -1494,9 +1471,9 @@
         <span class="kw">let </span><span class="kw-2">mut </span>adapters_paths: HashMap&lt;String, Vec&lt;PathBuf&gt;&gt; = HashMap::new();
         <span class="kw">for </span>(file, name) <span class="kw">in </span>adapter_files {
             <span class="kw">if let </span><span class="prelude-val">Some</span>(paths) = adapters_paths.get_mut(<span class="kw-2">&amp;</span>name) {
-                paths.push(api.get(<span class="kw-2">&amp;</span>file)<span class="question-mark">?</span>);
+                paths.push(<span class="macro">api_get_file!</span>(api, <span class="kw-2">&amp;</span>file, Path::new(<span class="string">""</span>)));
             } <span class="kw">else </span>{
-                adapters_paths.insert(name, <span class="macro">vec!</span>[api.get(<span class="kw-2">&amp;</span>file)<span class="question-mark">?</span>]);
+                adapters_paths.insert(name, <span class="macro">vec!</span>[<span class="macro">api_get_file!</span>(api, <span class="kw-2">&amp;</span>file, Path::new(<span class="string">""</span>))]);
             }
         }
         <span class="kw">let </span><span class="kw-2">mut </span>adapters_configs = Vec::new();
@@ -1561,6 +1538,7 @@
     quantized_model_id: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;String&gt;,
     quantized_filename: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;String&gt;,
     api: <span class="kw-2">&amp;</span>ApiRepo,
+    model_id: <span class="kw-2">&amp;</span>Path,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;PathBuf&gt;&gt; {
     <span class="kw">match </span><span class="kw-2">&amp;</span>quantized_filename {
         <span class="prelude-val">Some</span>(name) =&gt; <span class="kw">match </span>quantized_model_id.as_ref().unwrap().as_str() {
@@ -1575,20 +1553,14 @@
                     RepoType::Model,
                     revision.clone(),
                 ));
-                <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[qapi.get(name).unwrap()])
+                <span class="kw">let </span>model_id = Path::new(<span class="kw-2">&amp;</span>id);
+                <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[<span class="macro">api_get_file!</span>(qapi, name, model_id)])
             }
         },
         <span class="prelude-val">None </span>=&gt; {
             <span class="kw">let </span><span class="kw-2">mut </span>filenames = <span class="macro">vec!</span>[];
-            <span class="kw">for </span>rfilename <span class="kw">in </span>api
-                .info()<span class="question-mark">?
-                </span>.siblings
-                .iter()
-                .map(|x| x.rfilename.clone())
-                .filter(|x| x.ends_with(<span class="string">".safetensors"</span>))
-            {
-                <span class="kw">let </span>filename = api.get(<span class="kw-2">&amp;</span>rfilename)<span class="question-mark">?</span>;
-                filenames.push(filename);
+            <span class="kw">for </span>rfilename <span class="kw">in </span><span class="macro">api_dir_list!</span>(api, model_id).filter(|x| x.ends_with(<span class="string">".safetensors"</span>)) {
+                filenames.push(<span class="macro">api_get_file!</span>(api, <span class="kw-2">&amp;</span>rfilename, Path::new(<span class="string">""</span>)));
             }
             <span class="prelude-val">Ok</span>(filenames)
         }

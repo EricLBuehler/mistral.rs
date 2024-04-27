@@ -426,6 +426,9 @@
 <a href="#424" id="424">424</a>
 <a href="#425" id="425">425</a>
 <a href="#426" id="426">426</a>
+<a href="#427" id="427">427</a>
+<a href="#428" id="428">428</a>
+<a href="#429" id="429">429</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -756,7 +759,10 @@
             )<span class="question-mark">?</span>;
         }
         <span class="kw">let </span>x = x.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
-        <span class="kw">let </span>x = <span class="self">self</span>.ln_f.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>x = <span class="self">self</span>.ln_f.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.lm_head, QMatMul::QTensor(<span class="kw">_</span>)) {
+            x = x.to_dtype(DType::F32)<span class="question-mark">?</span>;
+        }
         <span class="kw">let </span>logits = <span class="self">self</span>.lm_head.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>;
         extract_logits(<span class="kw-2">&amp;</span>logits, context_lens)
     }
