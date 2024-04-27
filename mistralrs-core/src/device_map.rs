@@ -96,7 +96,7 @@ impl DeviceMapper for LayerDeviceMapper {
     }
     fn device_for(&self, layer: usize, loading_isq: bool) -> Option<&Device> {
         if loading_isq {
-            return None;
+            return Some(&self.nm_device);
         }
         self.mappings.get(layer)
     }
@@ -121,7 +121,10 @@ impl DeviceMapper for DummyDeviceMapper {
     fn set_device<'a>(&self, _: usize, varbuilder: VarBuilder<'a>, _: bool) -> VarBuilder<'a> {
         varbuilder
     }
-    fn device_for(&self, _: usize, _: bool) -> Option<&Device> {
+    fn device_for(&self, _: usize, loading_isq: bool) -> Option<&Device> {
+        if loading_isq {
+            return Some(&self.nm_device);
+        }
         None
     }
     fn set_nm_device<'a>(&self, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a> {
