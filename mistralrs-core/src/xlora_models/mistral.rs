@@ -598,58 +598,55 @@ impl XLoraModel {
             )?;
 
             if no_kv_cache {
-                extract_logits(
-                    &self
-                        .inner_forward(
-                            input_ids_full,
-                            seqlen_offsets_full,
-                            start_offsets_kernel_full,
-                            Some(scalings),
-                            true,
-                            no_kv_cache,
-                            None,
-                        )?
-                        .contiguous()?
-                        .to_dtype(DType::F32)?
-                        .apply(&self.lm_head)?,
-                    context_lens,
-                )
+                let mut res = self
+                    .inner_forward(
+                        input_ids_full,
+                        seqlen_offsets_full,
+                        start_offsets_kernel_full,
+                        Some(scalings),
+                        true,
+                        no_kv_cache,
+                        None,
+                    )?
+                    .contiguous()?;
+                if self.lm_head.is_quant() {
+                    res = res.to_dtype(DType::F32)?;
+                }
+                extract_logits(&res.apply(&self.lm_head)?, context_lens)
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
-                extract_logits(
-                    &self
-                        .inner_forward(
-                            input_ids,
-                            seqlen_offsets,
-                            start_offsets_kernel,
-                            Some(scalings),
-                            true,
-                            no_kv_cache,
-                            None,
-                        )?
-                        .contiguous()?
-                        .to_dtype(DType::F32)?
-                        .apply(&self.lm_head)?,
-                    context_lens,
-                )
-            }
-        } else {
-            extract_logits(
-                &self
+                let mut res = self
                     .inner_forward(
                         input_ids,
                         seqlen_offsets,
                         start_offsets_kernel,
-                        None,
-                        false,
+                        Some(scalings),
+                        true,
                         no_kv_cache,
                         None,
                     )?
-                    .contiguous()?
-                    .to_dtype(DType::F32)?
-                    .apply(&self.lm_head)?,
-                context_lens,
-            )
+                    .contiguous()?;
+                if self.lm_head.is_quant() {
+                    res = res.to_dtype(DType::F32)?;
+                }
+                extract_logits(&res.apply(&self.lm_head)?, context_lens)
+            }
+        } else {
+            let mut res = self
+                .inner_forward(
+                    input_ids,
+                    seqlen_offsets,
+                    start_offsets_kernel,
+                    None,
+                    false,
+                    no_kv_cache,
+                    None,
+                )?
+                .contiguous()?;
+            if self.lm_head.is_quant() {
+                res = res.to_dtype(DType::F32)?;
+            }
+            extract_logits(&res.apply(&self.lm_head)?, context_lens)
         }
     }
 }

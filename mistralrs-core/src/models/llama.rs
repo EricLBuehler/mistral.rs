@@ -328,7 +328,10 @@ impl Llama {
             )?;
         }
         let x = x.to_device(&self.device)?;
-        let x = self.ln_f.forward(&x)?.to_dtype(DType::F32)?;
+        let mut x = self.ln_f.forward(&x)?.to_dtype(DType::F32)?;
+        if matches!(self.lm_head, QMatMul::QTensor(_)) {
+            x = x.to_dtype(DType::F32)?;
+        }
         let logits = self.lm_head.forward(&x)?;
         extract_logits(&logits, context_lens)
     }
