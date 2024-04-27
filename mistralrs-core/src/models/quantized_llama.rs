@@ -203,7 +203,7 @@ pub struct ModelWeights {
     layers: Vec<LayerWeights>,
     norm: QRmsNorm,
     output: QMatMul,
-    masks: HashMap<usize, Tensor>,
+    masks: HashMap<(usize, usize), Tensor>,
     pub device: Device,
     pub cache: Cache,
     pub max_seq_len: usize,
@@ -404,15 +404,15 @@ impl ModelWeights {
         })
     }
 
-    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
-        if let Some(mask) = self.masks.get(&t) {
+    fn mask(&mut self, t: usize, u: usize, device: &Device) -> Result<Tensor> {
+        if let Some(mask) = self.masks.get(&(t, u)) {
             Ok(mask.clone())
         } else {
             let mask: Vec<_> = (0..t)
-                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
+                .flat_map(|i| (0..u).map(move |j| u8::from(j + t > i + u)))
                 .collect();
-            let mask = Tensor::from_slice(&mask, (t, t), device)?;
-            self.masks.insert(t, mask.clone());
+            let mask = Tensor::from_slice(&mask, (t, u), device)?;
+            self.masks.insert((t, u), mask.clone());
             Ok(mask)
         }
     }
@@ -428,7 +428,12 @@ impl ModelWeights {
         let mask = if seq_len == 1 {
             None
         } else {
-            Some(self.mask(seq_len, x.device())?)
+            let masks = start_offsets
+                .iter()
+                .map(|index_pos| self.mask(seq_len, index_pos + seq_len, x.device()))
+                .collect::<Result<Vec<_>>>()?;
+            let tensor = Tensor::stack(&masks, 0)?;
+            Some(tensor.unsqueeze(1)?)
         };
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();
@@ -439,9 +444,13 @@ impl ModelWeights {
             let x = layer_in;
             let residual = &x;
             let x = layer.attention_norm.forward(&x)?;
+            let mask = match mask {
+                Some(ref mask) => Some(mask.to_device(x.device())?),
+                None => None,
+            };
             let attn = layer.forward_attn(
                 &x,
-                &mask.as_ref().map(|m| m.to_device(x.device()).unwrap()),
+                &mask,
                 start_offsets,
                 start_offsets_kernel.clone(),
                 &mut cache[i],

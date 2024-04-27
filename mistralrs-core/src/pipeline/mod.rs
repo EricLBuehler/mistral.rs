@@ -363,11 +363,48 @@ pub trait NormalModel {
     }
 }
 
-struct InputMetadata {
-    input: Tensor,
-    positions: Vec<usize>,
-    positions_kernel: Tensor, // [bs, seq len]
-    context_lens: Vec<usize>,
+#[derive(Debug)]
+pub struct InputMetadata {
+    pub input: Tensor,
+    pub positions: Vec<usize>,
+    pub positions_kernel: Tensor, // [bs, seq len]
+    pub context_lens: Vec<usize>,
+}
+
+pub fn get_prompt_input_batched(
+    input_seqs: &[&mut Sequence],
+    device: &Device,
+    chunk_size: usize,
+) -> Result<Vec<InputMetadata>> {
+    assert!(input_seqs.len() == 1);
+    let seq = &input_seqs[0];
+
+    let mut acc = vec![];
+
+    for (chunk_index, chunk) in seq.get_toks().chunks(chunk_size).enumerate() {
+        let input = Tensor::new(chunk, &device)?.unsqueeze(0)?;
+        let pos_idx = chunk_index * chunk_size;
+        let positions = vec![pos_idx];
+
+        let this_chunk_size = chunk.len();
+        let positions_kernel = Tensor::from_slice(
+            &(pos_idx..this_chunk_size + pos_idx)
+                .map(|x| x as i64)
+                .collect::<Vec<_>>(),
+            this_chunk_size,
+            device,
+        )?;
+
+        let context_lens = vec![this_chunk_size - 1];
+        acc.push(InputMetadata {
+            input,
+            positions,
+            positions_kernel,
+            context_lens,
+        });
+    }
+
+    Ok(acc)
 }
 
 fn get_prompt_input(input_seqs: &[&mut Sequence], device: &Device) -> Result<InputMetadata> {
