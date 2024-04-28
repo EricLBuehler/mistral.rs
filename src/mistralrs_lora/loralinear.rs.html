@@ -415,7 +415,7 @@
                 <span class="kw">let </span>new_w = QTensor::quantize(<span class="kw-2">&amp;</span>w_base_layer, dtype)<span class="question-mark">?</span>;
                 <span class="self">self</span>.old = QLinear::from_qparts(new_w, <span class="self">self</span>.old.bias().cloned());
             }
-            QMatMul::Tensor(w_base_layer) =&gt; {
+            QMatMul::Tensor(w_base_layer) | QMatMul::TensorF16(w_base_layer) =&gt; {
                 <span class="kw">let </span><span class="kw-2">mut </span>w_base_layer = w_base_layer.clone();
                 <span class="kw">for </span>adapter <span class="kw">in </span><span class="number">0</span>..<span class="self">self</span>.scale_adapters.len() {
                     w_base_layer = (w_base_layer + <span class="self">self</span>.get_delta_weight(adapter))<span class="question-mark">?</span>;

@@ -462,7 +462,7 @@
     <span class="kw">fn </span>merge_weights(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span>(<span class="kw-2">mut </span>w_base_layer, dtype) = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.old {
             QMatMul::QTensor(q) =&gt; (q.dequantize(<span class="kw-2">&amp;</span>q.device())<span class="question-mark">?</span>, q.dtype()),
-            QMatMul::Tensor(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+            QMatMul::Tensor(<span class="kw">_</span>) | QMatMul::TensorF16(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
         };
         <span class="kw">for </span>adapter <span class="kw">in </span><span class="number">0</span>..<span class="self">self</span>.scale_adapters.len() {
             w_base_layer = (w_base_layer + <span class="self">self</span>.get_delta_weight(adapter))<span class="question-mark">?</span>;
