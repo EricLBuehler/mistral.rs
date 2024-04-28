@@ -149,7 +149,7 @@ impl Merge for LoraLinear {
                 let new_w = QTensor::quantize(&w_base_layer, dtype)?;
                 self.old = QLinear::from_qparts(new_w, self.old.bias().cloned());
             }
-            QMatMul::Tensor(w_base_layer) => {
+            QMatMul::Tensor(w_base_layer) | QMatMul::TensorF16(w_base_layer) => {
                 let mut w_base_layer = w_base_layer.clone();
                 for adapter in 0..self.scale_adapters.len() {
                     w_base_layer = (w_base_layer + self.get_delta_weight(adapter))?;
