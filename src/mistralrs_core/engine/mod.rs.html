@@ -903,14 +903,16 @@
 <a href="#901" id="901">901</a>
 <a href="#902" id="902">902</a>
 <a href="#903" id="903">903</a>
+<a href="#904" id="904">904</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
     iter::zip,
     rc::Rc,
-    sync::{mpsc::Receiver, Arc, Mutex},
+    sync::{Arc, Mutex},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
+<span class="kw">use </span>tokio::sync::mpsc::Receiver;
 
 <span class="kw">use crate</span>::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
@@ -1140,7 +1142,7 @@
                 </span>&amp;&amp; <span class="self">self</span>.scheduler.waiting_len() == <span class="number">0
             </span>{
                 <span class="comment">// If there is nothing to do, sleep until a request comes in
-                </span><span class="kw">if let </span><span class="prelude-val">Ok</span>(request) = <span class="self">self</span>.rx.recv() {
+                </span><span class="kw">if let </span><span class="prelude-val">Some</span>(request) = <span class="self">self</span>.rx.recv().<span class="kw">await </span>{
                     <span class="self">self</span>.add_request(request);
                 }
             }
@@ -1593,7 +1595,7 @@
         {
             request
                     .response
-                    .send(Response::ValidationError(
+                    .blocking_send(Response::ValidationError(
                         <span class="string">"Received messages for a model which does not have a chat template. Either use a different model or pass a single string as the prompt"</span>.into(),
                     )).expect(<span class="string">"Expected receiver."</span>);
             <span class="kw">return</span>;
@@ -1620,7 +1622,7 @@
         <span class="kw">if </span>formatted_prompt.is_empty() {
             request
                 .response
-                .send(Response::ValidationError(
+                .blocking_send(Response::ValidationError(
                     <span class="string">"Received an empty prompt."</span>.into(),
                 ))
                 .expect(<span class="string">"Expected receiver."</span>);
@@ -1638,7 +1640,7 @@
             <span class="kw">if </span>!<span class="self">self</span>.truncate_sequence {
                 request
                     .response
-                    .send(Response::ValidationError(
+                    .blocking_send(Response::ValidationError(
                         <span class="macro">format!</span>(<span class="string">"Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?"</span>, <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_max_seq_len()).into(),
                     )).expect(<span class="string">"Expected receiver."</span>);
                 <span class="kw">return</span>;
@@ -1682,7 +1684,7 @@
                     </span><span class="kw">if </span>tok_trie.has_extensions(tok_trie.token(<span class="kw-2">*</span>id)) {
                         request
                             .response
-                            .send(Response::ValidationError(
+                            .blocking_send(Response::ValidationError(
                                 <span class="macro">format!</span>(<span class="string">"Stop token {:?} is also a prefix of other tokens and cannot be used as a stop token."</span>, tok_trie.token_str(<span class="kw-2">*</span>id)).into(),
                             ))
                             .expect(<span class="string">"Expected receiver."</span>);
@@ -1736,7 +1738,7 @@
             <span class="prelude-val">Err</span>(err) =&gt; {
                 request
                     .response
-                    .send(Response::ValidationError(
+                    .blocking_send(Response::ValidationError(
                         <span class="macro">format!</span>(<span class="string">"Failed creation of logits bias. {}"</span>, err).into(),
                     ))
                     .expect(<span class="string">"Expected receiver."</span>);
@@ -1760,7 +1762,7 @@
             <span class="prelude-val">Err</span>(err) =&gt; {
                 request
                     .response
-                    .send(Response::ValidationError(
+                    .blocking_send(Response::ValidationError(
                         <span class="macro">format!</span>(<span class="string">"Invalid grammar. {}"</span>, err).into(),
                     ))
                     .expect(<span class="string">"Expected receiver."</span>);

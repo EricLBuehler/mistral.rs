@@ -528,10 +528,10 @@
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
-    sync::mpsc::{SendError, Sender},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
+<span class="kw">use </span>tokio::sync::mpsc::{error::SendError, Sender};
 
 <span class="kw">use crate</span>::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
@@ -1010,7 +1010,7 @@
     ) {
         <span class="kw">if </span><span class="self">self</span>.choices.len() == <span class="self">self</span>.n_choices {
             sender
-                .send(Response::Done(response))
+                .blocking_send(Response::Done(response))
                 .expect(<span class="string">"Expected receiver."</span>);
         }
     }
@@ -1026,7 +1026,7 @@
             std::mem::swap(<span class="kw-2">&amp;mut </span>swap_streaming_chunks, <span class="kw-2">&amp;mut </span><span class="self">self</span>.streaming_chunks);
 
             seq.responder()
-                .send(Response::Chunk(ChatCompletionChunkResponse {
+                .blocking_send(Response::Chunk(ChatCompletionChunkResponse {
                     id: seq.id.to_string(),
                     choices: swap_streaming_chunks,
                     created: seq.timestamp,
@@ -1045,7 +1045,7 @@
     ) {
         <span class="kw">if </span><span class="self">self</span>.completion_choices.len() == <span class="self">self</span>.n_choices {
             sender
-                .send(Response::CompletionDone(response))
+                .blocking_send(Response::CompletionDone(response))
                 .expect(<span class="string">"Expected receiver."</span>);
         }
     }

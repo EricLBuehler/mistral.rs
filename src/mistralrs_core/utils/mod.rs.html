@@ -246,7 +246,7 @@
             <span class="prelude-val">Err</span>(e) =&gt; {
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::response::Response</span>;
                 <span class="macro-nonterminal">$response
-                    </span>.send(Response::InternalError(e.into()))
+                    </span>.blocking_send(Response::InternalError(e.into()))
                     .expect(<span class="string">"Expected receiver."</span>);
                 <span class="kw">return</span>;
             }
@@ -262,7 +262,7 @@
             <span class="prelude-val">Err</span>(e) =&gt; {
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::response::Response</span>;
                 <span class="macro-nonterminal">$response
-                    </span>.send(Response::InternalError(e.into()))
+                    </span>.blocking_send(Response::InternalError(e.into()))
                     .expect(<span class="string">"Expected receiver."</span>);
                 <span class="kw">return </span><span class="prelude-val">Ok</span>(());
             }
@@ -297,7 +297,7 @@
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::response::Response</span>;
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::sequence::SequenceState</span>;
                 <span class="macro-nonterminal">$seq</span>.responder()
-                    .send(Response::InternalError(e.into()))
+                    .blocking_send(Response::InternalError(e.into()))
                     .expect(<span class="string">"Expected receiver."</span>);
                 <span class="macro-nonterminal">$seq</span>.set_state(SequenceState::Error);
                 <span class="kw">return </span><span class="prelude-val">Ok</span>(());
@@ -366,7 +366,7 @@
                         };
 
                         seq.responder()
-                            .send(Response::ModelError(
+                            .blocking_send(Response::ModelError(
                                 e.to_string(),
                                 partial_completion_response
                             ))
@@ -383,7 +383,7 @@
                         };
 
                         seq.responder()
-                            .send(Response::CompletionModelError(
+                            .blocking_send(Response::CompletionModelError(
                                 e.to_string(),
                                 partial_completion_response
                             ))
