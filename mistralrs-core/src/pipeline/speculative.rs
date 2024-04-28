@@ -29,7 +29,8 @@ const SEED: u64 = 0;
 /// - Keep the sample for token i if q_i(x) <= p_i(x)
 ///     - This means the target model agrees
 /// - Else (q_i(x) > p_i(x)) accept that token with prob p_i(x)/q_i(x)
-///     - If rejected, sample token from from p'_i(x) = norm(max(0, p(x) − q(x))) and do not take any more
+///     - If rejected, sample token from from p'_i(x) = norm(max(0, p(x) − q(x))) and do not take any more'
+///
 pub struct SpeculativePipeline {
     target: Arc<Mutex<dyn Pipeline>>,
     draft: Arc<Mutex<dyn Pipeline>>,
@@ -159,18 +160,19 @@ impl Pipeline for SpeculativePipeline {
         }
 
         for (draft_samples, tgt_samples) in draft_samples.into_iter().zip(target_samples) {
+            let mut accepted_tokens = Vec::new();
             for (draft_sample, tgt_sample) in draft_samples.into_iter().zip(tgt_samples) {
                 if draft_sample.token == tgt_sample.token {
                     if draft_sample.logprob <= tgt_sample.logprob {
                         // Target model agrees.
-                        // todo: accepted
+                        accepted_tokens.push(tgt_sample);
                     } else {
                         // Target model disagrees.
                         let acceptance_prob = tgt_sample.logprob / draft_sample.logprob;
                         let is_accepted =
                             get_mut_arcmutex!(self.rng).gen_bool(acceptance_prob as f64);
                         if is_accepted {
-                            // todo: accepted
+                            accepted_tokens.push(tgt_sample);
                         } else {
                             // Do not accept. Resample with updated prob dist norm(max(0, p(x) − q(x)))
                             // todo: resample and done with seq
@@ -178,7 +180,7 @@ impl Pipeline for SpeculativePipeline {
                     }
                 } else {
                     // Did not agree. Use the target model's choice. Return it.
-                    // todo: done with seq
+                    accepted_tokens.push(tgt_sample);
                 }
             }
         }
