@@ -158,14 +158,7 @@ impl Engine {
                     for prompt in scheduled.prompt.as_mut() {
                         Self::set_none_cache(&mut *pipeline);
                         let logits = pipeline.forward_prompt(prompt);
-                        let logits = handle_pipeline_forward_error!(
-                            "prompt",
-                            logits,
-                            &mut scheduled.prompt,
-                            pipeline,
-                            'lp,
-                            self.prefix_cacher
-                        );
+
                         logits_vec.push(logits);
 
                         if !self.no_kv_cache {
@@ -174,6 +167,17 @@ impl Engine {
                             Self::set_none_cache(&mut *pipeline);
                         }
                     }
+
+                    let logits_vec: Result<Vec<Tensor>> = logits_vec.into_iter().collect();
+
+                    let logits_vec = handle_pipeline_forward_error!(
+                        "prompt",
+                        logits_vec,
+                        &mut scheduled.prompt,
+                        pipeline,
+                        'lp,
+                        self.prefix_cacher
+                    );
                     Tensor::stack(&logits_vec, 0).unwrap()
                 };
 
