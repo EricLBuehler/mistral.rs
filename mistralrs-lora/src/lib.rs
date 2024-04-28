@@ -130,6 +130,7 @@ impl LinearLayerLike for Linear {
 pub fn linear(
     d1: usize,
     d2: usize,
+    base_vb: crate::VarBuilder,
     vb: VarBuilder,
     lora_config: &[(String, LoraConfig)],
     count: &mut usize,
@@ -139,7 +140,7 @@ pub fn linear(
     let module = prefix.split('.').last().unwrap();
 
     let linear_config = LoraLinearConfig::new(d1, d2);
-    let inner = candle_nn::linear(d1, d2, vb.clone())?;
+    let inner = candle_nn::linear(d1, d2, base_vb.clone())?;
 
     let target_modules = &lora_config[0].1.target_modules;
     for (_, cfg) in lora_config {
@@ -162,6 +163,7 @@ pub fn linear(
 pub fn linear_no_bias(
     d1: usize,
     d2: usize,
+    base_vb: crate::VarBuilder,
     vb: VarBuilder,
     lora_config: &[(String, LoraConfig)],
     count: &mut usize,
@@ -171,7 +173,7 @@ pub fn linear_no_bias(
     let module = prefix.split('.').last().unwrap();
 
     let linear_config = LoraLinearConfig::new(d1, d2);
-    let inner = candle_nn::linear_no_bias(d1, d2, vb.clone())?;
+    let inner = candle_nn::linear_no_bias(d1, d2, base_vb.clone())?;
 
     let target_modules = &lora_config[0].1.target_modules;
     for (_, cfg) in lora_config {
@@ -195,19 +197,21 @@ fn get_maybe_topk_scalings(scalings: Tensor, layer: usize) -> Result<Tensor> {
     scalings.i((.., .., layer, ..))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn linear_b(
     in_dim: usize,
     out_dim: usize,
     bias: bool,
+    base_vb: crate::VarBuilder,
     vb: crate::VarBuilder,
     lora_config: &[(String, LoraConfig)],
     count: &mut usize,
     ord: &Ordering,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
     if bias {
-        linear(in_dim, out_dim, vb, lora_config, count, ord)
+        linear(in_dim, out_dim, base_vb, vb, lora_config, count, ord)
     } else {
-        linear_no_bias(in_dim, out_dim, vb, lora_config, count, ord)
+        linear_no_bias(in_dim, out_dim, base_vb, vb, lora_config, count, ord)
     }
 }
 

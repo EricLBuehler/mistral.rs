@@ -16,6 +16,8 @@ Possible values for ISQ quantization:
 - Q6K
 - Q8K
 
+When using ISQ, it will automatically load non ISQ-able weights into CPU memory before applying ISQ. The ISQ application process moves the weights to device memory. This process is implemented to avoid memory spikes from loading the model in full precision.
+
 ## Python Example
 ```python
 runner = Runner(

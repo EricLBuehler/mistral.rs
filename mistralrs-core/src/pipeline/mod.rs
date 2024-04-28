@@ -5,6 +5,7 @@ mod loaders;
 mod macros;
 mod normal;
 use crate::aici::toktree::TokTrie;
+use crate::device_map::DeviceMapper;
 use crate::{api_dir_list, api_get_file, DeviceMapMetadata};
 use crate::{get_bias_if_not_allowed, sampler::Logprobs, sequence::SequenceRecognizer};
 use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
@@ -19,17 +20,19 @@ use hf_hub::{
     Repo, RepoType,
 };
 use indexmap::IndexMap;
+use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 pub use loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
     Phi3Loader, Qwen2Loader,
 };
 use mistralrs_lora::{LoraConfig, Ordering};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use std::path::Path;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
 use tokenizers::Tokenizer;
-use tqdm::Iter;
 use tracing::{info, warn};
 
 use anyhow::Result;
@@ -324,6 +327,8 @@ pub trait NormalModelLoader {
         use_flash_attn: bool,
         vb: VarBuilder,
         mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        device: Device,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     #[allow(clippy::too_many_arguments)]
     fn load_xlora(
@@ -335,6 +340,8 @@ pub trait NormalModelLoader {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        device: Device,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn is_gptx(&self) -> bool;
 }
@@ -364,20 +371,45 @@ pub trait NormalModel {
     fn device(&self) -> &Device;
     fn cache(&self) -> &Cache;
     fn max_seq_len(&self) -> usize;
-    fn get_tensors(&mut self) -> Vec<&mut QMatMul>;
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper);
     /// Quantize the model in-situ.
-    fn quantize(&mut self, dtype: GgmlDType) -> candle_core::Result<()> {
-        let tensors = self.get_tensors();
+    fn quantize(&mut self, dtype: GgmlDType, device: Device) -> candle_core::Result<()> {
+        let (tensors, mapper) = self.get_tensors();
         let total_tensors = tensors.len();
-        let mut n_quantized = 0;
-        info!("Applying in-situ quantization to {dtype:?}.");
-        for tensor in tensors.into_iter().tqdm() {
-            if let QMatMul::Tensor(t) = tensor {
-                n_quantized += 1;
-                *tensor = QMatMul::QTensor(Arc::new(QTensor::quantize(&*t, dtype)?));
-            }
+        let n_quantized = AtomicUsize::new(0);
+        info!(
+            "Applying in-situ quantization into {dtype:?} to {total_tensors} tensors in parallel."
+        );
+        let bar = ProgressBar::new(total_tensors as u64);
+        bar.set_style(
+            ProgressStyle::default_bar()
+                .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+
+        let mut devices = Vec::new();
+        for (_, layer) in &tensors {
+            let device = if let Some(layer) = layer {
+                mapper.device_for(*layer, false).unwrap_or(&device)
+            } else {
+                &device
+            };
+            devices.push(device.clone());
         }
-        info!("Applied in-situ quantization into {dtype:?} to {n_quantized} tensors out of {total_tensors} total tensors.");
+
+        tensors
+            .into_par_iter()
+            .zip(devices)
+            .progress_with(bar)
+            .for_each(|((tensor, _), device)| {
+                if let QMatMul::Tensor(t) = tensor {
+                    n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let t = t.to_device(&device).unwrap();
+                    *tensor = QMatMul::QTensor(Arc::new(QTensor::quantize(&t, dtype).unwrap()));
+                }
+            });
+        info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors.");
         Ok(())
     }
 }

@@ -36,7 +36,9 @@ impl DeviceMapMetadata {
         let n_device_layers = if let Some(n) = self.device_layers {
             n
         } else {
-            return Ok(Box::new(DummyDeviceMapper));
+            return Ok(Box::new(DummyDeviceMapper {
+                nm_device: device.clone(),
+            }));
         };
         // How many host (cpu) layers, defaulting to automatically filling the rest.
         let n_host_layers = self.host_layers.unwrap_or(model_layers - n_device_layers);
@@ -47,44 +49,98 @@ impl DeviceMapMetadata {
         let mut combined = vec![device.clone(); n_device_layers];
         // Always put the CPU layers at the end so that we reduce dtoh and htod copies
         combined.extend(vec![Device::Cpu; n_host_layers]);
-        Ok(Box::new(LayerDeviceMapper { mappings: combined }))
+        Ok(Box::new(LayerDeviceMapper {
+            mappings: combined,
+            nm_device: device.clone(),
+        }))
     }
 }
 
 pub trait DeviceMapper: Debug {
+    /// Map during runtime
     fn map(&self, input: Tensor, layer: usize) -> Result<Tensor>;
-    fn set_device<'a>(&self, layer: usize, varbuilder: VarBuilder<'a>) -> VarBuilder<'a>;
-    fn device_for(&self, layer: usize) -> Option<&Device>;
+    /// If ISQ layer, then do not change the device. *They will do it later in NormalModel::quantize*
+    fn set_device<'a>(
+        &self,
+        layer: usize,
+        varbuilder: VarBuilder<'a>,
+        loading_isq: bool,
+    ) -> VarBuilder<'a>;
+    /// If ISQ layer, then do not change the device (return None). *They will do it later in NormalModel::quantize*
+    fn device_for(&self, layer: usize, loading_isq: bool) -> Option<&Device>;
+    /// Set non mapped layer device. This is for ISQ + device mapping support
+    /// If ISQ layer, then do not change the device. *They will do it later in NormalModel::quantize*
+    fn set_nm_device<'a>(&self, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a>;
 }
 
 #[derive(Debug)]
 pub struct LayerDeviceMapper {
     mappings: Vec<Device>,
+    nm_device: Device,
 }
 
 impl DeviceMapper for LayerDeviceMapper {
     fn map(&self, input: Tensor, layer: usize) -> Result<Tensor> {
         input.to_device(&self.mappings[layer])
     }
-    fn set_device<'a>(&self, layer: usize, varbuilder: VarBuilder<'a>) -> VarBuilder<'a> {
+    fn set_device<'a>(
+        &self,
+        layer: usize,
+        varbuilder: VarBuilder<'a>,
+        loading_isq: bool,
+    ) -> VarBuilder<'a> {
+        if loading_isq {
+            return varbuilder;
+        }
         varbuilder.set_device(self.mappings[layer].clone())
     }
-    fn device_for(&self, layer: usize) -> Option<&Device> {
+    fn device_for(&self, layer: usize, loading_isq: bool) -> Option<&Device> {
+        if loading_isq {
+            return Some(&self.nm_device);
+        }
         self.mappings.get(layer)
+    }
+    fn set_nm_device<'a>(&self, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a> {
+        if loading_isq {
+            varbuilder
+        } else {
+            varbuilder.set_device(self.nm_device.clone())
+        }
     }
 }
 
 #[derive(Debug)]
-pub struct DummyDeviceMapper;
+pub struct DummyDeviceMapper {
+    nm_device: Device,
+}
 
 impl DeviceMapper for DummyDeviceMapper {
     fn map(&self, input: Tensor, _: usize) -> Result<Tensor> {
         Ok(input)
     }
-    fn set_device<'a>(&self, _: usize, varbuilder: VarBuilder<'a>) -> VarBuilder<'a> {
-        varbuilder
+    fn set_device<'a>(
+        &self,
+        _: usize,
+        varbuilder: VarBuilder<'a>,
+        loading_isq: bool,
+    ) -> VarBuilder<'a> {
+        if loading_isq {
+            varbuilder
+        } else {
+            varbuilder.set_device(self.nm_device.clone())
+        }
     }
-    fn device_for(&self, _: usize) -> Option<&Device> {
+    fn device_for(&self, _: usize, loading_isq: bool) -> Option<&Device> {
+        if loading_isq {
+            return Some(&self.nm_device);
+        }
         None
+    }
+    fn set_nm_device<'a>(&self, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a> {
+        if loading_isq {
+            varbuilder
+        } else {
+            varbuilder.set_device(self.nm_device.clone())
+        }
     }
 }
