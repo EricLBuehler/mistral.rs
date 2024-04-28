@@ -216,6 +216,10 @@
 <a href="#214" id="214">214</a>
 <a href="#215" id="215">215</a>
 <a href="#216" id="216">216</a>
+<a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a>
+<a href="#219" id="219">219</a>
+<a href="#220" id="220">220</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashSet, fmt::Debug, sync::Arc};
 
 <span class="kw">use </span>candle_core::{
@@ -348,6 +352,7 @@
 <span class="kw">pub fn </span>linear(
     d1: usize,
     d2: usize,
+    base_vb: <span class="kw">crate</span>::VarBuilder,
     vb: VarBuilder,
     lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
     count: <span class="kw-2">&amp;mut </span>usize,
@@ -357,7 +362,7 @@
     <span class="kw">let </span>module = prefix.split(<span class="string">'.'</span>).last().unwrap();
 
     <span class="kw">let </span>linear_config = LoraLinearConfig::new(d1, d2);
-    <span class="kw">let </span>inner = candle_nn::linear(d1, d2, vb.clone())<span class="question-mark">?</span>;
+    <span class="kw">let </span>inner = candle_nn::linear(d1, d2, base_vb.clone())<span class="question-mark">?</span>;
 
     <span class="kw">let </span>target_modules = <span class="kw-2">&amp;</span>lora_config[<span class="number">0</span>].<span class="number">1</span>.target_modules;
     <span class="kw">for </span>(<span class="kw">_</span>, cfg) <span class="kw">in </span>lora_config {
@@ -380,6 +385,7 @@
 <span class="kw">pub fn </span>linear_no_bias(
     d1: usize,
     d2: usize,
+    base_vb: <span class="kw">crate</span>::VarBuilder,
     vb: VarBuilder,
     lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
     count: <span class="kw-2">&amp;mut </span>usize,
@@ -389,7 +395,7 @@
     <span class="kw">let </span>module = prefix.split(<span class="string">'.'</span>).last().unwrap();
 
     <span class="kw">let </span>linear_config = LoraLinearConfig::new(d1, d2);
-    <span class="kw">let </span>inner = candle_nn::linear_no_bias(d1, d2, vb.clone())<span class="question-mark">?</span>;
+    <span class="kw">let </span>inner = candle_nn::linear_no_bias(d1, d2, base_vb.clone())<span class="question-mark">?</span>;
 
     <span class="kw">let </span>target_modules = <span class="kw-2">&amp;</span>lora_config[<span class="number">0</span>].<span class="number">1</span>.target_modules;
     <span class="kw">for </span>(<span class="kw">_</span>, cfg) <span class="kw">in </span>lora_config {
@@ -413,19 +419,21 @@
     scalings.i((.., .., layer, ..))
 }
 
-<span class="kw">pub fn </span>linear_b(
+<span class="attr">#[allow(clippy::too_many_arguments)]
+</span><span class="kw">pub fn </span>linear_b(
     in_dim: usize,
     out_dim: usize,
     bias: bool,
+    base_vb: <span class="kw">crate</span>::VarBuilder,
     vb: <span class="kw">crate</span>::VarBuilder,
     lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
     count: <span class="kw-2">&amp;mut </span>usize,
     ord: <span class="kw-2">&amp;</span>Ordering,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;&gt; {
     <span class="kw">if </span>bias {
-        linear(in_dim, out_dim, vb, lora_config, count, ord)
+        linear(in_dim, out_dim, base_vb, vb, lora_config, count, ord)
     } <span class="kw">else </span>{
-        linear_no_bias(in_dim, out_dim, vb, lora_config, count, ord)
+        linear_no_bias(in_dim, out_dim, base_vb, vb, lora_config, count, ord)
     }
 }
 

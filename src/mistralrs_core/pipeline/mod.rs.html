@@ -820,6 +820,38 @@
 <a href="#818" id="818">818</a>
 <a href="#819" id="819">819</a>
 <a href="#820" id="820">820</a>
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
+<a href="#823" id="823">823</a>
+<a href="#824" id="824">824</a>
+<a href="#825" id="825">825</a>
+<a href="#826" id="826">826</a>
+<a href="#827" id="827">827</a>
+<a href="#828" id="828">828</a>
+<a href="#829" id="829">829</a>
+<a href="#830" id="830">830</a>
+<a href="#831" id="831">831</a>
+<a href="#832" id="832">832</a>
+<a href="#833" id="833">833</a>
+<a href="#834" id="834">834</a>
+<a href="#835" id="835">835</a>
+<a href="#836" id="836">836</a>
+<a href="#837" id="837">837</a>
+<a href="#838" id="838">838</a>
+<a href="#839" id="839">839</a>
+<a href="#840" id="840">840</a>
+<a href="#841" id="841">841</a>
+<a href="#842" id="842">842</a>
+<a href="#843" id="843">843</a>
+<a href="#844" id="844">844</a>
+<a href="#845" id="845">845</a>
+<a href="#846" id="846">846</a>
+<a href="#847" id="847">847</a>
+<a href="#848" id="848">848</a>
+<a href="#849" id="849">849</a>
+<a href="#850" id="850">850</a>
+<a href="#851" id="851">851</a>
+<a href="#852" id="852">852</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>chat_template;
 <span class="kw">mod </span>ggml;
 <span class="kw">mod </span>gguf;
@@ -827,6 +859,7 @@
 <span class="kw">mod </span>macros;
 <span class="kw">mod </span>normal;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
+<span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use crate</span>::{api_dir_list, api_get_file, DeviceMapMetadata};
 <span class="kw">use crate</span>::{get_bias_if_not_allowed, sampler::Logprobs, sequence::SequenceRecognizer};
 <span class="kw">use </span>candle_core::quantized::{GgmlDType, QMatMul, QTensor};
@@ -841,17 +874,19 @@
     Repo, RepoType,
 };
 <span class="kw">use </span>indexmap::IndexMap;
+<span class="kw">use </span>indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 <span class="kw">pub use </span>loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
     Phi3Loader, Qwen2Loader,
 };
 <span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
 <span class="kw">pub use </span>normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
+<span class="kw">use </span>rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 <span class="kw">use </span>std::path::Path;
+<span class="kw">use </span>std::sync::atomic::AtomicUsize;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
 <span class="kw">use </span>tokenizers::Tokenizer;
-<span class="kw">use </span>tqdm::Iter;
 <span class="kw">use </span>tracing::{info, warn};
 
 <span class="kw">use </span>anyhow::Result;
@@ -1146,6 +1181,8 @@
         use_flash_attn: bool,
         vb: VarBuilder,
         mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        device: Device,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt;;
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>load_xlora(
@@ -1157,6 +1194,8 @@
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         xlora_ordering: Ordering,
         mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        device: Device,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt;;
     <span class="kw">fn </span>is_gptx(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
 }
@@ -1186,20 +1225,45 @@
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device;
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache;
     <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
-    <span class="kw">fn </span>get_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;mut </span>QMatMul&gt;;
+    <span class="kw">fn </span>get_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper);
     <span class="doccomment">/// Quantize the model in-situ.
-    </span><span class="kw">fn </span>quantize(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: GgmlDType) -&gt; candle_core::Result&lt;()&gt; {
-        <span class="kw">let </span>tensors = <span class="self">self</span>.get_tensors();
+    </span><span class="kw">fn </span>quantize(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: GgmlDType, device: Device) -&gt; candle_core::Result&lt;()&gt; {
+        <span class="kw">let </span>(tensors, mapper) = <span class="self">self</span>.get_tensors();
         <span class="kw">let </span>total_tensors = tensors.len();
-        <span class="kw">let </span><span class="kw-2">mut </span>n_quantized = <span class="number">0</span>;
-        <span class="macro">info!</span>(<span class="string">"Applying in-situ quantization to {dtype:?}."</span>);
-        <span class="kw">for </span>tensor <span class="kw">in </span>tensors.into_iter().tqdm() {
-            <span class="kw">if let </span>QMatMul::Tensor(t) = tensor {
-                n_quantized += <span class="number">1</span>;
-                <span class="kw-2">*</span>tensor = QMatMul::QTensor(Arc::new(QTensor::quantize(<span class="kw-2">&amp;*</span>t, dtype)<span class="question-mark">?</span>));
-            }
+        <span class="kw">let </span>n_quantized = AtomicUsize::new(<span class="number">0</span>);
+        <span class="macro">info!</span>(
+            <span class="string">"Applying in-situ quantization into {dtype:?} to {total_tensors} tensors in parallel."
+        </span>);
+        <span class="kw">let </span>bar = ProgressBar::new(total_tensors <span class="kw">as </span>u64);
+        bar.set_style(
+            ProgressStyle::default_bar()
+                .template(<span class="string">"[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})"</span>)
+                .unwrap()
+                .progress_chars(<span class="string">"#&gt;-"</span>),
+        );
+
+        <span class="kw">let </span><span class="kw-2">mut </span>devices = Vec::new();
+        <span class="kw">for </span>(<span class="kw">_</span>, layer) <span class="kw">in </span><span class="kw-2">&amp;</span>tensors {
+            <span class="kw">let </span>device = <span class="kw">if let </span><span class="prelude-val">Some</span>(layer) = layer {
+                mapper.device_for(<span class="kw-2">*</span>layer, <span class="bool-val">false</span>).unwrap_or(<span class="kw-2">&amp;</span>device)
+            } <span class="kw">else </span>{
+                <span class="kw-2">&amp;</span>device
+            };
+            devices.push(device.clone());
         }
-        <span class="macro">info!</span>(<span class="string">"Applied in-situ quantization into {dtype:?} to {n_quantized} tensors out of {total_tensors} total tensors."</span>);
+
+        tensors
+            .into_par_iter()
+            .zip(devices)
+            .progress_with(bar)
+            .for_each(|((tensor, <span class="kw">_</span>), device)| {
+                <span class="kw">if let </span>QMatMul::Tensor(t) = tensor {
+                    n_quantized.fetch_add(<span class="number">1</span>, std::sync::atomic::Ordering::Relaxed);
+                    <span class="kw">let </span>t = t.to_device(<span class="kw-2">&amp;</span>device).unwrap();
+                    <span class="kw-2">*</span>tensor = QMatMul::QTensor(Arc::new(QTensor::quantize(<span class="kw-2">&amp;</span>t, dtype).unwrap()));
+                }
+            });
+        <span class="macro">info!</span>(<span class="string">"Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors."</span>);
         <span class="prelude-val">Ok</span>(())
     }
 }

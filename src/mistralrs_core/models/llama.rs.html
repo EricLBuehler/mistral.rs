@@ -429,6 +429,40 @@
 <a href="#427" id="427">427</a>
 <a href="#428" id="428">428</a>
 <a href="#429" id="429">429</a>
+<a href="#430" id="430">430</a>
+<a href="#431" id="431">431</a>
+<a href="#432" id="432">432</a>
+<a href="#433" id="433">433</a>
+<a href="#434" id="434">434</a>
+<a href="#435" id="435">435</a>
+<a href="#436" id="436">436</a>
+<a href="#437" id="437">437</a>
+<a href="#438" id="438">438</a>
+<a href="#439" id="439">439</a>
+<a href="#440" id="440">440</a>
+<a href="#441" id="441">441</a>
+<a href="#442" id="442">442</a>
+<a href="#443" id="443">443</a>
+<a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a>
+<a href="#450" id="450">450</a>
+<a href="#451" id="451">451</a>
+<a href="#452" id="452">452</a>
+<a href="#453" id="453">453</a>
+<a href="#454" id="454">454</a>
+<a href="#455" id="455">455</a>
+<a href="#456" id="456">456</a>
+<a href="#457" id="457">457</a>
+<a href="#458" id="458">458</a>
+<a href="#459" id="459">459</a>
+<a href="#460" id="460">460</a>
+<a href="#461" id="461">461</a>
+<a href="#462" id="462">462</a>
+<a href="#463" id="463">463</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -600,7 +634,7 @@
         <span class="prelude-val">Ok</span>(y)
     }
 
-    <span class="kw">fn </span>load(vb: VarBuilder, cfg: <span class="kw-2">&amp;</span>Config, is_gptx: bool) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">fn </span>load(vb: VarBuilder, cfg: <span class="kw-2">&amp;</span>Config, rope: Arc&lt;RotaryEmbedding&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>size_in = cfg.hidden_size;
         <span class="kw">let </span>size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         <span class="kw">let </span>size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
@@ -608,15 +642,6 @@
         <span class="kw">let </span>k_proj = linear(size_in, size_kv, vb.pp(<span class="string">"k_proj"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>v_proj = linear(size_in, size_kv, vb.pp(<span class="string">"v_proj"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>o_proj = linear(size_q, size_in, vb.pp(<span class="string">"o_proj"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        <span class="kw">let </span>rotary_emb = Arc::new(RotaryEmbedding::new(
-            cfg.rope_theta,
-            head_dim,
-            MAX_SEQ_LEN,
-            vb.device(),
-            is_gptx,
-            vb.dtype(),
-        )<span class="question-mark">?</span>);
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             q_proj: QMatMul::Tensor(q_proj.weight().clone()),
             k_proj: QMatMul::Tensor(k_proj.weight().clone()),
@@ -626,7 +651,7 @@
             num_key_value_heads: cfg.num_key_value_heads,
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             use_flash_attn: cfg.use_flash_attn,
-            rotary_emb,
+            rotary_emb: rope,
         })
     }
 }
@@ -707,14 +732,29 @@
         <span class="prelude-val">Ok</span>(x)
     }
 
-    <span class="kw">fn </span>load(vb: VarBuilder, cfg: <span class="kw-2">&amp;</span>Config, is_gptx: bool) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>attn = CausalSelfAttention::load(vb.pp(<span class="string">"self_attn"</span>), cfg, is_gptx)<span class="question-mark">?</span>;
-        <span class="kw">let </span>mlp = Mlp::load(vb.pp(<span class="string">"mlp"</span>), cfg)<span class="question-mark">?</span>;
-        <span class="kw">let </span>rms_1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp(<span class="string">"input_layernorm"</span>))<span class="question-mark">?</span>;
+    <span class="kw">fn </span>load(
+        vb: VarBuilder,
+        cfg: <span class="kw-2">&amp;</span>Config,
+        mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
+        rope: Arc&lt;RotaryEmbedding&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">let </span>attn = CausalSelfAttention::load(
+            mapper.set_device(layer_idx, vb.pp(<span class="string">"self_attn"</span>), loading_isq),
+            cfg,
+            rope,
+        )<span class="question-mark">?</span>;
+        <span class="kw">let </span>mlp = Mlp::load(mapper.set_device(layer_idx, vb.pp(<span class="string">"mlp"</span>), loading_isq), cfg)<span class="question-mark">?</span>;
+        <span class="kw">let </span>rms_1 = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_nm_device(vb.pp(<span class="string">"input_layernorm"</span>), <span class="bool-val">false</span>),
+        )<span class="question-mark">?</span>;
         <span class="kw">let </span>rms_2 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            vb.pp(<span class="string">"post_attention_layernorm"</span>),
+            mapper.set_nm_device(vb.pp(<span class="string">"post_attention_layernorm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             rms_1,
@@ -759,7 +799,7 @@
             )<span class="question-mark">?</span>;
         }
         <span class="kw">let </span>x = x.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>x = <span class="self">self</span>.ln_f.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>x = <span class="self">self</span>.ln_f.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>;
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.lm_head, QMatMul::QTensor(<span class="kw">_</span>)) {
             x = x.to_dtype(DType::F32)<span class="question-mark">?</span>;
         }
@@ -772,18 +812,46 @@
         vb: VarBuilder,
         is_gptx: bool,
         mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        real_device: Device,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>device = vb.device();
-        <span class="kw">let </span>wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp(<span class="string">"model.embed_tokens"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp(<span class="string">"lm_head"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp(<span class="string">"model.norm"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())<span class="question-mark">?</span>;
+        <span class="kw">let </span>mapper = mapper.into_mapper(cfg.num_hidden_layers, <span class="kw-2">&amp;</span>real_device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>wte = embedding(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            mapper.set_nm_device(vb.pp(<span class="string">"model.embed_tokens"</span>), <span class="bool-val">false</span>),
+        )<span class="question-mark">?</span>;
+        <span class="kw">let </span>lm_head = linear(
+            cfg.hidden_size,
+            cfg.vocab_size,
+            mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), loading_isq),
+        )<span class="question-mark">?</span>;
+        <span class="kw">let </span>ln_f = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_nm_device(vb.pp(<span class="string">"model.norm"</span>), <span class="bool-val">false</span>),
+        )<span class="question-mark">?</span>;
+        <span class="kw">let </span>head_dim = cfg.hidden_size / cfg.num_attention_heads;
         <span class="kw">let </span>blocks: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..cfg.num_hidden_layers)
             .map(|i| {
+                <span class="kw">let </span>rotary_emb = Arc::new(
+                    RotaryEmbedding::new(
+                        cfg.rope_theta,
+                        head_dim,
+                        MAX_SEQ_LEN,
+                        mapper.device_for(i, <span class="bool-val">false</span>).unwrap_or(<span class="kw-2">&amp;</span>real_device),
+                        is_gptx,
+                        vb.dtype(),
+                    )
+                    .expect(<span class="string">"Failed to create RoPE"</span>),
+                );
                 Block::load(
-                    mapper.set_device(i, vb.pp(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"model.layers.{i}"</span>))),
+                    vb.pp(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"model.layers.{i}"</span>)),
                     cfg,
-                    is_gptx,
+                    <span class="kw-2">&amp;*</span>mapper,
+                    i,
+                    loading_isq,
+                    rotary_emb,
                 )
                 .expect(<span class="string">"Failed to load block."</span>)
             })
@@ -796,7 +864,7 @@
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             cache: Cache::new()<span class="question-mark">?</span>,
             kv_cache: <span class="kw">super</span>::Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
-            device: device.clone(),
+            device: real_device,
             mapper,
         })
     }
@@ -843,19 +911,19 @@
     <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         MAX_SEQ_LEN
     }
-    <span class="kw">fn </span>get_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;mut </span>QMatMul&gt; {
+    <span class="kw">fn </span>get_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
         <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
-        tensors.push(<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head);
-        <span class="kw">for </span>layer <span class="kw">in </span><span class="kw-2">&amp;mut </span><span class="self">self</span>.blocks {
-            tensors.push(<span class="kw-2">&amp;mut </span>layer.attn.q_proj);
-            tensors.push(<span class="kw-2">&amp;mut </span>layer.attn.k_proj);
-            tensors.push(<span class="kw-2">&amp;mut </span>layer.attn.v_proj);
-            tensors.push(<span class="kw-2">&amp;mut </span>layer.attn.o_proj);
-            tensors.push(<span class="kw-2">&amp;mut </span>layer.mlp.c_fc1);
-            tensors.push(<span class="kw-2">&amp;mut </span>layer.mlp.c_fc2);
-            tensors.push(<span class="kw-2">&amp;mut </span>layer.mlp.c_proj);
+        tensors.push((<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head, <span class="prelude-val">None</span>));
+        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.blocks.iter_mut().enumerate() {
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.q_proj, <span class="prelude-val">Some</span>(i)));
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.k_proj, <span class="prelude-val">Some</span>(i)));
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.v_proj, <span class="prelude-val">Some</span>(i)));
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.o_proj, <span class="prelude-val">Some</span>(i)));
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.mlp.c_fc1, <span class="prelude-val">Some</span>(i)));
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.mlp.c_fc2, <span class="prelude-val">Some</span>(i)));
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.mlp.c_proj, <span class="prelude-val">Some</span>(i)));
         }
-        tensors
+        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
     }
 }
 </code></pre></div></section></main></body></html>

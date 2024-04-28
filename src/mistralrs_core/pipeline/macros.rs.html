@@ -271,6 +271,17 @@
 <a href="#269" id="269">269</a>
 <a href="#270" id="270">270</a>
 <a href="#271" id="271">271</a>
+<a href="#272" id="272">272</a>
+<a href="#273" id="273">273</a>
+<a href="#274" id="274">274</a>
+<a href="#275" id="275">275</a>
+<a href="#276" id="276">276</a>
+<a href="#277" id="277">277</a>
+<a href="#278" id="278">278</a>
+<a href="#279" id="279">279</a>
+<a href="#280" id="280">280</a>
+<a href="#281" id="281">281</a>
+<a href="#282" id="282">282</a>
 </pre></div><pre class="rust"><code><span class="attr">#[macro_export]
 </span><span class="macro">macro_rules! </span>api_dir_list {
     (<span class="macro-nonterminal">$api</span>:expr, <span class="macro-nonterminal">$model_id</span>:expr) =&gt; {
@@ -462,7 +473,7 @@
 
 <span class="attr">#[macro_export]
 </span><span class="macro">macro_rules! </span>normal_model_loader {
-    (<span class="macro-nonterminal">$paths</span>:expr, <span class="macro-nonterminal">$dtype</span>:expr, <span class="macro-nonterminal">$default_dtype</span>:expr, <span class="macro-nonterminal">$device</span>:expr, <span class="macro-nonterminal">$config</span>:expr, <span class="macro-nonterminal">$loader</span>:expr, <span class="macro-nonterminal">$use_flash_attn</span>:expr, <span class="macro-nonterminal">$silent</span>:expr, <span class="macro-nonterminal">$mapper</span>:expr) =&gt; {{
+    (<span class="macro-nonterminal">$paths</span>:expr, <span class="macro-nonterminal">$dtype</span>:expr, <span class="macro-nonterminal">$default_dtype</span>:expr, <span class="macro-nonterminal">$device</span>:expr, <span class="macro-nonterminal">$config</span>:expr, <span class="macro-nonterminal">$loader</span>:expr, <span class="macro-nonterminal">$use_flash_attn</span>:expr, <span class="macro-nonterminal">$silent</span>:expr, <span class="macro-nonterminal">$mapper</span>:expr, <span class="macro-nonterminal">$loading_isq</span>:expr, <span class="macro-nonterminal">$real_device</span>:expr) =&gt; {{
         <span class="kw">let </span>vb = from_mmaped_safetensors(
             <span class="macro-nonterminal">$paths</span>.get_weight_filenames().to_vec(),
             Vec::new(),
@@ -471,13 +482,20 @@
             <span class="macro-nonterminal">$silent</span>,
         )<span class="question-mark">?</span>;
 
-        <span class="macro-nonterminal">$loader</span>.load(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$config</span>, <span class="macro-nonterminal">$use_flash_attn</span>, vb, <span class="macro-nonterminal">$mapper</span>)<span class="question-mark">?
+        <span class="macro-nonterminal">$loader</span>.load(
+            <span class="kw-2">&amp;</span><span class="macro-nonterminal">$config</span>,
+            <span class="macro-nonterminal">$use_flash_attn</span>,
+            vb,
+            <span class="macro-nonterminal">$mapper</span>,
+            <span class="macro-nonterminal">$loading_isq</span>,
+            <span class="macro-nonterminal">$real_device</span>,
+        )<span class="question-mark">?
     </span>}};
 }
 
 <span class="attr">#[macro_export]
 </span><span class="macro">macro_rules! </span>xlora_model_loader {
-    (<span class="macro-nonterminal">$paths</span>:expr, <span class="macro-nonterminal">$dtype</span>:expr, <span class="macro-nonterminal">$default_dtype</span>:expr, <span class="macro-nonterminal">$device</span>:expr, <span class="macro-nonterminal">$config</span>:expr, <span class="macro-nonterminal">$loader</span>:expr, <span class="macro-nonterminal">$use_flash_attn</span>:expr, <span class="macro-nonterminal">$silent</span>:expr, <span class="macro-nonterminal">$mapper</span>:expr) =&gt; {{
+    (<span class="macro-nonterminal">$paths</span>:expr, <span class="macro-nonterminal">$dtype</span>:expr, <span class="macro-nonterminal">$default_dtype</span>:expr, <span class="macro-nonterminal">$device</span>:expr, <span class="macro-nonterminal">$config</span>:expr, <span class="macro-nonterminal">$loader</span>:expr, <span class="macro-nonterminal">$use_flash_attn</span>:expr, <span class="macro-nonterminal">$silent</span>:expr, <span class="macro-nonterminal">$mapper</span>:expr, <span class="macro-nonterminal">$loading_isq</span>:expr, <span class="macro-nonterminal">$real_device</span>:expr) =&gt; {{
         <span class="kw">let </span><span class="kw-2">mut </span>safetensors_paths = <span class="macro-nonterminal">$paths</span>.get_weight_filenames().iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
         safetensors_paths.push(<span class="macro-nonterminal">$paths</span>.get_classifier_path().as_ref().unwrap());
         <span class="kw">let </span>vb = from_mmaped_safetensors(
@@ -505,13 +523,15 @@
             <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$paths</span>.get_classifier_config().as_ref().unwrap().clone()),
             <span class="macro-nonterminal">$paths</span>.get_ordering().as_ref().unwrap().clone(),
             <span class="macro-nonterminal">$mapper</span>,
+            <span class="macro-nonterminal">$loading_isq</span>,
+            <span class="macro-nonterminal">$real_device</span>,
         )<span class="question-mark">?
     </span>}};
 }
 
 <span class="attr">#[macro_export]
 </span><span class="macro">macro_rules! </span>lora_model_loader {
-    (<span class="macro-nonterminal">$paths</span>:expr, <span class="macro-nonterminal">$dtype</span>:expr, <span class="macro-nonterminal">$default_dtype</span>:expr, <span class="macro-nonterminal">$device</span>:expr, <span class="macro-nonterminal">$config</span>:expr, <span class="macro-nonterminal">$loader</span>:expr, <span class="macro-nonterminal">$use_flash_attn</span>:expr, <span class="macro-nonterminal">$silent</span>:expr, <span class="macro-nonterminal">$mapper</span>:expr) =&gt; {{
+    (<span class="macro-nonterminal">$paths</span>:expr, <span class="macro-nonterminal">$dtype</span>:expr, <span class="macro-nonterminal">$default_dtype</span>:expr, <span class="macro-nonterminal">$device</span>:expr, <span class="macro-nonterminal">$config</span>:expr, <span class="macro-nonterminal">$loader</span>:expr, <span class="macro-nonterminal">$use_flash_attn</span>:expr, <span class="macro-nonterminal">$silent</span>:expr, <span class="macro-nonterminal">$mapper</span>:expr, <span class="macro-nonterminal">$loading_isq</span>:expr, <span class="macro-nonterminal">$real_device</span>:expr) =&gt; {{
         <span class="kw">let </span><span class="kw-2">mut </span>safetensors_paths = <span class="macro-nonterminal">$paths</span>.get_weight_filenames().iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
         safetensors_paths.push(<span class="macro-nonterminal">$paths</span>.get_classifier_path().as_ref().unwrap());
         <span class="kw">let </span>vb = from_mmaped_safetensors(
@@ -539,6 +559,8 @@
             <span class="prelude-val">None</span>,
             <span class="macro-nonterminal">$paths</span>.get_ordering().as_ref().unwrap().clone(),
             <span class="macro-nonterminal">$mapper</span>,
+            <span class="macro-nonterminal">$loading_isq</span>,
+            <span class="macro-nonterminal">$real_device</span>,
         )<span class="question-mark">?
     </span>}};
 }

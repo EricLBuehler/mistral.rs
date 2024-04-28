@@ -428,6 +428,23 @@
 <a href="#426" id="426">426</a>
 <a href="#427" id="427">427</a>
 <a href="#428" id="428">428</a>
+<a href="#429" id="429">429</a>
+<a href="#430" id="430">430</a>
+<a href="#431" id="431">431</a>
+<a href="#432" id="432">432</a>
+<a href="#433" id="433">433</a>
+<a href="#434" id="434">434</a>
+<a href="#435" id="435">435</a>
+<a href="#436" id="436">436</a>
+<a href="#437" id="437">437</a>
+<a href="#438" id="438">438</a>
+<a href="#439" id="439">439</a>
+<a href="#440" id="440">440</a>
+<a href="#441" id="441">441</a>
+<a href="#442" id="442">442</a>
+<a href="#443" id="443">443</a>
+<a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
     Phi3Loader, Qwen2Loader,
@@ -680,13 +697,21 @@
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>config = std::fs::read_to_string(paths.get_config_filename())<span class="question-mark">?</span>;
-        <span class="kw">let </span>default_dtype = <span class="kw">if </span>device.is_cuda() {
+        <span class="kw">let </span>default_dtype = <span class="kw">if </span>device.is_cuda() &amp;&amp; mapper.is_dummy() {
             DType::BF16
+        } <span class="kw">else if </span>!mapper.is_dummy() {
+            DType::F16
         } <span class="kw">else </span>{
             DType::F32
         };
 
         <span class="macro">info!</span>(<span class="string">"Model config: {config}"</span>);
+
+        <span class="kw">let </span>load_device = <span class="kw">if </span>in_situ_quant.is_none() {
+            device.clone()
+        } <span class="kw">else </span>{
+            Device::Cpu
+        };
 
         <span class="kw">let </span><span class="kw-2">mut </span>is_lora = <span class="bool-val">false</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
@@ -696,23 +721,27 @@
                 paths,
                 dtype,
                 default_dtype,
-                device,
+                <span class="kw-2">&amp;</span>load_device,
                 config,
                 <span class="self">self</span>.inner,
                 <span class="self">self</span>.config.use_flash_attn,
                 silent,
-                mapper
+                mapper,
+                in_situ_quant.is_some(),
+                device.clone()
             ),
             ModelKind::XLoraNormal =&gt; <span class="macro">xlora_model_loader!</span>(
                 paths,
                 dtype,
                 default_dtype,
-                device,
+                <span class="kw-2">&amp;</span>load_device,
                 config,
                 <span class="self">self</span>.inner,
                 <span class="self">self</span>.config.use_flash_attn,
                 silent,
-                mapper
+                mapper,
+                in_situ_quant.is_some(),
+                device.clone()
             ),
             ModelKind::LoraNormal =&gt; {
                 is_lora = <span class="bool-val">true</span>;
@@ -720,12 +749,14 @@
                     paths,
                     dtype,
                     default_dtype,
-                    device,
+                    <span class="kw-2">&amp;</span>load_device,
                     config,
                     <span class="self">self</span>.inner,
                     <span class="self">self</span>.config.use_flash_attn,
                     silent,
-                    mapper
+                    mapper,
+                    in_situ_quant.is_some(),
+                    device.clone()
                 )
             }
             ModelKind::XLoraGGUF =&gt; <span class="macro">unreachable!</span>(),
@@ -740,7 +771,7 @@
         <span class="kw">let </span>chat_template: ChatTemplate = <span class="macro">deserialize_chat_template!</span>(paths, <span class="self">self</span>);
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(in_situ_quant) = in_situ_quant {
-            model.quantize(in_situ_quant)<span class="question-mark">?</span>;
+            model.quantize(in_situ_quant, device.clone())<span class="question-mark">?</span>;
         }
 
         <span class="prelude-val">Ok</span>(Box::new(Mutex::new(NormalPipeline {
@@ -853,7 +884,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>.tok_trie
     }
     <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: GgmlDType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="self">self</span>.model.quantize(dtype).map_err(anyhow::Error::msg)
+        <span class="kw">let </span>device = <span class="self">self</span>.device().clone();
+        <span class="self">self</span>.model
+            .quantize(dtype, device)
+            .map_err(anyhow::Error::msg)
     }
 }
 </code></pre></div></section></main></body></html>

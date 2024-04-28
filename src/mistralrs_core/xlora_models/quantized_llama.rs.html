@@ -1350,7 +1350,7 @@
         <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device)<span class="question-mark">?</span>;
         <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..block_count {
             <span class="kw">let </span>prefix = <span class="macro">format!</span>(<span class="string">"blk.{layer_idx}"</span>);
-            <span class="kw">let </span>device = mapper.device_for(layer_idx).unwrap_or(device);
+            <span class="kw">let </span>device = mapper.device_for(layer_idx, <span class="bool-val">false</span>).unwrap_or(device);
             <span class="kw">let </span>rotary = RotaryEmbedding::new_partial(
                 rope_freq_base,
                 head_dim,
