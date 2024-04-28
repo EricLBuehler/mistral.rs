@@ -1,10 +1,10 @@
 use std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
-    sync::mpsc::{SendError, Sender},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::mpsc::{error::SendError, Sender};
 
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
@@ -483,7 +483,7 @@ impl SequenceGroup {
     ) {
         if self.choices.len() == self.n_choices {
             sender
-                .send(Response::Done(response))
+                .blocking_send(Response::Done(response))
                 .expect("Expected receiver.");
         }
     }
@@ -499,7 +499,7 @@ impl SequenceGroup {
             std::mem::swap(&mut swap_streaming_chunks, &mut self.streaming_chunks);
 
             seq.responder()
-                .send(Response::Chunk(ChatCompletionChunkResponse {
+                .blocking_send(Response::Chunk(ChatCompletionChunkResponse {
                     id: seq.id.to_string(),
                     choices: swap_streaming_chunks,
                     created: seq.timestamp,
@@ -518,7 +518,7 @@ impl SequenceGroup {
     ) {
         if self.completion_choices.len() == self.n_choices {
             sender
-                .send(Response::CompletionDone(response))
+                .blocking_send(Response::CompletionDone(response))
                 .expect("Expected receiver.");
         }
     }
