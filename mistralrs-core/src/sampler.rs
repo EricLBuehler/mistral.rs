@@ -117,14 +117,10 @@ impl Sampler {
         probs: &[f32],
         argsort_indices: &[usize],
     ) -> Result<Vec<TopLogprob>> {
-        let mut argsort_indices_sorted = argsort_indices.to_vec();
-        // Sort by descending prob
-        argsort_indices_sorted
-            .sort_by(|a, b| probs[*b].partial_cmp(&probs[*a]).expect("No ordering."));
         // These are where the top n are
         let top_n_toks_range = 0..self.top_n_logprobs;
         // The top n's values
-        let top_n_logprobs = argsort_indices_sorted[top_n_toks_range.clone()]
+        let top_n_logprobs = argsort_indices[top_n_toks_range.clone()]
             .iter()
             .map(|x| probs[*x].log(10.0))
             .collect::<Vec<_>>();
@@ -151,12 +147,16 @@ impl Sampler {
             .collect::<Vec<_>>())
     }
 
-    fn sample_argmax(&self, logits: Tensor, return_logprobs: bool) -> Result<Logprobs> {
+    fn sample_argmax(
+        &self,
+        logits: Tensor,
+        argsort_indices: Vec<usize>,
+        return_logprobs: bool,
+    ) -> Result<Logprobs> {
         let next_token = logits.argmax(D::Minus1)?.to_scalar::<u32>()?;
 
         let probs: Vec<f32> = logits.to_vec1()?;
 
-        let argsort_indices = (0..probs.len()).collect::<Vec<_>>();
         let logprob = probs[next_token as usize].log(10.0);
 
         let top_logprobs = if return_logprobs {
@@ -209,17 +209,12 @@ impl Sampler {
     fn sample_topkp(
         &self,
         probs: &mut Vec<f32>,
+        argsort_indices: Vec<usize>,
         top_k: i64,
         top_p: f32,
         return_logprobs: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<Logprobs> {
-        let mut argsort_indices = (0..probs.len()).collect::<Vec<_>>();
-
-        // Sort by descending probability.
-        argsort_indices
-            .sort_unstable_by(|&i, &j| probs[j].partial_cmp(&probs[i]).expect("No ordering."));
-
         if top_k > 0 {
             // Clamp smaller probabilities to zero.
             for (index, val) in argsort_indices.iter().enumerate() {
@@ -291,13 +286,20 @@ impl Sampler {
         return_logprobs: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<Logprobs> {
+        let argsort_indices = logits
+            .arg_sort_last_dim(false)?
+            .to_vec1::<u32>()?
+            .iter()
+            .map(|x| *x as usize)
+            .collect::<Vec<_>>();
+
         let logits = self.apply_penalties(logits.to_vec1()?, penalty_ctxt)?;
         let logits = match self.logits_bias {
             Some(ref bias) => (logits + bias)?,
             None => logits,
         };
         let next_token = match self.temperature {
-            None => self.sample_argmax(logits, return_logprobs)?,
+            None => self.sample_argmax(logits, argsort_indices, return_logprobs)?,
             Some(temperature) => {
                 let logits = (&logits / temperature)?;
                 let probs = candle_nn::ops::softmax_last_dim(&logits)?;
@@ -305,6 +307,7 @@ impl Sampler {
 
                 self.sample_topkp(
                     &mut probs,
+                    argsort_indices,
                     self.topk,
                     self.topp as f32,
                     return_logprobs,
