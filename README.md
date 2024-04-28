@@ -69,7 +69,7 @@ Please see [this section](#supported-models) for details on quantization and LoR
 ## APIs and Integrations
 **Rust Library API**
 
-Rust multithreaded API for easy integration into any application.
+Rust asynchronous API for easy integration into any application.
 
 - [Docs](https://ericlbuehler.github.io/mistral.rs/mistralrs/)
 - [Examples](mistralrs/examples/)
