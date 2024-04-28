@@ -222,3 +222,21 @@ macro_rules! sample_async {
         }
     };
 }
+
+#[macro_export]
+macro_rules! impl_mask {
+    () => {
+        fn mask(&mut self, t: usize, u: usize, device: &Device) -> Result<Tensor> {
+            if let Some(mask) = self.masks.get(&(t, u)) {
+                Ok(mask.clone())
+            } else {
+                let mask: Vec<_> = (0..t)
+                    .flat_map(|i| (0..u).map(move |j| u8::from(j + t > i + u)))
+                    .collect();
+                let mask = Tensor::from_slice(&mask, (t, u), device)?;
+                self.masks.insert((t, u), mask.clone());
+                Ok(mask)
+            }
+        }
+    };
+}

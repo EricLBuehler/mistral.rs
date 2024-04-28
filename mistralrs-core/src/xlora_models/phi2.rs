@@ -120,11 +120,13 @@ struct Attention {
     use_flash_attn: bool,
 }
 
-fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
-    let mask: Vec<_> = (0..size)
-        .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
+fn get_mask(size: usize, offset: usize, device: &Device) -> Result<Tensor> {
+    let t = size;
+    let u = offset + size;
+    let mask: Vec<_> = (0..t)
+        .flat_map(|i| (0..u).map(move |j| u8::from(j + t > i + u)))
         .collect();
-    Tensor::from_slice(&mask, (size, size), device)
+    Tensor::from_slice(&mask, (t, u), &device)
 }
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
@@ -550,7 +552,12 @@ impl Model {
         let mask = if seq_len <= 1 {
             None
         } else {
-            Some(get_mask(seq_len, xs.device())?)
+            let masks = seqlen_offsets
+                .iter()
+                .map(|index_pos| get_mask(seq_len, *index_pos, xs.device()))
+                .collect::<Result<Vec<_>>>()?;
+            let tensor = Tensor::stack(&masks, 0)?;
+            Some(tensor.unsqueeze(1)?)
         };
         let mut cache = if is_full_pass {
             if no_kv_cache {

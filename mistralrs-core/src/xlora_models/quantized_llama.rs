@@ -14,7 +14,7 @@ use crate::device_map::DeviceMapper;
 use crate::layers::QRmsNorm;
 use crate::models::{repeat_kv, verify_sanity_gguf, Cache};
 use crate::pipeline::extract_logits;
-use crate::DeviceMapMetadata;
+use crate::{impl_mask, DeviceMapMetadata};
 
 use super::classifier::XLoraClassifier;
 use super::{verify_sanity_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -272,7 +272,7 @@ pub struct ModelWeights {
     layers: Vec<LayerWeights>,
     norm: QRmsNorm,
     output: QMatMul,
-    masks: HashMap<usize, Tensor>,
+    masks: HashMap<(usize, usize), Tensor>,
     pub device: Device,
     pub cache: Cache,
     xlora_classifier: Option<XLoraClassifier>,
@@ -679,18 +679,7 @@ impl ModelWeights {
         })
     }
 
-    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
-        if let Some(mask) = self.masks.get(&t) {
-            Ok(mask.clone())
-        } else {
-            let mask: Vec<_> = (0..t)
-                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
-                .collect();
-            let mask = Tensor::from_slice(&mask, (t, t), device)?;
-            self.masks.insert(t, mask.clone());
-            Ok(mask)
-        }
-    }
+    impl_mask!();
 
     #[allow(clippy::too_many_arguments)]
     fn inner_forward(
@@ -707,7 +696,12 @@ impl ModelWeights {
         let mask = if seq_len == 1 {
             None
         } else {
-            Some(self.mask(seq_len, x.device())?)
+            let masks = start_offsets
+                .iter()
+                .map(|index_pos| self.mask(seq_len, index_pos + seq_len, x.device()))
+                .collect::<Result<Vec<_>>>()?;
+            let tensor = Tensor::stack(&masks, 0)?;
+            Some(tensor.unsqueeze(1)?)
         };
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = if is_full_pass {
