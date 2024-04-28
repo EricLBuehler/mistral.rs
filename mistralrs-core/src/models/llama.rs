@@ -174,7 +174,7 @@ impl CausalSelfAttention {
         Ok(y)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config, is_gptx: bool) -> Result<Self> {
+    fn load(vb: VarBuilder, cfg: &Config, rope: Arc<RotaryEmbedding>) -> Result<Self> {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
@@ -182,15 +182,6 @@ impl CausalSelfAttention {
         let k_proj = linear(size_in, size_kv, vb.pp("k_proj"))?;
         let v_proj = linear(size_in, size_kv, vb.pp("v_proj"))?;
         let o_proj = linear(size_q, size_in, vb.pp("o_proj"))?;
-        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        let rotary_emb = Arc::new(RotaryEmbedding::new(
-            cfg.rope_theta,
-            head_dim,
-            MAX_SEQ_LEN,
-            vb.device(),
-            is_gptx,
-            vb.dtype(),
-        )?);
         Ok(Self {
             q_proj: QMatMul::Tensor(q_proj.weight().clone()),
             k_proj: QMatMul::Tensor(k_proj.weight().clone()),
@@ -200,7 +191,7 @@ impl CausalSelfAttention {
             num_key_value_heads: cfg.num_key_value_heads,
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             use_flash_attn: cfg.use_flash_attn,
-            rotary_emb,
+            rotary_emb: rope,
         })
     }
 }
@@ -281,14 +272,29 @@ impl Block {
         Ok(x)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config, is_gptx: bool) -> Result<Self> {
-        let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg, is_gptx)?;
-        let mlp = Mlp::load(vb.pp("mlp"), cfg)?;
-        let rms_1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+    fn load(
+        vb: VarBuilder,
+        cfg: &Config,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
+        rope: Arc<RotaryEmbedding>,
+    ) -> Result<Self> {
+        let attn = CausalSelfAttention::load(
+            mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
+            cfg,
+            rope,
+        )?;
+        let mlp = Mlp::load(mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq), cfg)?;
+        let rms_1 = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_nm_device(vb.pp("input_layernorm"), false),
+        )?;
         let rms_2 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            vb.pp("post_attention_layernorm"),
+            mapper.set_nm_device(vb.pp("post_attention_layernorm"), false),
         )?;
         Ok(Self {
             rms_1,
@@ -333,7 +339,10 @@ impl Llama {
             )?;
         }
         let x = x.to_device(&self.device)?;
-        let x = self.ln_f.forward(&x)?.to_dtype(DType::F32)?;
+        let mut x = self.ln_f.forward(&x)?;
+        if matches!(self.lm_head, QMatMul::QTensor(_)) {
+            x = x.to_dtype(DType::F32)?;
+        }
         let logits = self.lm_head.forward(&x)?;
         extract_logits(&logits, context_lens)
     }
@@ -343,18 +352,46 @@ impl Llama {
         vb: VarBuilder,
         is_gptx: bool,
         mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        real_device: Device,
     ) -> Result<Self> {
-        let device = vb.device();
-        let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
-        let lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
-        let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
+        let wte = embedding(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
+        )?;
+        let lm_head = linear(
+            cfg.hidden_size,
+            cfg.vocab_size,
+            mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
+        )?;
+        let ln_f = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_nm_device(vb.pp("model.norm"), false),
+        )?;
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)
             .map(|i| {
+                let rotary_emb = Arc::new(
+                    RotaryEmbedding::new(
+                        cfg.rope_theta,
+                        head_dim,
+                        MAX_SEQ_LEN,
+                        mapper.device_for(i, false).unwrap_or(&real_device),
+                        is_gptx,
+                        vb.dtype(),
+                    )
+                    .expect("Failed to create RoPE"),
+                );
                 Block::load(
-                    mapper.set_device(i, vb.pp(&format!("model.layers.{i}"))),
+                    vb.pp(&format!("model.layers.{i}")),
                     cfg,
-                    is_gptx,
+                    &*mapper,
+                    i,
+                    loading_isq,
+                    rotary_emb,
                 )
                 .expect("Failed to load block.")
             })
@@ -367,7 +404,7 @@ impl Llama {
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             cache: Cache::new()?,
             kv_cache: super::Cache::new(cfg.num_hidden_layers, false),
-            device: device.clone(),
+            device: real_device,
             mapper,
         })
     }
@@ -414,18 +451,18 @@ impl NormalModel for Llama {
     fn max_seq_len(&self) -> usize {
         MAX_SEQ_LEN
     }
-    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
-        tensors.push(&mut self.lm_head);
-        for layer in &mut self.blocks {
-            tensors.push(&mut layer.attn.q_proj);
-            tensors.push(&mut layer.attn.k_proj);
-            tensors.push(&mut layer.attn.v_proj);
-            tensors.push(&mut layer.attn.o_proj);
-            tensors.push(&mut layer.mlp.c_fc1);
-            tensors.push(&mut layer.mlp.c_fc2);
-            tensors.push(&mut layer.mlp.c_proj);
+        tensors.push((&mut self.lm_head, None));
+        for (i, layer) in self.blocks.iter_mut().enumerate() {
+            tensors.push((&mut layer.attn.q_proj, Some(i)));
+            tensors.push((&mut layer.attn.k_proj, Some(i)));
+            tensors.push((&mut layer.attn.v_proj, Some(i)));
+            tensors.push((&mut layer.attn.o_proj, Some(i)));
+            tensors.push((&mut layer.mlp.c_fc1, Some(i)));
+            tensors.push((&mut layer.mlp.c_fc2, Some(i)));
+            tensors.push((&mut layer.mlp.c_proj, Some(i)));
         }
-        tensors
+        (tensors, &*self.mapper)
     }
 }

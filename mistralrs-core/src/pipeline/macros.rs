@@ -1,4 +1,64 @@
 #[macro_export]
+macro_rules! api_dir_list {
+    ($api:expr, $model_id:expr) => {
+        $api.info()
+            .map(|repo| {
+                repo.siblings
+                    .iter()
+                    .map(|x| x.rfilename.clone())
+                    .collect::<Vec<String>>()
+            })
+            .unwrap_or_else(|e| {
+                // If we do not get a 404, it was something else.
+                let format = format!("{e:?}");
+                if let hf_hub::api::sync::ApiError::RequestError(resp) = e {
+                    if resp.into_response().is_some_and(|r| r.status() != 404) {
+                        panic!("{format}");
+                    }
+                }
+
+                let listing = std::fs::read_dir($model_id);
+                if listing.is_err() {
+                    panic!("Cannot list directory {:?}", $model_id)
+                }
+                let listing = listing.unwrap();
+                listing
+                    .into_iter()
+                    .map(|s| {
+                        s.unwrap()
+                            .path()
+                            .to_str()
+                            .expect("Could not convert to str")
+                            .to_string()
+                    })
+                    .collect::<Vec<String>>()
+            })
+            .into_iter()
+    };
+}
+
+#[macro_export]
+macro_rules! api_get_file {
+    ($api:expr, $file:expr, $model_id:expr) => {
+        $api.get($file).unwrap_or_else(|e| {
+            // If we do not get a 404, it was something else.
+            let format = format!("{e:?}");
+            if let hf_hub::api::sync::ApiError::RequestError(resp) = e {
+                if resp.into_response().is_some_and(|r| r.status() != 404) {
+                    panic!("{format}");
+                }
+            }
+
+            let path = $model_id.join($file);
+            if !path.exists() {
+                panic!("File \"{}\" not found at model id {:?}", $file, $model_id)
+            }
+            path
+        })
+    };
+}
+
+#[macro_export]
 macro_rules! deserialize_chat_template {
     ($paths:expr, $this:ident) => {{
         use tracing::info;
@@ -77,15 +137,16 @@ macro_rules! get_paths {
             RepoType::Model,
             revision.clone(),
         ));
+        let model_id = std::path::Path::new(&$this.model_id);
 
         let tokenizer_filename = if let Some(ref p) = $this.tokenizer_json {
             info!("Using tokenizer.json at `{p}`");
             PathBuf::from_str(p)?
         } else {
-            api.get("tokenizer.json")?
+            $crate::api_get_file!(api, "tokenizer.json", model_id)
         };
 
-        let config_filename = api.get("config.json")?;
+        let config_filename = $crate::api_get_file!(api, "config.json", model_id);
 
         let filenames = get_model_paths(
             revision.clone(),
@@ -93,6 +154,7 @@ macro_rules! get_paths {
             &$quantized_model_id,
             &$quantized_filename,
             &api,
+            &model_id,
         )?;
 
         let XLoraPaths {
@@ -109,7 +171,7 @@ macro_rules! get_paths {
             &$this.xlora_order,
         )?;
 
-        let template_filename = api.get("tokenizer_config.json")?;
+        let template_filename = $crate::api_get_file!(api, "tokenizer_config.json", model_id);
 
         Ok(Box::new($path_name {
             tokenizer_filename,
@@ -127,7 +189,7 @@ macro_rules! get_paths {
 
 #[macro_export]
 macro_rules! normal_model_loader {
-    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr) => {{
+    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
         let vb = from_mmaped_safetensors(
             $paths.get_weight_filenames().to_vec(),
             Vec::new(),
@@ -136,13 +198,20 @@ macro_rules! normal_model_loader {
             $silent,
         )?;
 
-        $loader.load(&$config, $use_flash_attn, vb, $mapper)?
+        $loader.load(
+            &$config,
+            $use_flash_attn,
+            vb,
+            $mapper,
+            $loading_isq,
+            $real_device,
+        )?
     }};
 }
 
 #[macro_export]
 macro_rules! xlora_model_loader {
-    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr) => {{
+    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
         let mut safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
         safetensors_paths.push($paths.get_classifier_path().as_ref().unwrap());
         let vb = from_mmaped_safetensors(
@@ -170,13 +239,15 @@ macro_rules! xlora_model_loader {
             Some($paths.get_classifier_config().as_ref().unwrap().clone()),
             $paths.get_ordering().as_ref().unwrap().clone(),
             $mapper,
+            $loading_isq,
+            $real_device,
         )?
     }};
 }
 
 #[macro_export]
 macro_rules! lora_model_loader {
-    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr) => {{
+    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
         let mut safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
         safetensors_paths.push($paths.get_classifier_path().as_ref().unwrap());
         let vb = from_mmaped_safetensors(
@@ -204,6 +275,8 @@ macro_rules! lora_model_loader {
             None,
             $paths.get_ordering().as_ref().unwrap().clone(),
             $mapper,
+            $loading_isq,
+            $real_device,
         )?
     }};
 }

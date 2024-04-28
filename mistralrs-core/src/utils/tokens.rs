@@ -2,6 +2,7 @@ use std::{env, fs};
 use thiserror::Error;
 
 use anyhow::Result;
+use tracing::info;
 
 use crate::pipeline::TokenSource;
 
@@ -11,13 +12,29 @@ enum TokenRetrievalError {
     HomeDirectoryMissing,
 }
 
+/// This reads a token from a specified source. If the token cannot be read, a warning is logged with `tracing`
+/// and *no token is used*.
 pub(crate) fn get_token(source: &TokenSource) -> Result<String> {
     Ok(match source {
         TokenSource::Literal(data) => data.clone(),
-        TokenSource::EnvVar(envvar) => env::var(envvar)
-            .map_err(|_| anyhow::Error::msg(format!("Could not load env var `{envvar}`")))?,
-        TokenSource::Path(path) => fs::read_to_string(path)
-            .map_err(|_| anyhow::Error::msg(format!("Could not load token at `{path}`")))?,
+        TokenSource::EnvVar(envvar) => {
+            let tok = env::var(envvar);
+            if let Ok(tok) = tok {
+                tok
+            } else {
+                info!("Could not load token at {envvar:?}, using no HF token.");
+                "".to_string()
+            }
+        }
+        TokenSource::Path(path) => {
+            let tok = fs::read_to_string(path);
+            if let Ok(tok) = tok {
+                tok
+            } else {
+                info!("Could not load token at {path:?}, using no HF token.");
+                "".to_string()
+            }
+        }
         TokenSource::CacheToken => {
             let home = format!(
                 "{}/.cache/huggingface/token",
@@ -25,8 +42,13 @@ pub(crate) fn get_token(source: &TokenSource) -> Result<String> {
                     .ok_or(TokenRetrievalError::HomeDirectoryMissing)?
                     .display()
             );
-            fs::read_to_string(home.clone())
-                .map_err(|_| anyhow::Error::msg(format!("Could not load token at `{home}`")))?
+            let tok = fs::read_to_string(home.clone());
+            if let Ok(tok) = tok {
+                tok
+            } else {
+                info!("Could not load token at {home:?}, using no HF token.");
+                "".to_string()
+            }
         }
         TokenSource::None => "".to_string(),
     }

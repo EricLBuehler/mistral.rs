@@ -8,9 +8,9 @@ fn parse_arch(x: &str) -> Result<NormalLoaderType, String> {
 
 #[derive(Debug, Subcommand)]
 pub enum ModelSelected {
-    /// Select a plain model
+    /// Select a plain model, without quantization or adapters
     Plain {
-        /// Model ID to load from
+        /// Model ID to load from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         model_id: String,
 
@@ -22,13 +22,14 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
 
+        /// The architecture of the model.
         #[arg(short, long, value_parser = parse_arch)]
         arch: NormalLoaderType,
     },
 
     /// Select an X-LoRA architecture
     XLora {
-        /// Force a base model ID to load from instead of using the ordering file.
+        /// Force a base model ID to load from instead of using the ordering file. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         model_id: Option<String>,
 
@@ -36,7 +37,7 @@ pub enum ModelSelected {
         #[arg(short, long)]
         tokenizer_json: Option<String>,
 
-        /// Model ID to load X-LoRA from.
+        /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         xlora_model_id: String,
 
@@ -53,13 +54,14 @@ pub enum ModelSelected {
         #[arg(long)]
         tgt_non_granular_index: Option<usize>,
 
+        /// The architecture of the model.
         #[arg(short, long, value_parser = parse_arch)]
         arch: NormalLoaderType,
     },
 
     /// Select a LoRA architecture
     Lora {
-        /// Force a base model ID to load from instead of using the ordering file.
+        /// Force a base model ID to load from instead of using the ordering file. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         model_id: Option<String>,
 
@@ -67,7 +69,7 @@ pub enum ModelSelected {
         #[arg(short, long)]
         tokenizer_json: Option<String>,
 
-        /// Model ID to load X-LoRA from.
+        /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         adapters_model_id: String,
 
@@ -79,13 +81,14 @@ pub enum ModelSelected {
         #[arg(short, long)]
         order: String,
 
+        /// The architecture of the model.
         #[arg(short, long, value_parser = parse_arch)]
         arch: NormalLoaderType,
     },
 
     /// Select a GGUF model.
     GGUF {
-        /// Model ID to load the tokenizer from
+        /// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         tok_model_id: String,
 
@@ -94,6 +97,7 @@ pub enum ModelSelected {
         tokenizer_json: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// This may be a HF hub repo or a local path.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
@@ -108,7 +112,7 @@ pub enum ModelSelected {
 
     /// Select a GGUF model with X-LoRA.
     XLoraGGUF {
-        /// Model ID to load the tokenizer from
+        /// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         tok_model_id: Option<String>,
 
@@ -117,6 +121,7 @@ pub enum ModelSelected {
         tokenizer_json: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// This may be a HF hub repo or a local path.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
@@ -128,7 +133,7 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
 
-        /// Model ID to load X-LoRA from.
+        /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         xlora_model_id: String,
 
@@ -144,7 +149,7 @@ pub enum ModelSelected {
 
     /// Select a GGUF model with LoRA.
     LoraGGUF {
-        /// Model ID to load the tokenizer from
+        /// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         tok_model_id: Option<String>,
 
@@ -153,6 +158,7 @@ pub enum ModelSelected {
         tokenizer_json: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// This may be a HF hub repo or a local path.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
@@ -164,7 +170,7 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
 
-        /// Model ID to load X-LoRA from.
+        /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         adapters_model_id: String,
 
@@ -180,7 +186,7 @@ pub enum ModelSelected {
 
     /// Select a GGML model.
     GGML {
-        /// Model ID to load the tokenizer from
+        /// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         tok_model_id: String,
 
@@ -189,6 +195,7 @@ pub enum ModelSelected {
         tokenizer_json: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// This may be a HF hub repo or a local path.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
@@ -207,7 +214,7 @@ pub enum ModelSelected {
 
     /// Select a GGML model with X-LoRA.
     XLoraGGML {
-        /// Model ID to load the tokenizer from
+        /// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         tok_model_id: Option<String>,
 
@@ -216,6 +223,7 @@ pub enum ModelSelected {
         tokenizer_json: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// This may be a HF hub repo or a local path.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
@@ -227,7 +235,7 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
 
-        /// Model ID to load X-LoRA from.
+        /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         xlora_model_id: String,
 
@@ -247,7 +255,7 @@ pub enum ModelSelected {
 
     /// Select a GGML model with LoRA.
     LoraGGML {
-        /// Model ID to load the tokenizer from
+        /// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         tok_model_id: Option<String>,
 
@@ -256,6 +264,7 @@ pub enum ModelSelected {
         tokenizer_json: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// This may be a HF hub repo or a local path.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
@@ -267,7 +276,7 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
 
-        /// Model ID to load X-LoRA from.
+        /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         adapters_model_id: String,
 

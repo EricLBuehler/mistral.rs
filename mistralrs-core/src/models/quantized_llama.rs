@@ -319,7 +319,7 @@ impl ModelWeights {
         let mapper = mapper.into_mapper(block_count, device)?;
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
-            let device = mapper.device_for(layer_idx).unwrap_or(device);
+            let device = mapper.device_for(layer_idx, false).unwrap_or(device);
             let rotary = RotaryEmbedding::new_partial(
                 rope_freq_base,
                 head_dim,

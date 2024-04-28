@@ -117,7 +117,7 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 }
 
 impl Attention {
-    fn new(cfg: &Config, vb: VarBuilder, is_gptx: bool) -> Result<Self> {
+    fn new(cfg: &Config, vb: VarBuilder, rope: RotaryEmbedding) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads();
         let head_dim = cfg.head_dim();
@@ -125,16 +125,6 @@ impl Attention {
         let k_proj = linear(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?;
         let v_proj = linear(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?;
         let dense = linear(num_heads * head_dim, cfg.hidden_size, vb.pp("dense"))?;
-        // Alternative rope scalings are not supported.
-        let rotary_emb = RotaryEmbedding::new_partial(
-            cfg.rope_theta,
-            cfg.head_dim(),
-            (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
-            cfg.max_position_embeddings,
-            vb.device(),
-            is_gptx,
-            vb.dtype(),
-        )?;
         let (q_layernorm, k_layernorm) = if cfg.qk_layernorm {
             let q_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp("q_layernorm"))?;
             let k_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp("k_layernorm"))?;
@@ -150,7 +140,7 @@ impl Attention {
             dense: QLinear::from_linear(dense),
             q_layernorm,
             k_layernorm,
-            rotary_emb,
+            rotary_emb: rope,
             softmax_scale,
             num_heads,
             num_kv_heads,
@@ -276,13 +266,24 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn new(cfg: &Config, vb: VarBuilder, is_gptx: bool) -> Result<Self> {
-        let self_attn = Attention::new(cfg, vb.pp("self_attn"), is_gptx)?;
-        let mlp = MLP::new(cfg, vb.pp("mlp"))?;
+    fn new(
+        cfg: &Config,
+        vb: VarBuilder,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
+        rotary_emb: RotaryEmbedding,
+    ) -> Result<Self> {
+        let self_attn = Attention::new(
+            cfg,
+            mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
+            rotary_emb,
+        )?;
+        let mlp = MLP::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
         let input_layernorm = layer_norm(
             cfg.hidden_size,
             cfg.layer_norm_eps,
-            vb.pp("input_layernorm"),
+            mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
         Ok(Self {
             self_attn,
@@ -326,33 +327,56 @@ impl Model {
         vb: VarBuilder,
         is_gptx: bool,
         mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        real_device: Device,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
-        let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
+        let embed_tokens = embedding(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+        )?;
         let final_layernorm = layer_norm(
             cfg.hidden_size,
             cfg.layer_norm_eps,
-            vb_m.pp("final_layernorm"),
+            mapper.set_nm_device(vb_m.pp("final_layernorm"), false),
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_m = vb_m.pp("layers");
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
         for layer_idx in 0..cfg.num_hidden_layers {
+            // Alternative rope scalings are not supported.
+            let rotary_emb = RotaryEmbedding::new_partial(
+                cfg.rope_theta,
+                cfg.head_dim(),
+                (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
+                cfg.max_position_embeddings,
+                mapper.device_for(layer_idx, false).unwrap_or(&real_device),
+                is_gptx,
+                vb.dtype(),
+            )?;
             let layer = DecoderLayer::new(
                 cfg,
-                mapper.set_device(layer_idx, vb_m.pp(layer_idx)),
-                is_gptx,
+                vb_m.pp(layer_idx),
+                &*mapper,
+                layer_idx,
+                loading_isq,
+                rotary_emb,
             )?;
             layers.push(layer)
         }
-        let lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
+        let lm_head = linear(
+            cfg.hidden_size,
+            cfg.vocab_size,
+            mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
+        )?;
         Ok(Self {
             embed_tokens,
             layers,
             final_layernorm,
             lm_head: QLinear::from_linear(lm_head),
             cache: Cache::new(cfg.num_hidden_layers, false),
-            device: vb.device().clone(),
+            device: real_device,
             max_seq_len: cfg.max_position_embeddings,
             mapper,
         })
@@ -386,12 +410,11 @@ impl Model {
             )?;
         }
         let xs = xs.to_device(&self.device)?;
-        extract_logits(
-            &xs.apply(&self.final_layernorm)?
-                .to_dtype(DType::F32)?
-                .apply(&self.lm_head)?,
-            context_lens,
-        )
+        let mut xs = xs.apply(&self.final_layernorm)?;
+        if self.lm_head.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        extract_logits(&xs.apply(&self.lm_head)?, context_lens)
     }
 }
 
@@ -436,17 +459,17 @@ impl NormalModel for Model {
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
     }
-    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
-        tensors.push(self.lm_head.inner());
-        for layer in &mut self.layers {
-            tensors.push(layer.self_attn.q_proj.inner());
-            tensors.push(layer.self_attn.k_proj.inner());
-            tensors.push(layer.self_attn.v_proj.inner());
-            tensors.push(layer.self_attn.dense.inner());
-            tensors.push(layer.mlp.fc1.inner());
-            tensors.push(layer.mlp.fc2.inner());
+        tensors.push((self.lm_head.inner(), None));
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            tensors.push((layer.self_attn.q_proj.inner(), Some(i)));
+            tensors.push((layer.self_attn.k_proj.inner(), Some(i)));
+            tensors.push((layer.self_attn.v_proj.inner(), Some(i)));
+            tensors.push((layer.self_attn.dense.inner(), Some(i)));
+            tensors.push((layer.mlp.fc1.inner(), Some(i)));
+            tensors.push((layer.mlp.fc2.inner(), Some(i)));
         }
-        tensors
+        (tensors, &*self.mapper)
     }
 }

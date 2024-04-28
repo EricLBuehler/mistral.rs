@@ -43,7 +43,7 @@ Mistral.rs is a fast LLM inference platform supporting inference on a variety of
 - Lightweight OpenAI API compatible HTTP server.
 - Python API.
 - Grammar support with Regex and Yacc.
-- [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from Huggingface Hub by quantizing them after loading instead of creating a GGUF file.
+- [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from Huggingface Hub by quantizing them after loading instead of creating a GGUF file. This loads the ISQ-able weights on CPU before quantizing with ISQ and then moving back to the device to avoid memory spikes.
 
 **Powerful**:
 - Fast LoRA support with weight merging.
@@ -64,12 +64,12 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95
 - Phi 3
 - Qwen 2
 
-Please see [this section](README#supported-models) for details on quantization and LoRA support.
+Please see [this section](#supported-models) for details on quantization and LoRA support.
 
 ## APIs and Integrations
 **Rust Library API**
 
-Rust multithreaded API for easy integration into any application.
+Rust asynchronous API for easy integration into any application.
 
 - [Docs](https://ericlbuehler.github.io/mistral.rs/mistralrs/)
 - [Examples](mistralrs/examples/)
@@ -213,7 +213,7 @@ To install mistral.rs, one should ensure they have Rust installed by following [
         ```
 6) The build process will output a binary `misralrs-server` at `./target/release/mistralrs-server` which may be copied into the working directory with the following command:
     ```
-    cp ./target/release/mistralrs-server .
+    cp ./target/release/mistralrs-server ./mistralrs_server
     ```
 
 7) Installing Python support
@@ -221,7 +221,9 @@ To install mistral.rs, one should ensure they have Rust installed by following [
     You can install Python support by following the guide [here](/mistralrs-pyo3/README.md).
 
 ### Getting models
-Mistral.rs will automatically download models from HF hub. To access gated models, you should provide a token source. They may be one of:
+**Loading from HF Hub:**
+
+Mistral.rs can automatically download models from HF Hub. To access gated models, you should provide a token source. They may be one of:
 - `literal:<value>`: Load from a specified literal
 - `env:<value>`: Load from a specified environment variable
 - `path:<value>`: Load from a specified file
@@ -231,29 +233,58 @@ Mistral.rs will automatically download models from HF hub. To access gated model
 This is passed in the following ways:
 - Command line:
 ```bash
-./mistralrs-server --port 1234 gguf -m mistralai/Mistral-7B-Instruct-v0.1
+./mistralrs_server --token-source none -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
 ```
 - Python:
 
-Example [here](examples/python/token_source.py).
+[Here](examples/python/token_source.py) is an example of setting the token source.
 
-*Loading locally will be added shortly*.
+If token cannot be loaded, no token will be used (i.e. effectively using `none`).
+
+**Loading from local files:**
+
+You can also instruct mistral.rs to load models locally by modifying the `*_model_id` arguments or options:
+```bash
+./mistralrs_server --port 1234 plain -m . -a mistral
+```
+
+The following files must be present in the paths for the options below:
+- `--model-id` (server) or `model_id` (python) or `--tok-model-id` (server) or `tok_model_id` (python): 
+  - `config.json`
+  - `tokenizer_config.json`
+  - `tokenizer.json` (if not specified separately)
+  - `.safetensors` files.
+- `--quantized-model-id` (server) or `quantized_model_id` (python):
+  - Specified `.gguf` or `.ggml` file.
+- `--x-lora-model-id` (server) or `xlora_model_id` (python):
+  - `xlora_classifier.safetensors`
+  - `xlora_config.json`
+  - Adapters `.safetensors` and `adapter_config.json` files in their respective directories
 
 ### Run
 
-To start a server serving Mistral on `localhost:1234`, 
+To start a server serving Mistral GGUF on `localhost:1234`, 
 ```bash
-./mistralrs-server --port 1234 --log output.log plain -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF
+./mistralrs_server --port 1234 --log output.log gguf -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -t mistralai/Mistral-7B-Instruct-v0.1 -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
 ```
 
-Mistral.rs uses subcommands to control the model type. They are generally of format `<XLORA/LORA>-<ARCHITECTURE/QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
+Mistral.rs uses subcommands to control the model type. They are generally of format `<XLORA/LORA>-<QUANTIZATION>`. Please run `./mistralrs_server --help` to see the subcommands.
+
+Additionally, for models without quantization, the model architecture should be provided as the `--arch` or `-a` argument in contrast to GGUF models which encode the architecture in the file. It should be one of the following:
+- `mistral`
+- `gemma`
+- `mixtral`
+- `llama`
+- `phi2`
+- `phi3`
+- `qwen2`
 
 **Interactive mode:**
 
 You can launch interactive mode, a simple chat application running in the terminal, by passing `-i`:
 
 ```bash
-./mistralrs-server -i gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
+./mistralrs_server -i gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
 ```
 
 ### Quick examples:
@@ -263,14 +294,14 @@ You can launch interactive mode, a simple chat application running in the termin
 To start an X-LoRA server with the exactly as presented in [the paper](https://arxiv.org/abs/2402.07148):
 
 ```bash
-./mistralrs-server --port 1234 x-lora-plain -o orderings/xlora-paper-ordering.json -x lamm-mit/x-lora
+./mistralrs_server --port 1234 x-lora-plain -o orderings/xlora-paper-ordering.json -x lamm-mit/x-lora
 ```
 - LoRA with a model from GGUF
 
 To start an LoRA server with adapters from the X-LoRA paper (you should modify the ordering file to use only one adapter, as the adapter static scalings are all 1 and so the signal will become distorted):
 
 ```bash
-./mistralrs-server --port 1234 lora-gguf -o orderings/xlora-paper-ordering.json -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q8_0.gguf -x lamm-mit/x-lora
+./mistralrs_server --port 1234 lora-gguf -o orderings/xlora-paper-ordering.json -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q8_0.gguf -x lamm-mit/x-lora
 ```
 
 Normally with a LoRA model you would use a custom ordering file. However, for this example we use the ordering from the X-LoRA paper because we are using the adapters from the X-LoRA paper.
@@ -280,7 +311,7 @@ Normally with a LoRA model you would use a custom ordering file. However, for th
 To start a server running Mistral from GGUF:
 
 ```bash
-./mistralrs-server --port 1234 gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
+./mistralrs_server --port 1234 gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
 ```
 
 - With a model from GGML
@@ -288,7 +319,7 @@ To start a server running Mistral from GGUF:
 To start a server running Llama from GGML:
 
 ```bash
-./mistralrs-server --port 1234 ggml -t meta-llama/Llama-2-13b-chat-hf -m TheBloke/Llama-2-13B-chat-GGML -f llama-2-13b-chat.ggmlv3.q4_K_M.bin
+./mistralrs_server --port 1234 ggml -t meta-llama/Llama-2-13b-chat-hf -m TheBloke/Llama-2-13B-chat-GGML -f llama-2-13b-chat.ggmlv3.q4_K_M.bin
 ```
 
 - Plain model from safetensors
@@ -296,7 +327,7 @@ To start a server running Llama from GGML:
 To start a server running Mistral from safetensors.
 
 ```bash
-./mistralrs-server --port 1234 gguf -m mistralai/Mistral-7B-Instruct-v0.1
+./mistralrs_server --port 1234 gguf -m mistralai/Mistral-7B-Instruct-v0.1
 ```
 
 
@@ -353,7 +384,7 @@ It is also important to check the chat template style of the model. If the HF hu
 
 For example, when using a Zephyr model:
 
-`./mistralrs-server --port 1234 --log output.txt gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf`
+`./mistralrs_server --port 1234 --log output.txt gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf`
 
 ### Adapter model support: X-LoRA and LoRA
 
