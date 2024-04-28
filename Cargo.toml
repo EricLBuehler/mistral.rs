@@ -39,3 +39,6 @@ tokio = { version = "1.36.0", features = ["rt-multi-thread"] }
 [profile.profiling]
 inherits = "release"
 debug = true
+
+[profile.dev]
+opt-level = 3
