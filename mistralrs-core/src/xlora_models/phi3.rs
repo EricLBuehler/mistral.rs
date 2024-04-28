@@ -34,6 +34,7 @@ struct Attention {
 }
 
 impl Attention {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         rotary_emb: Arc<PhiRotaryEmbedding>,
         cfg: &Config,
@@ -41,6 +42,9 @@ impl Attention {
         lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
     ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -49,7 +53,8 @@ impl Attention {
         let qkv_proj = linear_no_bias(
             cfg.hidden_size,
             op_size,
-            vb.pp("qkv_proj"),
+            mapper.set_device(layer_idx, vb.pp("qkv_proj"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("qkv_proj"), false),
             lora_config,
             count,
             ord,
@@ -57,7 +62,8 @@ impl Attention {
         let o_proj = linear_no_bias(
             num_heads * head_dim,
             cfg.hidden_size,
-            vb.pp("o_proj"),
+            mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("o_proj"), false),
             lora_config,
             count,
             ord,
@@ -179,19 +185,24 @@ struct Mlp {
 }
 
 impl Mlp {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         cfg: &Config,
         vb: VarBuilder,
         lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
     ) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
         let gate_up_proj = linear_no_bias(
             hidden_size,
             2 * i_size,
-            vb.pp("gate_up_proj"),
+            mapper.set_device(layer_idx, vb.pp("gate_up_proj"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("gate_up_proj"), false),
             lora_config,
             count,
             ord,
@@ -199,7 +210,8 @@ impl Mlp {
         let down_proj = linear_no_bias(
             i_size,
             hidden_size,
-            vb.pp("down_proj"),
+            mapper.set_device(layer_idx, vb.pp("down_proj"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("down_proj"), false),
             lora_config,
             count,
             ord,
@@ -255,6 +267,7 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         rotary_emb: Arc<PhiRotaryEmbedding>,
         cfg: &Config,
@@ -262,16 +275,40 @@ impl DecoderLayer {
         lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
     ) -> Result<Self> {
-        let self_attn =
-            Attention::new(rotary_emb, cfg, vb.pp("self_attn"), lora_config, count, ord)?;
-        let mlp = Mlp::new(cfg, vb.pp("mlp"), lora_config, count, ord)?;
-        let input_layernorm =
-            RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let self_attn = Attention::new(
+            rotary_emb,
+            cfg,
+            vb.pp("self_attn"),
+            lora_config,
+            count,
+            ord,
+            mapper,
+            layer_idx,
+            loading_isq,
+        )?;
+        let mlp = Mlp::new(
+            cfg,
+            vb.pp("mlp"),
+            lora_config,
+            count,
+            ord,
+            mapper,
+            layer_idx,
+            loading_isq,
+        )?;
+        let input_layernorm = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
+        )?;
         let post_attention_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            vb.pp("post_attention_layernorm"),
+            mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
         Ok(Self {
             self_attn,
@@ -331,6 +368,7 @@ pub struct Model {
 }
 
 impl Model {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         cfg: &Config,
         vb: VarBuilder,
@@ -339,27 +377,35 @@ impl Model {
         xlora_ordering: Ordering,
         _is_gptx: bool,
         mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        real_device: Device,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
-        let embed_tokens =
-            candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
+        let embed_tokens = candle_nn::embedding(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+        )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
         let mut count = 0;
         for layer_idx in 0..cfg.num_hidden_layers {
             let rotary_emb = Arc::new(PhiRotaryEmbedding::new(
                 vb.dtype(),
                 cfg,
-                mapper.device_for(layer_idx).unwrap_or(vb.device()),
+                mapper.device_for(layer_idx, false).unwrap_or(&real_device),
             )?);
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
-                mapper.set_device(layer_idx, vb_l.pp(layer_idx)),
+                vb_l.pp(layer_idx),
                 lora_config,
                 &mut count,
                 &xlora_ordering,
+                &*mapper,
+                layer_idx,
+                loading_isq,
             )?;
             layers.push(layer)
         }
@@ -382,14 +428,22 @@ impl Model {
                     .merge_weights()?;
             }
         }
-        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
-        let lm_head = candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
+        let norm = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_nm_device(vb_m.pp("norm"), false),
+        )?;
+        let lm_head = candle_nn::linear_no_bias(
+            cfg.hidden_size,
+            cfg.vocab_size,
+            mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
+        )?;
         Ok(Self {
             embed_tokens,
             layers,
             norm,
             lm_head: QLinear::from_linear(lm_head),
-            device: vb.device().clone(),
+            device: real_device,
             dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, true),
             max_seq_len: cfg.max_position_embeddings,
@@ -489,6 +543,7 @@ impl Model {
                 is_scaling_pass,
             )?
         }
+        let xs = xs.to_device(&self.device)?;
         xs.apply(&self.norm)
     }
 
@@ -617,16 +672,28 @@ impl NormalModel for Model {
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
     }
-    fn get_tensors(&mut self) -> Vec<&mut QMatMul> {
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
-        tensors.push(self.lm_head.inner());
-        for layer in &mut self.layers {
-            tensors.push(Arc::get_mut(&mut layer.self_attn.qkv_proj).unwrap().inner());
-            tensors.push(Arc::get_mut(&mut layer.self_attn.o_proj).unwrap().inner());
-            tensors.push(Arc::get_mut(&mut layer.mlp.down_proj).unwrap().inner());
-            tensors.push(Arc::get_mut(&mut layer.mlp.gate_up_proj).unwrap().inner());
+        tensors.push((self.lm_head.inner(), None));
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.qkv_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.o_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.down_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.gate_up_proj).unwrap().inner(),
+                Some(i),
+            ));
         }
-        tensors
+        (tensors, &*self.mapper)
     }
 }
 

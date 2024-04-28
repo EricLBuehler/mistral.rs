@@ -13,17 +13,28 @@ use crate::models::phi3;
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
     inner: candle_nn::RmsNorm<RmsNormNonQuantized>,
+    eps: f64,
+    weight: Tensor,
 }
 
 impl RmsNorm {
     pub fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
         let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
-        Ok(Self { inner })
+        let w = inner.inner().weight().clone();
+        Ok(Self {
+            inner,
+            eps,
+            weight: w,
+        })
     }
 }
 
 impl Module for RmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        if x.device().is_cpu() {
+            // Handle device mapping case
+            return candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32);
+        }
         self.inner.forward(x)
     }
 }

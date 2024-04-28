@@ -86,13 +86,13 @@ impl Engine {
     }
 
     pub async fn run(&mut self) {
-        let mut last_run = Instant::now();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
         let mut last_completion_ids: Vec<usize> = vec![];
         'lp: loop {
             while let Ok(request) = self.rx.try_recv() {
                 self.add_request(request);
             }
+            let run_start = Instant::now();
             let mut scheduled = self.scheduler.schedule();
             if let Ok(dtype) = self.isq_rx.try_recv() {
                 if let Err(e) = get_mut_arcmutex!(self.pipeline).re_isq_model(dtype) {
@@ -205,8 +205,7 @@ impl Engine {
             }
 
             if self.is_debug {
-                let ms_from_last_run = last_run.elapsed().as_millis();
-                last_run = Instant::now();
+                let ms_from_last_run = run_start.elapsed().as_millis();
                 let total_len = scheduled.prompt.len() + scheduled.completion.len();
                 if total_len > 0 {
                     let prompt_lengths = scheduled

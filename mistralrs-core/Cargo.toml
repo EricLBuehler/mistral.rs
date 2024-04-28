@@ -50,6 +50,7 @@ tokio.workspace = true
 tokio-rayon = "2.1.0"
 rand_isaac = "0.3.0"
 futures.workspace = true
+indicatif = { version = "0.17.8", features = ["rayon"] }
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
