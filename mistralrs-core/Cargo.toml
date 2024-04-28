@@ -46,6 +46,10 @@ radix_trie = "0.2.1"
 bytemuck = "1.15.0"
 pyo3.workspace = true
 rayon = "1.10.0"
+tokio.workspace = true
+tokio-rayon = "2.1.0"
+rand_isaac = "0.3.0"
+futures.workspace = true
 indicatif = { version = "0.17.8", features = ["rayon"] }
 
 [features]

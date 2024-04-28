@@ -86,6 +86,7 @@ macro_rules! handle_pipeline_forward_error {
         match $fallible {
             Ok(v) => v,
             Err(e) => {
+                let mut pipeline = $pipeline;
                 use $crate::response::Response;
                 use $crate::sequence::SequenceState;
                 use $crate::Engine;
@@ -94,7 +95,7 @@ macro_rules! handle_pipeline_forward_error {
                 error!("{} - Model failed with error: {:?}", $stage, &e);
                 for seq in $seq_slice.iter_mut() {
                     // Step 1: Add all choices to groups
-                    let res = match $pipeline
+                    let res = match pipeline
                         .tokenizer()
                         .decode(&seq.get_toks()[seq.prompt_tokens()..], false)
                     {
@@ -132,7 +133,7 @@ macro_rules! handle_pipeline_forward_error {
                             id: seq.id().to_string(),
                             choices: group.get_choices().to_vec(),
                             created: seq.creation_time(),
-                            model: $pipeline.name(),
+                            model: pipeline.name(),
                             system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                             object: "chat.completion".to_string(),
                             usage: group.get_usage(),
@@ -149,7 +150,7 @@ macro_rules! handle_pipeline_forward_error {
                             id: seq.id().to_string(),
                             choices: group.get_completion_choices().to_vec(),
                             created: seq.creation_time(),
-                            model: $pipeline.name(),
+                            model: pipeline.name(),
                             system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                             object: "text_completion".to_string(),
                             usage: group.get_usage(),
@@ -168,7 +169,7 @@ macro_rules! handle_pipeline_forward_error {
                     seq.set_state(SequenceState::Error);
                 }
 
-                Engine::set_none_cache(&mut *$pipeline);
+                Engine::set_none_cache(&mut *pipeline);
                 $prefix_cacher.evict_all_to_cpu().unwrap();
 
                 continue $label;
@@ -190,13 +191,34 @@ macro_rules! get_mut_group {
 
 #[macro_export]
 macro_rules! get_bias_if_not_allowed {
-    ($pipeline:expr, $rx:expr, $next_token_id:expr) => {
-        if $pipeline.tok_trie().token_allowed($rx, $next_token_id) {
+    ($tok_trie:expr, $rx:expr, $next_token_id:expr) => {
+        if $tok_trie.token_allowed($rx, $next_token_id) {
             None
         } else {
-            let mut token_set = $pipeline.tok_trie().alloc_token_set();
-            $pipeline.tok_trie().compute_bias($rx, &mut token_set);
+            let mut token_set = $tok_trie.alloc_token_set();
+            $tok_trie.compute_bias($rx, &mut token_set);
             Some(token_set)
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! sample_async {
+    (
+        $use_async_pool: expr,
+        $sampler: expr,
+        $logits: expr,
+        $ctx: expr,
+        $return_logprobs: expr,
+        $rng: expr
+     ) => {
+        if $use_async_pool {
+            tokio_rayon::spawn(move || {
+                $sampler.sample($logits, Some(&$ctx), $return_logprobs, $rng)
+            })
+            .await?
+        } else {
+            $sampler.sample($logits, Some(&$ctx), $return_logprobs, $rng)?
         }
     };
 }

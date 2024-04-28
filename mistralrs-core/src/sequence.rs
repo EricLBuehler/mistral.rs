@@ -2,6 +2,7 @@ use std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
     sync::mpsc::{SendError, Sender},
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -66,7 +67,7 @@ pub struct Sequence {
     prompt_len: usize,
     max_len: Option<usize>,
     timestamp: u128,
-    sampler: Sampler,
+    sampler: Arc<Sampler>,
     stop_tokens: Vec<u32>,
     stop_strings: Vec<String>,
     return_logprobs: bool,
@@ -132,7 +133,7 @@ impl Sequence {
                 None
             },
             responder,
-            sampler,
+            sampler: sampler.into(),
             stop_tokens,
             stop_strings,
             max_len,
@@ -236,8 +237,8 @@ impl Sequence {
         self.xlora_cache.is_some()
     }
 
-    pub fn sampler(&mut self) -> &mut Sampler {
-        &mut self.sampler
+    pub fn sampler(&mut self) -> Arc<Sampler> {
+        self.sampler.clone()
     }
 
     pub fn add_token(

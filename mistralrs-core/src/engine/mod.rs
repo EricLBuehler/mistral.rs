@@ -3,17 +3,20 @@ use std::{
     collections::{HashMap, VecDeque},
     iter::zip,
     rc::Rc,
-    sync::{mpsc::Receiver, Mutex},
+    sync::{mpsc::Receiver, Arc, Mutex},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use crate::{
-    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
-    handle_seq_error_ok, handle_seq_error_stateaware_ok,
+    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
+    get_bias_if_not_allowed, handle_seq_error_ok, handle_seq_error_stateaware_ok,
     response::CompletionChoice,
-    CompletionResponse, RequestMessage,
+    sample_async, sampler, CompletionResponse, RequestMessage,
 };
-use candle_core::{quantized::GgmlDType, Result, Tensor};
+use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
+use futures::future;
+use rand::SeedableRng;
+use rand_isaac::Isaac64Rng;
 use tracing::warn;
 
 use crate::{
@@ -36,7 +39,7 @@ const SEED: u64 = 0;
 pub struct Engine {
     rx: Receiver<Request>,
     isq_rx: Receiver<GgmlDType>,
-    pipeline: Box<Mutex<dyn Pipeline>>,
+    pipeline: Arc<Mutex<dyn Pipeline>>,
     scheduler: Scheduler<VecDeque<Sequence>>,
     id: usize,
     truncate_sequence: bool,
@@ -51,7 +54,7 @@ impl Engine {
     pub fn new(
         rx: Receiver<Request>,
         isq_rx: Receiver<GgmlDType>,
-        pipeline: Box<Mutex<dyn Pipeline>>,
+        pipeline: Arc<Mutex<dyn Pipeline>>,
         method: SchedulerMethod,
         truncate_sequence: bool,
         no_kv_cache: bool,
@@ -82,7 +85,8 @@ impl Engine {
         }
     }
 
-    pub fn run(&mut self) {
+    pub async fn run(&mut self) {
+        let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
         let mut last_completion_ids: Vec<usize> = vec![];
         'lp: loop {
             while let Ok(request) = self.rx.try_recv() {
@@ -90,9 +94,8 @@ impl Engine {
             }
             let run_start = Instant::now();
             let mut scheduled = self.scheduler.schedule();
-            let mut pipeline = get_mut_arcmutex!(self.pipeline);
             if let Ok(dtype) = self.isq_rx.try_recv() {
-                if let Err(e) = pipeline.re_isq_model(dtype) {
+                if let Err(e) = get_mut_arcmutex!(self.pipeline).re_isq_model(dtype) {
                     warn!("ISQ requantization failed: {e:?}");
                 }
             }
@@ -100,31 +103,45 @@ impl Engine {
             if scheduled.completion.len() > 0 {
                 let current_completion_ids: Vec<usize> =
                     scheduled.completion.iter().map(|seq| *seq.id()).collect();
-                // Run the completion seqs
-                if !self.no_kv_cache && last_completion_ids != current_completion_ids {
-                    Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
-                }
-                let logits = pipeline.forward(&scheduled.completion, false);
-                let logits = handle_pipeline_forward_error!(
-                    "completion",
-                    logits,
+                let logits = {
+                    let mut pipeline = get_mut_arcmutex!(self.pipeline);
+                    // Run the completion seqs
+                    // Run the completion seqs
+                    if !self.no_kv_cache && last_completion_ids != current_completion_ids {
+                        Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
+                    }
+                    let logits = pipeline.forward(&scheduled.completion, false);
+                    let logits = handle_pipeline_forward_error!(
+                        "completion",
+                        logits,
+                        &mut scheduled.completion,
+                        pipeline,
+                        'lp,
+                        self.prefix_cacher
+                    );
+
+                    if !self.no_kv_cache {
+                        Self::clone_out_cache(&mut *pipeline, &mut scheduled.completion);
+                    } else {
+                        Self::set_none_cache(&mut *pipeline);
+                    }
+                    logits
+                };
+
+                let sampled_result = Self::sample_seqs(
+                    self.pipeline.clone(),
                     &mut scheduled.completion,
-                    pipeline,
-                    'lp,
-                    self.prefix_cacher
-                );
-
-                if !self.no_kv_cache {
-                    Self::clone_out_cache(&mut *pipeline, &mut scheduled.completion);
-                } else {
-                    Self::set_none_cache(&mut *pipeline);
-                }
-
+                    logits,
+                    &mut self.prefix_cacher,
+                    self.disable_eos_stop,
+                    rng.clone(),
+                )
+                .await;
                 handle_pipeline_forward_error!(
                     "sampling",
-                    Self::sample_seqs(&mut *pipeline, &mut scheduled.completion, logits, &mut self.prefix_cacher, self.disable_eos_stop),
+                    sampled_result,
                     &mut scheduled.completion,
-                    pipeline,
+                    get_mut_arcmutex!(self.pipeline),
                     'lp,
                     self.prefix_cacher
                 );
@@ -132,29 +149,43 @@ impl Engine {
             }
 
             if scheduled.prompt.len() > 0 {
-                // Run the prompt seqs
-                Self::set_none_cache(&mut *pipeline);
-                let logits = pipeline.forward(&scheduled.prompt, true);
-                let logits = handle_pipeline_forward_error!(
-                    "prompt",
-                    logits,
-                    &mut scheduled.prompt,
-                    pipeline,
-                    'lp,
-                    self.prefix_cacher
-                );
+                let logits = {
+                    let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
-                if !self.no_kv_cache {
-                    Self::clone_out_cache(&mut *pipeline, &mut scheduled.prompt);
-                } else {
+                    // Run the prompt seqs
                     Self::set_none_cache(&mut *pipeline);
-                }
+                    let logits = pipeline.forward(&scheduled.prompt, true);
+                    let logits = handle_pipeline_forward_error!(
+                        "prompt",
+                        logits,
+                        &mut scheduled.prompt,
+                        pipeline,
+                        'lp,
+                        self.prefix_cacher
+                    );
 
+                    if !self.no_kv_cache {
+                        Self::clone_out_cache(&mut *pipeline, &mut scheduled.prompt);
+                    } else {
+                        Self::set_none_cache(&mut *pipeline);
+                    }
+                    logits
+                };
+
+                let sampled_result = Self::sample_seqs(
+                    self.pipeline.clone(),
+                    &mut scheduled.prompt,
+                    logits,
+                    &mut self.prefix_cacher,
+                    self.disable_eos_stop,
+                    rng.clone(),
+                )
+                .await;
                 handle_pipeline_forward_error!(
                     "sampling",
-                    Self::sample_seqs(&mut *pipeline, &mut scheduled.prompt, logits, &mut self.prefix_cacher,self.disable_eos_stop,),
+                    sampled_result,
                     &mut scheduled.prompt,
-                    pipeline,
+                    get_mut_arcmutex!(self.pipeline),
                     'lp,
                     self.prefix_cacher
                 );
@@ -199,7 +230,6 @@ impl Engine {
                     );
                 }
             }
-            drop(pipeline);
             if scheduled.prompt.len() == 0
                 && scheduled.completion.len() == 0
                 && self.scheduler.waiting_len() == 0
@@ -212,21 +242,113 @@ impl Engine {
         }
     }
 
-    fn sample_seqs(
-        pipeline: &mut dyn Pipeline,
+    async fn sample_sequence(
+        logits: Tensor,
+        seq: &mut Sequence,
+        return_logprobs: bool,
+        repeat_last_n: usize,
+        tok_trie: Arc<TokTrie>,
+        rng: Arc<Mutex<Isaac64Rng>>,
+        use_async_pool: bool,
+    ) -> Result<sampler::Logprobs> {
+        let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
+        let start_at = seq.get_toks().len().saturating_sub(repeat_last_n);
+
+        let sampler = seq.sampler();
+        let logits_clone = logits.clone();
+        let ctx_clone = seq.get_toks()[start_at..].to_vec();
+        let rng_clone = rng.clone();
+        let first_lobprobs_response = sample_async!(
+            use_async_pool,
+            sampler,
+            logits_clone,
+            ctx_clone,
+            return_logprobs,
+            rng_clone
+        );
+
+        let bias_if_not_allowed = match &mut seq.recognizer {
+            SequenceRecognizer::Regex(ref mut rx) => {
+                get_bias_if_not_allowed!(tok_trie, rx.as_mut(), first_lobprobs_response.token)
+            }
+            SequenceRecognizer::Cfg(ref mut cfg) => {
+                get_bias_if_not_allowed!(tok_trie, cfg.as_mut(), first_lobprobs_response.token)
+            }
+            SequenceRecognizer::None => None,
+        };
+        let second_logprobs_response = match bias_if_not_allowed {
+            Some(token_set) => {
+                let mut acc = vec![-f32::INFINITY; tok_trie.vocab_size()];
+                token_set.apply_to(&mut acc);
+                let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), &Device::Cpu)?)?;
+
+                let ctx_clone = seq.get_toks()[start_at..].to_vec();
+                let rng_clone = rng.clone();
+                let sampler = seq.sampler();
+                sample_async!(
+                    use_async_pool,
+                    sampler,
+                    new_logits,
+                    ctx_clone,
+                    return_logprobs,
+                    rng_clone
+                )
+            }
+            None => first_lobprobs_response,
+        };
+
+        match seq.recognizer {
+            SequenceRecognizer::Regex(ref mut rx) => {
+                tok_trie.append_token(rx.as_mut(), second_logprobs_response.token);
+            }
+            SequenceRecognizer::Cfg(ref mut cfg) => {
+                tok_trie.append_token(cfg.as_mut(), second_logprobs_response.token);
+            }
+            SequenceRecognizer::None => {}
+        }
+        Ok(second_logprobs_response)
+    }
+    async fn sample_seqs(
+        pipeline: Arc<Mutex<dyn Pipeline>>,
         seqs: &mut [&mut Sequence],
         logits: Tensor,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
+        rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<()> {
         let seqs_len = seqs.len();
-        let logits_seq = logits.chunk(seqs_len, 0).unwrap();
+        let logits_seq = logits.to_device(&Device::Cpu)?.chunk(seqs_len, 0)?;
         debug_assert_eq!(logits_seq.len(), seqs_len);
-        let eos_tok = pipeline.eos_tok().to_vec();
-        for (logits_per_seq, seq) in zip(logits_seq, seqs.iter_mut()) {
-            // Sample and extract next token
-            let return_logprobs = seq.return_logprobs();
-            let sampled = pipeline.sample(logits_per_seq, seq, return_logprobs);
+
+        let (tok_trie, repeat_last_n, eos_tok, max_seq_len, pipeline_name) = {
+            let pipeline = get_mut_arcmutex!(pipeline);
+            let repeat_last_n = pipeline.get_repeat_last_n();
+            let tok_trie = pipeline.tok_trie();
+            let eos_tok = pipeline.eos_tok().to_vec();
+            let max_seq_len = pipeline.get_max_seq_len();
+            let pipeline_name = pipeline.name();
+            (tok_trie, repeat_last_n, eos_tok, max_seq_len, pipeline_name)
+        };
+
+        let use_async_pool = seqs_len > 1;
+
+        let sampling_futures: Vec<_> = zip(logits_seq, seqs.iter_mut())
+            .map(|(logits_per_seq, seq)| {
+                let return_logprobs = seq.return_logprobs();
+                Self::sample_sequence(
+                    logits_per_seq,
+                    seq,
+                    return_logprobs,
+                    repeat_last_n,
+                    tok_trie.clone(),
+                    rng.clone(),
+                    use_async_pool,
+                )
+            })
+            .collect();
+        let sampled_vec = future::join_all(sampling_futures).await;
+
+        for (sampled, seq) in zip(sampled_vec, seqs.iter_mut()) {
             let next_token = handle_seq_error_stateaware_ok!(sampled, seq);
             let next_token_id = next_token.token;
 
@@ -235,10 +357,10 @@ impl Engine {
             } else {
                 Some(eos_tok.as_ref())
             };
-            let is_done = seq.is_done(next_token_id, eos_tok, pipeline.get_max_seq_len());
+            let is_done = seq.is_done(next_token_id, eos_tok, max_seq_len);
             seq.add_token(
                 next_token.clone(),
-                pipeline.tok_trie().decode(&[next_token_id]),
+                tok_trie.decode(&[next_token_id]),
                 &is_done,
             );
             // Handle streaming requests
@@ -271,22 +393,23 @@ impl Engine {
                             prefix_cacher.add_sequence(seq);
                             prefix_cacher.evict_to_cpu()?;
                             seq.set_state(SequenceState::Done(reason));
-                            pipeline.reset_non_granular_state();
+                            get_mut_arcmutex!(pipeline).reset_non_granular_state();
                         }
 
                         if seq
                             .get_mut_group()
-                            .maybe_send_streaming_response(seq, pipeline.name())
+                            .maybe_send_streaming_response(seq, pipeline_name.clone())
                             .is_err()
                         {
                             // If we can't send the response, cancel the sequence
                             seq.set_state(SequenceState::Done(StopReason::Canceled));
-                            pipeline.reset_non_granular_state();
+                            get_mut_arcmutex!(pipeline).reset_non_granular_state();
                         }
                     }
                 }
             } else if let Some(reason) = is_done {
-                Self::finish_seq(pipeline, seq, reason, prefix_cacher)?;
+                let mut pipeline = get_mut_arcmutex!(pipeline);
+                Self::finish_seq(&mut *pipeline, seq, reason, prefix_cacher)?;
                 pipeline.reset_non_granular_state();
             }
         }
@@ -718,7 +841,6 @@ impl Engine {
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
 
         let sampler = Sampler::new(
-            SEED,
             Some(request.sampling_params.temperature.unwrap_or(1.0)),
             request.sampling_params.top_n_logprobs,
             tokenizer,

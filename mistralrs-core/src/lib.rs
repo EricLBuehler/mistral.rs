@@ -51,6 +51,7 @@ pub use response::*;
 pub use sampler::{SamplingParams, StopTokens, TopLogprob};
 pub use scheduler::SchedulerMethod;
 use serde::Serialize;
+use tokio::runtime::Runtime;
 
 /// The MistralRs struct handles sending requests to the engine.
 /// It is the core multi-threaded component of mistral.rs, and uses `mspc`
@@ -69,7 +70,7 @@ pub struct MistralRs {
 /// an Engine and a MistralRs instance. The Engine runs on a separate thread, and the MistralRs
 /// instance stays on the calling thread.
 pub struct MistralRsBuilder {
-    pipeline: Box<Mutex<dyn Pipeline>>,
+    pipeline: Arc<Mutex<dyn Pipeline>>,
     method: SchedulerMethod,
     log: Option<String>,
     truncate_sequence: Option<bool>,
@@ -80,7 +81,7 @@ pub struct MistralRsBuilder {
 }
 
 impl MistralRsBuilder {
-    pub fn new(pipeline: Box<Mutex<dyn Pipeline>>, method: SchedulerMethod) -> Self {
+    pub fn new(pipeline: Arc<Mutex<dyn Pipeline>>, method: SchedulerMethod) -> Self {
         Self {
             pipeline,
             method,
@@ -160,20 +161,22 @@ impl MistralRs {
                 .as_secs(),
             next_request_id: Mutex::new(RefCell::new(0)),
         });
-
         thread::spawn(move || {
-            let mut engine = Engine::new(
-                rx,
-                isq_rx,
-                pipeline,
-                method,
-                truncate_sequence,
-                no_kv_cache,
-                no_prefix_cache,
-                prefix_cache_n,
-                disable_eos_stop,
-            );
-            engine.run();
+            let rt = Runtime::new().unwrap();
+            rt.block_on(async move {
+                let mut engine = Engine::new(
+                    rx,
+                    isq_rx,
+                    pipeline,
+                    method,
+                    truncate_sequence,
+                    no_kv_cache,
+                    no_prefix_cache,
+                    prefix_cache_n,
+                    disable_eos_stop,
+                );
+                engine.run().await;
+            });
         });
 
         this

@@ -81,7 +81,7 @@ pub struct GGUFPipeline {
     model: Model,
     config: GGUFSpecificConfig,
     tokenizer: Arc<Tokenizer>,
-    tok_trie: TokTrie,
+    tok_trie: Arc<TokTrie>,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
     model_id: String,
@@ -319,7 +319,7 @@ impl Loader for GGUFLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-    ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
             anyhow::bail!(
                 "You are trying to in-situ quantize a GGUF model. This will not do anything."
@@ -412,11 +412,11 @@ impl Loader for GGUFLoader {
 
         let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
 
-        Ok(Box::new(Mutex::new(GGUFPipeline {
+        Ok(Arc::new(Mutex::new(GGUFPipeline {
             model,
             config: self.config,
             eos_tok: calculate_eos_tokens(&chat_template, &tokenizer),
-            tok_trie: build_tok_trie(tokenizer.clone()),
+            tok_trie: build_tok_trie(tokenizer.clone()).into(),
             tokenizer: tokenizer.into(),
             no_kv_cache: self.no_kv_cache,
             chat_template,
@@ -534,8 +534,8 @@ impl Pipeline for GGUFPipeline {
     fn get_non_granular_state(&self) -> &Option<NonGranularState> {
         &None
     }
-    fn tok_trie(&self) -> &TokTrie {
-        &self.tok_trie
+    fn tok_trie(&self) -> Arc<TokTrie> {
+        self.tok_trie.clone()
     }
     fn re_isq_model(&mut self, _dtype: GgmlDType) -> Result<()> {
         anyhow::bail!(
