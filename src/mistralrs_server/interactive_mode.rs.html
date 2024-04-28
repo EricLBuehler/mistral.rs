@@ -92,14 +92,12 @@
 <a href="#90" id="90">90</a>
 <a href="#91" id="91">91</a>
 <a href="#92" id="92">92</a>
-<a href="#93" id="93">93</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_core::{Constraint, MistralRs, Request, RequestMessage, Response, SamplingParams};
 <span class="kw">use </span>std::{
     io::{<span class="self">self</span>, Write},
-    sync::Arc,
+    sync::{mpsc::channel, Arc},
 };
-<span class="kw">use </span>tokio::sync::mpsc::channel;
 <span class="kw">use </span>tracing::{error, info};
 
 <span class="kw">pub fn </span>interactive_mode(mistralrs: Arc&lt;MistralRs&gt;) {
@@ -131,7 +129,7 @@
         user_message.insert(<span class="string">"content"</span>.to_string(), prompt);
         messages.push(user_message);
 
-        <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">10_000</span>);
+        <span class="kw">let </span>(tx, rx) = channel();
         <span class="kw">let </span>req = Request {
             id: mistralrs.next_request_id(),
             messages: RequestMessage::Chat(messages.clone()),
@@ -142,7 +140,7 @@
             constraint: Constraint::None,
             suffix: <span class="prelude-val">None</span>,
         };
-        sender.blocking_send(req).unwrap();
+        sender.send(req).unwrap();
 
         <span class="kw">let </span><span class="kw-2">mut </span>assistant_output = String::new();
         <span class="kw">loop </span>{

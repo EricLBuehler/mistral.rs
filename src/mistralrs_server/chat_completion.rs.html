@@ -265,15 +265,19 @@
 <a href="#263" id="263">263</a>
 <a href="#264" id="264">264</a>
 <a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     env,
     error::Error,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        mpsc::{channel, Receiver, Sender},
+        Arc,
+    },
     task::{Context, Poll},
     time::Duration,
 };
-<span class="kw">use </span>tokio::sync::mpsc::{channel, Receiver, Sender};
 
 <span class="kw">use </span><span class="kw">crate</span>::openai::{ChatCompletionRequest, Grammar, StopTokens};
 <span class="kw">use </span>anyhow::Result;
@@ -482,11 +486,11 @@
     State(state): State&lt;Arc&lt;MistralRs&gt;&gt;,
     Json(oairequest): Json&lt;ChatCompletionRequest&gt;,
 ) -&gt; ChatCompletionResponder {
-    <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">10_000</span>);
+    <span class="kw">let </span>(tx, rx) = channel();
     <span class="kw">let </span>request = parse_request(oairequest, state.clone(), tx);
     <span class="kw">let </span>is_streaming = request.is_streaming;
     <span class="kw">let </span>sender = state.get_sender();
-    sender.send(request).<span class="kw">await</span>.unwrap();
+    sender.send(request).unwrap();
 
     <span class="kw">if </span>is_streaming {
         <span class="kw">let </span>streamer = Streamer {
@@ -507,7 +511,7 @@
             ),
         )
     } <span class="kw">else </span>{
-        <span class="kw">let </span>response = rx.recv().<span class="kw">await</span>.unwrap();
+        <span class="kw">let </span>response = rx.recv().unwrap();
 
         <span class="kw">match </span>response {
             Response::InternalError(e) =&gt; {

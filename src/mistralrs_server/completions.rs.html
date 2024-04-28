@@ -189,8 +189,18 @@
 <a href="#187" id="187">187</a>
 <a href="#188" id="188">188</a>
 <a href="#189" id="189">189</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::{error::Error, sync::Arc};
-<span class="kw">use </span>tokio::sync::mpsc::{channel, Sender};
+<a href="#190" id="190">190</a>
+<a href="#191" id="191">191</a>
+<a href="#192" id="192">192</a>
+<a href="#193" id="193">193</a>
+<a href="#194" id="194">194</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+    error::Error,
+    sync::{
+        mpsc::{channel, Sender},
+        Arc,
+    },
+};
 
 <span class="kw">use </span><span class="kw">crate</span>::openai::{CompletionRequest, Grammar, StopTokens};
 <span class="kw">use </span>axum::{
@@ -337,7 +347,7 @@
     State(state): State&lt;Arc&lt;MistralRs&gt;&gt;,
     Json(oairequest): Json&lt;CompletionRequest&gt;,
 ) -&gt; CompletionResponder {
-    <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">10_000</span>);
+    <span class="kw">let </span>(tx, rx) = channel();
     <span class="kw">let </span>request = parse_request(oairequest, state.clone(), tx);
     <span class="kw">let </span>is_streaming = request.is_streaming;
     <span class="kw">let </span>sender = state.get_sender();
@@ -354,9 +364,9 @@
         );
     }
 
-    sender.send(request).<span class="kw">await</span>.unwrap();
+    sender.send(request).unwrap();
 
-    <span class="kw">let </span>response = rx.recv().<span class="kw">await</span>.unwrap();
+    <span class="kw">let </span>response = rx.recv().unwrap();
 
     <span class="kw">match </span>response {
         Response::InternalError(e) =&gt; {
