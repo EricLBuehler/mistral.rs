@@ -781,7 +781,6 @@
 <a href="#779" id="779">779</a>
 <a href="#780" id="780">780</a>
 <a href="#781" id="781">781</a>
-<a href="#782" id="782">782</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
@@ -867,12 +866,12 @@
     }
 
     <span class="kw">pub fn </span>run(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-        <span class="kw">let </span><span class="kw-2">mut </span>last_run = Instant::now();
         <span class="kw">let </span><span class="kw-2">mut </span>last_completion_ids: Vec&lt;usize&gt; = <span class="macro">vec!</span>[];
         <span class="lifetime">'lp</span>: <span class="kw">loop </span>{
             <span class="kw">while let </span><span class="prelude-val">Ok</span>(request) = <span class="self">self</span>.rx.try_recv() {
                 <span class="self">self</span>.add_request(request);
             }
+            <span class="kw">let </span>run_start = Instant::now();
             <span class="kw">let </span><span class="kw-2">mut </span>scheduled = <span class="self">self</span>.scheduler.schedule();
             <span class="kw">let </span><span class="kw-2">mut </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
             <span class="kw">if let </span><span class="prelude-val">Ok</span>(dtype) = <span class="self">self</span>.isq_rx.try_recv() {
@@ -958,8 +957,7 @@
             }
 
             <span class="kw">if </span><span class="self">self</span>.is_debug {
-                <span class="kw">let </span>ms_from_last_run = last_run.elapsed().as_millis();
-                last_run = Instant::now();
+                <span class="kw">let </span>ms_from_last_run = run_start.elapsed().as_millis();
                 <span class="kw">let </span>total_len = scheduled.prompt.len() + scheduled.completion.len();
                 <span class="kw">if </span>total_len &gt; <span class="number">0 </span>{
                     <span class="kw">let </span>prompt_lengths = scheduled
