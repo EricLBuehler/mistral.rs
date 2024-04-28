@@ -3,9 +3,10 @@ use std::{
     collections::{HashMap, VecDeque},
     iter::zip,
     rc::Rc,
-    sync::{mpsc::Receiver, Arc, Mutex},
+    sync::{Arc, Mutex},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::mpsc::Receiver;
 
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
@@ -235,7 +236,7 @@ impl Engine {
                 && self.scheduler.waiting_len() == 0
             {
                 // If there is nothing to do, sleep until a request comes in
-                if let Ok(request) = self.rx.recv() {
+                if let Some(request) = self.rx.recv().await {
                     self.add_request(request);
                 }
             }
@@ -688,7 +689,7 @@ impl Engine {
         {
             request
                     .response
-                    .send(Response::ValidationError(
+                    .blocking_send(Response::ValidationError(
                         "Received messages for a model which does not have a chat template. Either use a different model or pass a single string as the prompt".into(),
                     )).expect("Expected receiver.");
             return;
@@ -715,7 +716,7 @@ impl Engine {
         if formatted_prompt.is_empty() {
             request
                 .response
-                .send(Response::ValidationError(
+                .blocking_send(Response::ValidationError(
                     "Received an empty prompt.".into(),
                 ))
                 .expect("Expected receiver.");
@@ -733,7 +734,7 @@ impl Engine {
             if !self.truncate_sequence {
                 request
                     .response
-                    .send(Response::ValidationError(
+                    .blocking_send(Response::ValidationError(
                         format!("Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?", get_mut_arcmutex!(self.pipeline).get_max_seq_len()).into(),
                     )).expect("Expected receiver.");
                 return;
@@ -777,7 +778,7 @@ impl Engine {
                     if tok_trie.has_extensions(tok_trie.token(*id)) {
                         request
                             .response
-                            .send(Response::ValidationError(
+                            .blocking_send(Response::ValidationError(
                                 format!("Stop token {:?} is also a prefix of other tokens and cannot be used as a stop token.", tok_trie.token_str(*id)).into(),
                             ))
                             .expect("Expected receiver.");
@@ -831,7 +832,7 @@ impl Engine {
             Err(err) => {
                 request
                     .response
-                    .send(Response::ValidationError(
+                    .blocking_send(Response::ValidationError(
                         format!("Failed creation of logits bias. {}", err).into(),
                     ))
                     .expect("Expected receiver.");
@@ -855,7 +856,7 @@ impl Engine {
             Err(err) => {
                 request
                     .response
-                    .send(Response::ValidationError(
+                    .blocking_send(Response::ValidationError(
                         format!("Invalid grammar. {}", err).into(),
                     ))
                     .expect("Expected receiver.");

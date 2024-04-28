@@ -21,6 +21,7 @@ mistralrs-core = { version = "0.1.1", path = "../mistralrs-core" }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 either.workspace = true
+tokio.workspace = true
 cli-table = "0.4.7"
 
 [features]
