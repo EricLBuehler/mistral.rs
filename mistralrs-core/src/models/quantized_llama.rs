@@ -16,6 +16,28 @@ use super::{repeat_kv, verify_sanity_gguf, Cache};
 
 const MAX_SEQ_LEN: u32 = 4096;
 
+fn lt_mul(xs: &Tensor, w: &QMatMul, is_prompt: bool) -> Result<Tensor> {
+    if is_prompt {
+        let w = match w {
+            QMatMul::QTensor(ref qt) => qt.dequantize(xs.device())?,
+            QMatMul::Tensor(w) => w.clone(),
+        };
+
+        let w = w.to_dtype(DType::F16)?;
+        let w = match *xs.dims() {
+            [b1, b2, _, _] => w.broadcast_left((b1, b2))?.t()?,
+            [bsize, _, _] => w.broadcast_left(bsize)?.t()?,
+            _ => w.t()?,
+        };
+        // xs.matmul(&w)
+        let xs = xs.to_dtype(DType::F16)?;
+
+        xs.matmul(&w)?.to_dtype(DType::F32)
+    } else {
+        w.forward(xs)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Mlp {
     feed_forward_w1: QMatMul,
@@ -23,12 +45,15 @@ struct Mlp {
     feed_forward_w3: QMatMul,
 }
 
-impl Module for Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let w1 = self.feed_forward_w1.forward(xs)?;
-        let w3 = self.feed_forward_w3.forward(xs)?;
-        self.feed_forward_w2
-            .forward(&(candle_nn::ops::silu(&w1)? * w3)?)
+impl Mlp {
+    fn forward(&self, xs: &Tensor, is_prompt: bool) -> Result<Tensor> {
+        // let w1 = self.feed_forward_w1.forward(xs)?;
+        let w1 = lt_mul(xs, &self.feed_forward_w1, is_prompt)?;
+        // let w3 = self.feed_forward_w3.forward(xs)?;
+        let w3 = lt_mul(xs, &self.feed_forward_w3, is_prompt)?;
+        let y = &(candle_nn::ops::silu(&w1)? * w3)?;
+        // self.feed_forward_w2.forward(y)
+        lt_mul(y, &self.feed_forward_w2, is_prompt)
     }
 }
 
@@ -42,8 +67,8 @@ enum MlpOrMoe {
     },
 }
 
-impl Module for MlpOrMoe {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl MlpOrMoe {
+    fn forward(&self, xs: &Tensor, is_prompt: bool) -> Result<Tensor> {
         match self {
             Self::MoE {
                 feed_forward_gate_inp,
@@ -98,7 +123,7 @@ impl Module for MlpOrMoe {
                     // states by `routing_weights` on the corresponding tokens (top-1 and top-2)
                     let current_state = xs.index_select(&top_x, 0)?.reshape(((), hidden_dim))?;
                     // current_hidden_states = expert_layer(current_state, routing_weights[top_x_list, idx_list, None])
-                    let current_hidden_states = expert_layer.forward(&current_state)?;
+                    let current_hidden_states = expert_layer.forward(&current_state, is_prompt)?;
                     let current_hidden_states =
                         current_hidden_states.broadcast_mul(&selected_rws)?;
                     ys = ys.index_add(&top_x, &current_hidden_states, 0)?;
@@ -107,7 +132,7 @@ impl Module for MlpOrMoe {
                 let ys = ys.reshape((b_size, seq_len, hidden_dim))?;
                 Ok(ys)
             }
-            Self::Mlp(mlp) => mlp.forward(xs),
+            Self::Mlp(mlp) => mlp.forward(xs, is_prompt),
         }
     }
 }
@@ -142,12 +167,17 @@ impl LayerWeights {
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
+        is_prompt: bool,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
-        let q = self.attention_wq.forward(x)?;
-        let k = self.attention_wk.forward(x)?;
-        let v = self.attention_wv.forward(x)?;
 
+        let q = lt_mul(x, &self.attention_wq, is_prompt)?;
+        let k = lt_mul(x, &self.attention_wk, is_prompt)?;
+        let v = lt_mul(x, &self.attention_wv, is_prompt)?;
+
+        // let q = self.attention_wq.forward(x)?;
+        // let k = self.attention_wk.forward(x)?;
+        // let v = self.attention_wv.forward(x)?;
         let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
         let v = v
@@ -192,7 +222,8 @@ impl LayerWeights {
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = att.matmul(&v.contiguous()?)?;
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
-        let y = self.attention_wo.forward(&y)?;
+        // let y = self.attention_wo.forward(&y)?;
+        let y = lt_mul(&y, &self.attention_wo, is_prompt)?;
         Ok(y)
     }
 }
@@ -423,6 +454,7 @@ impl ModelWeights {
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<usize>,
+        is_prompt: bool,
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
         let mask = if seq_len == 1 {
@@ -445,13 +477,14 @@ impl ModelWeights {
                 start_offsets,
                 start_offsets_kernel.clone(),
                 &mut cache[i],
+                is_prompt,
             )?;
             let x = (attn + residual)?;
 
             // MLP
             let residual = &x;
             let x = layer.ffn_norm.forward(&x)?;
-            let x = layer.mlp_or_moe.forward(&x)?;
+            let x = layer.mlp_or_moe.forward(&x, is_prompt)?;
             let x = (x + residual)?;
             layer_in = x;
         }
