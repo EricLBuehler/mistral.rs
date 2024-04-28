@@ -1,4 +1,5 @@
-use std::sync::{mpsc::channel, Arc};
+use std::sync::Arc;
+use tokio::sync::mpsc::channel;
 
 use candle_core::Device;
 use mistralrs::{
@@ -36,7 +37,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
 fn main() -> anyhow::Result<()> {
     let mistralrs = setup()?;
 
-    let (tx, rx) = channel();
+    let (tx, mut rx) = channel(10_000);
     let request = Request {
         messages: RequestMessage::Completion {
             text: "I like to code in the following language: ".to_string(),
@@ -51,9 +52,9 @@ fn main() -> anyhow::Result<()> {
         constraint: Constraint::Regex("(- [^\n]*\n)+(- [^\n]*)(\n\n)?".to_string()), // Bullet list regex
         suffix: None,
     };
-    mistralrs.get_sender().send(request)?;
+    mistralrs.get_sender().blocking_send(request)?;
 
-    let response = rx.recv().unwrap();
+    let response = rx.blocking_recv().unwrap();
     match response {
         Response::CompletionDone(c) => println!("Text: {}", c.choices[0].text),
         _ => unreachable!(),
