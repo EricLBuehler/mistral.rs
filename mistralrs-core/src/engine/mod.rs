@@ -885,6 +885,18 @@ impl Engine {
                 return;
             }
         };
+
+        if request.sampling_params.n_choices == 0 {
+            request
+                .response
+                .send(Response::ValidationError(
+                    "Number of choices must be greater than 0.".into(),
+                ))
+                .await
+                .expect("Expected receiver.");
+            return;
+        }
+
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {
             let seq = Sequence::new_waiting(

@@ -20,7 +20,7 @@ pub enum StopTokens {
     Ids(Vec<u32>),
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 /// Sampling params are used to control sampling.
 pub struct SamplingParams {
     pub temperature: Option<f64>,
@@ -33,6 +33,23 @@ pub struct SamplingParams {
     pub max_len: Option<usize>,
     pub logits_bias: Option<HashMap<u32, f32>>,
     pub n_choices: usize,
+}
+
+impl Default for SamplingParams {
+    fn default() -> Self {
+        Self {
+            temperature: None,
+            top_k: None,
+            top_p: None,
+            top_n_logprobs: 0,
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop_toks: None,
+            max_len: None,
+            logits_bias: None,
+            n_choices: 1,
+        }
+    }
 }
 
 /// Sampler for sampling.
