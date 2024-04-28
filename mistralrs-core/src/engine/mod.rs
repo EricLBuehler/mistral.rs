@@ -89,7 +89,7 @@ impl Engine {
         let mut last_completion_ids: Vec<usize> = vec![];
         'lp: loop {
             while let Ok(request) = self.rx.try_recv() {
-                self.add_request(request);
+                self.add_request(request).await;
             }
             let run_start = Instant::now();
             let mut scheduled = self.scheduler.schedule();
@@ -103,26 +103,31 @@ impl Engine {
                 let current_completion_ids: Vec<usize> =
                     scheduled.completion.iter().map(|seq| *seq.id()).collect();
                 let logits = {
-                    let mut pipeline = get_mut_arcmutex!(self.pipeline);
-                    // Run the completion seqs
-                    // Run the completion seqs
-                    if !self.no_kv_cache && last_completion_ids != current_completion_ids {
-                        Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
-                    }
-                    let logits = pipeline.forward(&scheduled.completion, false);
+                    let logits = {
+                        let mut pipeline = get_mut_arcmutex!(self.pipeline);
+                        // Run the completion seqs
+                        // Run the completion seqs
+                        if !self.no_kv_cache && last_completion_ids != current_completion_ids {
+                            Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
+                        }
+                        pipeline.forward(&scheduled.completion, false)
+                    };
                     let logits = handle_pipeline_forward_error!(
                         "completion",
                         logits,
                         &mut scheduled.completion,
-                        pipeline,
+                        self.pipeline,
                         'lp,
                         self.prefix_cacher
                     );
 
-                    if !self.no_kv_cache {
-                        Self::clone_out_cache(&mut *pipeline, &mut scheduled.completion);
-                    } else {
-                        Self::set_none_cache(&mut *pipeline);
+                    {
+                        let mut pipeline = get_mut_arcmutex!(self.pipeline);
+                        if !self.no_kv_cache {
+                            Self::clone_out_cache(&mut *pipeline, &mut scheduled.completion);
+                        } else {
+                            Self::set_none_cache(&mut *pipeline);
+                        }
                     }
                     logits
                 };
@@ -140,7 +145,7 @@ impl Engine {
                     "sampling",
                     sampled_result,
                     &mut scheduled.completion,
-                    get_mut_arcmutex!(self.pipeline),
+                    self.pipeline,
                     'lp,
                     self.prefix_cacher
                 );
@@ -153,23 +158,25 @@ impl Engine {
 
                     // Run the prompt seqs
                     Self::set_none_cache(&mut *pipeline);
-                    let logits = pipeline.forward(&scheduled.prompt, true);
-                    let logits = handle_pipeline_forward_error!(
-                        "prompt",
-                        logits,
-                        &mut scheduled.prompt,
-                        pipeline,
-                        'lp,
-                        self.prefix_cacher
-                    );
+                    pipeline.forward(&scheduled.prompt, true)
+                };
+                let logits = handle_pipeline_forward_error!(
+                    "prompt",
+                    logits,
+                    &mut scheduled.prompt,
+                    self.pipeline,
+                    'lp,
+                    self.prefix_cacher
+                );
 
+                {
+                    let mut pipeline = get_mut_arcmutex!(self.pipeline);
                     if !self.no_kv_cache {
                         Self::clone_out_cache(&mut *pipeline, &mut scheduled.prompt);
                     } else {
                         Self::set_none_cache(&mut *pipeline);
                     }
-                    logits
-                };
+                }
 
                 let sampled_result = Self::sample_seqs(
                     self.pipeline.clone(),
@@ -184,7 +191,7 @@ impl Engine {
                     "sampling",
                     sampled_result,
                     &mut scheduled.prompt,
-                    get_mut_arcmutex!(self.pipeline),
+                    self.pipeline,
                     'lp,
                     self.prefix_cacher
                 );
@@ -235,7 +242,7 @@ impl Engine {
             {
                 // If there is nothing to do, sleep until a request comes in
                 if let Some(request) = self.rx.recv().await {
-                    self.add_request(request);
+                    self.add_request(request).await;
                 }
             }
         }
@@ -677,7 +684,7 @@ impl Engine {
         }
     }
 
-    fn add_request(&mut self, request: Request) {
+    async fn add_request(&mut self, request: Request) {
         let is_chat = matches!(request.messages, RequestMessage::Chat(_));
         let echo_prompt = matches!(
             request.messages,
@@ -698,19 +705,17 @@ impl Engine {
         {
             request
                     .response
-                    .blocking_send(Response::ValidationError(
+                    .send(Response::ValidationError(
                         "Received messages for a model which does not have a chat template. Either use a different model or pass a single string as the prompt".into(),
-                    )).expect("Expected receiver.");
+                    )).await.expect("Expected receiver.");
             return;
         }
 
         let mut force_tokens = None;
         let formatted_prompt = match request.messages {
             RequestMessage::Chat(messages) => {
-                handle_seq_error!(
-                    get_mut_arcmutex!(self.pipeline).apply_chat_template(messages, true),
-                    request.response
-                )
+                let template = get_mut_arcmutex!(self.pipeline).apply_chat_template(messages, true);
+                handle_seq_error!(template, request.response)
             }
             RequestMessage::Completion { text, .. } => text,
             RequestMessage::CompletionTokens(it) => {
@@ -725,27 +730,28 @@ impl Engine {
         if formatted_prompt.is_empty() {
             request
                 .response
-                .blocking_send(Response::ValidationError(
+                .send(Response::ValidationError(
                     "Received an empty prompt.".into(),
                 ))
+                .await
                 .expect("Expected receiver.");
             return;
         }
         let mut prompt = match force_tokens {
             Some(tks) => tks,
-            None => handle_seq_error!(
-                get_mut_arcmutex!(self.pipeline).tokenize_prompt(&formatted_prompt),
-                request.response
-            ),
+            None => {
+                let prompt = get_mut_arcmutex!(self.pipeline).tokenize_prompt(&formatted_prompt);
+                handle_seq_error!(prompt, request.response)
+            }
         };
 
         if prompt.len() > get_mut_arcmutex!(self.pipeline).get_max_seq_len() {
             if !self.truncate_sequence {
                 request
                     .response
-                    .blocking_send(Response::ValidationError(
+                    .send(Response::ValidationError(
                         format!("Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?", get_mut_arcmutex!(self.pipeline).get_max_seq_len()).into(),
-                    )).expect("Expected receiver.");
+                    )).await.expect("Expected receiver.");
                 return;
             } else {
                 let prompt_len = prompt.len();
@@ -780,17 +786,19 @@ impl Engine {
         let (stop_toks, stop_strings) = match request.sampling_params.stop_toks {
             None => (vec![], vec![]),
             Some(StopTokens::Ids(ref i)) => {
-                let pipeline = get_mut_arcmutex!(self.pipeline);
-                let tok_trie = pipeline.tok_trie();
+                let tok_trie = {
+                    let pipeline = get_mut_arcmutex!(self.pipeline);
+                    pipeline.tok_trie()
+                };
                 for id in i {
                     // We can't use ` ` (space) as a stop token because other tokens like ` moon` start with a space.
                     if tok_trie.has_extensions(tok_trie.token(*id)) {
                         request
                             .response
-                            .blocking_send(Response::ValidationError(
+                            .send(Response::ValidationError(
                                 format!("Stop token {:?} is also a prefix of other tokens and cannot be used as a stop token.", tok_trie.token_str(*id)).into(),
                             ))
-                            .expect("Expected receiver.");
+                            .await .expect("Expected receiver.");
                         return;
                     }
                 }
@@ -801,9 +809,12 @@ impl Engine {
                 let mut stop_toks = Vec::new();
                 let mut stop_strings: Vec<String> = Vec::new();
 
-                let pipeline = get_mut_arcmutex!(self.pipeline);
-                let tok_trie = pipeline.tok_trie();
-                let tokenizer = pipeline.tokenizer();
+                let (tok_trie, tokenizer) = {
+                    let pipeline = get_mut_arcmutex!(self.pipeline);
+                    let tok_trie = pipeline.tok_trie();
+                    let tokenizer = pipeline.tokenizer();
+                    (tok_trie, tokenizer)
+                };
 
                 for stop_txt in s {
                     let encoded = tokenizer.encode(stop_txt.to_string(), false);
@@ -841,9 +852,10 @@ impl Engine {
             Err(err) => {
                 request
                     .response
-                    .blocking_send(Response::ValidationError(
+                    .send(Response::ValidationError(
                         format!("Failed creation of logits bias. {}", err).into(),
                     ))
+                    .await
                     .expect("Expected receiver.");
                 return;
             }
@@ -865,9 +877,10 @@ impl Engine {
             Err(err) => {
                 request
                     .response
-                    .blocking_send(Response::ValidationError(
+                    .send(Response::ValidationError(
                         format!("Invalid grammar. {}", err).into(),
                     ))
+                    .await
                     .expect("Expected receiver.");
                 return;
             }
