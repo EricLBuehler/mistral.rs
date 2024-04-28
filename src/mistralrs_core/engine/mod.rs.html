@@ -903,6 +903,16 @@
 <a href="#901" id="901">901</a>
 <a href="#902" id="902">902</a>
 <a href="#903" id="903">903</a>
+<a href="#904" id="904">904</a>
+<a href="#905" id="905">905</a>
+<a href="#906" id="906">906</a>
+<a href="#907" id="907">907</a>
+<a href="#908" id="908">908</a>
+<a href="#909" id="909">909</a>
+<a href="#910" id="910">910</a>
+<a href="#911" id="911">911</a>
+<a href="#912" id="912">912</a>
+<a href="#913" id="913">913</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
@@ -1720,7 +1730,6 @@
                 (stop_toks, stop_strings)
             }
         };
-
         <span class="kw">let </span>group = Rc::new(RefCell::new(SequenceGroup::new(
             request.sampling_params.n_choices,
             request.is_streaming,
@@ -1767,6 +1776,17 @@
                 <span class="kw">return</span>;
             }
         };
+
+        <span class="kw">if </span>request.sampling_params.n_choices == <span class="number">0 </span>{
+            request
+                .response
+                .send(Response::ValidationError(
+                    <span class="string">"Number of choices must be greater than 0."</span>.into(),
+                ))
+                .expect(<span class="string">"Expected receiver."</span>);
+            <span class="kw">return</span>;
+        }
+
         <span class="comment">// Add sequences
         </span><span class="kw">for </span>response_index <span class="kw">in </span><span class="number">0</span>..request.sampling_params.n_choices {
             <span class="kw">let </span>seq = Sequence::new_waiting(

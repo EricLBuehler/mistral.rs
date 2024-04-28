@@ -340,6 +340,23 @@
 <a href="#338" id="338">338</a>
 <a href="#339" id="339">339</a>
 <a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a>
+<a href="#342" id="342">342</a>
+<a href="#343" id="343">343</a>
+<a href="#344" id="344">344</a>
+<a href="#345" id="345">345</a>
+<a href="#346" id="346">346</a>
+<a href="#347" id="347">347</a>
+<a href="#348" id="348">348</a>
+<a href="#349" id="349">349</a>
+<a href="#350" id="350">350</a>
+<a href="#351" id="351">351</a>
+<a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a>
+<a href="#354" id="354">354</a>
+<a href="#355" id="355">355</a>
+<a href="#356" id="356">356</a>
+<a href="#357" id="357">357</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -362,7 +379,7 @@
     Ids(Vec&lt;u32&gt;),
 }
 
-<span class="attr">#[derive(Clone, Debug, Default)]
+<span class="attr">#[derive(Clone, Debug)]
 </span><span class="doccomment">/// Sampling params are used to control sampling.
 </span><span class="kw">pub struct </span>SamplingParams {
     <span class="kw">pub </span>temperature: <span class="prelude-ty">Option</span>&lt;f64&gt;,
@@ -375,6 +392,23 @@
     <span class="kw">pub </span>max_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="kw">pub </span>logits_bias: <span class="prelude-ty">Option</span>&lt;HashMap&lt;u32, f32&gt;&gt;,
     <span class="kw">pub </span>n_choices: usize,
+}
+
+<span class="kw">impl </span>Default <span class="kw">for </span>SamplingParams {
+    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{
+            temperature: <span class="prelude-val">None</span>,
+            top_k: <span class="prelude-val">None</span>,
+            top_p: <span class="prelude-val">None</span>,
+            top_n_logprobs: <span class="number">0</span>,
+            frequency_penalty: <span class="prelude-val">None</span>,
+            presence_penalty: <span class="prelude-val">None</span>,
+            stop_toks: <span class="prelude-val">None</span>,
+            max_len: <span class="prelude-val">None</span>,
+            logits_bias: <span class="prelude-val">None</span>,
+            n_choices: <span class="number">1</span>,
+        }
+    }
 }
 
 <span class="doccomment">/// Sampler for sampling.
