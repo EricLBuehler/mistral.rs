@@ -502,7 +502,7 @@ impl XLoraLlama {
             )?;
         }
         let x = x.to_device(&self.device)?;
-        self.ln_f.forward(&x)?.to_dtype(DType::F32)
+        self.ln_f.forward(&x)
     }
 
     #[allow(clippy::too_many_arguments)]
