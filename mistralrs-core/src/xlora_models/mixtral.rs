@@ -3,7 +3,7 @@
 /// Mixtral Model
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
-use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, Result, Tensor};
 use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 use std::sync::Arc;
@@ -675,25 +675,20 @@ impl XLoraModel {
         tgt_len: usize,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
-        // Sliding window mask?
-        let mask: Vec<_> = (0..tgt_len)
+        let t = tgt_len;
+        let u = seqlen_offset + tgt_len;
+        let mask: Vec<_> = (0..t)
             .flat_map(|i| {
-                (0..tgt_len).map(move |j| {
-                    if i < j || j + self.sliding_window < i {
-                        f32::NEG_INFINITY
-                    } else {
+                (0..u).map(move |j| {
+                    if j + t + self.sliding_window > i + u {
                         0.
+                    } else {
+                        f32::NEG_INFINITY
                     }
                 })
             })
             .collect();
-        let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
-        let mask = if seqlen_offset > 0 {
-            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, &self.device)?;
-            Tensor::cat(&[&mask0, &mask], D::Minus1)?
-        } else {
-            mask
-        };
+        let mask = Tensor::from_slice(&mask, (t, u), &self.device)?;
         mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
             .to_dtype(self.dtype)
     }

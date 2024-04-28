@@ -9,6 +9,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     device_map::DeviceMapper,
+    impl_mask,
     layers::RmsNorm,
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
@@ -43,18 +44,7 @@ impl Cache {
         })
     }
 
-    fn mask(&mut self, t: usize, u: usize, device: &Device) -> Result<Tensor> {
-        if let Some(mask) = self.masks.get(&(t, u)) {
-            Ok(mask.clone())
-        } else {
-            let mask: Vec<_> = (0..t)
-                .flat_map(|i| (0..u).map(move |j| u8::from(j + t > i + u)))
-                .collect();
-            let mask = Tensor::from_slice(&mask, (t, u), device)?;
-            self.masks.insert((t, u), mask.clone());
-            Ok(mask)
-        }
-    }
+    impl_mask!();
 }
 
 #[derive(Debug, Clone)]
