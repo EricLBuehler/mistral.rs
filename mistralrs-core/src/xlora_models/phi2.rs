@@ -126,7 +126,7 @@ fn get_mask(size: usize, offset: usize, device: &Device) -> Result<Tensor> {
     let mask: Vec<_> = (0..t)
         .flat_map(|i| (0..u).map(move |j| u8::from(j + t > i + u)))
         .collect();
-    Tensor::from_slice(&mask, (t, u), &device)
+    Tensor::from_slice(&mask, (t, u), device)
 }
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
