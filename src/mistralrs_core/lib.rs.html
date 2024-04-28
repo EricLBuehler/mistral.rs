@@ -247,6 +247,9 @@
 <a href="#245" id="245">245</a>
 <a href="#246" id="246">246</a>
 <a href="#247" id="247">247</a>
+<a href="#248" id="248">248</a>
+<a href="#249" id="249">249</a>
+<a href="#250" id="250">250</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -300,6 +303,7 @@
 <span class="kw">pub use </span>sampler::{SamplingParams, StopTokens, TopLogprob};
 <span class="kw">pub use </span>scheduler::SchedulerMethod;
 <span class="kw">use </span>serde::Serialize;
+<span class="kw">use </span>tokio::runtime::Runtime;
 
 <span class="doccomment">/// The MistralRs struct handles sending requests to the engine.
 /// It is the core multi-threaded component of mistral.rs, and uses `mspc`
@@ -318,7 +322,7 @@
 /// an Engine and a MistralRs instance. The Engine runs on a separate thread, and the MistralRs
 /// instance stays on the calling thread.
 </span><span class="kw">pub struct </span>MistralRsBuilder {
-    pipeline: Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
+    pipeline: Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
     method: SchedulerMethod,
     log: <span class="prelude-ty">Option</span>&lt;String&gt;,
     truncate_sequence: <span class="prelude-ty">Option</span>&lt;bool&gt;,
@@ -329,7 +333,7 @@
 }
 
 <span class="kw">impl </span>MistralRsBuilder {
-    <span class="kw">pub fn </span>new(pipeline: Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;, method: SchedulerMethod) -&gt; <span class="self">Self </span>{
+    <span class="kw">pub fn </span>new(pipeline: Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;, method: SchedulerMethod) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             pipeline,
             method,
@@ -409,20 +413,22 @@
                 .as_secs(),
             next_request_id: Mutex::new(RefCell::new(<span class="number">0</span>)),
         });
-
         thread::spawn(<span class="kw">move </span>|| {
-            <span class="kw">let </span><span class="kw-2">mut </span>engine = Engine::new(
-                rx,
-                isq_rx,
-                pipeline,
-                method,
-                truncate_sequence,
-                no_kv_cache,
-                no_prefix_cache,
-                prefix_cache_n,
-                disable_eos_stop,
-            );
-            engine.run();
+            <span class="kw">let </span>rt = Runtime::new().unwrap();
+            rt.block_on(<span class="kw">async move </span>{
+                <span class="kw">let </span><span class="kw-2">mut </span>engine = Engine::new(
+                    rx,
+                    isq_rx,
+                    pipeline,
+                    method,
+                    truncate_sequence,
+                    no_kv_cache,
+                    no_prefix_cache,
+                    prefix_cache_n,
+                    disable_eos_stop,
+                );
+                engine.run().<span class="kw">await</span>;
+            });
         });
 
         this

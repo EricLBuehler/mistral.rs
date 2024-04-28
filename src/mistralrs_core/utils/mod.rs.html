@@ -202,6 +202,28 @@
 <a href="#200" id="200">200</a>
 <a href="#201" id="201">201</a>
 <a href="#202" id="202">202</a>
+<a href="#203" id="203">203</a>
+<a href="#204" id="204">204</a>
+<a href="#205" id="205">205</a>
+<a href="#206" id="206">206</a>
+<a href="#207" id="207">207</a>
+<a href="#208" id="208">208</a>
+<a href="#209" id="209">209</a>
+<a href="#210" id="210">210</a>
+<a href="#211" id="211">211</a>
+<a href="#212" id="212">212</a>
+<a href="#213" id="213">213</a>
+<a href="#214" id="214">214</a>
+<a href="#215" id="215">215</a>
+<a href="#216" id="216">216</a>
+<a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a>
+<a href="#219" id="219">219</a>
+<a href="#220" id="220">220</a>
+<a href="#221" id="221">221</a>
+<a href="#222" id="222">222</a>
+<a href="#223" id="223">223</a>
+<a href="#224" id="224">224</a>
 </pre></div><pre class="rust"><code><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>tokens;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>varbuilder_utils;
 
@@ -290,6 +312,7 @@
         <span class="kw">match </span><span class="macro-nonterminal">$fallible </span>{
             <span class="prelude-val">Ok</span>(v) =&gt; v,
             <span class="prelude-val">Err</span>(e) =&gt; {
+                <span class="kw">let </span><span class="kw-2">mut </span>pipeline = <span class="macro-nonterminal">$pipeline</span>;
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::response::Response</span>;
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::sequence::SequenceState</span>;
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::Engine</span>;
@@ -298,8 +321,8 @@
                 <span class="macro">error!</span>(<span class="string">"{} - Model failed with error: {:?}"</span>, <span class="macro-nonterminal">$stage</span>, <span class="kw-2">&amp;</span>e);
                 <span class="kw">for </span>seq <span class="kw">in </span><span class="macro-nonterminal">$seq_slice</span>.iter_mut() {
                     <span class="comment">// Step 1: Add all choices to groups
-                    </span><span class="kw">let </span>res = <span class="kw">match </span><span class="macro-nonterminal">$pipeline
-                        </span>.tokenizer()
+                    </span><span class="kw">let </span>res = <span class="kw">match </span>pipeline
+                        .tokenizer()
                         .decode(<span class="kw-2">&amp;</span>seq.get_toks()[seq.prompt_tokens()..], <span class="bool-val">false</span>)
                     {
                         <span class="prelude-val">Ok</span>(v) =&gt; v,
@@ -336,7 +359,7 @@
                             id: seq.id().to_string(),
                             choices: group.get_choices().to_vec(),
                             created: seq.creation_time(),
-                            model: <span class="macro-nonterminal">$pipeline</span>.name(),
+                            model: pipeline.name(),
                             system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                             object: <span class="string">"chat.completion"</span>.to_string(),
                             usage: group.get_usage(),
@@ -353,7 +376,7 @@
                             id: seq.id().to_string(),
                             choices: group.get_completion_choices().to_vec(),
                             created: seq.creation_time(),
-                            model: <span class="macro-nonterminal">$pipeline</span>.name(),
+                            model: pipeline.name(),
                             system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                             object: <span class="string">"text_completion"</span>.to_string(),
                             usage: group.get_usage(),
@@ -372,7 +395,7 @@
                     </span>seq.set_state(SequenceState::Error);
                 }
 
-                Engine::set_none_cache(<span class="kw-2">&amp;mut *</span><span class="macro-nonterminal">$pipeline</span>);
+                Engine::set_none_cache(<span class="kw-2">&amp;mut *</span>pipeline);
                 <span class="macro-nonterminal">$prefix_cacher</span>.evict_all_to_cpu().unwrap();
 
                 <span class="kw">continue </span><span class="macro-nonterminal">$label</span>;
@@ -394,14 +417,35 @@
 
 <span class="attr">#[macro_export]
 </span><span class="macro">macro_rules! </span>get_bias_if_not_allowed {
-    (<span class="macro-nonterminal">$pipeline</span>:expr, <span class="macro-nonterminal">$rx</span>:expr, <span class="macro-nonterminal">$next_token_id</span>:expr) =&gt; {
-        <span class="kw">if </span><span class="macro-nonterminal">$pipeline</span>.tok_trie().token_allowed(<span class="macro-nonterminal">$rx</span>, <span class="macro-nonterminal">$next_token_id</span>) {
+    (<span class="macro-nonterminal">$tok_trie</span>:expr, <span class="macro-nonterminal">$rx</span>:expr, <span class="macro-nonterminal">$next_token_id</span>:expr) =&gt; {
+        <span class="kw">if </span><span class="macro-nonterminal">$tok_trie</span>.token_allowed(<span class="macro-nonterminal">$rx</span>, <span class="macro-nonterminal">$next_token_id</span>) {
             <span class="prelude-val">None
         </span>} <span class="kw">else </span>{
-            <span class="kw">let </span><span class="kw-2">mut </span>token_set = <span class="macro-nonterminal">$pipeline</span>.tok_trie().alloc_token_set();
-            <span class="macro-nonterminal">$pipeline</span>.tok_trie().compute_bias(<span class="macro-nonterminal">$rx</span>, <span class="kw-2">&amp;mut </span>token_set);
+            <span class="kw">let </span><span class="kw-2">mut </span>token_set = <span class="macro-nonterminal">$tok_trie</span>.alloc_token_set();
+            <span class="macro-nonterminal">$tok_trie</span>.compute_bias(<span class="macro-nonterminal">$rx</span>, <span class="kw-2">&amp;mut </span>token_set);
             <span class="prelude-val">Some</span>(token_set)
         }
+    };
+}
+
+<span class="attr">#[macro_export]
+</span><span class="macro">macro_rules! </span>sample_async {
+    (
+        <span class="macro-nonterminal">$use_async_pool</span>: expr,
+        <span class="macro-nonterminal">$sampler</span>: expr,
+        <span class="macro-nonterminal">$logits</span>: expr,
+        <span class="macro-nonterminal">$ctx</span>: expr,
+        <span class="macro-nonterminal">$return_logprobs</span>: expr,
+        <span class="macro-nonterminal">$rng</span>: expr
+     ) =&gt; {
+        <span class="kw">if </span><span class="macro-nonterminal">$use_async_pool </span>{
+            tokio_rayon::spawn(<span class="kw">move </span>|| {
+                <span class="macro-nonterminal">$sampler</span>.sample(<span class="macro-nonterminal">$logits</span>, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$ctx</span>), <span class="macro-nonterminal">$return_logprobs</span>, <span class="macro-nonterminal">$rng</span>)
+            })
+            .<span class="kw">await</span><span class="question-mark">?
+        </span>} <span class="kw">else </span>{
+            <span class="macro-nonterminal">$sampler</span>.sample(<span class="macro-nonterminal">$logits</span>, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$ctx</span>), <span class="macro-nonterminal">$return_logprobs</span>, <span class="macro-nonterminal">$rng</span>)<span class="question-mark">?
+        </span>}
     };
 }
 </code></pre></div></section></main></body></html>

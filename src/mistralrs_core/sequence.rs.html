@@ -524,10 +524,12 @@
 <a href="#522" id="522">522</a>
 <a href="#523" id="523">523</a>
 <a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
     sync::mpsc::{SendError, Sender},
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -592,7 +594,7 @@
     prompt_len: usize,
     max_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     timestamp: u128,
-    sampler: Sampler,
+    sampler: Arc&lt;Sampler&gt;,
     stop_tokens: Vec&lt;u32&gt;,
     stop_strings: Vec&lt;String&gt;,
     return_logprobs: bool,
@@ -658,7 +660,7 @@
                 <span class="prelude-val">None
             </span>},
             responder,
-            sampler,
+            sampler: sampler.into(),
             stop_tokens,
             stop_strings,
             max_len,
@@ -762,8 +764,8 @@
         <span class="self">self</span>.xlora_cache.is_some()
     }
 
-    <span class="kw">pub fn </span>sampler(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>Sampler {
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>.sampler
+    <span class="kw">pub fn </span>sampler(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Arc&lt;Sampler&gt; {
+        <span class="self">self</span>.sampler.clone()
     }
 
     <span class="kw">pub fn </span>add_token(

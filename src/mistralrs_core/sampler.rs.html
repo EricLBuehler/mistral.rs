@@ -335,16 +335,23 @@
 <a href="#333" id="333">333</a>
 <a href="#334" id="334">334</a>
 <a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-</span><span class="kw">use </span>std::{collections::HashMap, iter::zip, sync::Arc};
+</span><span class="kw">use </span>std::{
+    collections::HashMap,
+    iter::zip,
+    sync::{Arc, Mutex},
+};
 
 <span class="kw">use </span>candle_core::{bail, Device, Error, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>pyo3::pyclass;
-<span class="kw">use </span>rand::{
-    distributions::{Distribution, WeightedIndex},
-    SeedableRng,
-};
+<span class="kw">use </span>rand::distributions::{Distribution, WeightedIndex};
+<span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>tokenizers::Tokenizer;
 
@@ -373,7 +380,6 @@
 <span class="doccomment">/// Sampler for sampling.
 </span><span class="attr">#[derive(Clone)]
 </span><span class="kw">pub struct </span>Sampler {
-    rng: rand::rngs::StdRng,
     temperature: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     top_n_logprobs: usize,
     tokenizer: Arc&lt;Tokenizer&gt;,
@@ -405,7 +411,6 @@
 <span class="kw">impl </span>Sampler {
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>new(
-        seed: u64,
         temperature: <span class="prelude-ty">Option</span>&lt;f64&gt;,
         top_n_logprobs: usize,
         tokenizer: Arc&lt;Tokenizer&gt;,
@@ -421,7 +426,6 @@
             temperature
         };
         <span class="self">Self </span>{
-            rng: rand::rngs::StdRng::seed_from_u64(seed),
             temperature,
             top_n_logprobs,
             tokenizer,
@@ -472,7 +476,7 @@
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
     }
 
-    <span class="kw">fn </span>sample_argmax(<span class="kw-2">&amp;mut </span><span class="self">self</span>, logits: Tensor, return_logprobs: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
+    <span class="kw">fn </span>sample_argmax(<span class="kw-2">&amp;</span><span class="self">self</span>, logits: Tensor, return_logprobs: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
         <span class="kw">let </span>next_token = logits.argmax(D::Minus1)<span class="question-mark">?</span>.to_scalar::&lt;u32&gt;()<span class="question-mark">?</span>;
 
         <span class="kw">let </span>probs: Vec&lt;f32&gt; = logits.to_vec1()<span class="question-mark">?</span>;
@@ -498,13 +502,16 @@
     }
 
     <span class="kw">fn </span>sample_multinomial(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
         probs: <span class="kw-2">&amp;mut </span>Vec&lt;f32&gt;,
         argsort_indices: Vec&lt;usize&gt;,
         return_logprobs: bool,
+        rng: Arc&lt;Mutex&lt;Isaac64Rng&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
         <span class="kw">let </span>distr = WeightedIndex::new(<span class="kw-2">&amp;*</span>probs).map_err(Error::wrap)<span class="question-mark">?</span>;
-        <span class="kw">let </span>next_token = distr.sample(<span class="kw-2">&amp;mut </span><span class="self">self</span>.rng); <span class="comment">// "Find the first item which has a weight *higher* than the chosen weight."
+
+        <span class="kw">let </span><span class="kw-2">mut </span>mut_ref_rng = <span class="kw-2">&amp;mut *</span>rng.lock().expect(<span class="string">"could not lock rng mutex"</span>);
+        <span class="kw">let </span>next_token = distr.sample(<span class="kw-2">&amp;mut </span>mut_ref_rng); <span class="comment">// "Find the first item which has a weight *higher* than the chosen weight."
         </span><span class="kw">let </span>logprob = probs[next_token].log(<span class="number">10.0</span>);
 
         <span class="kw">let </span>top_logprobs = <span class="kw">if </span>return_logprobs {
@@ -525,11 +532,12 @@
     }
 
     <span class="kw">fn </span>sample_topkp(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
         probs: <span class="kw-2">&amp;mut </span>Vec&lt;f32&gt;,
         top_k: i64,
         top_p: f32,
         return_logprobs: bool,
+        rng: Arc&lt;Mutex&lt;Isaac64Rng&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>argsort_indices = (<span class="number">0</span>..probs.len()).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 
@@ -547,7 +555,7 @@
         }
 
         <span class="kw">if </span>top_p &lt;= <span class="number">0.0 </span>|| top_p &gt;= <span class="number">1.0 </span>{
-            <span class="kw">return </span><span class="self">self</span>.sample_multinomial(probs, argsort_indices, return_logprobs);
+            <span class="kw">return </span><span class="self">self</span>.sample_multinomial(probs, argsort_indices, return_logprobs, rng);
         }
         <span class="comment">// TOP P
 
@@ -566,7 +574,7 @@
         }
 
         <span class="comment">// Sample with clamped probabilities.
-        </span><span class="self">self</span>.sample_multinomial(probs, argsort_indices, return_logprobs)
+        </span><span class="self">self</span>.sample_multinomial(probs, argsort_indices, return_logprobs, rng)
     }
 
     <span class="kw">fn </span>apply_penalties(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw-2">mut </span>logits: Vec&lt;f32&gt;, context: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[u32]&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -602,10 +610,11 @@
     /// With `top-p` sampling, if the `top-p` value is `&lt;= 0.0` or `&gt;= 1.0`, multinomial sampling is used.
     /// If `frequency_penalty.is_some()` or `presence_penalty.is_some()`, then `penalty_ctxt` must be provided.
     </span><span class="kw">pub fn </span>sample(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
         logits: Tensor,
         penalty_ctxt: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[u32]&gt;,
         return_logprobs: bool,
+        rng: Arc&lt;Mutex&lt;Isaac64Rng&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
         <span class="kw">let </span>logits = <span class="self">self</span>.apply_penalties(logits.to_vec1()<span class="question-mark">?</span>, penalty_ctxt)<span class="question-mark">?</span>;
         <span class="kw">let </span>logits = <span class="kw">match </span><span class="self">self</span>.logits_bias {
@@ -618,7 +627,14 @@
                 <span class="kw">let </span>logits = (<span class="kw-2">&amp;</span>logits / temperature)<span class="question-mark">?</span>;
                 <span class="kw">let </span>probs = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>logits)<span class="question-mark">?</span>;
                 <span class="kw">let </span><span class="kw-2">mut </span>probs: Vec&lt;f32&gt; = probs.to_vec1()<span class="question-mark">?</span>;
-                <span class="self">self</span>.sample_topkp(<span class="kw-2">&amp;mut </span>probs, <span class="self">self</span>.topk, <span class="self">self</span>.topp <span class="kw">as </span>f32, return_logprobs)<span class="question-mark">?
+
+                <span class="self">self</span>.sample_topkp(
+                    <span class="kw-2">&amp;mut </span>probs,
+                    <span class="self">self</span>.topk,
+                    <span class="self">self</span>.topp <span class="kw">as </span>f32,
+                    return_logprobs,
+                    rng,
+                )<span class="question-mark">?
             </span>}
         };
         <span class="prelude-val">Ok</span>(next_token)
@@ -650,21 +666,15 @@
     </span><span class="kw">fn </span>test_argmax() {
         <span class="kw">use </span><span class="kw">super</span>::Sampler;
         <span class="kw">use </span>candle_core::{Device, Tensor};
+        <span class="kw">use </span>rand::SeedableRng;
+        <span class="kw">use </span>rand_isaac::Isaac64Rng;
+        <span class="kw">use </span>std::sync::Arc;
+        <span class="kw">use </span>std::sync::Mutex;
 
-        <span class="kw">let </span><span class="kw-2">mut </span>sampler = Sampler::new(
-            <span class="number">0</span>,
-            <span class="prelude-val">None</span>,
-            <span class="number">10</span>,
-            get_tokenizer().into(),
-            <span class="prelude-val">None</span>,
-            <span class="prelude-val">None</span>,
-            <span class="prelude-val">None</span>,
-            <span class="number">32</span>,
-            <span class="number">0.1</span>,
-        );
-
+        <span class="kw">let </span>sampler = Sampler::new(<span class="prelude-val">None</span>, <span class="number">10</span>, get_tokenizer().into(), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="number">32</span>, <span class="number">0.1</span>);
         <span class="kw">let </span>logits = Tensor::arange(<span class="number">0f32</span>, <span class="number">1024f32</span>, <span class="kw-2">&amp;</span>Device::Cpu).unwrap();
-        <span class="kw">let </span>res = sampler.sample(logits, <span class="prelude-val">None</span>, <span class="bool-val">false</span>).unwrap();
+        <span class="kw">let </span>rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(<span class="number">42</span>)));
+        <span class="kw">let </span>res = sampler.sample(logits, <span class="prelude-val">None</span>, <span class="bool-val">false</span>, rng).unwrap();
         <span class="macro">assert_eq!</span>(res.token, <span class="number">1023</span>);
         <span class="macro">assert_eq!</span>(res.top_logprobs, <span class="prelude-val">None</span>);
         <span class="macro">assert_eq!</span>(res.logprob, <span class="number">1023f64</span>.log(<span class="number">10.</span>) <span class="kw">as </span>f32)

@@ -628,7 +628,7 @@
     model: Model,
     config: GGUFSpecificConfig,
     tokenizer: Arc&lt;Tokenizer&gt;,
-    tok_trie: TokTrie,
+    tok_trie: Arc&lt;TokTrie&gt;,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
     model_id: String,
@@ -866,7 +866,7 @@
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">if </span>in_situ_quant.is_some() {
             <span class="macro">anyhow::bail!</span>(
                 <span class="string">"You are trying to in-situ quantize a GGUF model. This will not do anything."
@@ -959,11 +959,11 @@
 
         <span class="kw">let </span>chat_template: ChatTemplate = <span class="macro">deserialize_chat_template!</span>(paths, <span class="self">self</span>);
 
-        <span class="prelude-val">Ok</span>(Box::new(Mutex::new(GGUFPipeline {
+        <span class="prelude-val">Ok</span>(Arc::new(Mutex::new(GGUFPipeline {
             model,
             config: <span class="self">self</span>.config,
             eos_tok: calculate_eos_tokens(<span class="kw-2">&amp;</span>chat_template, <span class="kw-2">&amp;</span>tokenizer),
-            tok_trie: build_tok_trie(tokenizer.clone()),
+            tok_trie: build_tok_trie(tokenizer.clone()).into(),
             tokenizer: tokenizer.into(),
             no_kv_cache: <span class="self">self</span>.no_kv_cache,
             chat_template,
@@ -1081,8 +1081,8 @@
     <span class="kw">fn </span>get_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;NonGranularState&gt; {
         <span class="kw-2">&amp;</span><span class="prelude-val">None
     </span>}
-    <span class="kw">fn </span>tok_trie(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>TokTrie {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.tok_trie
+    <span class="kw">fn </span>tok_trie(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;TokTrie&gt; {
+        <span class="self">self</span>.tok_trie.clone()
     }
     <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _dtype: GgmlDType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="macro">anyhow::bail!</span>(
