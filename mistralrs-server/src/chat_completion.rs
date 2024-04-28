@@ -219,7 +219,12 @@ pub async fn chatcompletions(
     let request = parse_request(oairequest, state.clone(), tx);
     let is_streaming = request.is_streaming;
     let sender = state.get_sender();
-    sender.send(request).await.unwrap();
+
+    if let Err(e) = sender.send(request).await {
+        let e = anyhow::Error::msg(e.to_string());
+        MistralRs::maybe_log_error(state, &*e);
+        return ChatCompletionResponder::InternalError(e.into());
+    }
 
     if is_streaming {
         let streamer = Streamer {
@@ -240,7 +245,14 @@ pub async fn chatcompletions(
             ),
         )
     } else {
-        let response = rx.recv().await.unwrap();
+        let response = match rx.recv().await {
+            Some(response) => response,
+            None => {
+                let e = anyhow::Error::msg("No response received from the model.");
+                MistralRs::maybe_log_error(state, &*e);
+                return ChatCompletionResponder::InternalError(e.into());
+            }
+        };
 
         match response {
             Response::InternalError(e) => {

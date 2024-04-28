@@ -163,9 +163,20 @@ pub async fn completions(
         );
     }
 
-    sender.send(request).await.unwrap();
+    if let Err(e) = sender.send(request).await {
+        let e = anyhow::Error::msg(e.to_string());
+        MistralRs::maybe_log_error(state, &*e);
+        return CompletionResponder::InternalError(e.into());
+    }
 
-    let response = rx.recv().await.unwrap();
+    let response = match rx.recv().await {
+        Some(response) => response,
+        None => {
+            let e = anyhow::Error::msg("No response received from the model.");
+            MistralRs::maybe_log_error(state, &*e);
+            return CompletionResponder::InternalError(e.into());
+        }
+    };
 
     match response {
         Response::InternalError(e) => {

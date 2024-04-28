@@ -182,7 +182,7 @@ macro_rules! handle_pipeline_forward_error {
 macro_rules! get_mut_group {
     ($this:expr) => {
         loop {
-            if let Ok(inner) = $this.group.try_borrow_mut() {
+            if let Ok(inner) = $this.group.try_lock() {
                 break inner;
             }
         }

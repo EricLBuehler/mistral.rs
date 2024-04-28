@@ -1,8 +1,6 @@
 use std::{
-    cell::RefCell,
     collections::{HashMap, VecDeque},
     iter::zip,
-    rc::Rc,
     sync::{Arc, Mutex},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -400,6 +398,7 @@ impl Engine {
                         if seq
                             .get_mut_group()
                             .maybe_send_streaming_response(seq, pipeline_name.clone())
+                            .await
                             .is_err()
                         {
                             // If we can't send the response, cancel the sequence
@@ -409,25 +408,29 @@ impl Engine {
                     }
                 }
             } else if let Some(reason) = is_done {
-                let mut pipeline = get_mut_arcmutex!(pipeline);
-                Self::finish_seq(&mut *pipeline, seq, reason, prefix_cacher)?;
-                pipeline.reset_non_granular_state();
+                Self::finish_seq(pipeline.clone(), seq, reason, prefix_cacher).await?;
+                get_mut_arcmutex!(pipeline).reset_non_granular_state();
             }
         }
 
         Ok(())
     }
 
-    fn finish_seq(
-        pipeline: &mut dyn Pipeline,
+    async fn finish_seq(
+        pipeline: Arc<Mutex<dyn Pipeline>>,
         seq: &mut Sequence,
         reason: StopReason,
         prefix_cacher: &mut PrefixCacheManager,
     ) -> Result<()> {
         seq.set_state(SequenceState::Done(reason));
+        let (tokenizer, pipeline_name) = {
+            let pipeline = get_mut_arcmutex!(pipeline);
+            let pipeline_name = pipeline.name();
+            let tokenizer = pipeline.tokenizer();
+            (tokenizer, pipeline_name)
+        };
 
         let logprobs = if seq.return_logprobs() {
-            let tokenizer = pipeline.tokenizer().clone();
             let mut logprobs = Vec::new();
             for logprob in seq.logprobs() {
                 let resp_logprob = ResponseLogprob {
@@ -489,31 +492,37 @@ impl Engine {
 
         let group = seq.get_mut_group();
         if group.is_chat {
-            group.maybe_send_done_response(
-                ChatCompletionResponse {
-                    id: seq.id().to_string(),
-                    choices: group.get_choices().to_vec(),
-                    created: seq.creation_time(),
-                    model: pipeline.name(),
-                    system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
-                    object: "chat.completion".to_string(),
-                    usage: group.get_usage(),
-                },
-                seq.responder(),
-            );
+            group
+                .maybe_send_done_response(
+                    ChatCompletionResponse {
+                        id: seq.id().to_string(),
+                        choices: group.get_choices().to_vec(),
+                        created: seq.creation_time(),
+                        model: pipeline_name,
+                        system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                        object: "chat.completion".to_string(),
+                        usage: group.get_usage(),
+                    },
+                    seq.responder(),
+                )
+                .await
+                .map_err(candle_core::Error::msg)?;
         } else {
-            group.maybe_send_completion_done_response(
-                CompletionResponse {
-                    id: seq.id().to_string(),
-                    choices: group.get_completion_choices().to_vec(),
-                    created: seq.creation_time(),
-                    model: pipeline.name(),
-                    system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
-                    object: "text_completion".to_string(),
-                    usage: group.get_usage(),
-                },
-                seq.responder(),
-            );
+            group
+                .maybe_send_completion_done_response(
+                    CompletionResponse {
+                        id: seq.id().to_string(),
+                        choices: group.get_completion_choices().to_vec(),
+                        created: seq.creation_time(),
+                        model: pipeline_name,
+                        system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                        object: "text_completion".to_string(),
+                        usage: group.get_usage(),
+                    },
+                    seq.responder(),
+                )
+                .await
+                .map_err(candle_core::Error::msg)?;
         }
 
         Ok(())
@@ -817,7 +826,7 @@ impl Engine {
             }
         };
 
-        let group = Rc::new(RefCell::new(SequenceGroup::new(
+        let group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
             request.sampling_params.n_choices,
             request.is_streaming,
             is_chat,

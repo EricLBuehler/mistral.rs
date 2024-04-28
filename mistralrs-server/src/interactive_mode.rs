@@ -7,7 +7,7 @@ use std::{
 use tokio::sync::mpsc::channel;
 use tracing::{error, info};
 
-pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
+pub async fn interactive_mode(mistralrs: Arc<MistralRs>) {
     let sender = mistralrs.get_sender();
     let mut messages = Vec::new();
 
@@ -47,41 +47,39 @@ pub fn interactive_mode(mistralrs: Arc<MistralRs>) {
             constraint: Constraint::None,
             suffix: None,
         };
-        sender.blocking_send(req).unwrap();
+        sender.send(req).await.unwrap();
 
         let mut assistant_output = String::new();
-        loop {
-            let resp = rx.try_recv();
-            if let Ok(resp) = resp {
-                match resp {
-                    Response::Chunk(chunk) => {
-                        let choice = &chunk.choices[0];
-                        assistant_output.push_str(&choice.delta.content);
-                        print!("{}", choice.delta.content);
-                        io::stdout().flush().unwrap();
-                        if choice.finish_reason.is_some() {
-                            if matches!(choice.finish_reason.as_ref().unwrap().as_str(), "length") {
-                                print!("...");
-                            }
-                            break;
+
+        while let Some(resp) = rx.recv().await {
+            match resp {
+                Response::Chunk(chunk) => {
+                    let choice = &chunk.choices[0];
+                    assistant_output.push_str(&choice.delta.content);
+                    print!("{}", choice.delta.content);
+                    io::stdout().flush().unwrap();
+                    if choice.finish_reason.is_some() {
+                        if matches!(choice.finish_reason.as_ref().unwrap().as_str(), "length") {
+                            print!("...");
                         }
+                        break;
                     }
-                    Response::InternalError(e) => {
-                        error!("Got an internal error: {e:?}");
-                        break 'outer;
-                    }
-                    Response::ModelError(e, resp) => {
-                        error!("Got a model error: {e:?}, response: {resp:?}");
-                        break 'outer;
-                    }
-                    Response::ValidationError(e) => {
-                        error!("Got a validation error: {e:?}");
-                        break 'outer;
-                    }
-                    Response::Done(_) => unreachable!(),
-                    Response::CompletionDone(_) => unreachable!(),
-                    Response::CompletionModelError(_, _) => unreachable!(),
                 }
+                Response::InternalError(e) => {
+                    error!("Got an internal error: {e:?}");
+                    break 'outer;
+                }
+                Response::ModelError(e, resp) => {
+                    error!("Got a model error: {e:?}, response: {resp:?}");
+                    break 'outer;
+                }
+                Response::ValidationError(e) => {
+                    error!("Got a validation error: {e:?}");
+                    break 'outer;
+                }
+                Response::Done(_) => unreachable!(),
+                Response::CompletionDone(_) => unreachable!(),
+                Response::CompletionModelError(_, _) => unreachable!(),
             }
         }
         let mut assistant_message = IndexMap::new();
