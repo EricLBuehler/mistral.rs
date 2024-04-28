@@ -16,23 +16,12 @@ use super::{repeat_kv, verify_sanity_gguf, Cache};
 
 const MAX_SEQ_LEN: u32 = 4096;
 
-fn lt_mul(xs: &Tensor, w: &QMatMul, is_prompt: bool) -> Result<Tensor> {
+fn quantized_mat_mul(xs: &Tensor, w: &QMatMul, is_prompt: bool) -> Result<Tensor> {
+    // TODO: For very small prompts, we should use forward
+    // For completions with batch size > 8, we should use forward_via_f16
+    // TODO: benchmark and implement the above
     if is_prompt {
-        let w = match w {
-            QMatMul::QTensor(ref qt) => qt.dequantize(xs.device())?,
-            QMatMul::Tensor(w) => w.clone(),
-        };
-
-        let w = w.to_dtype(DType::F16)?;
-        let w = match *xs.dims() {
-            [b1, b2, _, _] => w.broadcast_left((b1, b2))?.t()?,
-            [bsize, _, _] => w.broadcast_left(bsize)?.t()?,
-            _ => w.t()?,
-        };
-        // xs.matmul(&w)
-        let xs = xs.to_dtype(DType::F16)?;
-
-        xs.matmul(&w)?.to_dtype(DType::F32)
+        w.forward_via_f16(xs)
     } else {
         w.forward(xs)
     }
@@ -47,13 +36,10 @@ struct Mlp {
 
 impl Mlp {
     fn forward(&self, xs: &Tensor, is_prompt: bool) -> Result<Tensor> {
-        // let w1 = self.feed_forward_w1.forward(xs)?;
-        let w1 = lt_mul(xs, &self.feed_forward_w1, is_prompt)?;
-        // let w3 = self.feed_forward_w3.forward(xs)?;
-        let w3 = lt_mul(xs, &self.feed_forward_w3, is_prompt)?;
+        let w1 = quantized_mat_mul(xs, &self.feed_forward_w1, is_prompt)?;
+        let w3 = quantized_mat_mul(xs, &self.feed_forward_w3, is_prompt)?;
         let y = &(candle_nn::ops::silu(&w1)? * w3)?;
-        // self.feed_forward_w2.forward(y)
-        lt_mul(y, &self.feed_forward_w2, is_prompt)
+        quantized_mat_mul(y, &self.feed_forward_w2, is_prompt)
     }
 }
 
@@ -171,13 +157,10 @@ impl LayerWeights {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
 
-        let q = lt_mul(x, &self.attention_wq, is_prompt)?;
-        let k = lt_mul(x, &self.attention_wk, is_prompt)?;
-        let v = lt_mul(x, &self.attention_wv, is_prompt)?;
+        let q = quantized_mat_mul(x, &self.attention_wq, is_prompt)?;
+        let k = quantized_mat_mul(x, &self.attention_wk, is_prompt)?;
+        let v = quantized_mat_mul(x, &self.attention_wv, is_prompt)?;
 
-        // let q = self.attention_wq.forward(x)?;
-        // let k = self.attention_wk.forward(x)?;
-        // let v = self.attention_wv.forward(x)?;
         let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
         let v = v
@@ -222,8 +205,7 @@ impl LayerWeights {
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = att.matmul(&v.contiguous()?)?;
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
-        // let y = self.attention_wo.forward(&y)?;
-        let y = lt_mul(&y, &self.attention_wo, is_prompt)?;
+        let y = quantized_mat_mul(&y, &self.attention_wo, is_prompt)?;
         Ok(y)
     }
 }

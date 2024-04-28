@@ -173,6 +173,7 @@ impl Merge for QLoraLinear {
         let (mut w_base_layer, dtype) = match &self.old {
             QMatMul::QTensor(q) => (q.dequantize(&q.device())?, q.dtype()),
             QMatMul::Tensor(_) => unreachable!(),
+            QMatMul::TensorF16(_) => todo!(),
         };
         for adapter in 0..self.scale_adapters.len() {
             w_base_layer = (w_base_layer + self.get_delta_weight(adapter))?;
