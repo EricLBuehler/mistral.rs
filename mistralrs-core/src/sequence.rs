@@ -241,6 +241,16 @@ impl Sequence {
         self.sampler.clone()
     }
 
+    /// Add a raw token. Only meant for speculative decoding usage.
+    pub fn add_tmp_token(&mut self, token: u32) {
+        self.tokens.push(token);
+    }
+
+    /// Remove `n` raw tokens. Only meant for speculative decoding usage.
+    pub fn remove_tmp_tokens(&mut self, n: usize) {
+        self.tokens.truncate(self.tokens.len() - n);
+    }
+
     pub fn add_token(
         &mut self,
         tok: Logprobs,

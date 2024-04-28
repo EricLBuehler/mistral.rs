@@ -1,6 +1,6 @@
 use super::{
-    calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
-    Pipeline, TokenSource, XLoraPaths,
+    get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths, Pipeline,
+    TokenSource, XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -11,7 +11,7 @@ use crate::utils::varbuilder_utils::from_mmaped_safetensors;
 use crate::xlora_models::{NonGranularState, XLoraConfig};
 use crate::{deserialize_chat_template, get_paths, DeviceMapMetadata};
 use crate::{
-    models::quantized_llama::ModelWeights as QLlama, sequence::Sequence, utils::tokens::get_token,
+    models::quantized_llama::ModelWeights as QLlama, utils::tokens::get_token,
     xlora_models::XLoraModelWeights as XLoraQLlama,
 };
 use anyhow::Result;
@@ -388,12 +388,9 @@ impl Loader for GGMLLoader {
 }
 
 impl Pipeline for GGMLPipeline {
-    fn forward(
+    fn forward_inputs(
         &mut self,
-        input_toks: &[&mut Sequence],
-        is_prompt: bool,
-    ) -> Result<Tensor, candle_core::Error> {
-        let ModelInputs {
+        ModelInputs {
             input_ids,
             input_ids_full,
             seqlen_offsets,
@@ -401,14 +398,8 @@ impl Pipeline for GGMLPipeline {
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full,
             context_lens,
-        } = calculate_inputs(
-            input_toks,
-            is_prompt,
-            self.is_xlora(),
-            self.device(),
-            self.no_kv_cache,
-        )
-        .unwrap();
+        }: ModelInputs,
+    ) -> Result<Tensor, candle_core::Error> {
         match self.model {
             Model::Llama(ref mut model) => model.forward(
                 &input_ids,

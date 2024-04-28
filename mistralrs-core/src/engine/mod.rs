@@ -10,6 +10,7 @@ use std::{
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
     get_bias_if_not_allowed, handle_seq_error_ok, handle_seq_error_stateaware_ok,
+    pipeline::sample_sequence,
     response::CompletionChoice,
     sample_async, sampler, CompletionResponse, RequestMessage,
 };
@@ -110,7 +111,7 @@ impl Engine {
                     if !self.no_kv_cache && last_completion_ids != current_completion_ids {
                         Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
                     }
-                    let logits = pipeline.forward(&scheduled.completion, false);
+                    let logits = pipeline.forward(&mut scheduled.completion, false);
                     let logits = handle_pipeline_forward_error!(
                         "completion",
                         logits,
@@ -154,7 +155,7 @@ impl Engine {
 
                     // Run the prompt seqs
                     Self::set_none_cache(&mut *pipeline);
-                    let logits = pipeline.forward(&scheduled.prompt, true);
+                    let logits = pipeline.forward(&mut scheduled.prompt, true);
                     let logits = handle_pipeline_forward_error!(
                         "prompt",
                         logits,
@@ -242,72 +243,6 @@ impl Engine {
         }
     }
 
-    async fn sample_sequence(
-        logits: Tensor,
-        seq: &mut Sequence,
-        return_logprobs: bool,
-        repeat_last_n: usize,
-        tok_trie: Arc<TokTrie>,
-        rng: Arc<Mutex<Isaac64Rng>>,
-        use_async_pool: bool,
-    ) -> Result<sampler::Logprobs> {
-        let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
-        let start_at = seq.get_toks().len().saturating_sub(repeat_last_n);
-
-        let sampler = seq.sampler();
-        let logits_clone = logits.clone();
-        let ctx_clone = seq.get_toks()[start_at..].to_vec();
-        let rng_clone = rng.clone();
-        let first_lobprobs_response = sample_async!(
-            use_async_pool,
-            sampler,
-            logits_clone,
-            ctx_clone,
-            return_logprobs,
-            rng_clone
-        );
-
-        let bias_if_not_allowed = match &mut seq.recognizer {
-            SequenceRecognizer::Regex(ref mut rx) => {
-                get_bias_if_not_allowed!(tok_trie, rx.as_mut(), first_lobprobs_response.token)
-            }
-            SequenceRecognizer::Cfg(ref mut cfg) => {
-                get_bias_if_not_allowed!(tok_trie, cfg.as_mut(), first_lobprobs_response.token)
-            }
-            SequenceRecognizer::None => None,
-        };
-        let second_logprobs_response = match bias_if_not_allowed {
-            Some(token_set) => {
-                let mut acc = vec![-f32::INFINITY; tok_trie.vocab_size()];
-                token_set.apply_to(&mut acc);
-                let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), &Device::Cpu)?)?;
-
-                let ctx_clone = seq.get_toks()[start_at..].to_vec();
-                let rng_clone = rng.clone();
-                let sampler = seq.sampler();
-                sample_async!(
-                    use_async_pool,
-                    sampler,
-                    new_logits,
-                    ctx_clone,
-                    return_logprobs,
-                    rng_clone
-                )
-            }
-            None => first_lobprobs_response,
-        };
-
-        match seq.recognizer {
-            SequenceRecognizer::Regex(ref mut rx) => {
-                tok_trie.append_token(rx.as_mut(), second_logprobs_response.token);
-            }
-            SequenceRecognizer::Cfg(ref mut cfg) => {
-                tok_trie.append_token(cfg.as_mut(), second_logprobs_response.token);
-            }
-            SequenceRecognizer::None => {}
-        }
-        Ok(second_logprobs_response)
-    }
     async fn sample_seqs(
         pipeline: Arc<Mutex<dyn Pipeline>>,
         seqs: &mut [&mut Sequence],
@@ -335,7 +270,7 @@ impl Engine {
         let sampling_futures: Vec<_> = zip(logits_seq, seqs.iter_mut())
             .map(|(logits_per_seq, seq)| {
                 let return_logprobs = seq.return_logprobs();
-                Self::sample_sequence(
+                sample_sequence(
                     logits_per_seq,
                     seq,
                     return_logprobs,

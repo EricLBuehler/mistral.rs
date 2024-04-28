@@ -4,6 +4,8 @@ mod gguf;
 mod loaders;
 mod macros;
 mod normal;
+mod sampling;
+mod speculative;
 use crate::aici::toktree::TokTrie;
 use crate::device_map::DeviceMapper;
 use crate::{api_dir_list, api_get_file, DeviceMapMetadata};
@@ -27,6 +29,7 @@ pub use loaders::{
 use mistralrs_lora::{LoraConfig, Ordering};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+pub(crate) use sampling::sample_sequence;
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -197,11 +200,23 @@ pub trait Loader {
 }
 
 pub trait Pipeline: Send + Sync {
+    fn forward_inputs(&mut self, inputs: ModelInputs) -> Result<Tensor, candle_core::Error>;
     fn forward(
         &mut self,
-        input_seqs: &[&mut Sequence],
+        input_toks: &mut [&mut Sequence],
         is_prompt: bool,
-    ) -> Result<Tensor, candle_core::Error>;
+    ) -> Result<Tensor, candle_core::Error> {
+        let inputs = calculate_inputs(
+            input_toks,
+            is_prompt,
+            self.is_xlora(),
+            self.device(),
+            self.has_no_kv_cache(),
+            None,
+        )
+        .unwrap();
+        self.forward_inputs(inputs)
+    }
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
         let encoding = self
             .tokenizer()
@@ -370,7 +385,11 @@ struct InputMetadata {
     context_lens: Vec<usize>,
 }
 
-fn get_prompt_input(input_seqs: &[&mut Sequence], device: &Device) -> Result<InputMetadata> {
+fn get_prompt_input(
+    input_seqs: &[&mut Sequence],
+    device: &Device,
+    last_n_context_len: Option<usize>,
+) -> Result<InputMetadata> {
     let max_len = input_seqs
         .iter()
         .map(|seq| seq.len())
@@ -386,7 +405,7 @@ fn get_prompt_input(input_seqs: &[&mut Sequence], device: &Device) -> Result<Inp
         seqlen_offsets.push(0);
 
         ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));
-        context_lens.push(seq.len() - 1);
+        context_lens.push(seq.len() - 1 - last_n_context_len.unwrap_or(0));
 
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
     }
@@ -411,9 +430,10 @@ fn get_completion_input(
     input_seqs: &[&mut Sequence],
     device: &Device,
     no_kv_cache: bool,
+    last_n_context_len: Option<usize>,
 ) -> Result<InputMetadata> {
     if no_kv_cache {
-        return get_prompt_input(input_seqs, device);
+        return get_prompt_input(input_seqs, device, last_n_context_len);
     }
     // Pad each sequence by the padding token to the max len.
     let mut seqs_tensors = Vec::new();
@@ -443,6 +463,7 @@ fn get_completion_input(
     })
 }
 
+#[derive(Clone)]
 struct ModelInputs {
     input_ids: Tensor,
     input_ids_full: Option<Tensor>,
@@ -459,6 +480,7 @@ fn calculate_inputs(
     is_xlora: bool,
     device: &Device,
     no_kv_cache: bool,
+    last_n_context_len: Option<usize>,
 ) -> Result<ModelInputs> {
     if is_xlora && !is_prompt {
         let InputMetadata {
@@ -466,13 +488,13 @@ fn calculate_inputs(
             positions: seqlen_offsets_full,
             positions_kernel: seqlen_offsets_kernel_full,
             context_lens: _,
-        } = get_prompt_input(input_seqs, device)?;
+        } = get_prompt_input(input_seqs, device, last_n_context_len)?;
         let InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
-        } = get_completion_input(input_seqs, device, no_kv_cache)?;
+        } = get_completion_input(input_seqs, device, no_kv_cache, last_n_context_len)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: Some(input_ids_full),
@@ -488,7 +510,7 @@ fn calculate_inputs(
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
-        } = get_prompt_input(input_seqs, device)?;
+        } = get_prompt_input(input_seqs, device, last_n_context_len)?;
         Ok(ModelInputs {
             input_ids: input_ids.clone(),
             input_ids_full: Some(input_ids),
@@ -504,7 +526,7 @@ fn calculate_inputs(
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
-        } = get_prompt_input(input_seqs, device)?;
+        } = get_prompt_input(input_seqs, device, last_n_context_len)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: None,
@@ -520,7 +542,7 @@ fn calculate_inputs(
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
-        } = get_completion_input(input_seqs, device, no_kv_cache)?;
+        } = get_completion_input(input_seqs, device, no_kv_cache, last_n_context_len)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: None,

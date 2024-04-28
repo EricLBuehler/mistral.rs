@@ -3,22 +3,19 @@ use super::loaders::{
     Phi3Loader, Qwen2Loader,
 };
 use super::{
-    calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
-    NormalModel, NormalModelLoader, Pipeline, TokenSource, XLoraPaths,
+    get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths, NormalModel,
+    NormalModelLoader, Pipeline, TokenSource, XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::models::Cache;
 use crate::pipeline::chat_template::calculate_eos_tokens;
 use crate::pipeline::ChatTemplate;
+use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::{NonGranularState, XLoraConfig};
 use crate::{
     deserialize_chat_template, get_paths, lora_model_loader, normal_model_loader,
     xlora_model_loader, DeviceMapMetadata,
-};
-use crate::{
-    sequence::Sequence,
-    utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
@@ -356,12 +353,9 @@ impl Loader for NormalLoader {
 }
 
 impl Pipeline for NormalPipeline {
-    fn forward(
+    fn forward_inputs(
         &mut self,
-        input_toks: &[&mut Sequence],
-        is_prompt: bool,
-    ) -> Result<Tensor, candle_core::Error> {
-        let ModelInputs {
+        ModelInputs {
             input_ids,
             input_ids_full,
             seqlen_offsets,
@@ -369,14 +363,8 @@ impl Pipeline for NormalPipeline {
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full,
             context_lens,
-        } = calculate_inputs(
-            input_toks,
-            is_prompt,
-            self.is_xlora(),
-            self.device(),
-            self.no_kv_cache,
-        )
-        .unwrap();
+        }: ModelInputs,
+    ) -> Result<Tensor, candle_core::Error> {
         match self.model.is_xlora() {
             false => self.model.forward(
                 &input_ids,
