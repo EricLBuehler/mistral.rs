@@ -33,6 +33,7 @@ pub struct Config {
     pub rope_scaling: Option<HashMap<String, Either<Vec<f32>, String>>>,
     pub max_position_embeddings: usize,
     pub use_flash_attn: bool,
+    pub sliding_window: Option<usize>,
     pub original_max_position_embeddings: usize,
 }
 
@@ -277,6 +278,7 @@ pub struct Model {
     pub cache: Cache,
     pub max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    sliding_window: Option<usize>,
 }
 
 impl Model {
@@ -333,6 +335,7 @@ impl Model {
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
+            sliding_window: cfg.sliding_window,
         })
     }
 
@@ -341,9 +344,20 @@ impl Model {
         b_size: usize,
         tgt_len: usize,
         seqlen_offset: usize,
+        sliding_window: Option<usize>,
     ) -> Result<Tensor> {
+        // Sliding window mask
+        let sliding_window = sliding_window.unwrap_or(tgt_len + 1);
         let mask: Vec<_> = (0..tgt_len)
-            .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. }))
+            .flat_map(|i| {
+                (0..tgt_len).map(move |j| {
+                    if i < j || j + sliding_window < i {
+                        f32::NEG_INFINITY
+                    } else {
+                        0.
+                    }
+                })
+            })
             .collect();
         let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
         let mask = if seqlen_offset > 0 {
@@ -384,8 +398,12 @@ impl Model {
         let attention_mask = if seq_len <= 1 {
             None
         } else {
-            let mask =
-                self.prepare_decoder_attention_mask(b_size, seq_len, past_key_values_length)?;
+            let mask = self.prepare_decoder_attention_mask(
+                b_size,
+                seq_len,
+                past_key_values_length,
+                self.sliding_window,
+            )?;
             Some(mask)
         };
         let mut xs = self.embed_tokens.forward(input_ids)?;
