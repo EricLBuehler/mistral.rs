@@ -242,6 +242,7 @@ struct LlamaBasicConfig {
     rms_norm_eps: f64,
     #[serde(default = "default_rope")]
     rope_theta: f32,
+    max_position_embeddings: usize,
 }
 
 fn default_rope() -> f32 {
@@ -263,6 +264,7 @@ impl LlamaBasicConfig {
             rms_norm_eps: basic_config.rms_norm_eps,
             rope_theta: basic_config.rope_theta,
             use_flash_attn,
+            max_position_embeddings: basic_config.max_position_embeddings,
         })
     }
 }
