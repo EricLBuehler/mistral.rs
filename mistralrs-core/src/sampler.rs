@@ -138,7 +138,7 @@ impl Sampler {
         for tok in &top_n_toks {
             bytes.push(
                 self.tokenizer
-                    .decode(&[*tok as u32], true)
+                    .decode(&[*tok as u32], false)
                     .map_err(|x| Error::Msg(x.to_string()))?,
             );
         }
@@ -171,7 +171,7 @@ impl Sampler {
             top_logprobs,
             bytes: self
                 .tokenizer
-                .decode(&[next_token], true)
+                .decode(&[next_token], false)
                 .map_err(|x| Error::Msg(x.to_string()))?,
         })
     }
@@ -201,7 +201,7 @@ impl Sampler {
             top_logprobs,
             bytes: self
                 .tokenizer
-                .decode(&[next_token.try_into().unwrap()], true)
+                .decode(&[next_token.try_into().unwrap()], false)
                 .map_err(|x| Error::Msg(x.to_string()))?,
         })
     }
