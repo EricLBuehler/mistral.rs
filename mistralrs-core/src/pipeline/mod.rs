@@ -32,7 +32,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
 use tokenizers::Tokenizer;
-use tracing::{info, warn};
+use tracing::info;
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -55,6 +55,53 @@ pub trait ModelPaths {
     fn get_classifier_path(&self) -> &Option<PathBuf>;
     fn get_classifier_config(&self) -> &Option<XLoraConfig>;
     fn get_ordering(&self) -> &Option<Ordering>;
+    fn get_gen_conf_filename(&self) -> Option<&PathBuf>;
+}
+
+pub struct SimpleModelPaths<P> {
+    tokenizer_filename: P,
+    config_filename: P,
+    template_filename: P,
+    filenames: Vec<P>,
+    xlora_adapter_filenames: Option<Vec<(String, P)>>,
+    xlora_adapter_configs: Option<Vec<(String, LoraConfig)>>,
+    classifier_path: Option<P>,
+    classifier_config: Option<XLoraConfig>,
+    xlora_ordering: Option<Ordering>,
+    gen_conf: Option<P>,
+}
+
+impl ModelPaths for SimpleModelPaths<PathBuf> {
+    fn get_config_filename(&self) -> &PathBuf {
+        &self.config_filename
+    }
+    fn get_tokenizer_filename(&self) -> &PathBuf {
+        &self.tokenizer_filename
+    }
+    fn get_weight_filenames(&self) -> &[PathBuf] {
+        &self.filenames
+    }
+    fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>> {
+        &self.xlora_adapter_filenames
+    }
+    fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>> {
+        &self.xlora_adapter_configs
+    }
+    fn get_classifier_config(&self) -> &Option<XLoraConfig> {
+        &self.classifier_config
+    }
+    fn get_classifier_path(&self) -> &Option<PathBuf> {
+        &self.classifier_path
+    }
+    fn get_ordering(&self) -> &Option<Ordering> {
+        &self.xlora_ordering
+    }
+    fn get_template_filename(&self) -> &PathBuf {
+        &self.template_filename
+    }
+    fn get_gen_conf_filename(&self) -> Option<&PathBuf> {
+        self.gen_conf.as_ref()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -572,15 +619,15 @@ fn get_xlora_paths(
             .filter(|x| x.contains("xlora_classifier.safetensors"))
             .collect::<Vec<_>>();
         if xlora_classifier.len() != 1 {
-            warn!("Detected multiple X-LoRA classifiers: {xlora_classifier:?}");
-            warn!("Selected classifier: `{}`", &xlora_classifier[0]);
+            info!("⚠️ WARNING: Detected multiple X-LoRA classifiers: {xlora_classifier:?}");
+            info!("⚠️ WARNING: Selected classifier: `{}`", &xlora_classifier[0]);
         }
         let xlora_classifier = &xlora_classifier[0];
         let xlora_configs = &api_dir_list!(api, model_id)
             .filter(|x| x.contains("xlora_config.json"))
             .collect::<Vec<_>>();
         if xlora_configs.len() != 1 {
-            warn!("Detected multiple X-LoRA configs: {xlora_configs:?}");
+            info!("⚠️ WARNING: Detected multiple X-LoRA configs: {xlora_configs:?}");
         }
 
         let classifier_path = api_get_file!(api, xlora_classifier, Path::new(""));
@@ -589,7 +636,7 @@ fn get_xlora_paths(
         let mut last_err: Option<serde_json::Error> = None;
         for (i, config_path) in xlora_configs.iter().enumerate() {
             if xlora_configs.len() != 1 {
-                warn!("Selecting config: `{}`", config_path);
+                info!("⚠️ WARNING: Selecting config: `{}`", config_path);
             }
             let config_path = api_get_file!(api, config_path, Path::new(""));
             let conf = fs::read_to_string(config_path)?;
@@ -601,7 +648,7 @@ fn get_xlora_paths(
                 }
                 Err(e) => {
                     if i != xlora_configs.len() - 1 {
-                        warn!("Config is broken with error `{e}`");
+                        info!("⚠️ WARNING: Config is broken with error `{e}`");
                     }
                     last_err = Some(e);
                 }

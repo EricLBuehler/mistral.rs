@@ -12,6 +12,7 @@ use std::{
     sync::{mpsc::channel, Arc, Mutex},
 };
 use stream::ChatCompletionStreamer;
+use tracing_subscriber::{filter::LevelFilter, EnvFilter};
 
 use candle_core::Device;
 use mistralrs_core::{
@@ -791,6 +792,11 @@ impl ChatCompletionRequest {
 
 #[pymodule]
 fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+    tracing_subscriber::fmt().with_env_filter(filter).init();
+
     m.add_class::<Runner>()?;
     m.add_class::<Which>()?;
     m.add_class::<ChatCompletionRequest>()?;

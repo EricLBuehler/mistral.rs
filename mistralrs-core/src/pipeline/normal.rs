@@ -10,8 +10,8 @@ use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::models::Cache;
 use crate::pipeline::chat_template::calculate_eos_tokens;
-use crate::pipeline::ChatTemplate;
-use crate::xlora_models::{NonGranularState, XLoraConfig};
+use crate::pipeline::{ChatTemplate, SimpleModelPaths};
+use crate::xlora_models::NonGranularState;
 use crate::{
     deserialize_chat_template, get_paths, lora_model_loader, normal_model_loader,
     xlora_model_loader, DeviceMapMetadata,
@@ -24,7 +24,7 @@ use anyhow::Result;
 use candle_core::quantized::GgmlDType;
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use mistralrs_lora::{LoraConfig, Ordering};
+use mistralrs_lora::Ordering;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -34,48 +34,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tokenizers::Tokenizer;
 use tracing::info;
-
-pub struct NormalModelPaths<P> {
-    tokenizer_filename: P,
-    config_filename: P,
-    template_filename: P,
-    filenames: Vec<P>,
-    xlora_adapter_filenames: Option<Vec<(String, P)>>,
-    xlora_adapter_configs: Option<Vec<(String, LoraConfig)>>,
-    classifier_path: Option<P>,
-    classifier_config: Option<XLoraConfig>,
-    xlora_ordering: Option<Ordering>,
-}
-
-impl ModelPaths for NormalModelPaths<PathBuf> {
-    fn get_config_filename(&self) -> &PathBuf {
-        &self.config_filename
-    }
-    fn get_tokenizer_filename(&self) -> &PathBuf {
-        &self.tokenizer_filename
-    }
-    fn get_weight_filenames(&self) -> &[PathBuf] {
-        &self.filenames
-    }
-    fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>> {
-        &self.xlora_adapter_filenames
-    }
-    fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>> {
-        &self.xlora_adapter_configs
-    }
-    fn get_classifier_config(&self) -> &Option<XLoraConfig> {
-        &self.classifier_config
-    }
-    fn get_classifier_path(&self) -> &Option<PathBuf> {
-        &self.classifier_path
-    }
-    fn get_ordering(&self) -> &Option<Ordering> {
-        &self.xlora_ordering
-    }
-    fn get_template_filename(&self) -> &PathBuf {
-        &self.template_filename
-    }
-}
 
 pub struct NormalPipeline {
     model: Box<dyn NormalModel + Send + Sync>,
@@ -230,7 +188,7 @@ impl Loader for NormalLoader {
         silent: bool,
     ) -> Result<Box<dyn ModelPaths>> {
         get_paths!(
-            NormalModelPaths,
+            SimpleModelPaths,
             &token_source,
             revision,
             self,
@@ -321,7 +279,7 @@ impl Loader for NormalLoader {
         let tokenizer =
             Tokenizer::from_file(paths.get_tokenizer_filename()).map_err(anyhow::Error::msg)?;
 
-        let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
+        let (chat_template, gen_conf) = deserialize_chat_template!(paths, self);
 
         if let Some(in_situ_quant) = in_situ_quant {
             model.quantize(in_situ_quant, device.clone())?;
@@ -329,7 +287,7 @@ impl Loader for NormalLoader {
 
         Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
-            eos_tok: calculate_eos_tokens(&chat_template, &tokenizer),
+            eos_tok: calculate_eos_tokens(&chat_template, gen_conf, &tokenizer),
             tok_trie: build_tok_trie(tokenizer.clone()).into(),
             tokenizer: tokenizer.into(),
             config: self.config,

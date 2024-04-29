@@ -330,6 +330,10 @@ impl ModelWeights {
         // Strangely this value is generally 1e-6 in GGUF file but used to be 1e-5 by default.
         let rms_norm_eps = md_get("llama.attention.layer_norm_rms_epsilon")?.to_f32()?;
 
+        let max_seq_len = md_get("llama.context_length")
+            .and_then(|m| m.to_u64())
+            .unwrap_or(MAX_SEQ_LEN as u64) as usize;
+
         let rope_freq_base = md_get("llama.rope.freq_base")
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
@@ -350,7 +354,7 @@ impl ModelWeights {
                 rope_freq_base,
                 head_dim,
                 rope_dim,
-                MAX_SEQ_LEN as usize,
+                max_seq_len,
                 device,
                 false,
                 DType::F32,
@@ -423,9 +427,7 @@ impl ModelWeights {
             masks: HashMap::new(),
             device: device.clone(),
             cache: Cache::new(block_count, false),
-            max_seq_len: md_get("llama.context_length")
-                .and_then(|m| m.to_u64())
-                .unwrap_or(MAX_SEQ_LEN as u64) as usize,
+            max_seq_len,
             mapper: Some(mapper),
         })
     }
