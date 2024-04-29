@@ -520,6 +520,7 @@ struct Phi3BasicConfig {
     rope_scaling: Option<HashMap<String, RopeScaling>>,
     max_position_embeddings: usize,
     original_max_position_embeddings: usize,
+    sliding_window: Option<usize>,
 }
 
 impl Phi3BasicConfig {
@@ -545,6 +546,7 @@ impl Phi3BasicConfig {
             }),
             original_max_position_embeddings: basic_config.original_max_position_embeddings,
             use_flash_attn,
+            sliding_window: basic_config.sliding_window,
         })
     }
 }
