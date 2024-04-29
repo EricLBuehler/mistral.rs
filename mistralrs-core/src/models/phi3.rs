@@ -124,11 +124,20 @@ impl Attention {
                 if let Some(sliding_window) = self.sliding_window {
                     let kv_seq_len = prev_k.dim(2)?;
                     if kv_seq_len > sliding_window {
-                        let slicing_tokens = 1 - sliding_window;
-                        prev_k = prev_k.narrow(2, slicing_tokens, prev_k.dim(2)?)?;
-                        prev_v = prev_v.narrow(2, slicing_tokens, prev_k.dim(2)?)?;
+                        prev_k = prev_k.narrow(
+                            2,
+                            kv_seq_len - (sliding_window - 1),
+                            sliding_window - 1,
+                        )?;
+                        prev_v = prev_v.narrow(
+                            2,
+                            kv_seq_len - (sliding_window - 1),
+                            sliding_window - 1,
+                        )?;
                         if let Some(ref mut mask) = mask {
-                            *mask = mask.narrow(1, slicing_tokens, mask.dim(1)?)?
+                            let mask_len = mask.dim(1)?;
+                            *mask =
+                                mask.narrow(1, mask_len - (sliding_window - 1), sliding_window - 1)?
                         }
                     }
                 }
