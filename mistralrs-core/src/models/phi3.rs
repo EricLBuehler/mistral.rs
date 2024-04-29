@@ -53,6 +53,7 @@ struct Attention {
     head_dim: usize,
     rotary_emb: Arc<PhiRotaryEmbedding>,
     use_flash_attn: bool,
+    sliding_window: Option<usize>,
 }
 
 impl Attention {
@@ -72,6 +73,7 @@ impl Attention {
             num_kv_groups: num_heads / num_kv_heads,
             head_dim,
             use_flash_attn: cfg.use_flash_attn,
+            sliding_window: cfg.sliding_window,
         })
     }
 
@@ -115,12 +117,24 @@ impl Attention {
 
         let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
 
-        let (k, v) = match &*kv_cache {
-            None => (k, v),
-            Some((prev_k, prev_v)) => {
-                let k = Tensor::cat(&[prev_k, &k], 2)?;
-                let v = Tensor::cat(&[prev_v, &v], 2)?;
-                (k, v)
+        let (k, v, attn_mask) = match kv_cache.clone() {
+            None => (k, v, attention_mask.cloned()),
+            Some((mut prev_k, mut prev_v)) => {
+                let mut mask = attention_mask.cloned();
+                if let Some(sliding_window) = self.sliding_window {
+                    let kv_seq_len = prev_k.dim(2)?;
+                    if kv_seq_len > sliding_window {
+                        let slicing_tokens = 1 - sliding_window;
+                        prev_k = prev_k.narrow(2, slicing_tokens, prev_k.dim(2)?)?;
+                        prev_v = prev_v.narrow(2, slicing_tokens, prev_k.dim(2)?)?;
+                        if let Some(ref mut mask) = mask {
+                            *mask = mask.narrow(1, slicing_tokens, mask.dim(1)?)?
+                        }
+                    }
+                }
+                let k = Tensor::cat(&[prev_k, k], 2)?;
+                let v = Tensor::cat(&[prev_v, v], 2)?;
+                (k, v, mask)
             }
         };
         *kv_cache = Some((k.clone(), v.clone()));
@@ -139,9 +153,9 @@ impl Attention {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
             let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
 
-            let attn_weights = match attention_mask {
+            let attn_weights = match attn_mask {
                 None => attn_weights,
-                Some(mask) => attn_weights.broadcast_add(mask)?,
+                Some(mask) => attn_weights.broadcast_add(&mask)?,
             };
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
             attn_weights.matmul(&v)?
