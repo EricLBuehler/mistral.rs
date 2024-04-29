@@ -102,6 +102,7 @@ pub struct GGUFLoader {
     tokenizer_json: Option<String>,
     kind: ModelKind,
     tgt_non_granular_index: Option<usize>,
+    disable_attention_mask: bool,
 }
 
 #[derive(Debug)]
@@ -158,6 +159,7 @@ pub struct GGUFLoaderBuilder {
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
     tgt_non_granular_index: Option<usize>,
+    disable_attention_mask: bool,
 }
 
 impl GGUFLoaderBuilder {
@@ -236,6 +238,11 @@ impl GGUFLoaderBuilder {
         )
     }
 
+    pub fn with_disable_attention_mask(mut self, disable_attention_mask: bool) -> Self {
+        self.disable_attention_mask = disable_attention_mask;
+        self
+    }
+
     pub fn build(self) -> Box<dyn Loader> {
         Box::new(GGUFLoader {
             model_id: self.model_id.unwrap(),
@@ -249,6 +256,7 @@ impl GGUFLoaderBuilder {
             tgt_non_granular_index: self.tgt_non_granular_index,
             quantized_filename: Some(self.quantized_filename),
             quantized_model_id: Some(self.quantized_model_id),
+            disable_attention_mask: self.disable_attention_mask,
         })
     }
 }
@@ -267,6 +275,7 @@ impl GGUFLoader {
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
         tgt_non_granular_index: Option<usize>,
+        disable_attention_mask: bool,
     ) -> Self {
         let model_id = if let Some(id) = model_id {
             id
@@ -289,6 +298,7 @@ impl GGUFLoader {
             tokenizer_json,
             kind,
             tgt_non_granular_index,
+            disable_attention_mask,
         }
     }
 }
@@ -337,9 +347,13 @@ impl Loader for GGUFLoader {
         let mut is_lora = false;
         let model = match self.kind {
             ModelKind::QuantizedGGUF => match arch {
-                GGUFArchitecture::Llama => {
-                    Model::Llama(QLlama::from_gguf(model, &mut file, device, mapper)?)
-                }
+                GGUFArchitecture::Llama => Model::Llama(QLlama::from_gguf(
+                    model,
+                    &mut file,
+                    device,
+                    mapper,
+                    self.disable_attention_mask,
+                )?),
                 GGUFArchitecture::Phi2 => {
                     Model::Phi2(QPhi::from_gguf(model, &mut file, device, mapper)?)
                 }

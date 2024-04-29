@@ -13,6 +13,7 @@ pub struct LoaderBuilder {
     no_kv_cache: bool,
     chat_template: Option<String>,
     use_flash_attn: bool,
+    disable_attention_mask: bool,
 }
 
 impl LoaderBuilder {
@@ -22,6 +23,7 @@ impl LoaderBuilder {
             no_kv_cache: false,
             chat_template: None,
             use_flash_attn: false,
+            disable_attention_mask: false,
         }
     }
 
@@ -35,6 +37,11 @@ impl LoaderBuilder {
     }
     pub fn with_use_flash_attn(mut self, use_flash_attn: bool) -> Self {
         self.use_flash_attn = use_flash_attn;
+        self
+    }
+
+    pub fn with_disable_attention_mask(mut self, disable_attention_mask: bool) -> Self {
+        self.disable_attention_mask = disable_attention_mask;
         self
     }
 
@@ -152,6 +159,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_model_id,
             quantized_filename,
         )
+        .with_disable_attention_mask(args.disable_attention_mask)
         .build(),
         ModelSelected::XLoraGGUF {
             tok_model_id,
@@ -170,6 +178,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_model_id,
             quantized_filename,
         )
+        .with_disable_attention_mask(args.disable_attention_mask)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -197,6 +206,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_model_id,
             quantized_filename,
         )
+        .with_disable_attention_mask(args.disable_attention_mask)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -222,6 +232,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_model_id,
             quantized_filename,
         )
+        .with_disable_attention_mask(args.disable_attention_mask)
         .build(),
         ModelSelected::XLoraGGML {
             tok_model_id,
@@ -241,6 +252,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_model_id,
             quantized_filename,
         )
+        .with_disable_attention_mask(args.disable_attention_mask)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -269,6 +281,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_model_id,
             quantized_filename,
         )
+        .with_disable_attention_mask(args.disable_attention_mask)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(

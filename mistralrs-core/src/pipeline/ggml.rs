@@ -101,6 +101,7 @@ pub struct GGMLLoader {
     tokenizer_json: Option<String>,
     kind: ModelKind,
     tgt_non_granular_index: Option<usize>,
+    disable_attention_mask: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -124,6 +125,7 @@ pub struct GGMLLoaderBuilder {
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
     tgt_non_granular_index: Option<usize>,
+    disable_attention_mask: bool,
 }
 
 impl GGMLLoaderBuilder {
@@ -202,6 +204,11 @@ impl GGMLLoaderBuilder {
         )
     }
 
+    pub fn with_disable_attention_mask(mut self, disable_attention_mask: bool) -> Self {
+        self.disable_attention_mask = disable_attention_mask;
+        self
+    }
+
     pub fn build(self) -> Box<dyn Loader> {
         Box::new(GGMLLoader {
             model_id: self.model_id.unwrap(),
@@ -215,6 +222,7 @@ impl GGMLLoaderBuilder {
             tgt_non_granular_index: self.tgt_non_granular_index,
             quantized_filename: Some(self.quantized_filename),
             quantized_model_id: Some(self.quantized_model_id),
+            disable_attention_mask: self.disable_attention_mask,
         })
     }
 }
@@ -233,6 +241,7 @@ impl GGMLLoader {
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
         tgt_non_granular_index: Option<usize>,
+        disable_attention_mask: bool,
     ) -> Self {
         let model_id = if let Some(id) = model_id {
             id
@@ -255,6 +264,7 @@ impl GGMLLoader {
             tokenizer_json,
             kind,
             tgt_non_granular_index,
+            disable_attention_mask,
         }
     }
 }
@@ -301,7 +311,11 @@ impl Loader for GGMLLoader {
 
         let mut is_lora = false;
         let model = match self.kind {
-            ModelKind::QuantizedGGML => Model::Llama(QLlama::from_ggml(model, self.config.gqa)?),
+            ModelKind::QuantizedGGML => Model::Llama(QLlama::from_ggml(
+                model,
+                self.config.gqa,
+                self.disable_attention_mask,
+            )?),
             ModelKind::XLoraGGML => {
                 let vb = from_mmaped_safetensors(
                     vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()],

@@ -193,11 +193,11 @@ impl LayerWeights {
         let k = repeat_kv(k, self.n_head / self.n_kv_head)?.contiguous()?;
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?.contiguous()?;
         let att = if is_prompt {
-            (q.to_dtype(DType::F16)?
-                .contiguous()?
-                .matmul(&k.to_dtype(DType::F16)?.t()?.contiguous()?)?
-                .to_dtype(DType::F32)?
-                / (self.head_dim as f64).sqrt())?
+            let mm = q
+                .to_dtype(DType::F16)?
+                .matmul(&k.to_dtype(DType::F16)?.t()?)?;
+
+            ((mm / (self.head_dim as f64).sqrt())?).to_dtype(DType::F32)?
         } else {
             (q.contiguous()?.matmul(&k.t()?.contiguous()?)? / (self.head_dim as f64).sqrt())?
         };
@@ -213,7 +213,7 @@ impl LayerWeights {
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = if is_prompt {
             att.to_dtype(DType::F16)?
-                .matmul(&v.to_dtype(DType::F16)?.contiguous()?)?
+                .matmul(&v.to_dtype(DType::F16)?)?
                 .to_dtype(DType::F32)?
         } else {
             att.matmul(&v.contiguous()?)?
@@ -236,10 +236,11 @@ pub struct ModelWeights {
     pub cache: Cache,
     pub max_seq_len: usize,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
+    disable_mask: bool,
 }
 
 impl ModelWeights {
-    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
+    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize, disable_mask: bool) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
         let rotary = RotaryEmbedding::new_partial(
             10000.,
@@ -299,6 +300,7 @@ impl ModelWeights {
             cache: Cache::new(ct.hparams.n_layer as usize, false),
             max_seq_len: MAX_SEQ_LEN as usize, // Cannot determine from ggml.
             mapper: None,
+            disable_mask,
         })
     }
 
@@ -307,6 +309,7 @@ impl ModelWeights {
         reader: &mut R,
         device: &Device,
         mapper: DeviceMapMetadata,
+        disable_mask: bool,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle_core::bail!("cannot find {s} in metadata"),
@@ -429,6 +432,7 @@ impl ModelWeights {
                 .and_then(|m| m.to_u64())
                 .unwrap_or(MAX_SEQ_LEN as u64) as usize,
             mapper: Some(mapper),
+            disable_mask,
         })
     }
 
@@ -454,7 +458,7 @@ impl ModelWeights {
         is_prompt: bool,
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
-        let mask = if seq_len == 1 {
+        let mask: Option<Tensor> = if seq_len == 1 || self.disable_mask {
             None
         } else {
             Some(self.mask(seq_len, x.device())?)
