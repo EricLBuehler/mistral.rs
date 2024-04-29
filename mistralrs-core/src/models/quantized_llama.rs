@@ -8,10 +8,11 @@ use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 
 use crate::device_map::DeviceMapper;
+use crate::layers::QRmsNorm;
 use crate::pipeline::extract_logits;
 use crate::DeviceMapMetadata;
 
-use super::{repeat_kv, verify_sanity_gguf, Cache, QRmsNorm};
+use super::{repeat_kv, verify_sanity_gguf, Cache};
 
 const MAX_SEQ_LEN: u32 = 4096;
 
@@ -318,7 +319,7 @@ impl ModelWeights {
         let mapper = mapper.into_mapper(block_count, device)?;
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
-            let device = mapper.device_for(layer_idx).unwrap_or(device);
+            let device = mapper.device_for(layer_idx, false).unwrap_or(device);
             let rotary = RotaryEmbedding::new_partial(
                 rope_freq_base,
                 head_dim,

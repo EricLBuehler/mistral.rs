@@ -17,21 +17,13 @@ doc = false
 
 [dependencies]
 pyo3.workspace = true
-mistralrs-core = { version = "0.1.1", path = "../mistralrs-core" }
+mistralrs-core = { version = "0.1.1", path = "../mistralrs-core", features=["$feature_name"] }
 serde.workspace = true
 serde_json.workspace = true
-candle-core.workspace = true
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.5.0", features=["$feature_name"] }
 indexmap.workspace = true
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
 either.workspace = true
 futures.workspace = true
 tracing-subscriber.workspace = true
-
-[features]
-cuda = ["candle-core/cuda", "mistralrs-core/cuda"]
-cudnn = ["candle-core/cudnn", "mistralrs-core/cudnn"]
-metal = ["candle-core/metal", "mistralrs-core/metal"]
-flash-attn = ["cuda", "mistralrs-core/flash-attn"]
-accelerate = ["mistralrs-core/accelerate"]
-mkl = ["mistralrs-core/mkl"]

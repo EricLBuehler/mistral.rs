@@ -8,7 +8,9 @@ use mistralrs_core::{
 };
 use std::sync::Arc;
 use std::{fmt::Display, sync::mpsc::channel};
-use tracing::{info, warn};
+use tracing::info;
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::EnvFilter;
 
 enum TestName {
     Prompt(usize),
@@ -251,7 +253,11 @@ fn main() -> anyhow::Result<()> {
     #[cfg(not(feature = "metal"))]
     let device = Device::cuda_if_available(0)?;
 
-    tracing_subscriber::fmt().init();
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+    tracing_subscriber::fmt().with_env_filter(filter).init();
+
     let token_source = TokenSource::CacheToken;
     info!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
@@ -274,7 +280,7 @@ fn main() -> anyhow::Result<()> {
                 | ModelKind::XLoraGGUF
         )
     {
-        warn!("Using flash attention with a quantized model has no effect!")
+        info!("⚠️ WARNING: Using flash attention with a quantized model has no effect!")
     }
     info!("Model kind is: {}", loader.get_kind().as_ref());
     let pipeline = loader.load_model(
@@ -286,6 +292,7 @@ fn main() -> anyhow::Result<()> {
         args.num_device_layers
             .map(DeviceMapMetadata::from_num_device_layers)
             .unwrap_or(DeviceMapMetadata::dummy()),
+        None,
     )?;
     info!("Model loaded.");
 

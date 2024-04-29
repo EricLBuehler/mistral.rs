@@ -85,8 +85,13 @@ impl ChatTemplate {
     }
 }
 
-pub fn calculate_eos_tokens(chat_template: &ChatTemplate, tokenizer: &Tokenizer) -> Vec<u32> {
+pub fn calculate_eos_tokens(
+    chat_template: &ChatTemplate,
+    gen_conf: Option<GenerationConfig>,
+    tokenizer: &Tokenizer,
+) -> Vec<u32> {
     let mut eos_tok_ids = vec![chat_template.eos_tok()];
+    let mut bos_tok_ids = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
 
     for alternate in SUPPORTED_ALTERNATE_EOS {
         if tokenizer.get_vocab(true).get(alternate).is_some() {
@@ -94,10 +99,47 @@ pub fn calculate_eos_tokens(chat_template: &ChatTemplate, tokenizer: &Tokenizer)
         }
     }
 
+    if let Some(gen_conf) = gen_conf {
+        let ids = match gen_conf.eos_token_id {
+            Either::Left(id) => vec![id],
+            Either::Right(ids) => ids,
+        };
+        for id in ids {
+            let s = tokenizer
+                .decode(&[id], false)
+                .unwrap_or_else(|_| panic!("Unable to decode id {id})"));
+            if !eos_tok_ids.contains(&s) {
+                eos_tok_ids.push(s);
+            }
+        }
+
+        let ids = match gen_conf.bos_token_id {
+            Either::Left(id) => vec![id],
+            Either::Right(ids) => ids,
+        };
+        for id in ids {
+            let s = tokenizer
+                .decode(&[id], false)
+                .unwrap_or_else(|_| panic!("Unable to decode id {id})"));
+            if !bos_tok_ids.contains(&s) {
+                bos_tok_ids.push(s);
+            }
+        }
+    }
+
+    let bos_render = bos_tok_ids
+        .iter()
+        .map(|val| format!("{:?}", val))
+        .collect::<Vec<String>>()
+        .join(", ");
+    let eos_render = eos_tok_ids
+        .iter()
+        .map(|val| format!("{:?}", val))
+        .collect::<Vec<String>>()
+        .join(", ");
+
     info!(
-        "bos_tok = {}, eos_tok = {:?}, unk_tok = {}",
-        chat_template.bos_tok().unwrap_or("`None`".to_string()),
-        eos_tok_ids,
+        "bos_toks = {bos_render}, eos_toks = {eos_render}, unk_tok = {}",
         chat_template.unk_tok().unwrap_or("`None`".to_string()),
     );
 
@@ -112,6 +154,15 @@ pub fn calculate_eos_tokens(chat_template: &ChatTemplate, tokenizer: &Tokenizer)
         )
     }
     eos_toks
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+pub struct GenerationConfig {
+    #[serde(with = "either::serde_untagged")]
+    bos_token_id: Either<u32, Vec<u32>>,
+    #[serde(with = "either::serde_untagged")]
+    eos_token_id: Either<u32, Vec<u32>>,
 }
 
 pub fn apply_chat_template_to(

@@ -13,6 +13,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use candle_core::quantized::GgmlDType;
 use engine::Engine;
 pub use mistralrs_lora::Ordering;
 pub use pipeline::Pipeline;
@@ -25,6 +26,7 @@ pub use model_loader::{get_tgt_non_granular_index, LoaderBuilder};
 mod model_selected;
 pub use model_selected::ModelSelected;
 
+pub mod layers;
 mod models;
 mod pipeline;
 mod prefix_cacher;
@@ -49,6 +51,7 @@ pub use response::*;
 pub use sampler::{SamplingParams, StopTokens, TopLogprob};
 pub use scheduler::SchedulerMethod;
 use serde::Serialize;
+use tokio::runtime::Runtime;
 
 /// The MistralRs struct handles sending requests to the engine.
 /// It is the core multi-threaded component of mistral.rs, and uses `mspc`
@@ -56,6 +59,7 @@ use serde::Serialize;
 /// engine.
 pub struct MistralRs {
     sender: Sender<Request>,
+    sender_isq: Sender<GgmlDType>,
     log: Option<String>,
     id: String,
     creation_time: u64,
@@ -66,7 +70,7 @@ pub struct MistralRs {
 /// an Engine and a MistralRs instance. The Engine runs on a separate thread, and the MistralRs
 /// instance stays on the calling thread.
 pub struct MistralRsBuilder {
-    pipeline: Box<Mutex<dyn Pipeline>>,
+    pipeline: Arc<Mutex<dyn Pipeline>>,
     method: SchedulerMethod,
     log: Option<String>,
     truncate_sequence: Option<bool>,
@@ -77,7 +81,7 @@ pub struct MistralRsBuilder {
 }
 
 impl MistralRsBuilder {
-    pub fn new(pipeline: Box<Mutex<dyn Pipeline>>, method: SchedulerMethod) -> Self {
+    pub fn new(pipeline: Arc<Mutex<dyn Pipeline>>, method: SchedulerMethod) -> Self {
         Self {
             pipeline,
             method,
@@ -144,9 +148,11 @@ impl MistralRs {
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
 
         let (tx, rx) = channel();
+        let (isq_tx, isq_rx) = channel();
 
         let this = Arc::new(Self {
             sender: tx,
+            sender_isq: isq_tx,
             log,
             id: pipeline.lock().unwrap().name(),
             creation_time: SystemTime::now()
@@ -155,19 +161,22 @@ impl MistralRs {
                 .as_secs(),
             next_request_id: Mutex::new(RefCell::new(0)),
         });
-
         thread::spawn(move || {
-            let mut engine = Engine::new(
-                rx,
-                pipeline,
-                method,
-                truncate_sequence,
-                no_kv_cache,
-                no_prefix_cache,
-                prefix_cache_n,
-                disable_eos_stop,
-            );
-            engine.run();
+            let rt = Runtime::new().unwrap();
+            rt.block_on(async move {
+                let mut engine = Engine::new(
+                    rx,
+                    isq_rx,
+                    pipeline,
+                    method,
+                    truncate_sequence,
+                    no_kv_cache,
+                    no_prefix_cache,
+                    prefix_cache_n,
+                    disable_eos_stop,
+                );
+                engine.run().await;
+            });
         });
 
         this
@@ -175,6 +184,12 @@ impl MistralRs {
 
     pub fn get_sender(&self) -> Sender<Request> {
         self.sender.clone()
+    }
+
+    /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
+    /// then nothing will happen.
+    pub fn send_re_isq(&self, dtype: GgmlDType) {
+        self.sender_isq.send(dtype).expect("Engine is not present.")
     }
 
     pub fn get_id(&self) -> String {

@@ -7,11 +7,11 @@ use std::sync::Arc;
 /// There is an alternative implementation of the phi model in mixformers.rs.
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
 use candle_nn::{
-    embedding, layer_norm, Activation, Embedding, LayerNorm, Linear, RotaryEmbedding, VarBuilder,
+    embedding, layer_norm, Activation, Embedding, LayerNorm, RotaryEmbedding, VarBuilder,
 };
-use mistralrs_lora::{linear, LinearLayerLike, LoraConfig, Ordering};
+use mistralrs_lora::{layer::QLinear, linear, LinearLayerLike, LoraConfig, Ordering};
 use tqdm::Iter;
 use tracing::info;
 
@@ -33,17 +33,22 @@ struct MLP {
 }
 
 impl MLP {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         cfg: &Config,
         vb: VarBuilder,
         lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
     ) -> Result<Self> {
         let fc1 = linear(
             cfg.hidden_size,
             cfg.intermediate_size,
-            vb.pp("fc1"),
+            mapper.set_device(layer_idx, vb.pp("fc1"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("fc1"), false),
             lora_config,
             count,
             ord,
@@ -51,7 +56,8 @@ impl MLP {
         let fc2 = linear(
             cfg.intermediate_size,
             cfg.hidden_size,
-            vb.pp("fc2"),
+            mapper.set_device(layer_idx, vb.pp("fc2"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("fc2"), false),
             lora_config,
             count,
             ord,
@@ -72,15 +78,29 @@ impl MLP {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        self.fc2.lora_forward(
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.fc1.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        let mut res = self.fc2.lora_forward(
             &self
                 .fc1
-                .lora_forward(xs, scalings.clone(), global_scaling_weight, is_scaling_pass)?
+                .lora_forward(
+                    &xs,
+                    scalings.clone(),
+                    global_scaling_weight,
+                    is_scaling_pass,
+                )?
                 .apply(&self.act)?,
             scalings,
             global_scaling_weight,
             is_scaling_pass,
-        )
+        )?;
+        if self.fc1.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -115,13 +135,17 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 }
 
 impl Attention {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         cfg: &Config,
         vb: VarBuilder,
         lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
-        is_gptx: bool,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
+        rope: RotaryEmbedding,
     ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads();
@@ -129,7 +153,8 @@ impl Attention {
         let q_proj = linear(
             cfg.hidden_size,
             num_heads * head_dim,
-            vb.pp("q_proj"),
+            mapper.set_device(layer_idx, vb.pp("q_proj"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("q_proj"), false),
             lora_config,
             count,
             ord,
@@ -137,7 +162,8 @@ impl Attention {
         let k_proj = linear(
             cfg.hidden_size,
             num_kv_heads * head_dim,
-            vb.pp("k_proj"),
+            mapper.set_device(layer_idx, vb.pp("k_proj"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("k_proj"), false),
             lora_config,
             count,
             ord,
@@ -145,7 +171,8 @@ impl Attention {
         let v_proj = linear(
             cfg.hidden_size,
             num_kv_heads * head_dim,
-            vb.pp("v_proj"),
+            mapper.set_device(layer_idx, vb.pp("v_proj"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("v_proj"), false),
             lora_config,
             count,
             ord,
@@ -153,20 +180,11 @@ impl Attention {
         let dense = linear(
             num_heads * head_dim,
             cfg.hidden_size,
-            vb.pp("dense"),
+            mapper.set_device(layer_idx, vb.pp("dense"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("dense"), false),
             lora_config,
             count,
             ord,
-        )?;
-        // Alternative rope scalings are not supported.
-        let rotary_emb = RotaryEmbedding::new_partial(
-            cfg.rope_theta,
-            cfg.head_dim(),
-            (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
-            cfg.max_position_embeddings,
-            vb.device(),
-            is_gptx,
-            vb.dtype(),
         )?;
         let (q_layernorm, k_layernorm) = if cfg.qk_layernorm {
             let q_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp("q_layernorm"))?;
@@ -183,7 +201,7 @@ impl Attention {
             dense,
             q_layernorm,
             k_layernorm,
-            rotary_emb,
+            rotary_emb: rope,
             softmax_scale,
             num_heads,
             num_kv_heads,
@@ -205,24 +223,34 @@ impl Attention {
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
         let (b_size, seq_len, _n_embd) = xs.dims3()?;
-        let q = self.q_proj.lora_forward(
-            xs,
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.q_proj.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        let mut q = self.q_proj.lora_forward(
+            &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let k = self.k_proj.lora_forward(
-            xs,
+        let mut k = self.k_proj.lora_forward(
+            &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let v = self.v_proj.lora_forward(
-            xs,
+        let mut v = self.v_proj.lora_forward(
+            &xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
+        if self.q_proj.is_quant() {
+            q = q.to_dtype(original_dtype)?;
+            k = k.to_dtype(original_dtype)?;
+            v = v.to_dtype(original_dtype)?;
+        }
 
         let q = match &self.q_layernorm {
             None => q,
@@ -296,15 +324,22 @@ impl Attention {
             attn_weights.matmul(&v)?
         };
 
-        let attn_output = attn_output
+        let mut attn_output = attn_output
             .transpose(1, 2)?
             .reshape((b_size, seq_len, ()))?;
-        self.dense.lora_forward(
+        if self.q_proj.is_quant() {
+            attn_output = attn_output.to_dtype(DType::F32)?;
+        }
+        let mut res = self.dense.lora_forward(
             &attn_output,
             scalings,
             global_scaling_weight,
             is_scaling_pass,
-        )
+        )?;
+        if self.q_proj.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -316,20 +351,43 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         cfg: &Config,
         vb: VarBuilder,
         lora_config: &[(String, LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
-        is_gptx: bool,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
+        rope: RotaryEmbedding,
     ) -> Result<Self> {
-        let self_attn = Attention::new(cfg, vb.pp("self_attn"), lora_config, count, ord, is_gptx)?;
-        let mlp = MLP::new(cfg, vb.pp("mlp"), lora_config, count, ord)?;
+        let self_attn = Attention::new(
+            cfg,
+            vb.pp("self_attn"),
+            lora_config,
+            count,
+            ord,
+            mapper,
+            layer_idx,
+            loading_isq,
+            rope,
+        )?;
+        let mlp = MLP::new(
+            cfg,
+            vb.pp("mlp"),
+            lora_config,
+            count,
+            ord,
+            mapper,
+            layer_idx,
+            loading_isq,
+        )?;
         let input_layernorm = layer_norm(
             cfg.hidden_size,
             cfg.layer_norm_eps,
-            vb.pp("input_layernorm"),
+            mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
         Ok(Self {
             self_attn,
@@ -373,7 +431,7 @@ pub struct Model {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
     final_layernorm: LayerNorm,
-    lm_head: Linear,
+    lm_head: QLinear,
     pub cache: Cache,
     pub device: Device,
     pub max_seq_len: usize,
@@ -383,6 +441,7 @@ pub struct Model {
 }
 
 impl Model {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         cfg: &Config,
         vb: VarBuilder,
@@ -391,26 +450,45 @@ impl Model {
         xlora_ordering: Ordering,
         is_gptx: bool,
         mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        real_device: Device,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
-        let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
+        let embed_tokens = embedding(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+        )?;
         let final_layernorm = layer_norm(
             cfg.hidden_size,
             cfg.layer_norm_eps,
-            vb_m.pp("final_layernorm"),
+            mapper.set_nm_device(vb_m.pp("final_layernorm"), false),
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_m = vb_m.pp("layers");
         let mut count = 0;
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
         for layer_idx in 0..cfg.num_hidden_layers {
+            // Alternative rope scalings are not supported.
+            let rotary_emb = RotaryEmbedding::new_partial(
+                cfg.rope_theta,
+                cfg.head_dim(),
+                (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
+                cfg.max_position_embeddings,
+                mapper.device_for(layer_idx, false).unwrap_or(&real_device),
+                is_gptx,
+                vb.dtype(),
+            )?;
             let layer = DecoderLayer::new(
                 cfg,
-                mapper.set_device(layer_idx, vb_m.pp(layer_idx)),
+                vb_m.pp(layer_idx),
                 lora_config,
                 &mut count,
                 &xlora_ordering,
-                is_gptx,
+                &*mapper,
+                layer_idx,
+                loading_isq,
+                rotary_emb,
             )?;
             layers.push(layer)
         }
@@ -435,14 +513,18 @@ impl Model {
                 Arc::get_mut(&mut layer.mlp.fc2).unwrap().merge_weights()?;
             }
         }
-        let lm_head = candle_nn::linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
+        let lm_head = candle_nn::linear(
+            cfg.hidden_size,
+            cfg.vocab_size,
+            mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
+        )?;
         Ok(Self {
             embed_tokens,
             layers,
             final_layernorm,
-            lm_head,
+            lm_head: QLinear::from_linear(lm_head),
             cache: Cache::new(cfg.num_hidden_layers, true),
-            device: vb.device().clone(),
+            device: real_device,
             max_seq_len: cfg.max_position_embeddings,
             dtype: vb.dtype(),
             xlora_classifier: xlora_config.map(|xlora_config| {
@@ -531,55 +613,55 @@ impl Model {
             )?;
 
             if no_kv_cache {
-                extract_logits(
-                    &self
-                        .inner_forward(
-                            input_ids_full,
-                            seqlen_offsets_full,
-                            start_offsets_kernel_full,
-                            Some(scalings),
-                            true,
-                            no_kv_cache,
-                            None,
-                        )?
-                        .contiguous()?
-                        .apply(&self.lm_head)?,
-                    context_lens,
-                )
+                let mut res = self
+                    .inner_forward(
+                        input_ids_full,
+                        seqlen_offsets_full,
+                        start_offsets_kernel_full,
+                        Some(scalings),
+                        true,
+                        no_kv_cache,
+                        None,
+                    )?
+                    .contiguous()?;
+                if self.lm_head.is_quant() {
+                    res = res.to_dtype(DType::F32)?;
+                }
+                extract_logits(&res.apply(&self.lm_head)?, context_lens)
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
-                extract_logits(
-                    &self
-                        .inner_forward(
-                            input_ids,
-                            seqlen_offsets,
-                            start_offsets_kernel,
-                            Some(scalings),
-                            true,
-                            no_kv_cache,
-                            None,
-                        )?
-                        .contiguous()?
-                        .apply(&self.lm_head)?,
-                    context_lens,
-                )
-            }
-        } else {
-            extract_logits(
-                &self
+                let mut res = self
                     .inner_forward(
                         input_ids,
                         seqlen_offsets,
                         start_offsets_kernel,
-                        None,
-                        false,
+                        Some(scalings),
+                        true,
                         no_kv_cache,
                         None,
                     )?
-                    .contiguous()?
-                    .apply(&self.lm_head)?,
-                context_lens,
-            )
+                    .contiguous()?;
+                if self.lm_head.is_quant() {
+                    res = res.to_dtype(DType::F32)?;
+                }
+                extract_logits(&res.apply(&self.lm_head)?, context_lens)
+            }
+        } else {
+            let mut res = self
+                .inner_forward(
+                    input_ids,
+                    seqlen_offsets,
+                    start_offsets_kernel,
+                    None,
+                    false,
+                    no_kv_cache,
+                    None,
+                )?
+                .contiguous()?;
+            if self.lm_head.is_quant() {
+                res = res.to_dtype(DType::F32)?;
+            }
+            extract_logits(&res.apply(&self.lm_head)?, context_lens)
         }
     }
 }
@@ -629,6 +711,31 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+        let mut tensors = Vec::new();
+        tensors.push((self.lm_head.inner(), None));
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.v_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.dense).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((Arc::get_mut(&mut layer.mlp.fc1).unwrap().inner(), Some(i)));
+            tensors.push((Arc::get_mut(&mut layer.mlp.fc2).unwrap().inner(), Some(i)));
+        }
+        (tensors, &*self.mapper)
     }
 }
 

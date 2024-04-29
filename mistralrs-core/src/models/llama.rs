@@ -1,18 +1,20 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
-use candle_transformers::models::with_tracing::{linear_no_bias as linear, Linear};
+use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor, D};
+use candle_nn::{
+    embedding, linear_no_bias as linear, Embedding, Module, RotaryEmbedding, VarBuilder,
+};
 use serde::Deserialize;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     device_map::DeviceMapper,
+    layers::RmsNorm,
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
 
-use super::{flash_attn, repeat_kv, RmsNorm};
+use super::{flash_attn, repeat_kv};
 
 pub const MAX_SEQ_LEN: usize = 4096;
 
@@ -57,10 +59,10 @@ impl Cache {
 
 #[derive(Debug, Clone)]
 struct CausalSelfAttention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: QMatMul,
+    k_proj: QMatMul,
+    v_proj: QMatMul,
+    o_proj: QMatMul,
     num_attention_heads: usize,
     num_key_value_heads: usize,
     head_dim: usize,
@@ -79,9 +81,20 @@ impl CausalSelfAttention {
         cache: &mut Cache,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
-        let q = self.q_proj.forward(x)?;
-        let k = self.k_proj.forward(x)?;
-        let v = self.v_proj.forward(x)?;
+
+        let original_dtype = x.dtype();
+        let mut x = x.clone();
+        if matches!(self.q_proj, QMatMul::QTensor(_)) {
+            x = x.to_dtype(DType::F32)?;
+        }
+        let mut q = self.q_proj.forward(&x)?;
+        let mut k = self.k_proj.forward(&x)?;
+        let mut v = self.v_proj.forward(&x)?;
+        if matches!(self.q_proj, QMatMul::QTensor(_)) {
+            q = q.to_dtype(original_dtype)?;
+            k = k.to_dtype(original_dtype)?;
+            v = v.to_dtype(original_dtype)?;
+        }
 
         let mut q = q.reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.num_key_value_heads, self.head_dim))?;
@@ -124,7 +137,7 @@ impl CausalSelfAttention {
         let k = repeat_kv(k, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
         let v = repeat_kv(v, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
 
-        let y = if self.use_flash_attn {
+        let mut y = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
@@ -145,12 +158,18 @@ impl CausalSelfAttention {
             // Convert to contiguous as matmul doesn't support strided vs for now.
             att.matmul(&v.contiguous()?)?.to_dtype(in_dtype)?
         };
+        if matches!(self.q_proj, QMatMul::QTensor(_)) {
+            y = y.to_dtype(DType::F32)?;
+        }
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
-        let y = self.o_proj.forward(&y)?;
+        let mut y = self.o_proj.forward(&y)?;
+        if matches!(self.q_proj, QMatMul::QTensor(_)) {
+            y = y.to_dtype(original_dtype)?;
+        }
         Ok(y)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config, is_gptx: bool) -> Result<Self> {
+    fn load(vb: VarBuilder, cfg: &Config, rope: Arc<RotaryEmbedding>) -> Result<Self> {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
@@ -158,25 +177,16 @@ impl CausalSelfAttention {
         let k_proj = linear(size_in, size_kv, vb.pp("k_proj"))?;
         let v_proj = linear(size_in, size_kv, vb.pp("v_proj"))?;
         let o_proj = linear(size_q, size_in, vb.pp("o_proj"))?;
-        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        let rotary_emb = Arc::new(RotaryEmbedding::new(
-            cfg.rope_theta,
-            head_dim,
-            MAX_SEQ_LEN,
-            vb.device(),
-            is_gptx,
-            vb.dtype(),
-        )?);
         Ok(Self {
-            q_proj,
-            k_proj,
-            v_proj,
-            o_proj,
+            q_proj: QMatMul::Tensor(q_proj.weight().clone()),
+            k_proj: QMatMul::Tensor(k_proj.weight().clone()),
+            v_proj: QMatMul::Tensor(v_proj.weight().clone()),
+            o_proj: QMatMul::Tensor(o_proj.weight().clone()),
             num_attention_heads: cfg.num_attention_heads,
             num_key_value_heads: cfg.num_key_value_heads,
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             use_flash_attn: cfg.use_flash_attn,
-            rotary_emb,
+            rotary_emb: rope,
         })
     }
 }
@@ -190,15 +200,24 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 
 #[derive(Debug, Clone)]
 struct Mlp {
-    c_fc1: Linear,
-    c_fc2: Linear,
-    c_proj: Linear,
+    c_fc1: QMatMul,
+    c_fc2: QMatMul,
+    c_proj: QMatMul,
 }
 
 impl Mlp {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x = (candle_nn::ops::silu(&self.c_fc1.forward(x)?)? * self.c_fc2.forward(x)?)?;
-        self.c_proj.forward(&x)
+        let original_dtype = x.dtype();
+        let mut x = x.clone();
+        if matches!(self.c_fc1, QMatMul::QTensor(_)) {
+            x = x.to_dtype(DType::F32)?;
+        }
+        let x = (candle_nn::ops::silu(&self.c_fc1.forward(&x)?)? * self.c_fc2.forward(&x)?)?;
+        let mut res = self.c_proj.forward(&x)?;
+        if matches!(self.c_fc1, QMatMul::QTensor(_)) {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
@@ -208,9 +227,9 @@ impl Mlp {
         let c_fc2 = linear(h_size, i_size, vb.pp("up_proj"))?;
         let c_proj = linear(i_size, h_size, vb.pp("down_proj"))?;
         Ok(Self {
-            c_fc1,
-            c_fc2,
-            c_proj,
+            c_fc1: QMatMul::Tensor(c_fc1.weight().clone()),
+            c_fc2: QMatMul::Tensor(c_fc2.weight().clone()),
+            c_proj: QMatMul::Tensor(c_proj.weight().clone()),
         })
     }
 }
@@ -248,14 +267,29 @@ impl Block {
         Ok(x)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config, is_gptx: bool) -> Result<Self> {
-        let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg, is_gptx)?;
-        let mlp = Mlp::load(vb.pp("mlp"), cfg)?;
-        let rms_1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+    fn load(
+        vb: VarBuilder,
+        cfg: &Config,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
+        rope: Arc<RotaryEmbedding>,
+    ) -> Result<Self> {
+        let attn = CausalSelfAttention::load(
+            mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
+            cfg,
+            rope,
+        )?;
+        let mlp = Mlp::load(mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq), cfg)?;
+        let rms_1 = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_nm_device(vb.pp("input_layernorm"), false),
+        )?;
         let rms_2 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            vb.pp("post_attention_layernorm"),
+            mapper.set_nm_device(vb.pp("post_attention_layernorm"), false),
         )?;
         Ok(Self {
             rms_1,
@@ -271,7 +305,7 @@ pub struct Llama {
     wte: Embedding,
     blocks: Vec<Block>,
     ln_f: RmsNorm,
-    lm_head: Linear,
+    lm_head: QMatMul,
     pub kv_cache: super::Cache,
     pub device: Device,
     cache: Cache,
@@ -300,9 +334,12 @@ impl Llama {
             )?;
         }
         let x = x.to_device(&self.device)?;
-        let x = self.ln_f.forward(&x)?;
+        let mut x = self.ln_f.forward(&x)?;
+        if matches!(self.lm_head, QMatMul::QTensor(_)) {
+            x = x.to_dtype(DType::F32)?;
+        }
         let logits = self.lm_head.forward(&x)?;
-        extract_logits(&logits.to_dtype(DType::F32)?, context_lens)
+        extract_logits(&logits, context_lens)
     }
 
     pub fn new(
@@ -310,18 +347,46 @@ impl Llama {
         vb: VarBuilder,
         is_gptx: bool,
         mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        real_device: Device,
     ) -> Result<Self> {
-        let device = vb.device();
-        let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
-        let lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
-        let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, vb.device())?;
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
+        let wte = embedding(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
+        )?;
+        let lm_head = linear(
+            cfg.hidden_size,
+            cfg.vocab_size,
+            mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
+        )?;
+        let ln_f = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_nm_device(vb.pp("model.norm"), false),
+        )?;
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)
             .map(|i| {
+                let rotary_emb = Arc::new(
+                    RotaryEmbedding::new(
+                        cfg.rope_theta,
+                        head_dim,
+                        MAX_SEQ_LEN,
+                        mapper.device_for(i, false).unwrap_or(&real_device),
+                        is_gptx,
+                        vb.dtype(),
+                    )
+                    .expect("Failed to create RoPE"),
+                );
                 Block::load(
-                    mapper.set_device(i, vb.pp(&format!("model.layers.{i}"))),
+                    vb.pp(&format!("model.layers.{i}")),
                     cfg,
-                    is_gptx,
+                    &*mapper,
+                    i,
+                    loading_isq,
+                    rotary_emb,
                 )
                 .expect("Failed to load block.")
             })
@@ -331,10 +396,10 @@ impl Llama {
             wte,
             blocks,
             ln_f,
-            lm_head,
+            lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             cache: Cache::new()?,
             kv_cache: super::Cache::new(cfg.num_hidden_layers, false),
-            device: device.clone(),
+            device: real_device,
             mapper,
         })
     }
@@ -380,5 +445,19 @@ impl NormalModel for Llama {
     }
     fn max_seq_len(&self) -> usize {
         MAX_SEQ_LEN
+    }
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+        let mut tensors = Vec::new();
+        tensors.push((&mut self.lm_head, None));
+        for (i, layer) in self.blocks.iter_mut().enumerate() {
+            tensors.push((&mut layer.attn.q_proj, Some(i)));
+            tensors.push((&mut layer.attn.k_proj, Some(i)));
+            tensors.push((&mut layer.attn.v_proj, Some(i)));
+            tensors.push((&mut layer.attn.o_proj, Some(i)));
+            tensors.push((&mut layer.mlp.c_fc1, Some(i)));
+            tensors.push((&mut layer.mlp.c_fc2, Some(i)));
+            tensors.push((&mut layer.mlp.c_proj, Some(i)));
+        }
+        (tensors, &*self.mapper)
     }
 }

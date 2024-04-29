@@ -6,6 +6,7 @@ use candle_core::quantized::gguf_file;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Embedding, LayerNorm};
+use mistralrs_lora::layer::QLinear;
 
 use crate::device_map::DeviceMapper;
 use crate::DeviceMapMetadata;
@@ -14,33 +15,6 @@ use super::repeat_kv;
 use super::Cache;
 
 pub const MAX_SEQ_LEN: usize = 4096;
-
-#[derive(Debug, Clone)]
-struct QLinear {
-    inner: candle_core::quantized::QMatMul,
-    bias: Tensor,
-}
-
-impl QLinear {
-    fn new<R: std::io::Read + std::io::Seek>(
-        ct: &gguf_file::Content,
-        r: &mut R,
-        name: &str,
-        device: &Device,
-    ) -> Result<Self> {
-        let w = ct.tensor(r, &format!("{name}.weight"), device)?;
-        let b = ct.tensor(r, &format!("{name}.bias"), device)?;
-        let inner = candle_core::quantized::QMatMul::from_qtensor(w)?;
-        let bias = b.dequantize(device)?;
-        Ok(Self { inner, bias })
-    }
-}
-
-impl Module for QLinear {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        self.inner.forward(xs)?.broadcast_add(&self.bias)
-    }
-}
 
 #[derive(Debug, Clone)]
 struct Mlp {
@@ -222,7 +196,7 @@ impl ModelWeights {
         let mapper = mapper.into_mapper(block_count, device)?;
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
-            let device = mapper.device_for(layer_idx).unwrap_or(device);
+            let device = mapper.device_for(layer_idx, false).unwrap_or(device);
 
             let ffn_up = QLinear::new(&ct, reader, &format!("{prefix}.ffn_up"), device)?;
             let ffn_down = QLinear::new(&ct, reader, &format!("{prefix}.ffn_down"), device)?;

@@ -10,8 +10,8 @@ use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::models::Cache;
 use crate::pipeline::chat_template::calculate_eos_tokens;
-use crate::pipeline::ChatTemplate;
-use crate::xlora_models::{NonGranularState, XLoraConfig};
+use crate::pipeline::{ChatTemplate, SimpleModelPaths};
+use crate::xlora_models::NonGranularState;
 use crate::{
     deserialize_chat_template, get_paths, lora_model_loader, normal_model_loader,
     xlora_model_loader, DeviceMapMetadata,
@@ -21,9 +21,10 @@ use crate::{
     utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
 };
 use anyhow::Result;
+use candle_core::quantized::GgmlDType;
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use mistralrs_lora::{LoraConfig, Ordering};
+use mistralrs_lora::Ordering;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -34,52 +35,10 @@ use std::sync::Mutex;
 use tokenizers::Tokenizer;
 use tracing::info;
 
-pub struct NormalModelPaths<P> {
-    tokenizer_filename: P,
-    config_filename: P,
-    template_filename: P,
-    filenames: Vec<P>,
-    xlora_adapter_filenames: Option<Vec<(String, P)>>,
-    xlora_adapter_configs: Option<Vec<(String, LoraConfig)>>,
-    classifier_path: Option<P>,
-    classifier_config: Option<XLoraConfig>,
-    xlora_ordering: Option<Ordering>,
-}
-
-impl ModelPaths for NormalModelPaths<PathBuf> {
-    fn get_config_filename(&self) -> &PathBuf {
-        &self.config_filename
-    }
-    fn get_tokenizer_filename(&self) -> &PathBuf {
-        &self.tokenizer_filename
-    }
-    fn get_weight_filenames(&self) -> &[PathBuf] {
-        &self.filenames
-    }
-    fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>> {
-        &self.xlora_adapter_filenames
-    }
-    fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>> {
-        &self.xlora_adapter_configs
-    }
-    fn get_classifier_config(&self) -> &Option<XLoraConfig> {
-        &self.classifier_config
-    }
-    fn get_classifier_path(&self) -> &Option<PathBuf> {
-        &self.classifier_path
-    }
-    fn get_ordering(&self) -> &Option<Ordering> {
-        &self.xlora_ordering
-    }
-    fn get_template_filename(&self) -> &PathBuf {
-        &self.template_filename
-    }
-}
-
 pub struct NormalPipeline {
     model: Box<dyn NormalModel + Send + Sync>,
     tokenizer: Arc<Tokenizer>,
-    tok_trie: TokTrie,
+    tok_trie: Arc<TokTrie>,
     config: NormalSpecificConfig,
     no_kv_cache: bool,
     chat_template: ChatTemplate,
@@ -229,7 +188,7 @@ impl Loader for NormalLoader {
         silent: bool,
     ) -> Result<Box<dyn ModelPaths>> {
         get_paths!(
-            NormalModelPaths,
+            SimpleModelPaths,
             &token_source,
             revision,
             self,
@@ -246,41 +205,54 @@ impl Loader for NormalLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-    ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
+        in_situ_quant: Option<GgmlDType>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
-        let default_dtype = if device.is_cuda() {
+        let default_dtype = if device.is_cuda() && mapper.is_dummy() {
             DType::BF16
+        } else if !mapper.is_dummy() {
+            DType::F16
         } else {
             DType::F32
         };
 
         info!("Model config: {config}");
 
+        let load_device = if in_situ_quant.is_none() {
+            device.clone()
+        } else {
+            Device::Cpu
+        };
+
         let mut is_lora = false;
-        let model = match self.kind {
+        let mut model = match self.kind {
             ModelKind::QuantizedGGUF => unreachable!(),
             ModelKind::QuantizedGGML => unreachable!(),
             ModelKind::Normal => normal_model_loader!(
                 paths,
                 dtype,
                 default_dtype,
-                device,
+                &load_device,
                 config,
                 self.inner,
                 self.config.use_flash_attn,
                 silent,
-                mapper
+                mapper,
+                in_situ_quant.is_some(),
+                device.clone()
             ),
             ModelKind::XLoraNormal => xlora_model_loader!(
                 paths,
                 dtype,
                 default_dtype,
-                device,
+                &load_device,
                 config,
                 self.inner,
                 self.config.use_flash_attn,
                 silent,
-                mapper
+                mapper,
+                in_situ_quant.is_some(),
+                device.clone()
             ),
             ModelKind::LoraNormal => {
                 is_lora = true;
@@ -288,12 +260,14 @@ impl Loader for NormalLoader {
                     paths,
                     dtype,
                     default_dtype,
-                    device,
+                    &load_device,
                     config,
                     self.inner,
                     self.config.use_flash_attn,
                     silent,
-                    mapper
+                    mapper,
+                    in_situ_quant.is_some(),
+                    device.clone()
                 )
             }
             ModelKind::XLoraGGUF => unreachable!(),
@@ -305,12 +279,16 @@ impl Loader for NormalLoader {
         let tokenizer =
             Tokenizer::from_file(paths.get_tokenizer_filename()).map_err(anyhow::Error::msg)?;
 
-        let chat_template: ChatTemplate = deserialize_chat_template!(paths, self);
+        let (chat_template, gen_conf) = deserialize_chat_template!(paths, self);
 
-        Ok(Box::new(Mutex::new(NormalPipeline {
+        if let Some(in_situ_quant) = in_situ_quant {
+            model.quantize(in_situ_quant, device.clone())?;
+        }
+
+        Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
-            eos_tok: calculate_eos_tokens(&chat_template, &tokenizer),
-            tok_trie: build_tok_trie(tokenizer.clone()),
+            eos_tok: calculate_eos_tokens(&chat_template, gen_conf, &tokenizer),
+            tok_trie: build_tok_trie(tokenizer.clone()).into(),
             tokenizer: tokenizer.into(),
             config: self.config,
             no_kv_cache: self.no_kv_cache,
@@ -413,7 +391,13 @@ impl Pipeline for NormalPipeline {
     fn get_non_granular_state(&self) -> &Option<NonGranularState> {
         &self.non_granular_state
     }
-    fn tok_trie(&self) -> &TokTrie {
-        &self.tok_trie
+    fn tok_trie(&self) -> Arc<TokTrie> {
+        self.tok_trie.clone()
+    }
+    fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()> {
+        let device = self.device().clone();
+        self.model
+            .quantize(dtype, device)
+            .map_err(anyhow::Error::msg)
     }
 }

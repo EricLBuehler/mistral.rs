@@ -1,7 +1,8 @@
 use std::{
     cell::{Cell, RefCell, RefMut},
     rc::Rc,
-    sync::mpsc::Sender,
+    sync::mpsc::{SendError, Sender},
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -30,6 +31,7 @@ pub enum StopReason {
         stop_string_idx: usize,
         completion_bytes_pos: usize,
     },
+    Canceled,
 }
 
 impl ToString for StopReason {
@@ -38,6 +40,7 @@ impl ToString for StopReason {
             StopReason::Eos => "stop".to_string(),
             StopReason::Length(_) | StopReason::ModelLength(_) => "length".to_string(),
             StopReason::StopTok(_) | StopReason::StopString { .. } => "stop".to_string(),
+            StopReason::Canceled => "canceled".to_string(),
         }
     }
 }
@@ -64,7 +67,7 @@ pub struct Sequence {
     prompt_len: usize,
     max_len: Option<usize>,
     timestamp: u128,
-    sampler: Sampler,
+    sampler: Arc<Sampler>,
     stop_tokens: Vec<u32>,
     stop_strings: Vec<String>,
     return_logprobs: bool,
@@ -130,7 +133,7 @@ impl Sequence {
                 None
             },
             responder,
-            sampler,
+            sampler: sampler.into(),
             stop_tokens,
             stop_strings,
             max_len,
@@ -234,8 +237,8 @@ impl Sequence {
         self.xlora_cache.is_some()
     }
 
-    pub fn sampler(&mut self) -> &mut Sampler {
-        &mut self.sampler
+    pub fn sampler(&mut self) -> Arc<Sampler> {
+        self.sampler.clone()
     }
 
     pub fn add_token(
@@ -485,7 +488,11 @@ impl SequenceGroup {
         }
     }
 
-    pub fn maybe_send_streaming_response(&mut self, seq: &Sequence, model: String) {
+    pub fn maybe_send_streaming_response(
+        &mut self,
+        seq: &Sequence,
+        model: String,
+    ) -> Result<(), Box<SendError<Response>>> {
         if self.streaming_chunks.len() == self.n_choices && self.is_streaming {
             let mut swap_streaming_chunks = vec![];
 
@@ -499,9 +506,9 @@ impl SequenceGroup {
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "chat.completion.chunk".to_string(),
-                }))
-                .expect("Expected receiver.");
+                }))?;
         }
+        Ok(())
     }
 
     pub fn maybe_send_completion_done_response(

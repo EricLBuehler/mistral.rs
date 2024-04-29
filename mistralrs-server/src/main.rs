@@ -5,7 +5,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use candle_core::Device;
+use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
 use mistralrs_core::{
     get_tgt_non_granular_index, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs,
@@ -13,6 +13,7 @@ use mistralrs_core::{
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use std::sync::Arc;
+use tracing_subscriber::EnvFilter;
 mod chat_completion;
 mod completions;
 use crate::{chat_completion::__path_chatcompletions, completions::completions};
@@ -23,12 +24,30 @@ mod openai;
 
 use interactive_mode::interactive_mode;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tracing::{info, warn};
+use tracing::{info, level_filters::LevelFilter};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
+}
+
+fn parse_isq(s: &str) -> Result<GgmlDType, String> {
+    match s {
+        "Q4_0" => Ok(GgmlDType::Q4_0),
+        "Q4_1" => Ok(GgmlDType::Q4_1),
+        "Q5_0" => Ok(GgmlDType::Q5_0),
+        "Q5_1" => Ok(GgmlDType::Q5_1),
+        "Q8_0" => Ok(GgmlDType::Q8_1),
+        "Q8_1" => Ok(GgmlDType::Q4_0),
+        "Q2K" => Ok(GgmlDType::Q2K),
+        "Q3K" => Ok(GgmlDType::Q3K),
+        "Q4K" => Ok(GgmlDType::Q4K),
+        "Q5K" => Ok(GgmlDType::Q5K),
+        "Q6K" => Ok(GgmlDType::Q6K),
+        "Q8K" => Ok(GgmlDType::Q8K),
+        _ => Err(format!("GGML type {s} unknown")),
+    }
 }
 
 #[derive(Parser)]
@@ -86,6 +105,10 @@ struct Args {
     /// Number of device layers to load and run on the device. All others will be on the CPU.
     #[arg(short, long)]
     num_device_layers: Option<usize>,
+
+    /// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
+    #[arg(long = "isq", value_parser = parse_isq)]
+    in_situ_quant: Option<GgmlDType>,
 }
 
 #[utoipa::path(
@@ -179,7 +202,10 @@ async fn main() -> Result<()> {
     #[cfg(not(feature = "metal"))]
     let device = Device::cuda_if_available(0)?;
 
-    tracing_subscriber::fmt().init();
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     info!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
@@ -202,7 +228,7 @@ async fn main() -> Result<()> {
                 | ModelKind::XLoraGGUF
         )
     {
-        warn!("Using flash attention with a quantized model has no effect!")
+        info!("⚠️ WARNING: Using flash attention with a quantized model has no effect!")
     }
     info!("Model kind is: {}", loader.get_kind().as_ref());
     let pipeline = loader.load_model(
@@ -214,6 +240,7 @@ async fn main() -> Result<()> {
         args.num_device_layers
             .map(DeviceMapMetadata::from_num_device_layers)
             .unwrap_or(DeviceMapMetadata::dummy()),
+        args.in_situ_quant,
     )?;
     info!("Model loaded.");
 

@@ -1,17 +1,20 @@
 use std::{iter::zip, ops::Mul};
 
-use candle_core::{Module, Result, Shape, Tensor};
+use candle_core::{
+    quantized::{QMatMul, QTensor},
+    Module, Result, Tensor,
+};
 use candle_nn::{init, Dropout, Linear, VarBuilder};
 use either::Either;
 
 use crate::{
-    apply_scalings_to_x, frozenlinear::FrozenLinear, get_maybe_topk_scalings, LinearLayerLike,
-    LoraConfig, LoraLinearConfig, Merge,
+    apply_scalings_to_x, get_maybe_topk_scalings, layer::QLinear, LinearLayerLike, LoraConfig,
+    LoraLinearConfig, Merge,
 };
 
 #[derive(Debug)]
 pub struct LoraLinear {
-    old: FrozenLinear,
+    old: QLinear,
     a_adapters: Either<Vec<Linear>, (Tensor, Vec<Linear>)>,
     b_adapters: Either<Vec<Linear>, (Tensor, Vec<Linear>)>,
     scale_adapters: Vec<f64>,
@@ -101,7 +104,7 @@ impl LoraLinear {
             .to_dtype(a_adapters_stack.dtype())?;
             let a_adapters_stack = a_adapters_stack.broadcast_mul(&scale_adapters_t)?;
             Ok(LoraLinear {
-                old: FrozenLinear::new_from_linear(old)?,
+                old: QLinear::from_parts(old.weight().clone(), old.bias().cloned()),
                 a_adapters: Either::Right((a_adapters_stack.clone(), a_adapters)),
                 b_adapters: Either::Right((b_adapters_stack, b_adapters)),
                 scale_adapters,
@@ -111,7 +114,7 @@ impl LoraLinear {
             })
         } else {
             Ok(LoraLinear {
-                old: FrozenLinear::new_from_linear(old)?,
+                old: QLinear::from_parts(old.weight().clone(), old.bias().cloned()),
                 a_adapters: Either::Left(a_adapters),
                 b_adapters: Either::Left(b_adapters),
                 scale_adapters,
@@ -137,11 +140,23 @@ impl Merge for LoraLinear {
     }
 
     fn merge_weights(&mut self) -> Result<()> {
-        let mut w_base_layer = self.old.weight().clone();
-        for adapter in 0..self.scale_adapters.len() {
-            w_base_layer = (w_base_layer + self.get_delta_weight(adapter))?;
-        }
-        self.old = FrozenLinear::new(w_base_layer, self.old.bias().cloned())?;
+        match &self.old.inner() {
+            QMatMul::QTensor(q) => {
+                let (mut w_base_layer, dtype) = (q.dequantize(&q.device())?, q.dtype());
+                for adapter in 0..self.scale_adapters.len() {
+                    w_base_layer = (w_base_layer + self.get_delta_weight(adapter))?;
+                }
+                let new_w = QTensor::quantize(&w_base_layer, dtype)?;
+                self.old = QLinear::from_qparts(new_w, self.old.bias().cloned());
+            }
+            QMatMul::Tensor(w_base_layer) | QMatMul::TensorF16(w_base_layer) => {
+                let mut w_base_layer = w_base_layer.clone();
+                for adapter in 0..self.scale_adapters.len() {
+                    w_base_layer = (w_base_layer + self.get_delta_weight(adapter))?;
+                }
+                self.old = QLinear::from_parts(w_base_layer, self.old.bias().cloned());
+            }
+        };
         self.merged = true;
         Ok(())
     }
@@ -152,10 +167,13 @@ impl LinearLayerLike for LoraLinear {
         self.old.bias()
     }
     fn weight(&self) -> &Tensor {
-        self.old.weight()
+        unreachable!()
     }
-    fn shape(&self) -> &Shape {
-        self.old.shape()
+    fn inner(&mut self) -> &mut QMatMul {
+        self.old.inner()
+    }
+    fn is_quant(&self) -> bool {
+        self.old.is_quant()
     }
     fn lora_forward(
         &self,

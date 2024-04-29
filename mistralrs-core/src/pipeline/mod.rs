@@ -5,8 +5,9 @@ mod loaders;
 mod macros;
 mod normal;
 use crate::aici::toktree::TokTrie;
-use crate::DeviceMapMetadata;
-use crate::{get_bias_if_not_allowed, sampler::Logprobs, sequence::SequenceRecognizer};
+use crate::device_map::DeviceMapper;
+use crate::{api_dir_list, api_get_file, DeviceMapMetadata};
+use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
 use candle_nn::VarBuilder;
 use chat_template::{apply_chat_template_to, ChatTemplate};
 use core::fmt;
@@ -18,16 +19,20 @@ use hf_hub::{
     Repo, RepoType,
 };
 use indexmap::IndexMap;
+use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 pub use loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
     Phi3Loader, Qwen2Loader,
 };
 use mistralrs_lora::{LoraConfig, Ordering};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use std::path::Path;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
 use tokenizers::Tokenizer;
-use tracing::warn;
+use tracing::info;
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -50,6 +55,53 @@ pub trait ModelPaths {
     fn get_classifier_path(&self) -> &Option<PathBuf>;
     fn get_classifier_config(&self) -> &Option<XLoraConfig>;
     fn get_ordering(&self) -> &Option<Ordering>;
+    fn get_gen_conf_filename(&self) -> Option<&PathBuf>;
+}
+
+pub struct SimpleModelPaths<P> {
+    tokenizer_filename: P,
+    config_filename: P,
+    template_filename: P,
+    filenames: Vec<P>,
+    xlora_adapter_filenames: Option<Vec<(String, P)>>,
+    xlora_adapter_configs: Option<Vec<(String, LoraConfig)>>,
+    classifier_path: Option<P>,
+    classifier_config: Option<XLoraConfig>,
+    xlora_ordering: Option<Ordering>,
+    gen_conf: Option<P>,
+}
+
+impl ModelPaths for SimpleModelPaths<PathBuf> {
+    fn get_config_filename(&self) -> &PathBuf {
+        &self.config_filename
+    }
+    fn get_tokenizer_filename(&self) -> &PathBuf {
+        &self.tokenizer_filename
+    }
+    fn get_weight_filenames(&self) -> &[PathBuf] {
+        &self.filenames
+    }
+    fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>> {
+        &self.xlora_adapter_filenames
+    }
+    fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>> {
+        &self.xlora_adapter_configs
+    }
+    fn get_classifier_config(&self) -> &Option<XLoraConfig> {
+        &self.classifier_config
+    }
+    fn get_classifier_path(&self) -> &Option<PathBuf> {
+        &self.classifier_path
+    }
+    fn get_ordering(&self) -> &Option<Ordering> {
+        &self.xlora_ordering
+    }
+    fn get_template_filename(&self) -> &PathBuf {
+        &self.template_filename
+    }
+    fn get_gen_conf_filename(&self) -> Option<&PathBuf> {
+        self.gen_conf.as_ref()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +200,7 @@ impl AsRef<str> for ModelKind {
 ///     &Device::cuda_if_available(0).unwrap(),
 ///     false,
 ///     DeviceMapMetadata::dummy(),
+///     None,
 /// ).unwrap();
 /// ```
 pub trait Loader {
@@ -166,11 +219,12 @@ pub trait Loader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-    ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>>;
+        in_situ_quant: Option<GgmlDType>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
 
     /// If `revision` is None, then it defaults to `main`.
     /// If `dtype` is None, then it defaults to the model default (usually BF16).
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model(
         &self,
         revision: Option<String>,
@@ -179,9 +233,10 @@ pub trait Loader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-    ) -> Result<Box<Mutex<dyn Pipeline + Send + Sync>>> {
+        in_situ_quant: Option<GgmlDType>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths = self.download_model(revision, token_source, silent)?;
-        self._setup_model(&*paths, dtype, device, silent, mapper)
+        self._setup_model(&*paths, dtype, device, silent, mapper, in_situ_quant)
     }
 
     fn get_id(&self) -> &str;
@@ -205,7 +260,7 @@ pub trait Pipeline: Send + Sync {
     fn num_hidden_layers(&self) -> usize;
     fn cache(&self) -> &Cache;
     fn tokenizer(&self) -> Arc<Tokenizer>;
-    fn tok_trie(&self) -> &TokTrie;
+    fn tok_trie(&self) -> Arc<TokTrie>;
     fn eos_tok(&self) -> &[u32];
     fn name(&self) -> String;
     fn get_max_seq_len(&self) -> usize;
@@ -255,57 +310,8 @@ pub trait Pipeline: Send + Sync {
         }
     }
     fn get_repeat_last_n(&self) -> usize;
-    fn sample(
-        &mut self,
-        logits: Tensor,
-        seq: &mut Sequence,
-        return_logprobs: bool,
-    ) -> Result<Logprobs> {
-        let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
-        let start_at = seq
-            .get_toks()
-            .len()
-            .saturating_sub(self.get_repeat_last_n());
-        let ctxt = seq.get_toks()[start_at..].to_vec();
 
-        let first_lobprobs_response =
-            seq.sampler()
-                .sample(logits.clone(), Some(&ctxt), return_logprobs)?;
-
-        let bias_if_not_allowed = match &mut seq.recognizer {
-            SequenceRecognizer::Regex(ref mut rx) => {
-                get_bias_if_not_allowed!(self, rx.as_mut(), first_lobprobs_response.token)
-            }
-            SequenceRecognizer::Cfg(ref mut cfg) => {
-                get_bias_if_not_allowed!(self, cfg.as_mut(), first_lobprobs_response.token)
-            }
-            SequenceRecognizer::None => None,
-        };
-        let second_logprobs_response = match bias_if_not_allowed {
-            Some(token_set) => {
-                let mut acc = vec![-f32::INFINITY; self.tok_trie().vocab_size()];
-                token_set.apply_to(&mut acc);
-                let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), self.device())?)?;
-
-                seq.sampler()
-                    .sample(new_logits, Some(&ctxt), return_logprobs)?
-            }
-            None => first_lobprobs_response,
-        };
-
-        match seq.recognizer {
-            SequenceRecognizer::Regex(ref mut rx) => {
-                self.tok_trie()
-                    .append_token(rx.as_mut(), second_logprobs_response.token);
-            }
-            SequenceRecognizer::Cfg(ref mut cfg) => {
-                self.tok_trie()
-                    .append_token(cfg.as_mut(), second_logprobs_response.token);
-            }
-            SequenceRecognizer::None => {}
-        }
-        Ok(second_logprobs_response)
-    }
+    fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()>;
 }
 
 pub trait ConfigMarker {}
@@ -317,6 +323,8 @@ pub trait NormalModelLoader {
         use_flash_attn: bool,
         vb: VarBuilder,
         mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        device: Device,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     #[allow(clippy::too_many_arguments)]
     fn load_xlora(
@@ -328,6 +336,8 @@ pub trait NormalModelLoader {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        device: Device,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn is_gptx(&self) -> bool;
 }
@@ -357,6 +367,47 @@ pub trait NormalModel {
     fn device(&self) -> &Device;
     fn cache(&self) -> &Cache;
     fn max_seq_len(&self) -> usize;
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper);
+    /// Quantize the model in-situ.
+    fn quantize(&mut self, dtype: GgmlDType, device: Device) -> candle_core::Result<()> {
+        let (tensors, mapper) = self.get_tensors();
+        let total_tensors = tensors.len();
+        let n_quantized = AtomicUsize::new(0);
+        info!(
+            "Applying in-situ quantization into {dtype:?} to {total_tensors} tensors in parallel."
+        );
+        let bar = ProgressBar::new(total_tensors as u64);
+        bar.set_style(
+            ProgressStyle::default_bar()
+                .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+
+        let mut devices = Vec::new();
+        for (_, layer) in &tensors {
+            let device = if let Some(layer) = layer {
+                mapper.device_for(*layer, false).unwrap_or(&device)
+            } else {
+                &device
+            };
+            devices.push(device.clone());
+        }
+
+        tensors
+            .into_par_iter()
+            .zip(devices)
+            .progress_with(bar)
+            .for_each(|((tensor, _), device)| {
+                if let QMatMul::Tensor(t) = tensor {
+                    n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let t = t.to_device(&device).unwrap();
+                    *tensor = QMatMul::QTensor(Arc::new(QTensor::quantize(&t, dtype).unwrap()));
+                }
+            });
+        info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors.");
+        Ok(())
+    }
 }
 
 struct InputMetadata {
@@ -562,38 +613,32 @@ fn get_xlora_paths(
             RepoType::Model,
             revision,
         ));
-        let xlora_classifier = &api
-            .info()?
-            .siblings
-            .iter()
-            .map(|x| x.rfilename.clone())
+        let model_id = Path::new(&xlora_id);
+
+        let xlora_classifier = &api_dir_list!(api, model_id)
             .filter(|x| x.contains("xlora_classifier.safetensors"))
             .collect::<Vec<_>>();
         if xlora_classifier.len() != 1 {
-            warn!("Detected multiple X-LoRA classifiers: {xlora_classifier:?}");
-            warn!("Selected classifier: `{}`", &xlora_classifier[0]);
+            info!("⚠️ WARNING: Detected multiple X-LoRA classifiers: {xlora_classifier:?}");
+            info!("⚠️ WARNING: Selected classifier: `{}`", &xlora_classifier[0]);
         }
         let xlora_classifier = &xlora_classifier[0];
-        let xlora_configs = &api
-            .info()?
-            .siblings
-            .iter()
-            .map(|x| x.rfilename.clone())
+        let xlora_configs = &api_dir_list!(api, model_id)
             .filter(|x| x.contains("xlora_config.json"))
             .collect::<Vec<_>>();
         if xlora_configs.len() != 1 {
-            warn!("Detected multiple X-LoRA configs: {xlora_configs:?}");
+            info!("⚠️ WARNING: Detected multiple X-LoRA configs: {xlora_configs:?}");
         }
 
-        let classifier_path = api.get(xlora_classifier)?;
+        let classifier_path = api_get_file!(api, xlora_classifier, Path::new(""));
 
         let mut xlora_config: Option<XLoraConfig> = None;
         let mut last_err: Option<serde_json::Error> = None;
         for (i, config_path) in xlora_configs.iter().enumerate() {
             if xlora_configs.len() != 1 {
-                warn!("Selecting config: `{}`", config_path);
+                info!("⚠️ WARNING: Selecting config: `{}`", config_path);
             }
-            let config_path = api.get(config_path)?;
+            let config_path = api_get_file!(api, config_path, Path::new(""));
             let conf = fs::read_to_string(config_path)?;
             let deser: Result<XLoraConfig, serde_json::Error> = serde_json::from_str(&conf);
             match deser {
@@ -603,7 +648,7 @@ fn get_xlora_paths(
                 }
                 Err(e) => {
                     if i != xlora_configs.len() - 1 {
-                        warn!("Config is broken with error `{e}`");
+                        info!("⚠️ WARNING: Config is broken with error `{e}`");
                     }
                     last_err = Some(e);
                 }
@@ -616,11 +661,7 @@ fn get_xlora_paths(
             )
         });
 
-        let adapter_files = api
-            .info()?
-            .siblings
-            .iter()
-            .map(|x| x.rfilename.clone())
+        let adapter_files = api_dir_list!(api, model_id)
             .filter_map(|name| {
                 for adapter_name in xlora_order.as_ref().unwrap().adapters.as_ref().unwrap() {
                     if name.contains(adapter_name) {
@@ -636,9 +677,9 @@ fn get_xlora_paths(
         let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
         for (file, name) in adapter_files {
             if let Some(paths) = adapters_paths.get_mut(&name) {
-                paths.push(api.get(&file)?);
+                paths.push(api_get_file!(api, &file, Path::new("")));
             } else {
-                adapters_paths.insert(name, vec![api.get(&file)?]);
+                adapters_paths.insert(name, vec![api_get_file!(api, &file, Path::new(""))]);
             }
         }
         let mut adapters_configs = Vec::new();
@@ -703,6 +744,7 @@ fn get_model_paths(
     quantized_model_id: &Option<String>,
     quantized_filename: &Option<String>,
     api: &ApiRepo,
+    model_id: &Path,
 ) -> Result<Vec<PathBuf>> {
     match &quantized_filename {
         Some(name) => match quantized_model_id.as_ref().unwrap().as_str() {
@@ -717,20 +759,14 @@ fn get_model_paths(
                     RepoType::Model,
                     revision.clone(),
                 ));
-                Ok(vec![qapi.get(name).unwrap()])
+                let model_id = Path::new(&id);
+                Ok(vec![api_get_file!(qapi, name, model_id)])
             }
         },
         None => {
             let mut filenames = vec![];
-            for rfilename in api
-                .info()?
-                .siblings
-                .iter()
-                .map(|x| x.rfilename.clone())
-                .filter(|x| x.ends_with(".safetensors"))
-            {
-                let filename = api.get(&rfilename)?;
-                filenames.push(filename);
+            for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
+                filenames.push(api_get_file!(api, &rfilename, Path::new("")));
             }
             Ok(filenames)
         }

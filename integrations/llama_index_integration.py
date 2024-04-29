@@ -36,7 +36,7 @@ DEFAULT_MISTRAL_RS_GGML_MODEL = (
     "/main/llama-2-13b-chat.ggmlv3.q4_0.bin"
 )
 DEFAULT_MISTRAL_RS_GGUF_MODEL = (
-    "https://huggingface.co/TheBloke/Ll ama-2-13B-chat-GGUF/resolve"
+    "https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve"
     "/main/llama-2-13b-chat.Q4_0.gguf"
 )
 DEFAULT_TOPK = 32
