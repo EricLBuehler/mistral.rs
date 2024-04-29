@@ -190,8 +190,8 @@ impl LayerWeights {
         };
         *kv_cache = Some((k.clone(), v.clone()));
 
-        let k = repeat_kv(k, self.n_head / self.n_kv_head)?.contiguous()?;
-        let v = repeat_kv(v, self.n_head / self.n_kv_head)?.contiguous()?;
+        let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
+        let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
         let att = if is_prompt {
             let mm = q
                 .to_dtype(DType::F16)?
@@ -199,6 +199,7 @@ impl LayerWeights {
 
             ((mm / (self.head_dim as f64).sqrt())?).to_dtype(DType::F32)?
         } else {
+            let k = k.contiguous()?;
             (q.contiguous()?.matmul(&k.t()?.contiguous()?)? / (self.head_dim as f64).sqrt())?
         };
 
