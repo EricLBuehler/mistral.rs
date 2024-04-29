@@ -341,6 +341,12 @@
 <a href="#339" id="339">339</a>
 <a href="#340" id="340">340</a>
 <a href="#341" id="341">341</a>
+<a href="#342" id="342">342</a>
+<a href="#343" id="343">343</a>
+<a href="#344" id="344">344</a>
+<a href="#345" id="345">345</a>
+<a href="#346" id="346">346</a>
+<a href="#347" id="347">347</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
@@ -351,7 +357,9 @@
 };
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Display, sync::mpsc::channel};
-<span class="kw">use </span>tracing::{info, warn};
+<span class="kw">use </span>tracing::info;
+<span class="kw">use </span>tracing::level_filters::LevelFilter;
+<span class="kw">use </span>tracing_subscriber::EnvFilter;
 
 <span class="kw">enum </span>TestName {
     Prompt(usize),
@@ -594,7 +602,11 @@
     <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
     </span><span class="kw">let </span>device = Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?</span>;
 
-    tracing_subscriber::fmt().init();
+    <span class="kw">let </span>filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+    tracing_subscriber::fmt().with_env_filter(filter).init();
+
     <span class="kw">let </span>token_source = TokenSource::CacheToken;
     <span class="macro">info!</span>(
         <span class="string">"avx: {}, neon: {}, simd128: {}, f16c: {}"</span>,
@@ -617,7 +629,7 @@
                 | ModelKind::XLoraGGUF
         )
     {
-        <span class="macro">warn!</span>(<span class="string">"Using flash attention with a quantized model has no effect!"</span>)
+        <span class="macro">info!</span>(<span class="string">"⚠️ WARNING: Using flash attention with a quantized model has no effect!"</span>)
     }
     <span class="macro">info!</span>(<span class="string">"Model kind is: {}"</span>, loader.get_kind().as_ref());
     <span class="kw">let </span>pipeline = loader.load_model(

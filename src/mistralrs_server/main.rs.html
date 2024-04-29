@@ -272,6 +272,10 @@
 <a href="#270" id="270">270</a>
 <a href="#271" id="271">271</a>
 <a href="#272" id="272">272</a>
+<a href="#273" id="273">273</a>
+<a href="#274" id="274">274</a>
+<a href="#275" id="275">275</a>
+<a href="#276" id="276">276</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{Json, State},
@@ -287,6 +291,7 @@
 };
 <span class="kw">use </span>openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 <span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>tracing_subscriber::EnvFilter;
 <span class="kw">mod </span>chat_completion;
 <span class="kw">mod </span>completions;
 <span class="kw">use crate</span>::{chat_completion::__path_chatcompletions, completions::completions};
@@ -297,7 +302,7 @@
 
 <span class="kw">use </span>interactive_mode::interactive_mode;
 <span class="kw">use </span>tower_http::cors::{AllowOrigin, CorsLayer};
-<span class="kw">use </span>tracing::{info, warn};
+<span class="kw">use </span>tracing::{info, level_filters::LevelFilter};
 <span class="kw">use </span>utoipa::OpenApi;
 <span class="kw">use </span>utoipa_swagger_ui::SwaggerUi;
 
@@ -475,7 +480,10 @@
     <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
     </span><span class="kw">let </span>device = Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?</span>;
 
-    tracing_subscriber::fmt().init();
+    <span class="kw">let </span>filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     <span class="macro">info!</span>(
         <span class="string">"avx: {}, neon: {}, simd128: {}, f16c: {}"</span>,
@@ -498,7 +506,7 @@
                 | ModelKind::XLoraGGUF
         )
     {
-        <span class="macro">warn!</span>(<span class="string">"Using flash attention with a quantized model has no effect!"</span>)
+        <span class="macro">info!</span>(<span class="string">"⚠️ WARNING: Using flash attention with a quantized model has no effect!"</span>)
     }
     <span class="macro">info!</span>(<span class="string">"Model kind is: {}"</span>, loader.get_kind().as_ref());
     <span class="kw">let </span>pipeline = loader.load_model(

@@ -189,7 +189,7 @@
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>std::collections::{BTreeMap, HashMap};
 <span class="kw">use </span>tokenizers::{normalizers::Sequence, NormalizerWrapper, Tokenizer};
-<span class="kw">use </span>tracing::{error, warn};
+<span class="kw">use </span>tracing::{error, info};
 
 <span class="attr">#[derive(Serialize, Deserialize)]
 </span><span class="kw">pub struct </span>ByteTokenizer {
@@ -338,7 +338,7 @@
                     <span class="macro">panic!</span>();
                 }
             } <span class="kw">else </span>{
-                <span class="macro">warn!</span>(<span class="string">"missing token: {}"</span>, tok_id);
+                <span class="macro">info!</span>(<span class="string">"⚠️ WARNING: missing token: {}"</span>, tok_id);
             }
         }
 

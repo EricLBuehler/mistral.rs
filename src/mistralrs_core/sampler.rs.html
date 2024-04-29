@@ -497,7 +497,7 @@
         <span class="kw">for </span>tok <span class="kw">in </span><span class="kw-2">&amp;</span>top_n_toks {
             bytes.push(
                 <span class="self">self</span>.tokenizer
-                    .decode(<span class="kw-2">&amp;</span>[<span class="kw-2">*</span>tok <span class="kw">as </span>u32], <span class="bool-val">true</span>)
+                    .decode(<span class="kw-2">&amp;</span>[<span class="kw-2">*</span>tok <span class="kw">as </span>u32], <span class="bool-val">false</span>)
                     .map_err(|x| Error::Msg(x.to_string()))<span class="question-mark">?</span>,
             );
         }
@@ -530,7 +530,7 @@
             top_logprobs,
             bytes: <span class="self">self
                 </span>.tokenizer
-                .decode(<span class="kw-2">&amp;</span>[next_token], <span class="bool-val">true</span>)
+                .decode(<span class="kw-2">&amp;</span>[next_token], <span class="bool-val">false</span>)
                 .map_err(|x| Error::Msg(x.to_string()))<span class="question-mark">?</span>,
         })
     }
@@ -560,7 +560,7 @@
             top_logprobs,
             bytes: <span class="self">self
                 </span>.tokenizer
-                .decode(<span class="kw-2">&amp;</span>[next_token.try_into().unwrap()], <span class="bool-val">true</span>)
+                .decode(<span class="kw-2">&amp;</span>[next_token.try_into().unwrap()], <span class="bool-val">false</span>)
                 .map_err(|x| Error::Msg(x.to_string()))<span class="question-mark">?</span>,
         })
     }
