@@ -105,11 +105,12 @@ pub fn calculate_eos_tokens(
             Either::Right(ids) => ids,
         };
         for id in ids {
-            eos_tok_ids.push(
-                tokenizer
-                    .decode(&[id], false)
-                    .unwrap_or_else(|_| panic!("Unable to decode id {id})")),
-            );
+            let s = tokenizer
+                .decode(&[id], false)
+                .unwrap_or_else(|_| panic!("Unable to decode id {id})"));
+            if !eos_tok_ids.contains(&s) {
+                eos_tok_ids.push(s);
+            }
         }
 
         let ids = match gen_conf.bos_token_id {
@@ -117,11 +118,12 @@ pub fn calculate_eos_tokens(
             Either::Right(ids) => ids,
         };
         for id in ids {
-            bos_tok_ids.push(
-                tokenizer
-                    .decode(&[id], false)
-                    .unwrap_or_else(|_| panic!("Unable to decode id {id})")),
-            );
+            let s = tokenizer
+                .decode(&[id], false)
+                .unwrap_or_else(|_| panic!("Unable to decode id {id})"));
+            if !bos_tok_ids.contains(&s) {
+                bos_tok_ids.push(s);
+            }
         }
     }
 
