@@ -472,6 +472,9 @@ impl ModelWeights {
         }
         let layer_in = layer_in.to_device(&self.device)?;
         let x = self.norm.forward(&layer_in)?;
-        extract_logits(&self.output.forward(&x.contiguous()?)?, context_lens)
+        extract_logits(
+            &quantized_mat_mul(&x.contiguous()?, &self.output, is_prompt)?,
+            context_lens,
+        )
     }
 }
