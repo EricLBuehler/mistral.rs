@@ -36,7 +36,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     libssl-dev \
     curl \
     pkg-config \
-    python3 \
+    libpython3.10-dev \
     && rm -rf /var/lib/apt/lists/*
 
 FROM base
