@@ -72,6 +72,5 @@ jobs:
                 build-args: |
                   CUDA_COMPUTE_CAP=${{matrix.compute_capability}}
                 cache-from: type=local,src=/tmp/.buildx-cache
-                cache-to: type=local,dest=/tmp/.buildx-cache-new
             
             
