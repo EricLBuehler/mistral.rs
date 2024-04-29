@@ -136,8 +136,15 @@ impl Attention {
                         )?;
                         if let Some(ref mut mask) = mask {
                             let mask_len = mask.dim(1)?;
-                            *mask =
-                                mask.narrow(1, mask_len - (sliding_window - 1), sliding_window - 1)?
+                            *mask = mask.narrow(
+                                1,
+                                mask_len - (sliding_window - 1),
+                                sliding_window - 1,
+                            )?;
+                            *mask = Tensor::cat(
+                                &[&*mask, &mask.narrow(1, mask_len - 1, 1)?],
+                                D::Minus1,
+                            )?;
                         }
                     }
                 }
