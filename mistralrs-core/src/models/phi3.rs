@@ -82,7 +82,7 @@ impl Attention {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        _start_offsets_kernel: Tensor,
+        position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
@@ -115,7 +115,9 @@ impl Attention {
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        let (q, k) = self
+            .rotary_emb
+            .forward(&q, &k, seqlen_offsets, position_ids)?;
 
         let (k, v, attn_mask) = match kv_cache.clone() {
             None => (k, v, attention_mask.cloned()),
@@ -278,18 +280,14 @@ impl DecoderLayer {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
+        position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self.self_attn.forward(
-            &xs,
-            attention_mask,
-            seqlen_offsets,
-            start_offsets_kernel,
-            kv_cache,
-        )?;
+        let xs =
+            self.self_attn
+                .forward(&xs, attention_mask, seqlen_offsets, position_ids, kv_cache)?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = xs.apply(&self.post_attention_layernorm)?.apply(&self.mlp)?;
@@ -420,7 +418,7 @@ impl Model {
         &mut self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
+        position_ids: &[usize],
         context_lens: Vec<usize>,
     ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
@@ -436,6 +434,12 @@ impl Model {
             )?;
             Some(mask)
         };
+        let position_ids_old = position_ids;
+        let mut position_ids = Vec::new();
+        for p in position_ids_old {
+            position_ids.push(*p + past_key_values_length);
+        }
+
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
@@ -447,7 +451,7 @@ impl Model {
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
                 seqlen_offsets,
-                start_offsets_kernel.clone(),
+                &position_ids,
                 &mut cache[i],
             )?
         }
@@ -465,14 +469,15 @@ impl NormalModel for Model {
         &mut self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
+        _start_offsets_kernel: Tensor,
         context_lens: Vec<usize>,
     ) -> Result<Tensor> {
+        // NOTE(EricLBuehler): hacky yes, but passing the context lens to start the position ids calculation works
         self.forward(
             input_ids,
             seqlen_offsets,
-            start_offsets_kernel,
-            context_lens,
+            &context_lens,
+            context_lens.clone(),
         )
     }
     fn xlora_forward(

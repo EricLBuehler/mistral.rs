@@ -88,7 +88,7 @@ impl Attention {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        _start_offsets_kernel: Tensor,
+        position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
@@ -129,7 +129,9 @@ impl Attention {
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        let (q, k) = self
+            .rotary_emb
+            .forward(&q, &k, seqlen_offsets, position_ids)?;
 
         let (k, v, attn_mask) = match kv_cache.clone() {
             None => (k, v, attention_mask.cloned()),
@@ -354,7 +356,7 @@ impl DecoderLayer {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
+        position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
@@ -366,7 +368,7 @@ impl DecoderLayer {
             &xs,
             attention_mask,
             seqlen_offsets,
-            start_offsets_kernel,
+            position_ids,
             kv_cache,
             scalings.clone(),
             global_scaling_weight,
@@ -538,7 +540,7 @@ impl Model {
         &mut self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
+        position_ids: &[usize],
         scalings: Option<Tensor>,
         is_full_pass: bool,
         no_kv_cache: bool,
@@ -557,6 +559,12 @@ impl Model {
             )?;
             Some(mask)
         };
+        let position_ids_old = position_ids;
+        let mut position_ids = Vec::new();
+        for p in position_ids_old {
+            position_ids.push(*p + past_key_values_length);
+        }
+
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let mut cache = if is_full_pass {
             if no_kv_cache {
@@ -580,7 +588,7 @@ impl Model {
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
                 seqlen_offsets,
-                start_offsets_kernel.clone(),
+                &position_ids,
                 &mut cache[i],
                 scalings.clone(),
                 self.xlora_classifier
@@ -607,6 +615,7 @@ impl Model {
         non_granular_state: &Option<NonGranularState>,
         context_lens: Vec<usize>,
     ) -> Result<Tensor> {
+        // NOTE(EricLBuehler): hacky yes, but passing the context lens to start the position ids calculation works
         if self.xlora_classifier.is_some() {
             let scalings = self.get_scalings(
                 input_ids,
@@ -617,6 +626,7 @@ impl Model {
                 &start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
+                &context_lens,
             )?;
 
             if no_kv_cache {
@@ -624,7 +634,7 @@ impl Model {
                     .inner_forward(
                         input_ids_full,
                         seqlen_offsets_full,
-                        start_offsets_kernel_full,
+                        &context_lens,
                         Some(scalings),
                         true,
                         no_kv_cache,
@@ -641,7 +651,7 @@ impl Model {
                     .inner_forward(
                         input_ids,
                         seqlen_offsets,
-                        start_offsets_kernel,
+                        &context_lens,
                         Some(scalings),
                         true,
                         no_kv_cache,
@@ -658,7 +668,7 @@ impl Model {
                 .inner_forward(
                     input_ids,
                     seqlen_offsets,
-                    start_offsets_kernel,
+                    &context_lens,
                     None,
                     false,
                     no_kv_cache,
@@ -758,16 +768,18 @@ impl ScalingsMaker for Model {
         &mut self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
+        _start_offsets_kernel: Tensor,
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
+        context_lens: &[usize],
     ) -> Result<Tensor> {
+        // NOTE(EricLBuehler): hacky yes, but passing the context lens to start the position ids calculation works
         self.inner_forward(
             input_ids,
             seqlen_offsets,
-            start_offsets_kernel,
+            context_lens,
             Some(scalings),
             is_full_pass,
             no_kv_cache,

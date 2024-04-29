@@ -679,6 +679,7 @@ impl XLoraModel {
                 &start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
+                &context_lens,
             )?;
 
             if no_kv_cache {
@@ -837,6 +838,7 @@ impl ScalingsMaker for XLoraModel {
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
+        _context_lens: &[usize],
     ) -> Result<Tensor> {
         self.inner_forward(
             input_ids,
