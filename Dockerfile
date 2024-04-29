@@ -25,7 +25,6 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     curl \
     pkg-config \
     python3 \
-    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 FROM base
