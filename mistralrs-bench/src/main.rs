@@ -254,7 +254,7 @@ fn main() -> anyhow::Result<()> {
     let device = Device::cuda_if_available(0)?;
 
     let filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::WARN.into())
+        .with_default_directive(LevelFilter::INFO.into())
         .from_env_lossy();
     tracing_subscriber::fmt().with_env_filter(filter).init();
 

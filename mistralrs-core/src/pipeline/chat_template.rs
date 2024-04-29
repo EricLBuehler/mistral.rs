@@ -129,12 +129,12 @@ pub fn calculate_eos_tokens(
         .iter()
         .map(|val| format!("{:?}", val))
         .collect::<Vec<String>>()
-        .join(" ");
+        .join(", ");
     let eos_render = eos_tok_ids
         .iter()
         .map(|val| format!("{:?}", val))
         .collect::<Vec<String>>()
-        .join(" ");
+        .join(", ");
 
     info!(
         "bos_toks = {bos_render}, eos_toks = {eos_render}, unk_tok = {}",
