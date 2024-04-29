@@ -12,6 +12,7 @@ use std::{
     sync::{mpsc::channel, Arc, Mutex},
 };
 use stream::ChatCompletionStreamer;
+use tracing_subscriber::{filter::LevelFilter, EnvFilter};
 
 use candle_core::Device;
 use mistralrs_core::{
@@ -139,6 +140,11 @@ impl Runner {
         } else {
             max_seqs
         };
+
+        let filter = EnvFilter::builder()
+            .with_default_directive(LevelFilter::WARN.into())
+            .from_env_lossy();
+        tracing_subscriber::fmt().with_env_filter(filter).init();
 
         let loader: Box<dyn Loader> = match which {
             Which::Plain {
