@@ -243,7 +243,6 @@ fn main() -> anyhow::Result<()> {
 
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
         .with_use_flash_attn(use_flash_attn)
-        .with_disable_attention_mask(true)
         .build()?;
     let model_name = loader.get_id();
 
