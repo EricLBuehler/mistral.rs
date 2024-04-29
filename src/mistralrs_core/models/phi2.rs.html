@@ -475,6 +475,8 @@
 <a href="#473" id="473">473</a>
 <a href="#474" id="474">474</a>
 <a href="#475" id="475">475</a>
+<a href="#476" id="476">476</a>
+<a href="#477" id="477">477</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Phi model.
@@ -902,6 +904,7 @@
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec&lt;usize&gt;,
+        _position_ids: Vec&lt;usize&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="self">self</span>.forward(
             input_ids,
@@ -921,6 +924,7 @@
         _no_kv_cache: bool,
         _non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::xlora_models::NonGranularState&gt;,
         _context_lens: Vec&lt;usize&gt;,
+        _position_ids: Vec&lt;usize&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="macro">unimplemented!</span>()
     }

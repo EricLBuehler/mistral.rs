@@ -464,6 +464,8 @@
 <a href="#462" id="462">462</a>
 <a href="#463" id="463">463</a>
 <a href="#464" id="464">464</a>
+<a href="#465" id="465">465</a>
+<a href="#466" id="466">466</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -879,6 +881,7 @@
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec&lt;usize&gt;,
+        _position_ids: Vec&lt;usize&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="self">self</span>.forward(
             input_ids,
@@ -898,6 +901,7 @@
         _no_kv_cache: bool,
         _non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::xlora_models::NonGranularState&gt;,
         _context_lens: Vec&lt;usize&gt;,
+        _position_ids: Vec&lt;usize&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="macro">unimplemented!</span>()
     }

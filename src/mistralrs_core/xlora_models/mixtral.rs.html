@@ -979,6 +979,10 @@
 <a href="#977" id="977">977</a>
 <a href="#978" id="978">978</a>
 <a href="#979" id="979">979</a>
+<a href="#980" id="980">980</a>
+<a href="#981" id="981">981</a>
+<a href="#982" id="982">982</a>
+<a href="#983" id="983">983</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
@@ -1789,6 +1793,7 @@
                 <span class="kw-2">&amp;</span>start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
+                <span class="kw-2">&amp;</span>context_lens,
             )<span class="question-mark">?</span>;
 
             <span class="kw">if </span>no_kv_cache {
@@ -1852,6 +1857,7 @@
         _seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         _start_offsets_kernel: Tensor,
         _context_lens: Vec&lt;usize&gt;,
+        _position_ids: Vec&lt;usize&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="macro">unreachable!</span>()
     }
@@ -1866,6 +1872,7 @@
         no_kv_cache: bool,
         non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::xlora_models::NonGranularState&gt;,
         context_lens: Vec&lt;usize&gt;,
+        _position_ids: Vec&lt;usize&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="self">self</span>.forward(
             input_ids,
@@ -1946,6 +1953,7 @@
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
+        _context_lens: <span class="kw-2">&amp;</span>[usize],
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="self">self</span>.inner_forward(
             input_ids,

@@ -133,6 +133,10 @@
 <a href="#131" id="131">131</a>
 <a href="#132" id="132">132</a>
 <a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>classifier;
 <span class="kw">mod </span>config;
 <span class="kw">mod </span>gemma;
@@ -179,6 +183,7 @@
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
+        context_lens: <span class="kw-2">&amp;</span>[usize],
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt;;
     <span class="kw">fn </span>get_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache;
 
@@ -193,6 +198,7 @@
         start_offsets_kernel_full: <span class="kw-2">&amp;</span>Tensor,
         no_kv_cache: bool,
         non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
+        position_ids: <span class="kw-2">&amp;</span>[usize],
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_size, <span class="kw">_</span>) = input_ids_full.dims2()<span class="question-mark">?</span>;
         <span class="kw">let </span>(<span class="kw">_</span>, seq_len) = input_ids.dims2()<span class="question-mark">?</span>;
@@ -222,6 +228,7 @@
                 <span class="bool-val">true</span>,
                 no_kv_cache,
                 <span class="prelude-val">Some</span>(<span class="self">self</span>.get_classifier().config.scaling_pass_value),
+                position_ids,
             )<span class="question-mark">?</span>;
 
             <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
@@ -243,6 +250,7 @@
                 <span class="bool-val">false</span>,
                 no_kv_cache,
                 <span class="prelude-val">Some</span>(<span class="self">self</span>.get_classifier().config.scaling_pass_value),
+                position_ids,
             )<span class="question-mark">?
         </span>};
 

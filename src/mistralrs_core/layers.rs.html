@@ -221,6 +221,7 @@
 <a href="#219" id="219">219</a>
 <a href="#220" id="220">220</a>
 <a href="#221" id="221">221</a>
+<a href="#222" id="222">222</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{ops::Mul, str::FromStr};
@@ -406,11 +407,11 @@
     }
 
     <span class="doccomment">/// Returns (sin, cos) taking into account LongRope
-    </span><span class="kw">fn </span>get_long_or_short_sin_cos(<span class="kw-2">&amp;</span><span class="self">self</span>, seqlen_offsets: <span class="kw-2">&amp;</span>[usize]) -&gt; (<span class="kw-2">&amp;</span>Tensor, <span class="kw-2">&amp;</span>Tensor) {
+    </span><span class="kw">fn </span>get_long_or_short_sin_cos(<span class="kw-2">&amp;</span><span class="self">self</span>, position_ids: <span class="kw-2">&amp;</span>[usize]) -&gt; (<span class="kw-2">&amp;</span>Tensor, <span class="kw-2">&amp;</span>Tensor) {
         <span class="kw">if </span><span class="self">self</span>.long_cos.is_none() {
             <span class="kw">return </span>(<span class="kw-2">&amp;</span><span class="self">self</span>.short_sin, <span class="kw-2">&amp;</span><span class="self">self</span>.short_cos);
         }
-        <span class="kw">let </span>seq_len = seqlen_offsets.iter().max().unwrap() + <span class="number">1</span>;
+        <span class="kw">let </span>seq_len = position_ids.iter().max().unwrap() + <span class="number">1</span>;
         <span class="kw">if </span>seq_len &gt; <span class="self">self</span>.original_max_position_embeddings {
             (
                 <span class="self">self</span>.long_sin.as_ref().unwrap(),
@@ -426,11 +427,12 @@
         q: <span class="kw-2">&amp;</span>Tensor,
         k: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+        position_ids: <span class="kw-2">&amp;</span>[usize],
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor)&gt; {
         <span class="kw">let </span>(_b_sz, _h, seq_len, _n_embd) = q.dims4()<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>q_embeds = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>k_embeds = Vec::new();
-        <span class="kw">let </span>(sin, cos) = <span class="self">self</span>.get_long_or_short_sin_cos(seqlen_offsets);
+        <span class="kw">let </span>(sin, cos) = <span class="self">self</span>.get_long_or_short_sin_cos(position_ids);
         <span class="kw">for </span>offset <span class="kw">in </span>seqlen_offsets {
             <span class="kw">let </span>cos = cos.narrow(<span class="number">0</span>, <span class="kw-2">*</span>offset, seq_len)<span class="question-mark">?</span>;
             <span class="kw">let </span>sin = sin.narrow(<span class="number">0</span>, <span class="kw-2">*</span>offset, seq_len)<span class="question-mark">?</span>;

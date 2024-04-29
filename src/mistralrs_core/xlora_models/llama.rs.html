@@ -795,6 +795,10 @@
 <a href="#793" id="793">793</a>
 <a href="#794" id="794">794</a>
 <a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
+<a href="#797" id="797">797</a>
+<a href="#798" id="798">798</a>
+<a href="#799" id="799">799</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -1323,6 +1327,7 @@
                 <span class="kw-2">&amp;</span>start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
+                <span class="kw-2">&amp;</span>context_lens,
             )<span class="question-mark">?</span>;
 
             <span class="kw">if </span>no_kv_cache {
@@ -1489,6 +1494,7 @@
         _seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         _start_offsets_kernel: Tensor,
         _context_lens: Vec&lt;usize&gt;,
+        _position_ids: Vec&lt;usize&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="macro">unreachable!</span>()
     }
@@ -1503,6 +1509,7 @@
         no_kv_cache: bool,
         non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::xlora_models::NonGranularState&gt;,
         context_lens: Vec&lt;usize&gt;,
+        _position_ids: Vec&lt;usize&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="self">self</span>.forward(
             input_ids,
@@ -1578,6 +1585,7 @@
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
+        _context_lens: <span class="kw-2">&amp;</span>[usize],
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="self">self</span>.inner_forward(
             input_ids,

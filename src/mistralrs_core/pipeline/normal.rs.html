@@ -403,6 +403,9 @@
 <a href="#401" id="401">401</a>
 <a href="#402" id="402">402</a>
 <a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
+<a href="#405" id="405">405</a>
+<a href="#406" id="406">406</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
     Phi3Loader, Qwen2Loader,
@@ -732,6 +735,7 @@
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full,
             context_lens,
+            position_ids,
         } = calculate_inputs(
             input_toks,
             is_prompt,
@@ -746,6 +750,7 @@
                 <span class="kw-2">&amp;</span>seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
+                position_ids,
             ),
             <span class="bool-val">true </span>=&gt; <span class="self">self</span>.model.xlora_forward(
                 <span class="kw-2">&amp;</span>input_ids,
@@ -757,6 +762,7 @@
                 <span class="self">self</span>.no_kv_cache,
                 <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state,
                 context_lens,
+                position_ids,
             ),
         }
     }

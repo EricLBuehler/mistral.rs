@@ -777,6 +777,21 @@
 <a href="#775" id="775">775</a>
 <a href="#776" id="776">776</a>
 <a href="#777" id="777">777</a>
+<a href="#778" id="778">778</a>
+<a href="#779" id="779">779</a>
+<a href="#780" id="780">780</a>
+<a href="#781" id="781">781</a>
+<a href="#782" id="782">782</a>
+<a href="#783" id="783">783</a>
+<a href="#784" id="784">784</a>
+<a href="#785" id="785">785</a>
+<a href="#786" id="786">786</a>
+<a href="#787" id="787">787</a>
+<a href="#788" id="788">788</a>
+<a href="#789" id="789">789</a>
+<a href="#790" id="790">790</a>
+<a href="#791" id="791">791</a>
+<a href="#792" id="792">792</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
@@ -867,7 +882,7 @@
         xs: <span class="kw-2">&amp;</span>Tensor,
         attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        _start_offsets_kernel: Tensor,
+        position_ids: <span class="kw-2">&amp;</span>[usize],
         kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
         scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         global_scaling_weight: f64,
@@ -908,7 +923,9 @@
             .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>(q, k) = <span class="self">self</span>.rotary_emb.forward(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, seqlen_offsets)<span class="question-mark">?</span>;
+        <span class="kw">let </span>(q, k) = <span class="self">self
+            </span>.rotary_emb
+            .forward(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, seqlen_offsets, position_ids)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>(k, v, attn_mask) = <span class="kw">match </span>kv_cache.clone() {
             <span class="prelude-val">None </span>=&gt; (k, v, attention_mask.cloned()),
@@ -1133,7 +1150,7 @@
         xs: <span class="kw-2">&amp;</span>Tensor,
         attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
+        position_ids: <span class="kw-2">&amp;</span>[usize],
         kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
         scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         global_scaling_weight: f64,
@@ -1145,7 +1162,7 @@
             <span class="kw-2">&amp;</span>xs,
             attention_mask,
             seqlen_offsets,
-            start_offsets_kernel,
+            position_ids,
             kv_cache,
             scalings.clone(),
             global_scaling_weight,
@@ -1317,7 +1334,7 @@
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
+        position_ids: <span class="kw-2">&amp;</span>[usize],
         scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         is_full_pass: bool,
         no_kv_cache: bool,
@@ -1336,6 +1353,12 @@
             )<span class="question-mark">?</span>;
             <span class="prelude-val">Some</span>(mask)
         };
+        <span class="kw">let </span>position_ids_old = position_ids;
+        <span class="kw">let </span><span class="kw-2">mut </span>position_ids = Vec::new();
+        <span class="kw">for </span>p <span class="kw">in </span>position_ids_old {
+            position_ids.push(<span class="kw-2">*</span>p + past_key_values_length);
+        }
+
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="kw">if </span>is_full_pass {
             <span class="kw">if </span>no_kv_cache {
@@ -1359,7 +1382,7 @@
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
                 seqlen_offsets,
-                start_offsets_kernel.clone(),
+                <span class="kw-2">&amp;</span>position_ids,
                 <span class="kw-2">&amp;mut </span>cache[i],
                 scalings.clone(),
                 <span class="self">self</span>.xlora_classifier
@@ -1385,6 +1408,7 @@
         no_kv_cache: bool,
         non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
         context_lens: Vec&lt;usize&gt;,
+        position_ids: Vec&lt;usize&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">if </span><span class="self">self</span>.xlora_classifier.is_some() {
             <span class="kw">let </span>scalings = <span class="self">self</span>.get_scalings(
@@ -1396,6 +1420,7 @@
                 <span class="kw-2">&amp;</span>start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
+                <span class="kw-2">&amp;</span>position_ids,
             )<span class="question-mark">?</span>;
 
             <span class="kw">if </span>no_kv_cache {
@@ -1403,7 +1428,7 @@
                     </span>.inner_forward(
                         input_ids_full,
                         seqlen_offsets_full,
-                        start_offsets_kernel_full,
+                        <span class="kw-2">&amp;</span>position_ids,
                         <span class="prelude-val">Some</span>(scalings),
                         <span class="bool-val">true</span>,
                         no_kv_cache,
@@ -1420,7 +1445,7 @@
                     </span>.inner_forward(
                         input_ids,
                         seqlen_offsets,
-                        start_offsets_kernel,
+                        <span class="kw-2">&amp;</span>position_ids,
                         <span class="prelude-val">Some</span>(scalings),
                         <span class="bool-val">true</span>,
                         no_kv_cache,
@@ -1437,7 +1462,7 @@
                 </span>.inner_forward(
                     input_ids,
                     seqlen_offsets,
-                    start_offsets_kernel,
+                    <span class="kw-2">&amp;</span>position_ids,
                     <span class="prelude-val">None</span>,
                     <span class="bool-val">false</span>,
                     no_kv_cache,
@@ -1459,6 +1484,7 @@
         _seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         _start_offsets_kernel: Tensor,
         _context_lens: Vec&lt;usize&gt;,
+        _position_ids: Vec&lt;usize&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="macro">unreachable!</span>()
     }
@@ -1473,6 +1499,7 @@
         no_kv_cache: bool,
         non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::xlora_models::NonGranularState&gt;,
         context_lens: Vec&lt;usize&gt;,
+        position_ids: Vec&lt;usize&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="self">self</span>.forward(
             input_ids,
@@ -1484,6 +1511,7 @@
             no_kv_cache,
             non_granular_state,
             context_lens,
+            position_ids,
         )
     }
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {
@@ -1537,16 +1565,18 @@
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
+        _start_offsets_kernel: Tensor,
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
+        context_lens: <span class="kw-2">&amp;</span>[usize],
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="self">self</span>.inner_forward(
+        <span class="comment">// NOTE(EricLBuehler): hacky yes, but passing the context lens to start the position ids calculation works
+        </span><span class="self">self</span>.inner_forward(
             input_ids,
             seqlen_offsets,
-            start_offsets_kernel,
+            context_lens,
             <span class="prelude-val">Some</span>(scalings),
             is_full_pass,
             no_kv_cache,

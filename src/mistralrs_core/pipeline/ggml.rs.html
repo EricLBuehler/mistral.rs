@@ -446,6 +446,7 @@
 <a href="#444" id="444">444</a>
 <a href="#445" id="445">445</a>
 <a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
 </pre></div><pre class="rust"><code><span class="kw">use super</span>::{
     calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
     Pipeline, TokenSource, XLoraPaths,
@@ -807,7 +808,8 @@
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full,
             context_lens,
-        } = calculate_inputs(
+            position_ids: <span class="kw">_</span>, <span class="comment">// NOTE(EricLBuehler): ignore, it is for phi3
+        </span>} = calculate_inputs(
             input_toks,
             is_prompt,
             <span class="self">self</span>.is_xlora(),
