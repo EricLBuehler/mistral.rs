@@ -471,14 +471,9 @@ impl NormalModel for Model {
         seqlen_offsets: &[usize],
         _start_offsets_kernel: Tensor,
         context_lens: Vec<usize>,
+        position_ids: Vec<usize>,
     ) -> Result<Tensor> {
-        // NOTE(EricLBuehler): hacky yes, but passing the context lens to start the position ids calculation works
-        self.forward(
-            input_ids,
-            seqlen_offsets,
-            &context_lens,
-            context_lens.clone(),
-        )
+        self.forward(input_ids, seqlen_offsets, &position_ids, context_lens)
     }
     fn xlora_forward(
         &mut self,
@@ -491,6 +486,7 @@ impl NormalModel for Model {
         _no_kv_cache: bool,
         _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         _context_lens: Vec<usize>,
+        _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         unimplemented!()
     }

@@ -59,7 +59,7 @@ trait ScalingsMaker {
         start_offsets_kernel_full: &Tensor,
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
-        context_lens: &[usize],
+        position_ids: &[usize],
     ) -> Result<Tensor> {
         let (b_size, _) = input_ids_full.dims2()?;
         let (_, seq_len) = input_ids.dims2()?;
@@ -89,7 +89,7 @@ trait ScalingsMaker {
                 true,
                 no_kv_cache,
                 Some(self.get_classifier().config.scaling_pass_value),
-                context_lens,
+                position_ids,
             )?;
 
             let mut new_cache = Vec::new();
@@ -111,7 +111,7 @@ trait ScalingsMaker {
                 false,
                 no_kv_cache,
                 Some(self.get_classifier().config.scaling_pass_value),
-                context_lens,
+                position_ids,
             )?
         };
 

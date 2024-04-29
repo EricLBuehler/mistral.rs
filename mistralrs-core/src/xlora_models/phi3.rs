@@ -614,8 +614,8 @@ impl Model {
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
         context_lens: Vec<usize>,
+        position_ids: Vec<usize>,
     ) -> Result<Tensor> {
-        // NOTE(EricLBuehler): hacky yes, but passing the context lens to start the position ids calculation works
         if self.xlora_classifier.is_some() {
             let scalings = self.get_scalings(
                 input_ids,
@@ -626,7 +626,7 @@ impl Model {
                 &start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
-                &context_lens,
+                &position_ids,
             )?;
 
             if no_kv_cache {
@@ -634,7 +634,7 @@ impl Model {
                     .inner_forward(
                         input_ids_full,
                         seqlen_offsets_full,
-                        &context_lens,
+                        &position_ids,
                         Some(scalings),
                         true,
                         no_kv_cache,
@@ -651,7 +651,7 @@ impl Model {
                     .inner_forward(
                         input_ids,
                         seqlen_offsets,
-                        &context_lens,
+                        &position_ids,
                         Some(scalings),
                         true,
                         no_kv_cache,
@@ -668,7 +668,7 @@ impl Model {
                 .inner_forward(
                     input_ids,
                     seqlen_offsets,
-                    &context_lens,
+                    &position_ids,
                     None,
                     false,
                     no_kv_cache,
@@ -690,6 +690,7 @@ impl NormalModel for Model {
         _seqlen_offsets: &[usize],
         _start_offsets_kernel: Tensor,
         _context_lens: Vec<usize>,
+        _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -704,6 +705,7 @@ impl NormalModel for Model {
         no_kv_cache: bool,
         non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         context_lens: Vec<usize>,
+        position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
@@ -715,6 +717,7 @@ impl NormalModel for Model {
             no_kv_cache,
             non_granular_state,
             context_lens,
+            position_ids,
         )
     }
     fn cache(&self) -> &Cache {

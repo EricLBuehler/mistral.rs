@@ -413,6 +413,7 @@ impl NormalModel for Llama {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<usize>,
+        _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
@@ -432,6 +433,7 @@ impl NormalModel for Llama {
         _no_kv_cache: bool,
         _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         _context_lens: Vec<usize>,
+        _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         unimplemented!()
     }
