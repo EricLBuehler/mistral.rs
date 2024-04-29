@@ -221,8 +221,6 @@
 <a href="#219" id="219">219</a>
 <a href="#220" id="220">220</a>
 <a href="#221" id="221">221</a>
-<a href="#222" id="222">222</a>
-<a href="#223" id="223">223</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{ops::Mul, str::FromStr};
@@ -362,22 +360,20 @@
             <span class="kw">let </span>inv_freq_len = inv_freq_long.len();
 
             <span class="kw">let </span>t = Tensor::arange(<span class="number">0u32</span>, max_seq_len <span class="kw">as </span>u32, dev)<span class="question-mark">?
-                </span>.to_dtype(dtype)<span class="question-mark">?
+                </span>.to_dtype(DType::F32)<span class="question-mark">?
                 </span>.reshape((max_seq_len, <span class="number">1</span>))<span class="question-mark">?</span>;
 
             <span class="comment">// Calculate sin,cos for long
-            </span><span class="kw">let </span>inv_freq_long =
-                Tensor::from_vec(inv_freq_long, (<span class="number">1</span>, inv_freq_len), dev)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
+            </span><span class="kw">let </span>inv_freq_long = Tensor::from_vec(inv_freq_long, (<span class="number">1</span>, inv_freq_len), dev)<span class="question-mark">?</span>;
             <span class="kw">let </span>freqs_long = t.matmul(<span class="kw-2">&amp;</span>inv_freq_long)<span class="question-mark">?</span>;
-            <span class="kw">let </span>long_sin = freqs_long.sin()<span class="question-mark">?</span>.mul(scaling_factor)<span class="question-mark">?</span>;
-            <span class="kw">let </span>long_cos = freqs_long.cos()<span class="question-mark">?</span>.mul(scaling_factor)<span class="question-mark">?</span>;
+            <span class="kw">let </span>long_sin = freqs_long.sin()<span class="question-mark">?</span>.mul(scaling_factor)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
+            <span class="kw">let </span>long_cos = freqs_long.cos()<span class="question-mark">?</span>.mul(scaling_factor)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
 
             <span class="comment">// Calculate sin,cos for short
-            </span><span class="kw">let </span>inv_freq_short =
-                Tensor::from_vec(inv_freq_short, (<span class="number">1</span>, inv_freq_len), dev)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
+            </span><span class="kw">let </span>inv_freq_short = Tensor::from_vec(inv_freq_short, (<span class="number">1</span>, inv_freq_len), dev)<span class="question-mark">?</span>;
             <span class="kw">let </span>freqs_short = t.matmul(<span class="kw-2">&amp;</span>inv_freq_short)<span class="question-mark">?</span>;
-            <span class="kw">let </span>short_sin = freqs_short.sin()<span class="question-mark">?</span>.mul(scaling_factor)<span class="question-mark">?</span>;
-            <span class="kw">let </span>short_cos = freqs_short.cos()<span class="question-mark">?</span>.mul(scaling_factor)<span class="question-mark">?</span>;
+            <span class="kw">let </span>short_sin = freqs_short.sin()<span class="question-mark">?</span>.mul(scaling_factor)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
+            <span class="kw">let </span>short_cos = freqs_short.cos()<span class="question-mark">?</span>.mul(scaling_factor)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
 
             <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
                 short_cos,
@@ -392,13 +388,13 @@
                 .map(|i| <span class="number">1f32 </span>/ cfg.rope_theta.powf(i <span class="kw">as </span>f64 / dim <span class="kw">as </span>f64) <span class="kw">as </span>f32)
                 .collect();
             <span class="kw">let </span>inv_freq_len = inv_freq.len();
-            <span class="kw">let </span>inv_freq = Tensor::from_vec(inv_freq, (<span class="number">1</span>, inv_freq_len), dev)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
+            <span class="kw">let </span>inv_freq = Tensor::from_vec(inv_freq, (<span class="number">1</span>, inv_freq_len), dev)<span class="question-mark">?</span>;
             <span class="kw">let </span>t = Tensor::arange(<span class="number">0u32</span>, max_seq_len <span class="kw">as </span>u32, dev)<span class="question-mark">?
-                </span>.to_dtype(dtype)<span class="question-mark">?
+                </span>.to_dtype(DType::F32)<span class="question-mark">?
                 </span>.reshape((max_seq_len, <span class="number">1</span>))<span class="question-mark">?</span>;
             <span class="kw">let </span>freqs = t.matmul(<span class="kw-2">&amp;</span>inv_freq)<span class="question-mark">?</span>;
-            <span class="kw">let </span>sin = freqs.sin()<span class="question-mark">?</span>;
-            <span class="kw">let </span>cos = freqs.cos()<span class="question-mark">?</span>;
+            <span class="kw">let </span>sin = freqs.sin()<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
+            <span class="kw">let </span>cos = freqs.cos()<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
             <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
                 short_cos: cos,
                 short_sin: sin,

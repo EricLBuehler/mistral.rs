@@ -592,6 +592,36 @@
 <a href="#590" id="590">590</a>
 <a href="#591" id="591">591</a>
 <a href="#592" id="592">592</a>
+<a href="#593" id="593">593</a>
+<a href="#594" id="594">594</a>
+<a href="#595" id="595">595</a>
+<a href="#596" id="596">596</a>
+<a href="#597" id="597">597</a>
+<a href="#598" id="598">598</a>
+<a href="#599" id="599">599</a>
+<a href="#600" id="600">600</a>
+<a href="#601" id="601">601</a>
+<a href="#602" id="602">602</a>
+<a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a>
+<a href="#612" id="612">612</a>
+<a href="#613" id="613">613</a>
+<a href="#614" id="614">614</a>
+<a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
+<a href="#617" id="617">617</a>
+<a href="#618" id="618">618</a>
+<a href="#619" id="619">619</a>
+<a href="#620" id="620">620</a>
+<a href="#621" id="621">621</a>
+<a href="#622" id="622">622</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
@@ -643,6 +673,7 @@
     hidden_size: usize,
     rotary_emb: Arc&lt;RotaryEmbedding&gt;,
     use_flash_attn: bool,
+    sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
 <span class="kw">impl </span>Attention {
@@ -668,6 +699,7 @@
             hidden_size: hidden_sz,
             rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
+            sliding_window: <span class="prelude-val">Some</span>(cfg.sliding_window),
         })
     }
 
@@ -715,12 +747,40 @@
                 </span>.contiguous()<span class="question-mark">?</span>;
         }
 
-        <span class="kw">let </span>(k, v) = <span class="kw">match </span><span class="kw-2">&amp;*</span>kv_cache {
-            <span class="prelude-val">None </span>=&gt; (k, v),
-            <span class="prelude-val">Some</span>((prev_k, prev_v)) =&gt; {
-                <span class="kw">let </span>k = candle_nn::ops::kvconcat(prev_k, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>;
-                <span class="kw">let </span>v = candle_nn::ops::kvconcat(prev_v, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>;
-                (k, v)
+        <span class="kw">let </span>(k, v, attn_mask) = <span class="kw">match </span>kv_cache.clone() {
+            <span class="prelude-val">None </span>=&gt; (k, v, attention_mask.cloned()),
+            <span class="prelude-val">Some</span>((<span class="kw-2">mut </span>prev_k, <span class="kw-2">mut </span>prev_v)) =&gt; {
+                <span class="kw">let </span><span class="kw-2">mut </span>mask = attention_mask.cloned();
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(sliding_window) = <span class="self">self</span>.sliding_window {
+                    <span class="kw">let </span>kv_seq_len = prev_k.dim(<span class="number">2</span>)<span class="question-mark">?</span>;
+                    <span class="kw">if </span>kv_seq_len &gt; sliding_window {
+                        prev_k = prev_k.narrow(
+                            <span class="number">2</span>,
+                            kv_seq_len - (sliding_window - <span class="number">1</span>),
+                            sliding_window - <span class="number">1</span>,
+                        )<span class="question-mark">?</span>;
+                        prev_v = prev_v.narrow(
+                            <span class="number">2</span>,
+                            kv_seq_len - (sliding_window - <span class="number">1</span>),
+                            sliding_window - <span class="number">1</span>,
+                        )<span class="question-mark">?</span>;
+                        <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>mask) = mask {
+                            <span class="kw">let </span>mask_len = mask.dim(<span class="number">1</span>)<span class="question-mark">?</span>;
+                            <span class="kw-2">*</span>mask = mask.narrow(
+                                <span class="number">1</span>,
+                                mask_len - (sliding_window - <span class="number">1</span>),
+                                sliding_window - <span class="number">1</span>,
+                            )<span class="question-mark">?</span>;
+                            <span class="kw-2">*</span>mask = Tensor::cat(
+                                <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;*</span>mask, <span class="kw-2">&amp;</span>mask.narrow(<span class="number">1</span>, mask_len - <span class="number">1</span>, <span class="number">1</span>)<span class="question-mark">?</span>.ones_like()<span class="question-mark">?</span>],
+                                D::Minus1,
+                            )<span class="question-mark">?</span>;
+                        }
+                    }
+                }
+                <span class="kw">let </span>k = candle_nn::ops::kvconcat(<span class="kw-2">&amp;</span>prev_k, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>;
+                <span class="kw">let </span>v = candle_nn::ops::kvconcat(<span class="kw-2">&amp;</span>prev_v, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>;
+                (k, v, mask)
             }
         };
         <span class="kw-2">*</span>kv_cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
@@ -739,9 +799,9 @@
             <span class="kw">let </span>scale = <span class="number">1f64 </span>/ f64::sqrt(<span class="self">self</span>.head_dim <span class="kw">as </span>f64);
             <span class="kw">let </span>attn_weights = (q.matmul(<span class="kw-2">&amp;</span>k.transpose(<span class="number">2</span>, <span class="number">3</span>)<span class="question-mark">?</span>)<span class="question-mark">? </span>* scale)<span class="question-mark">?</span>;
 
-            <span class="kw">let </span>attn_weights = <span class="kw">match </span>attention_mask {
+            <span class="kw">let </span>attn_weights = <span class="kw">match </span>attn_mask {
                 <span class="prelude-val">None </span>=&gt; attn_weights,
-                <span class="prelude-val">Some</span>(mask) =&gt; attn_weights.broadcast_add(mask)<span class="question-mark">?</span>,
+                <span class="prelude-val">Some</span>(mask) =&gt; attn_weights.broadcast_add(<span class="kw-2">&amp;</span>mask)<span class="question-mark">?</span>,
             };
             <span class="kw">let </span>attn_weights = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>;
             attn_weights.matmul(<span class="kw-2">&amp;</span>v)<span class="question-mark">?

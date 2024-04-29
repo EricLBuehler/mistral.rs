@@ -730,6 +730,53 @@
 <a href="#728" id="728">728</a>
 <a href="#729" id="729">729</a>
 <a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a>
+<a href="#733" id="733">733</a>
+<a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a>
+<a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a>
+<a href="#742" id="742">742</a>
+<a href="#743" id="743">743</a>
+<a href="#744" id="744">744</a>
+<a href="#745" id="745">745</a>
+<a href="#746" id="746">746</a>
+<a href="#747" id="747">747</a>
+<a href="#748" id="748">748</a>
+<a href="#749" id="749">749</a>
+<a href="#750" id="750">750</a>
+<a href="#751" id="751">751</a>
+<a href="#752" id="752">752</a>
+<a href="#753" id="753">753</a>
+<a href="#754" id="754">754</a>
+<a href="#755" id="755">755</a>
+<a href="#756" id="756">756</a>
+<a href="#757" id="757">757</a>
+<a href="#758" id="758">758</a>
+<a href="#759" id="759">759</a>
+<a href="#760" id="760">760</a>
+<a href="#761" id="761">761</a>
+<a href="#762" id="762">762</a>
+<a href="#763" id="763">763</a>
+<a href="#764" id="764">764</a>
+<a href="#765" id="765">765</a>
+<a href="#766" id="766">766</a>
+<a href="#767" id="767">767</a>
+<a href="#768" id="768">768</a>
+<a href="#769" id="769">769</a>
+<a href="#770" id="770">770</a>
+<a href="#771" id="771">771</a>
+<a href="#772" id="772">772</a>
+<a href="#773" id="773">773</a>
+<a href="#774" id="774">774</a>
+<a href="#775" id="775">775</a>
+<a href="#776" id="776">776</a>
+<a href="#777" id="777">777</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
@@ -763,6 +810,7 @@
     head_dim: usize,
     rotary_emb: Arc&lt;PhiRotaryEmbedding&gt;,
     use_flash_attn: bool,
+    sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
 <span class="kw">impl </span>Attention {
@@ -809,6 +857,7 @@
             num_kv_groups: num_heads / num_kv_heads,
             head_dim,
             use_flash_attn: cfg.use_flash_attn,
+            sliding_window: cfg.sliding_window,
         })
     }
 
@@ -861,12 +910,40 @@
 
         <span class="kw">let </span>(q, k) = <span class="self">self</span>.rotary_emb.forward(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, seqlen_offsets)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>(k, v) = <span class="kw">match </span><span class="kw-2">&amp;*</span>kv_cache {
-            <span class="prelude-val">None </span>=&gt; (k, v),
-            <span class="prelude-val">Some</span>((prev_k, prev_v)) =&gt; {
-                <span class="kw">let </span>k = Tensor::cat(<span class="kw-2">&amp;</span>[prev_k, <span class="kw-2">&amp;</span>k], <span class="number">2</span>)<span class="question-mark">?</span>;
-                <span class="kw">let </span>v = Tensor::cat(<span class="kw-2">&amp;</span>[prev_v, <span class="kw-2">&amp;</span>v], <span class="number">2</span>)<span class="question-mark">?</span>;
-                (k, v)
+        <span class="kw">let </span>(k, v, attn_mask) = <span class="kw">match </span>kv_cache.clone() {
+            <span class="prelude-val">None </span>=&gt; (k, v, attention_mask.cloned()),
+            <span class="prelude-val">Some</span>((<span class="kw-2">mut </span>prev_k, <span class="kw-2">mut </span>prev_v)) =&gt; {
+                <span class="kw">let </span><span class="kw-2">mut </span>mask = attention_mask.cloned();
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(sliding_window) = <span class="self">self</span>.sliding_window {
+                    <span class="kw">let </span>kv_seq_len = prev_k.dim(<span class="number">2</span>)<span class="question-mark">?</span>;
+                    <span class="kw">if </span>kv_seq_len &gt; sliding_window {
+                        prev_k = prev_k.narrow(
+                            <span class="number">2</span>,
+                            kv_seq_len - (sliding_window - <span class="number">1</span>),
+                            sliding_window - <span class="number">1</span>,
+                        )<span class="question-mark">?</span>;
+                        prev_v = prev_v.narrow(
+                            <span class="number">2</span>,
+                            kv_seq_len - (sliding_window - <span class="number">1</span>),
+                            sliding_window - <span class="number">1</span>,
+                        )<span class="question-mark">?</span>;
+                        <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>mask) = mask {
+                            <span class="kw">let </span>mask_len = mask.dim(<span class="number">1</span>)<span class="question-mark">?</span>;
+                            <span class="kw-2">*</span>mask = mask.narrow(
+                                <span class="number">1</span>,
+                                mask_len - (sliding_window - <span class="number">1</span>),
+                                sliding_window - <span class="number">1</span>,
+                            )<span class="question-mark">?</span>;
+                            <span class="kw-2">*</span>mask = Tensor::cat(
+                                <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;*</span>mask, <span class="kw-2">&amp;</span>mask.narrow(<span class="number">1</span>, mask_len - <span class="number">1</span>, <span class="number">1</span>)<span class="question-mark">?</span>.ones_like()<span class="question-mark">?</span>],
+                                D::Minus1,
+                            )<span class="question-mark">?</span>;
+                        }
+                    }
+                }
+                <span class="kw">let </span>k = Tensor::cat(<span class="kw-2">&amp;</span>[prev_k, k], <span class="number">2</span>)<span class="question-mark">?</span>;
+                <span class="kw">let </span>v = Tensor::cat(<span class="kw-2">&amp;</span>[prev_v, v], <span class="number">2</span>)<span class="question-mark">?</span>;
+                (k, v, mask)
             }
         };
         <span class="kw-2">*</span>kv_cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
@@ -885,9 +962,9 @@
             <span class="kw">let </span>scale = <span class="number">1f64 </span>/ f64::sqrt(<span class="self">self</span>.head_dim <span class="kw">as </span>f64);
             <span class="kw">let </span>attn_weights = (q.matmul(<span class="kw-2">&amp;</span>k.transpose(<span class="number">2</span>, <span class="number">3</span>)<span class="question-mark">?</span>)<span class="question-mark">? </span>* scale)<span class="question-mark">?</span>;
 
-            <span class="kw">let </span>attn_weights = <span class="kw">match </span>attention_mask {
+            <span class="kw">let </span>attn_weights = <span class="kw">match </span>attn_mask {
                 <span class="prelude-val">None </span>=&gt; attn_weights,
-                <span class="prelude-val">Some</span>(mask) =&gt; attn_weights.broadcast_add(mask)<span class="question-mark">?</span>,
+                <span class="prelude-val">Some</span>(mask) =&gt; attn_weights.broadcast_add(<span class="kw-2">&amp;</span>mask)<span class="question-mark">?</span>,
             };
             <span class="kw">let </span>attn_weights = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>;
             attn_weights.matmul(<span class="kw-2">&amp;</span>v)<span class="question-mark">?
@@ -1097,6 +1174,7 @@
     <span class="kw">pub </span>max_seq_len: usize,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
     xlora_classifier: <span class="prelude-ty">Option</span>&lt;XLoraClassifier&gt;,
+    sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
 <span class="kw">impl </span>Model {
@@ -1183,6 +1261,7 @@
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, <span class="bool-val">false</span>).unwrap()
             }),
+            sliding_window: cfg.sliding_window,
         })
     }
 
@@ -1191,9 +1270,20 @@
         b_size: usize,
         tgt_len: usize,
         seqlen_offset: usize,
+        sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="comment">// Sliding window mask
+        </span><span class="kw">let </span>sliding_window = sliding_window.unwrap_or(tgt_len + <span class="number">1</span>);
         <span class="kw">let </span>mask: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..tgt_len)
-            .flat_map(|i| (<span class="number">0</span>..tgt_len).map(<span class="kw">move </span>|j| <span class="kw">if </span>i &lt; j { f32::NEG_INFINITY } <span class="kw">else </span>{ <span class="number">0. </span>}))
+            .flat_map(|i| {
+                (<span class="number">0</span>..tgt_len).map(<span class="kw">move </span>|j| {
+                    <span class="kw">if </span>i &lt; j || j + sliding_window &lt; i {
+                        f32::NEG_INFINITY
+                    } <span class="kw">else </span>{
+                        <span class="number">0.
+                    </span>}
+                })
+            })
             .collect();
         <span class="kw">let </span>mask = Tensor::from_slice(<span class="kw-2">&amp;</span>mask, (tgt_len, tgt_len), <span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
         <span class="kw">let </span>mask = <span class="kw">if </span>seqlen_offset &gt; <span class="number">0 </span>{
@@ -1238,8 +1328,12 @@
         <span class="kw">let </span>attention_mask = <span class="kw">if </span>seq_len &lt;= <span class="number">1 </span>{
             <span class="prelude-val">None
         </span>} <span class="kw">else </span>{
-            <span class="kw">let </span>mask =
-                <span class="self">self</span>.prepare_decoder_attention_mask(b_size, seq_len, past_key_values_length)<span class="question-mark">?</span>;
+            <span class="kw">let </span>mask = <span class="self">self</span>.prepare_decoder_attention_mask(
+                b_size,
+                seq_len,
+                past_key_values_length,
+                <span class="self">self</span>.sliding_window,
+            )<span class="question-mark">?</span>;
             <span class="prelude-val">Some</span>(mask)
         };
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
