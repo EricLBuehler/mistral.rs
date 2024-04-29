@@ -685,6 +685,8 @@
 <a href="#683" id="683">683</a>
 <a href="#684" id="684">684</a>
 <a href="#685" id="685">685</a>
+<a href="#686" id="686">686</a>
+<a href="#687" id="687">687</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, str::FromStr};
 
 <span class="kw">use </span>anyhow::Result;
@@ -929,6 +931,7 @@
     rms_norm_eps: f64,
     <span class="attr">#[serde(default = <span class="string">"default_rope"</span>)]
     </span>rope_theta: f32,
+    max_position_embeddings: usize,
 }
 
 <span class="kw">fn </span>default_rope() -&gt; f32 {
@@ -950,6 +953,7 @@
             rms_norm_eps: basic_config.rms_norm_eps,
             rope_theta: basic_config.rope_theta,
             use_flash_attn,
+            max_position_embeddings: basic_config.max_position_embeddings,
         })
     }
 }

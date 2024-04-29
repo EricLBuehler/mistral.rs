@@ -462,6 +462,8 @@
 <a href="#460" id="460">460</a>
 <a href="#461" id="461">461</a>
 <a href="#462" id="462">462</a>
+<a href="#463" id="463">463</a>
+<a href="#464" id="464">464</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -768,6 +770,10 @@
         <span class="comment">// Strangely this value is generally 1e-6 in GGUF file but used to be 1e-5 by default.
         </span><span class="kw">let </span>rms_norm_eps = md_get(<span class="string">"llama.attention.layer_norm_rms_epsilon"</span>)<span class="question-mark">?</span>.to_f32()<span class="question-mark">?</span>;
 
+        <span class="kw">let </span>max_seq_len = md_get(<span class="string">"llama.context_length"</span>)
+            .and_then(|m| m.to_u64())
+            .unwrap_or(MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize;
+
         <span class="kw">let </span>rope_freq_base = md_get(<span class="string">"llama.rope.freq_base"</span>)
             .and_then(|m| m.to_f32())
             .unwrap_or(<span class="number">10000f32</span>);
@@ -788,7 +794,7 @@
                 rope_freq_base,
                 head_dim,
                 rope_dim,
-                MAX_SEQ_LEN <span class="kw">as </span>usize,
+                max_seq_len,
                 device,
                 <span class="bool-val">false</span>,
                 DType::F32,
@@ -861,9 +867,7 @@
             masks: HashMap::new(),
             device: device.clone(),
             cache: Cache::new(block_count, <span class="bool-val">false</span>),
-            max_seq_len: md_get(<span class="string">"llama.context_length"</span>)
-                .and_then(|m| m.to_u64())
-                .unwrap_or(MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize,
+            max_seq_len,
             mapper: <span class="prelude-val">Some</span>(mapper),
         })
     }

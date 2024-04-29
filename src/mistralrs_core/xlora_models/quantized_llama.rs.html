@@ -876,6 +876,8 @@
 <a href="#874" id="874">874</a>
 <a href="#875" id="875">875</a>
 <a href="#876" id="876">876</a>
+<a href="#877" id="877">877</a>
+<a href="#878" id="878">878</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -1338,6 +1340,10 @@
             .unwrap_or(<span class="number">10000f32</span>);
         <span class="kw">let </span>head_dim = embedding_length / head_count;
 
+        <span class="kw">let </span>max_seq_len = md_get(<span class="string">"llama.context_length"</span>)
+            .and_then(|m| m.to_u64())
+            .unwrap_or(MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize;
+
         <span class="kw">let </span>tok_embeddings = ct.tensor(reader, <span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(device)<span class="question-mark">?</span>;
         <span class="kw">let </span>norm = QRmsNorm::new(
@@ -1355,7 +1361,7 @@
                 rope_freq_base,
                 head_dim,
                 rope_dim,
-                MAX_SEQ_LEN <span class="kw">as </span>usize,
+                max_seq_len,
                 device,
                 <span class="bool-val">false</span>,
                 DType::F32,
@@ -1550,9 +1556,7 @@
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb.clone(), <span class="bool-val">true</span>)
                     .unwrap()
             }),
-            max_seq_len: md_get(<span class="string">"llama.context_length"</span>)
-                .and_then(|m| m.to_u64())
-                .unwrap_or(MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize,
+            max_seq_len,
             mapper: <span class="prelude-val">Some</span>(mapper),
         })
     }
