@@ -412,6 +412,7 @@ impl Pipeline for GGUFPipeline {
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full,
             context_lens,
+            position_ids: _, // NOTE(EricLBuehler): ignore, it is for phi3
         } = calculate_inputs(
             input_toks,
             is_prompt,

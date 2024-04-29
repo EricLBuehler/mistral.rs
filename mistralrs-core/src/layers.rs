@@ -183,11 +183,11 @@ impl PhiRotaryEmbedding {
     }
 
     /// Returns (sin, cos) taking into account LongRope
-    fn get_long_or_short_sin_cos(&self, seqlen_offsets: &[usize]) -> (&Tensor, &Tensor) {
+    fn get_long_or_short_sin_cos(&self, position_ids: &[usize]) -> (&Tensor, &Tensor) {
         if self.long_cos.is_none() {
             return (&self.short_sin, &self.short_cos);
         }
-        let seq_len = seqlen_offsets.iter().max().unwrap() + 1;
+        let seq_len = position_ids.iter().max().unwrap() + 1;
         if seq_len > self.original_max_position_embeddings {
             (
                 self.long_sin.as_ref().unwrap(),
@@ -203,11 +203,12 @@ impl PhiRotaryEmbedding {
         q: &Tensor,
         k: &Tensor,
         seqlen_offsets: &[usize],
+        position_ids: &[usize],
     ) -> Result<(Tensor, Tensor)> {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let mut q_embeds = Vec::new();
         let mut k_embeds = Vec::new();
-        let (sin, cos) = self.get_long_or_short_sin_cos(seqlen_offsets);
+        let (sin, cos) = self.get_long_or_short_sin_cos(position_ids);
         for offset in seqlen_offsets {
             let cos = cos.narrow(0, *offset, seq_len)?;
             let sin = sin.narrow(0, *offset, seq_len)?;

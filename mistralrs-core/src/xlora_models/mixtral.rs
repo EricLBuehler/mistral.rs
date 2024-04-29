@@ -808,6 +808,7 @@ impl XLoraModel {
                 &start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
+                &context_lens,
             )?;
 
             if no_kv_cache {
@@ -871,6 +872,7 @@ impl NormalModel for XLoraModel {
         _seqlen_offsets: &[usize],
         _start_offsets_kernel: Tensor,
         _context_lens: Vec<usize>,
+        _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -885,6 +887,7 @@ impl NormalModel for XLoraModel {
         no_kv_cache: bool,
         non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         context_lens: Vec<usize>,
+        _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
@@ -965,6 +968,7 @@ impl ScalingsMaker for XLoraModel {
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
+        _context_lens: &[usize],
     ) -> Result<Tensor> {
         self.inner_forward(
             input_ids,

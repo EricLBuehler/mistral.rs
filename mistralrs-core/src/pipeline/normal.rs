@@ -327,6 +327,7 @@ impl Pipeline for NormalPipeline {
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full,
             context_lens,
+            position_ids,
         } = calculate_inputs(
             input_toks,
             is_prompt,
@@ -341,6 +342,7 @@ impl Pipeline for NormalPipeline {
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
+                position_ids,
             ),
             true => self.model.xlora_forward(
                 &input_ids,
@@ -352,6 +354,7 @@ impl Pipeline for NormalPipeline {
                 self.no_kv_cache,
                 &self.non_granular_state,
                 context_lens,
+                position_ids,
             ),
         }
     }

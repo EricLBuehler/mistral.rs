@@ -349,6 +349,7 @@ pub trait NormalModel {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<usize>,
+        position_ids: Vec<usize>,
     ) -> candle_core::Result<Tensor>;
     #[allow(clippy::too_many_arguments)]
     fn xlora_forward(
@@ -362,6 +363,7 @@ pub trait NormalModel {
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
         context_lens: Vec<usize>,
+        position_ids: Vec<usize>,
     ) -> candle_core::Result<Tensor>;
     fn is_xlora(&self) -> bool;
     fn device(&self) -> &Device;
@@ -415,6 +417,7 @@ struct InputMetadata {
     positions: Vec<usize>,
     positions_kernel: Tensor, // [bs, seq len]
     context_lens: Vec<usize>,
+    position_ids: Vec<usize>,
 }
 
 fn get_prompt_input(input_seqs: &[&mut Sequence], device: &Device) -> Result<InputMetadata> {
@@ -428,12 +431,14 @@ fn get_prompt_input(input_seqs: &[&mut Sequence], device: &Device) -> Result<Inp
     let mut seqs_tensors = Vec::new();
     let mut seqlen_offsets = Vec::new();
     let mut context_lens = Vec::new();
+    let mut position_ids = Vec::new();
     for seq in input_seqs.iter() {
         let mut ctxt = seq.get_toks().to_vec();
         seqlen_offsets.push(0);
 
         ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));
         context_lens.push(seq.len() - 1);
+        position_ids.push(seq.len());
 
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
     }
@@ -451,6 +456,7 @@ fn get_prompt_input(input_seqs: &[&mut Sequence], device: &Device) -> Result<Inp
         positions: seqlen_offsets,
         positions_kernel,
         context_lens,
+        position_ids,
     })
 }
 
@@ -466,11 +472,13 @@ fn get_completion_input(
     let mut seqs_tensors = Vec::new();
     let mut seqlen_offsets = Vec::new();
     let mut context_lens = Vec::new();
+    let mut position_ids = Vec::new();
     for seq in input_seqs.iter() {
         let start_pos = seq.get_toks().len().saturating_sub(1);
         let ctxt = seq.get_toks()[start_pos..].to_vec();
         seqlen_offsets.push(start_pos);
         context_lens.push(0);
+        position_ids.push(seq.len());
 
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
     }
@@ -487,6 +495,7 @@ fn get_completion_input(
         positions: seqlen_offsets,
         positions_kernel,
         context_lens,
+        position_ids,
     })
 }
 
@@ -498,6 +507,7 @@ struct ModelInputs {
     seqlen_offsets_kernel: Tensor,
     seqlen_offsets_kernel_full: Option<Tensor>,
     context_lens: Vec<usize>,
+    position_ids: Vec<usize>,
 }
 
 fn calculate_inputs(
@@ -513,12 +523,14 @@ fn calculate_inputs(
             positions: seqlen_offsets_full,
             positions_kernel: seqlen_offsets_kernel_full,
             context_lens: _,
+            position_ids,
         } = get_prompt_input(input_seqs, device)?;
         let InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
+            position_ids: _,
         } = get_completion_input(input_seqs, device, no_kv_cache)?;
         Ok(ModelInputs {
             input_ids,
@@ -528,6 +540,7 @@ fn calculate_inputs(
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel_full),
             context_lens,
+            position_ids,
         })
     } else if is_xlora && is_prompt {
         let InputMetadata {
@@ -535,6 +548,7 @@ fn calculate_inputs(
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
+            position_ids,
         } = get_prompt_input(input_seqs, device)?;
         Ok(ModelInputs {
             input_ids: input_ids.clone(),
@@ -544,6 +558,7 @@ fn calculate_inputs(
             seqlen_offsets_kernel: seqlen_offsets_kernel.clone(),
             seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel),
             context_lens,
+            position_ids,
         })
     } else if is_prompt {
         let InputMetadata {
@@ -551,6 +566,7 @@ fn calculate_inputs(
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
+            position_ids,
         } = get_prompt_input(input_seqs, device)?;
         Ok(ModelInputs {
             input_ids,
@@ -560,6 +576,7 @@ fn calculate_inputs(
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full: None,
             context_lens,
+            position_ids,
         })
     } else {
         let InputMetadata {
@@ -567,6 +584,7 @@ fn calculate_inputs(
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
+            position_ids,
         } = get_completion_input(input_seqs, device, no_kv_cache)?;
         Ok(ModelInputs {
             input_ids,
@@ -576,6 +594,7 @@ fn calculate_inputs(
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full: None,
             context_lens,
+            position_ids,
         })
     }
 }
