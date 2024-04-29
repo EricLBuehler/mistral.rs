@@ -156,7 +156,6 @@ impl Merge for LoraLinear {
                 }
                 self.old = QLinear::from_parts(w_base_layer, self.old.bias().cloned());
             }
-            QMatMul::TensorF16(_) => todo!(),
         };
         self.merged = true;
         Ok(())
