@@ -141,11 +141,6 @@ impl Runner {
             max_seqs
         };
 
-        let filter = EnvFilter::builder()
-            .with_default_directive(LevelFilter::INFO.into())
-            .from_env_lossy();
-        tracing_subscriber::fmt().with_env_filter(filter).init();
-
         let loader: Box<dyn Loader> = match which {
             Which::Plain {
                 model_id,
@@ -797,6 +792,11 @@ impl ChatCompletionRequest {
 
 #[pymodule]
 fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+    tracing_subscriber::fmt().with_env_filter(filter).init();
+
     m.add_class::<Runner>()?;
     m.add_class::<Which>()?;
     m.add_class::<ChatCompletionRequest>()?;
