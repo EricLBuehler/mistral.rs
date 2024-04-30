@@ -12,13 +12,13 @@ use candle_nn::{
     embedding, layer_norm, Activation, Embedding, LayerNorm, RotaryEmbedding, VarBuilder,
 };
 use mistralrs_lora::{layer::QLinear, linear, LinearLayerLike, LoraConfig, Ordering};
-use tqdm::Iter;
 use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
     models::{flash_attn, phi2::Config, repeat_kv},
     pipeline::{extract_logits, NormalModel},
+    utils::new_progress_bar,
     DeviceMapMetadata,
 };
 
@@ -495,7 +495,8 @@ impl Model {
         if xlora_config.is_none() {
             // We are now a LoRA model so we must merge the weights
             info!("Merging LoRA adapters.");
-            for layer in layers.iter_mut().tqdm() {
+            let bar = new_progress_bar(layers.len() as u64);
+            for layer in layers.iter_mut() {
                 Arc::get_mut(&mut layer.self_attn.k_proj)
                     .unwrap()
                     .merge_weights()?;
@@ -511,7 +512,9 @@ impl Model {
 
                 Arc::get_mut(&mut layer.mlp.fc1).unwrap().merge_weights()?;
                 Arc::get_mut(&mut layer.mlp.fc2).unwrap().merge_weights()?;
+                bar.inc(1);
             }
+            bar.finish();
         }
         let lm_head = candle_nn::linear(
             cfg.hidden_size,

@@ -1,5 +1,18 @@
+use indicatif::{ProgressBar, ProgressStyle};
+
 pub(crate) mod tokens;
 pub(crate) mod varbuilder_utils;
+
+pub(crate) fn new_progress_bar(len: u64) -> ProgressBar {
+    let bar = ProgressBar::new(len);
+    bar.set_style(
+        ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+    bar
+}
 
 #[macro_export]
 macro_rules! get_mut_arcmutex {

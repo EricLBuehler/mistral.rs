@@ -185,17 +185,8 @@ impl Loader for NormalLoader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        silent: bool,
     ) -> Result<Box<dyn ModelPaths>> {
-        get_paths!(
-            SimpleModelPaths,
-            &token_source,
-            revision,
-            self,
-            None,
-            None,
-            silent
-        )
+        get_paths!(SimpleModelPaths, &token_source, revision, self, None, None)
     }
 
     fn _setup_model(
@@ -203,7 +194,6 @@ impl Loader for NormalLoader {
         paths: &dyn ModelPaths,
         dtype: Option<DType>,
         device: &Device,
-        silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
@@ -236,7 +226,6 @@ impl Loader for NormalLoader {
                 config,
                 self.inner,
                 self.config.use_flash_attn,
-                silent,
                 mapper,
                 in_situ_quant.is_some(),
                 device.clone()
@@ -249,7 +238,6 @@ impl Loader for NormalLoader {
                 config,
                 self.inner,
                 self.config.use_flash_attn,
-                silent,
                 mapper,
                 in_situ_quant.is_some(),
                 device.clone()
@@ -264,7 +252,6 @@ impl Loader for NormalLoader {
                     config,
                     self.inner,
                     self.config.use_flash_attn,
-                    silent,
                     mapper,
                     in_situ_quant.is_some(),
                     device.clone()

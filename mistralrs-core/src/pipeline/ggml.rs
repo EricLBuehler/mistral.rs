@@ -222,7 +222,6 @@ impl Loader for GGMLLoader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        silent: bool,
     ) -> Result<Box<dyn ModelPaths>> {
         get_paths!(
             SimpleModelPaths,
@@ -230,8 +229,7 @@ impl Loader for GGMLLoader {
             revision,
             self,
             self.quantized_model_id,
-            self.quantized_filename,
-            silent
+            self.quantized_filename
         )
     }
 
@@ -240,7 +238,6 @@ impl Loader for GGMLLoader {
         paths: &dyn ModelPaths,
         _dtype: Option<DType>,
         device: &Device,
-        silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
@@ -272,7 +269,6 @@ impl Loader for GGMLLoader {
                         .collect::<Vec<_>>(),
                     DType::F32,
                     device,
-                    silent,
                 )?;
 
                 Model::XLoraLlama(XLoraQLlama::from_ggml(
@@ -297,7 +293,6 @@ impl Loader for GGMLLoader {
                         .collect::<Vec<_>>(),
                     DType::F32,
                     device,
-                    silent,
                 )?;
 
                 Model::XLoraLlama(XLoraQLlama::from_ggml(

@@ -6,7 +6,6 @@ use mistralrs_lora::{
     layer::QLinear, linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering,
 };
 use std::{collections::HashMap, sync::Arc};
-use tqdm::Iter;
 use tracing::info;
 
 use crate::{
@@ -14,6 +13,7 @@ use crate::{
     layers::RmsNorm,
     models::{self, flash_attn, llama::Config, repeat_kv, LayerCaches},
     pipeline::{extract_logits, NormalModel},
+    utils::new_progress_bar,
     DeviceMapMetadata,
 };
 
@@ -643,7 +643,8 @@ impl XLoraLlama {
         if xlora_config.is_none() {
             // We are now a LoRA model so we must merge the weights
             info!("Merging LoRA adapters.");
-            for layer in blocks.iter_mut().tqdm() {
+            let bar = new_progress_bar(blocks.len() as u64);
+            for layer in blocks.iter_mut() {
                 Arc::get_mut(&mut layer.attn.k_proj)
                     .unwrap()
                     .merge_weights()?;
@@ -666,7 +667,9 @@ impl XLoraLlama {
                 Arc::get_mut(&mut layer.mlp.c_proj)
                     .unwrap()
                     .merge_weights()?;
+                bar.inc(1);
             }
+            bar.finish();
         }
 
         Ok(Self {

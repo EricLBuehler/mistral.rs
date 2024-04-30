@@ -7,7 +7,6 @@ use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, Result, Te
 use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 use std::sync::Arc;
-use tqdm::Iter;
 use tracing::info;
 
 use crate::{
@@ -15,6 +14,7 @@ use crate::{
     layers::RmsNorm,
     models::{flash_attn, mixtral::Config, repeat_kv, Cache},
     pipeline::{extract_logits, NormalModel},
+    utils::new_progress_bar,
     DeviceMapMetadata,
 };
 
@@ -632,7 +632,8 @@ impl XLoraModel {
         if xlora_config.is_none() {
             // We are now a LoRA model so we must merge the weights
             info!("Merging LoRA adapters.");
-            for layer in layers.iter_mut().tqdm() {
+            let bar = new_progress_bar(layers.len() as u64);
+            for layer in layers.iter_mut() {
                 Arc::get_mut(&mut layer.self_attn.k_proj)
                     .unwrap()
                     .merge_weights()?;
@@ -654,7 +655,9 @@ impl XLoraModel {
                     Arc::get_mut(&mut expert.w2).unwrap().merge_weights()?;
                     Arc::get_mut(&mut expert.w3).unwrap().merge_weights()?;
                 }
+                bar.inc(1);
             }
+            bar.finish();
         }
         let norm = RmsNorm::new(
             cfg.hidden_size,

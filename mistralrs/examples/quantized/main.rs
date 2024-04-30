@@ -25,7 +25,6 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         TokenSource::CacheToken,
         None,
         &Device::cuda_if_available(0)?,
-        false,
         DeviceMapMetadata::dummy(),
         None,
     )?;

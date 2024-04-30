@@ -236,7 +236,6 @@ async fn main() -> Result<()> {
         args.token_source,
         None,
         &device,
-        false,
         args.num_device_layers
             .map(DeviceMapMetadata::from_num_device_layers)
             .unwrap_or(DeviceMapMetadata::dummy()),

@@ -6,7 +6,6 @@ use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, Result, Te
 use candle_nn::VarBuilder;
 use mistralrs_lora::{layer::QLinear, linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 use std::sync::Arc;
-use tqdm::Iter;
 use tracing::info;
 
 use crate::{
@@ -14,6 +13,7 @@ use crate::{
     layers::{PhiRotaryEmbedding, RmsNorm},
     models::phi3::Config,
     pipeline::{extract_logits, NormalModel},
+    utils::new_progress_bar,
     DeviceMapMetadata,
 };
 
@@ -445,7 +445,8 @@ impl Model {
         if xlora_config.is_none() {
             // We are now a LoRA model so we must merge the weights
             info!("Merging LoRA adapters.");
-            for layer in layers.iter_mut().tqdm() {
+            let bar = new_progress_bar(layers.len() as u64);
+            for layer in layers.iter_mut() {
                 Arc::get_mut(&mut layer.self_attn.qkv_proj)
                     .unwrap()
                     .merge_weights()?;
@@ -459,7 +460,9 @@ impl Model {
                 Arc::get_mut(&mut layer.mlp.gate_up_proj)
                     .unwrap()
                     .merge_weights()?;
+                bar.inc(1);
             }
+            bar.finish();
         }
         let norm = RmsNorm::new(
             cfg.hidden_size,

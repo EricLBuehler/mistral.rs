@@ -26,7 +26,6 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         TokenSource::CacheToken,
         None,
         &Device::cuda_if_available(0)?,
-        false,
         DeviceMapMetadata::dummy(),
         Some(GgmlDType::Q4K), // In-situ quantize the model into q4k
     )?;

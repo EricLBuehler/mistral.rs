@@ -256,7 +256,6 @@ impl Loader for GGUFLoader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        silent: bool,
     ) -> Result<Box<dyn ModelPaths>> {
         get_paths!(
             SimpleModelPaths,
@@ -264,8 +263,7 @@ impl Loader for GGUFLoader {
             revision,
             self,
             self.quantized_model_id,
-            self.quantized_filename,
-            silent
+            self.quantized_filename
         )
     }
 
@@ -274,7 +272,6 @@ impl Loader for GGUFLoader {
         paths: &dyn ModelPaths,
         _dtype: Option<DType>,
         device: &Device,
-        silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
@@ -315,7 +312,6 @@ impl Loader for GGUFLoader {
                         .collect::<Vec<_>>(),
                     DType::F32,
                     device,
-                    silent,
                 )?;
 
                 match arch {
@@ -345,7 +341,6 @@ impl Loader for GGUFLoader {
                         .collect::<Vec<_>>(),
                     DType::F32,
                     device,
-                    silent,
                 )?;
 
                 match arch {

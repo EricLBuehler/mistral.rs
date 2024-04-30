@@ -388,7 +388,6 @@ impl Runner {
                     .map_err(|e| PyValueError::new_err(e.to_string()))?,
                 None,
                 &device,
-                true, // Silent for jupyter
                 num_device_layers
                     .map(DeviceMapMetadata::from_num_device_layers)
                     .unwrap_or(DeviceMapMetadata::dummy()),

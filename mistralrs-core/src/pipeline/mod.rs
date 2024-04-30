@@ -6,6 +6,7 @@ mod macros;
 mod normal;
 use crate::aici::toktree::TokTrie;
 use crate::device_map::DeviceMapper;
+use crate::utils::new_progress_bar;
 use crate::{api_dir_list, api_get_file, DeviceMapMetadata};
 use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
 use candle_nn::VarBuilder;
@@ -19,7 +20,7 @@ use hf_hub::{
     Repo, RepoType,
 };
 use indexmap::IndexMap;
-use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
+use indicatif::ParallelProgressIterator;
 pub use loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
     Phi3Loader, Qwen2Loader,
@@ -208,7 +209,6 @@ pub trait Loader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        silent: bool,
     ) -> Result<Box<dyn ModelPaths>>;
 
     #[allow(clippy::type_complexity)]
@@ -217,7 +217,6 @@ pub trait Loader {
         paths: &dyn ModelPaths,
         dtype: Option<DType>,
         device: &Device,
-        silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
@@ -231,12 +230,11 @@ pub trait Loader {
         token_source: TokenSource,
         dtype: Option<DType>,
         device: &Device,
-        silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let paths = self.download_model(revision, token_source, silent)?;
-        self._setup_model(&*paths, dtype, device, silent, mapper, in_situ_quant)
+        let paths = self.download_model(revision, token_source)?;
+        self._setup_model(&*paths, dtype, device, mapper, in_situ_quant)
     }
 
     fn get_id(&self) -> &str;
@@ -378,13 +376,7 @@ pub trait NormalModel {
         info!(
             "Applying in-situ quantization into {dtype:?} to {total_tensors} tensors in parallel."
         );
-        let bar = ProgressBar::new(total_tensors as u64);
-        bar.set_style(
-            ProgressStyle::default_bar()
-                .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
-                .unwrap()
-                .progress_chars("#>-"),
-        );
+        let bar = new_progress_bar(total_tensors as u64);
 
         let mut devices = Vec::new();
         for (_, layer) in &tensors {
@@ -399,7 +391,7 @@ pub trait NormalModel {
         tensors
             .into_par_iter()
             .zip(devices)
-            .progress_with(bar)
+            .progress_with(bar.clone())
             .for_each(|((tensor, _), device)| {
                 if let QMatMul::Tensor(t) = tensor {
                     n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -407,6 +399,7 @@ pub trait NormalModel {
                     *tensor = QMatMul::QTensor(Arc::new(QTensor::quantize(&t, dtype).unwrap()));
                 }
             });
+        bar.finish();
         info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors.");
         Ok(())
     }

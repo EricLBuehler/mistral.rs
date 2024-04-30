@@ -130,9 +130,9 @@ macro_rules! deserialize_chat_template {
 
 #[macro_export]
 macro_rules! get_paths {
-    ($path_name:ident, $token_source:expr, $revision:expr, $this:expr, $quantized_model_id:expr, $quantized_filename:expr, $silent:expr) => {{
+    ($path_name:ident, $token_source:expr, $revision:expr, $this:expr, $quantized_model_id:expr, $quantized_filename:expr) => {{
         let api = ApiBuilder::new()
-            .with_progress(!$silent)
+            .with_progress(true)
             .with_token(Some(get_token($token_source)?))
             .build()?;
         let revision = $revision.unwrap_or("main".to_string());
@@ -207,13 +207,12 @@ macro_rules! get_paths {
 
 #[macro_export]
 macro_rules! normal_model_loader {
-    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
+    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
         let vb = from_mmaped_safetensors(
             $paths.get_weight_filenames().to_vec(),
             Vec::new(),
             $dtype.unwrap_or($default_dtype),
             $device,
-            $silent,
         )?;
 
         $loader.load(
@@ -229,7 +228,7 @@ macro_rules! normal_model_loader {
 
 #[macro_export]
 macro_rules! xlora_model_loader {
-    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
+    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
         let mut safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
         safetensors_paths.push($paths.get_classifier_path().as_ref().unwrap());
         let vb = from_mmaped_safetensors(
@@ -246,7 +245,6 @@ macro_rules! xlora_model_loader {
                 .collect::<Vec<_>>(),
             $dtype.unwrap_or($default_dtype),
             $device,
-            $silent,
         )?;
 
         $loader.load_xlora(
@@ -265,7 +263,7 @@ macro_rules! xlora_model_loader {
 
 #[macro_export]
 macro_rules! lora_model_loader {
-    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
+    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
         let mut safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
         safetensors_paths.push($paths.get_classifier_path().as_ref().unwrap());
         let vb = from_mmaped_safetensors(
@@ -282,7 +280,6 @@ macro_rules! lora_model_loader {
                 .collect::<Vec<_>>(),
             $dtype.unwrap_or($default_dtype),
             $device,
-            $silent,
         )?;
 
         $loader.load_xlora(

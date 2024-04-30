@@ -7,13 +7,13 @@ use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear};
-use tqdm::Iter;
 use tracing::info;
 
 use crate::device_map::DeviceMapper;
 use crate::layers::QRmsNorm;
 use crate::models::{repeat_kv, verify_sanity_gguf, Cache};
 use crate::pipeline::extract_logits;
+use crate::utils::new_progress_bar;
 use crate::DeviceMapMetadata;
 
 use super::classifier::XLoraClassifier;
@@ -639,7 +639,8 @@ impl ModelWeights {
         if xlora_config.is_none() {
             // We are now a LoRA model so we must merge the weights
             info!("Merging LoRA adapters.");
-            for layer in layers.iter_mut().tqdm() {
+            let bar = new_progress_bar(layers.len() as u64);
+            for layer in layers.iter_mut() {
                 layer.attention_wk.merge_weights()?;
                 layer.attention_wo.merge_weights()?;
                 layer.attention_wq.merge_weights()?;
@@ -662,7 +663,9 @@ impl ModelWeights {
                         }
                     }
                 }
+                bar.inc(1);
             }
+            bar.finish();
         }
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
