@@ -3,7 +3,6 @@
 use candle_core::{quantized::GgmlDType, Result};
 use either::Either;
 use indexmap::IndexMap;
-use message::{Message, Role};
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -31,7 +30,6 @@ use std::fs::File;
 mod stream;
 mod which;
 use which::{Architecture, Which};
-mod message;
 
 #[cfg(not(feature = "metal"))]
 static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
@@ -456,14 +454,16 @@ impl Runner {
                     Either::Left(ref messages) => {
                         let mut messages_vec = Vec::new();
                         for message in messages {
+                            let role = message.get("role").expect("Expected role");
+                            let content = message.get("content").expect("Expected role");
                             let mut message_map = IndexMap::new();
-                            let role = match message.role {
-                                Role::Assistant => "assistant",
-                                Role::User => "user",
-                                Role::System => "system",
-                            };
+                            if !["user", "assistant", "system"].contains(&role.as_str()) {
+                                return Err(PyValueError::new_err(
+                                    "Only `user`, `assistant`, `system` roles supported.",
+                                ));
+                            }
                             message_map.insert("role".to_string(), role.to_string());
-                            message_map.insert("content".to_string(), message.content.clone());
+                            message_map.insert("content".to_string(), content.clone());
                             messages_vec.push(message_map);
                         }
                         RequestMessage::Chat(messages_vec)
@@ -699,7 +699,7 @@ impl CompletionRequest {
 #[derive(Debug)]
 /// An OpenAI API compatible chat completion request.
 struct ChatCompletionRequest {
-    messages: Either<Vec<Message>, String>,
+    messages: Either<Vec<IndexMap<String, String>>, String>,
     _model: String,
     logit_bias: Option<HashMap<u32, f32>>,
     logprobs: bool,
@@ -760,12 +760,14 @@ impl ChatCompletionRequest {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
                 let mut messages_vec = Vec::new();
                 for message in messages {
-                    messages_vec.push(message.extract::<Message>()?);
+                    messages_vec.push(message.extract::<IndexMap<String, String>>()?);
                 }
-                Ok::<Either<Vec<Message>, String>, PyErr>(Either::Left(messages_vec))
+                Ok::<Either<Vec<IndexMap<String, String>>, String>, PyErr>(Either::Left(
+                    messages_vec,
+                ))
             } else if let Ok(messages) = messages.bind(py).downcast_exact::<PyString>() {
                 let prompt = messages.extract::<String>()?;
-                Ok::<Either<Vec<Message>, String>, PyErr>(Either::Right(prompt))
+                Ok::<Either<Vec<IndexMap<String, String>>, String>, PyErr>(Either::Right(prompt))
             } else {
                 return Err(PyTypeError::new_err("Expected a string or list of dicts."));
             }
@@ -802,8 +804,6 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Which>()?;
     m.add_class::<ChatCompletionRequest>()?;
     m.add_class::<CompletionRequest>()?;
-    m.add_class::<Message>()?;
-    m.add_class::<Role>()?;
     m.add_class::<Architecture>()?;
 
     m.add_class::<mistralrs_core::ResponseMessage>()?;
