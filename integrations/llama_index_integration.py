@@ -166,7 +166,7 @@ class MistralRS(CustomLLM):
         top_p: int = DEFAULT_TOPP,
         frequency_penalty: Optional[float] = None,
         presence_penalty: Optional[float] = None,
-        isq: Optional[str] = None,
+        in_situ_quant: Optional[str] = None,
         max_seqs: int = DEFAULT_MAX_SEQS,
         token_source: str = "cache",
         prefix_cache_n: str = DEFAULT_PREFIX_CACHE_N,
@@ -219,7 +219,7 @@ class MistralRS(CustomLLM):
             prefix_cache_n=prefix_cache_n,
             no_kv_cache=no_kv_cache,
             chat_template=chat_template,
-            in_situ_quant=isq,
+            in_situ_quant=in_situ_quant,
         )
         self._has_messages_to_prompt = messages_to_prompt is not None
 
