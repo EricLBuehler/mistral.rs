@@ -38,7 +38,7 @@ pub struct NormalPipeline {
     tok_trie: Arc<TokTrie>,
     config: NormalSpecificConfig,
     no_kv_cache: bool,
-    chat_template: ChatTemplate,
+    chat_template: Arc<ChatTemplate>,
     non_granular_state: Option<NonGranularState>,
     model_id: String,
     is_lora: bool,
@@ -289,7 +289,7 @@ impl Loader for NormalLoader {
             tokenizer: tokenizer.into(),
             config: self.config,
             no_kv_cache: self.no_kv_cache,
-            chat_template,
+            chat_template: Arc::new(chat_template),
             non_granular_state: self.tgt_non_granular_index.map(|tgt_non_granular_index| {
                 NonGranularState {
                     non_granular_index: Arc::new(Mutex::new(0)),
@@ -376,8 +376,8 @@ impl Pipeline for NormalPipeline {
     fn has_no_kv_cache(&self) -> bool {
         self.no_kv_cache
     }
-    fn get_chat_template(&self) -> &ChatTemplate {
-        &self.chat_template
+    fn get_chat_template(&self) -> Arc<ChatTemplate> {
+        self.chat_template.clone()
     }
     fn get_non_granular_state(&self) -> &Option<NonGranularState> {
         &self.non_granular_state

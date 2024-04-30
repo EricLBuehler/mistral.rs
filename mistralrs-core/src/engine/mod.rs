@@ -7,13 +7,13 @@ use std::{
 use tokio::sync::mpsc::Receiver;
 
 use crate::{
-    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
-    get_bias_if_not_allowed, handle_seq_error_ok, handle_seq_error_stateaware_ok,
+    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
+    handle_seq_error_ok, handle_seq_error_stateaware_ok,
     pipeline::sample_sequence,
     response::CompletionChoice,
-    sample_async, sampler, CompletionResponse, RequestMessage,
+    CompletionResponse, RequestMessage,
 };
-use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
+use candle_core::{quantized::GgmlDType, Device, Result, Tensor};
 use futures::future;
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;

@@ -1,9 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use candle_core::{DType, Device, Result, Tensor};
-use futures::future;
 use rand_isaac::Isaac64Rng;
-use tokio::join;
 
 use crate::{
     aici::toktree::TokTrie,

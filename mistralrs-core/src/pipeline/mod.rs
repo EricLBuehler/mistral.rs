@@ -316,9 +316,8 @@ pub trait Pipeline: Send + Sync {
             unk_tok,
         )
     }
-    //fn get_chat_template(&self) -> &ChatTemplate;
+    fn get_chat_template(&self) -> Arc<ChatTemplate>;
     //fn get_non_granular_state(&self) -> &Option<NonGranularState>;
-    fn has_chat_template(&self) -> bool;
     fn reset_non_granular_state(&self) {
         if let Some(s) = self.get_non_granular_state().as_ref() {
             *self.cache().get_scalings_cache() = None;

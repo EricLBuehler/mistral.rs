@@ -226,7 +226,7 @@ impl Pipeline for SpeculativePipeline {
     fn has_no_kv_cache(&self) -> bool {
         get_mut_arcmutex!(self.target).has_no_kv_cache()
     }
-    fn get_chat_template(&self) -> &ChatTemplate {
+    fn get_chat_template(&self) -> Arc<ChatTemplate> {
         get_mut_arcmutex!(self.target).get_chat_template()
     }
     fn get_non_granular_state(&self) -> &Option<NonGranularState> {

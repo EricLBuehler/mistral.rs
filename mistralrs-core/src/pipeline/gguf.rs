@@ -41,7 +41,7 @@ pub struct GGUFPipeline {
     tokenizer: Arc<Tokenizer>,
     tok_trie: Arc<TokTrie>,
     no_kv_cache: bool,
-    chat_template: ChatTemplate,
+    chat_template: Arc<ChatTemplate>,
     model_id: String,
     eos_tok: Vec<u32>,
     non_granular_state: Option<NonGranularState>,
@@ -377,7 +377,7 @@ impl Loader for GGUFLoader {
             tok_trie: build_tok_trie(tokenizer.clone()).into(),
             tokenizer: tokenizer.into(),
             no_kv_cache: self.no_kv_cache,
-            chat_template,
+            chat_template: Arc::new(chat_template),
             model_id: self.model_id.clone(),
             non_granular_state: self.tgt_non_granular_index.map(|tgt_non_granular_index| {
                 NonGranularState {
@@ -478,8 +478,8 @@ impl Pipeline for GGUFPipeline {
     fn has_no_kv_cache(&self) -> bool {
         self.no_kv_cache
     }
-    fn get_chat_template(&self) -> &ChatTemplate {
-        &self.chat_template
+    fn get_chat_template(&self) -> Arc<ChatTemplate> {
+        self.chat_template.clone()
     }
     fn get_non_granular_state(&self) -> &Option<NonGranularState> {
         &None
