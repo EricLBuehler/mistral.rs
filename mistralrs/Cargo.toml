@@ -14,6 +14,7 @@ homepage.workspace = true
 [dependencies]
 mistralrs-core = { version = "0.1.1", path = "../mistralrs-core" }
 anyhow.workspace = true
+tokio.workspace = true
 candle-core.workspace = true
 
 [features]

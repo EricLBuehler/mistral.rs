@@ -26,6 +26,8 @@ accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
 either.workspace = true
 futures.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
 
 [features]
 cuda = ["candle-core/cuda", "mistralrs-core/cuda"]

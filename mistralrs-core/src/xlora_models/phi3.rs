@@ -31,6 +31,7 @@ struct Attention {
     head_dim: usize,
     rotary_emb: Arc<PhiRotaryEmbedding>,
     use_flash_attn: bool,
+    sliding_window: Option<usize>,
 }
 
 impl Attention {
@@ -77,6 +78,7 @@ impl Attention {
             num_kv_groups: num_heads / num_kv_heads,
             head_dim,
             use_flash_attn: cfg.use_flash_attn,
+            sliding_window: cfg.sliding_window,
         })
     }
 
@@ -86,7 +88,7 @@ impl Attention {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        _start_offsets_kernel: Tensor,
+        position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
@@ -127,14 +129,44 @@ impl Attention {
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        let (q, k) = self
+            .rotary_emb
+            .forward(&q, &k, seqlen_offsets, position_ids)?;
 
-        let (k, v) = match &*kv_cache {
-            None => (k, v),
-            Some((prev_k, prev_v)) => {
-                let k = Tensor::cat(&[prev_k, &k], 2)?;
-                let v = Tensor::cat(&[prev_v, &v], 2)?;
-                (k, v)
+        let (k, v, attn_mask) = match kv_cache.clone() {
+            None => (k, v, attention_mask.cloned()),
+            Some((mut prev_k, mut prev_v)) => {
+                let mut mask = attention_mask.cloned();
+                if let Some(sliding_window) = self.sliding_window {
+                    let kv_seq_len = prev_k.dim(2)?;
+                    if kv_seq_len > sliding_window {
+                        prev_k = prev_k.narrow(
+                            2,
+                            kv_seq_len - (sliding_window - 1),
+                            sliding_window - 1,
+                        )?;
+                        prev_v = prev_v.narrow(
+                            2,
+                            kv_seq_len - (sliding_window - 1),
+                            sliding_window - 1,
+                        )?;
+                        if let Some(ref mut mask) = mask {
+                            let mask_len = mask.dim(1)?;
+                            *mask = mask.narrow(
+                                1,
+                                mask_len - (sliding_window - 1),
+                                sliding_window - 1,
+                            )?;
+                            *mask = Tensor::cat(
+                                &[&*mask, &mask.narrow(1, mask_len - 1, 1)?.ones_like()?],
+                                D::Minus1,
+                            )?;
+                        }
+                    }
+                }
+                let k = Tensor::cat(&[prev_k, k], 2)?;
+                let v = Tensor::cat(&[prev_v, v], 2)?;
+                (k, v, mask)
             }
         };
         *kv_cache = Some((k.clone(), v.clone()));
@@ -153,9 +185,9 @@ impl Attention {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
             let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
 
-            let attn_weights = match attention_mask {
+            let attn_weights = match attn_mask {
                 None => attn_weights,
-                Some(mask) => attn_weights.broadcast_add(mask)?,
+                Some(mask) => attn_weights.broadcast_add(&mask)?,
             };
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
             attn_weights.matmul(&v)?
@@ -324,7 +356,7 @@ impl DecoderLayer {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
+        position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
@@ -336,7 +368,7 @@ impl DecoderLayer {
             &xs,
             attention_mask,
             seqlen_offsets,
-            start_offsets_kernel,
+            position_ids,
             kv_cache,
             scalings.clone(),
             global_scaling_weight,
@@ -365,6 +397,7 @@ pub struct Model {
     pub max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     xlora_classifier: Option<XLoraClassifier>,
+    sliding_window: Option<usize>,
 }
 
 impl Model {
@@ -451,6 +484,7 @@ impl Model {
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
             }),
+            sliding_window: cfg.sliding_window,
         })
     }
 
@@ -459,9 +493,20 @@ impl Model {
         b_size: usize,
         tgt_len: usize,
         seqlen_offset: usize,
+        sliding_window: Option<usize>,
     ) -> Result<Tensor> {
+        // Sliding window mask
+        let sliding_window = sliding_window.unwrap_or(tgt_len + 1);
         let mask: Vec<_> = (0..tgt_len)
-            .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. }))
+            .flat_map(|i| {
+                (0..tgt_len).map(move |j| {
+                    if i < j || j + sliding_window < i {
+                        f32::NEG_INFINITY
+                    } else {
+                        0.
+                    }
+                })
+            })
             .collect();
         let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
         let mask = if seqlen_offset > 0 {
@@ -495,7 +540,7 @@ impl Model {
         &mut self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
+        position_ids: &[usize],
         scalings: Option<Tensor>,
         is_full_pass: bool,
         no_kv_cache: bool,
@@ -506,10 +551,20 @@ impl Model {
         let attention_mask = if seq_len <= 1 {
             None
         } else {
-            let mask =
-                self.prepare_decoder_attention_mask(b_size, seq_len, past_key_values_length)?;
+            let mask = self.prepare_decoder_attention_mask(
+                b_size,
+                seq_len,
+                past_key_values_length,
+                self.sliding_window,
+            )?;
             Some(mask)
         };
+        let position_ids_old = position_ids;
+        let mut position_ids = Vec::new();
+        for p in position_ids_old {
+            position_ids.push(*p + past_key_values_length);
+        }
+
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let mut cache = if is_full_pass {
             if no_kv_cache {
@@ -533,7 +588,7 @@ impl Model {
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
                 seqlen_offsets,
-                start_offsets_kernel.clone(),
+                &position_ids,
                 &mut cache[i],
                 scalings.clone(),
                 self.xlora_classifier
@@ -559,6 +614,7 @@ impl Model {
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
         context_lens: Vec<usize>,
+        position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         if self.xlora_classifier.is_some() {
             let scalings = self.get_scalings(
@@ -570,6 +626,7 @@ impl Model {
                 &start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
+                &position_ids,
             )?;
 
             if no_kv_cache {
@@ -577,7 +634,7 @@ impl Model {
                     .inner_forward(
                         input_ids_full,
                         seqlen_offsets_full,
-                        start_offsets_kernel_full,
+                        &position_ids,
                         Some(scalings),
                         true,
                         no_kv_cache,
@@ -594,7 +651,7 @@ impl Model {
                     .inner_forward(
                         input_ids,
                         seqlen_offsets,
-                        start_offsets_kernel,
+                        &position_ids,
                         Some(scalings),
                         true,
                         no_kv_cache,
@@ -611,7 +668,7 @@ impl Model {
                 .inner_forward(
                     input_ids,
                     seqlen_offsets,
-                    start_offsets_kernel,
+                    &position_ids,
                     None,
                     false,
                     no_kv_cache,
@@ -633,6 +690,7 @@ impl NormalModel for Model {
         _seqlen_offsets: &[usize],
         _start_offsets_kernel: Tensor,
         _context_lens: Vec<usize>,
+        _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -647,6 +705,7 @@ impl NormalModel for Model {
         no_kv_cache: bool,
         non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         context_lens: Vec<usize>,
+        position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
@@ -658,6 +717,7 @@ impl NormalModel for Model {
             no_kv_cache,
             non_granular_state,
             context_lens,
+            position_ids,
         )
     }
     fn cache(&self) -> &Cache {
@@ -711,16 +771,18 @@ impl ScalingsMaker for Model {
         &mut self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
+        _start_offsets_kernel: Tensor,
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
+        context_lens: &[usize],
     ) -> Result<Tensor> {
+        // NOTE(EricLBuehler): hacky yes, but passing the context lens to start the position ids calculation works
         self.inner_forward(
             input_ids,
             seqlen_offsets,
-            start_offsets_kernel,
+            context_lens,
             Some(scalings),
             is_full_pass,
             no_kv_cache,

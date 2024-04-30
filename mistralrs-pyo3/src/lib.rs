@@ -9,9 +9,11 @@ use std::{
     collections::HashMap,
     fmt::Debug,
     str::FromStr,
-    sync::{mpsc::channel, Arc, Mutex},
+    sync::{Arc, Mutex},
 };
 use stream::ChatCompletionStreamer;
+use tokio::sync::mpsc::channel;
+use tracing_subscriber::{filter::LevelFilter, EnvFilter};
 
 use candle_core::Device;
 use mistralrs_core::{
@@ -63,8 +65,8 @@ fn parse_isq(s: &str) -> std::result::Result<GgmlDType, String> {
         "Q4_1" => Ok(GgmlDType::Q4_1),
         "Q5_0" => Ok(GgmlDType::Q5_0),
         "Q5_1" => Ok(GgmlDType::Q5_1),
-        "Q8_0" => Ok(GgmlDType::Q8_1),
-        "Q8_1" => Ok(GgmlDType::Q4_0),
+        "Q8_0" => Ok(GgmlDType::Q8_0),
+        "Q8_1" => Ok(GgmlDType::Q8_1),
         "Q2K" => Ok(GgmlDType::Q2K),
         "Q3K" => Ok(GgmlDType::Q3K),
         "Q4K" => Ok(GgmlDType::Q4K),
@@ -414,7 +416,7 @@ impl Runner {
         &mut self,
         request: Py<ChatCompletionRequest>,
     ) -> PyResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
-        let (tx, rx) = channel();
+        let (tx, mut rx) = channel(10_000);
         Python::with_gil(|py| {
             let request = request.bind(py).borrow();
             let stop_toks = request
@@ -496,12 +498,12 @@ impl Runner {
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
             let sender = self.runner.get_sender();
-            sender.send(model_request).unwrap();
+            sender.blocking_send(model_request).unwrap();
 
             if request.stream {
                 Ok(Either::Right(ChatCompletionStreamer::from_rx(rx)))
             } else {
-                let response = rx.recv().unwrap();
+                let response = rx.blocking_recv().unwrap();
 
                 match response {
                     Response::ValidationError(e) | Response::InternalError(e) => {
@@ -522,7 +524,7 @@ impl Runner {
         &mut self,
         request: Py<CompletionRequest>,
     ) -> PyResult<CompletionResponse> {
-        let (tx, rx) = channel();
+        let (tx, mut rx) = channel(10_000);
         Python::with_gil(|py| {
             let request = request.bind(py).borrow();
             let stop_toks = request
@@ -584,8 +586,8 @@ impl Runner {
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
             let sender = self.runner.get_sender();
-            sender.send(model_request).unwrap();
-            let response = rx.recv().unwrap();
+            sender.blocking_send(model_request).unwrap();
+            let response = rx.blocking_recv().unwrap();
 
             match response {
                 Response::ValidationError(e) | Response::InternalError(e) => {
@@ -791,6 +793,11 @@ impl ChatCompletionRequest {
 
 #[pymodule]
 fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+    tracing_subscriber::fmt().with_env_filter(filter).init();
+
     m.add_class::<Runner>()?;
     m.add_class::<Which>()?;
     m.add_class::<ChatCompletionRequest>()?;

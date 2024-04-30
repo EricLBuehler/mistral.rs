@@ -2,13 +2,11 @@ use std::{
     env,
     error::Error,
     pin::Pin,
-    sync::{
-        mpsc::{channel, Receiver, Sender},
-        Arc,
-    },
+    sync::Arc,
     task::{Context, Poll},
     time::Duration,
 };
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::openai::{ChatCompletionRequest, Grammar, StopTokens};
 use anyhow::Result;
@@ -217,11 +215,16 @@ pub async fn chatcompletions(
     State(state): State<Arc<MistralRs>>,
     Json(oairequest): Json<ChatCompletionRequest>,
 ) -> ChatCompletionResponder {
-    let (tx, rx) = channel();
+    let (tx, mut rx) = channel(10_000);
     let request = parse_request(oairequest, state.clone(), tx);
     let is_streaming = request.is_streaming;
     let sender = state.get_sender();
-    sender.send(request).unwrap();
+
+    if let Err(e) = sender.send(request).await {
+        let e = anyhow::Error::msg(e.to_string());
+        MistralRs::maybe_log_error(state, &*e);
+        return ChatCompletionResponder::InternalError(e.into());
+    }
 
     if is_streaming {
         let streamer = Streamer {
@@ -242,7 +245,14 @@ pub async fn chatcompletions(
             ),
         )
     } else {
-        let response = rx.recv().unwrap();
+        let response = match rx.recv().await {
+            Some(response) => response,
+            None => {
+                let e = anyhow::Error::msg("No response received from the model.");
+                MistralRs::maybe_log_error(state, &*e);
+                return ChatCompletionResponder::InternalError(e.into());
+            }
+        };
 
         match response {
             Response::InternalError(e) => {

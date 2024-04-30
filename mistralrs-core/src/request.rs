@@ -1,7 +1,8 @@
 use indexmap::IndexMap;
 
 use crate::{response::Response, sampler::SamplingParams};
-use std::{fmt::Debug, sync::mpsc::Sender};
+use std::fmt::Debug;
+use tokio::sync::mpsc::Sender;
 
 #[derive(Clone)]
 /// Control the constraint with Regex or Yacc.

@@ -1,10 +1,5 @@
-use std::{
-    error::Error,
-    sync::{
-        mpsc::{channel, Sender},
-        Arc,
-    },
-};
+use std::{error::Error, sync::Arc};
+use tokio::sync::mpsc::{channel, Sender};
 
 use crate::openai::{CompletionRequest, Grammar, StopTokens};
 use axum::{
@@ -17,7 +12,7 @@ use mistralrs_core::{
     StopTokens as InternalStopTokens,
 };
 use serde::Serialize;
-use tracing::warn;
+use tracing::info;
 
 #[derive(Debug)]
 struct ModelErrorMessage(String);
@@ -102,11 +97,11 @@ fn parse_request(
     };
 
     if oairequest.logprobs.is_some() {
-        warn!("Completion requests do not support logprobs.");
+        info!("⚠️ WARNING: Completion requests do not support logprobs.");
     }
 
     if oairequest._stream.is_some_and(|x| x) {
-        warn!("Completion requests do not support streaming.");
+        info!("⚠️ WARNING: Completion requests do not support streaming.");
     }
 
     Request {
@@ -151,7 +146,7 @@ pub async fn completions(
     State(state): State<Arc<MistralRs>>,
     Json(oairequest): Json<CompletionRequest>,
 ) -> CompletionResponder {
-    let (tx, rx) = channel();
+    let (tx, mut rx) = channel(10_000);
     let request = parse_request(oairequest, state.clone(), tx);
     let is_streaming = request.is_streaming;
     let sender = state.get_sender();
@@ -168,9 +163,20 @@ pub async fn completions(
         );
     }
 
-    sender.send(request).unwrap();
+    if let Err(e) = sender.send(request).await {
+        let e = anyhow::Error::msg(e.to_string());
+        MistralRs::maybe_log_error(state, &*e);
+        return CompletionResponder::InternalError(e.into());
+    }
 
-    let response = rx.recv().unwrap();
+    let response = match rx.recv().await {
+        Some(response) => response,
+        None => {
+            let e = anyhow::Error::msg("No response received from the model.");
+            MistralRs::maybe_log_error(state, &*e);
+            return CompletionResponder::InternalError(e.into());
+        }
+    };
 
     match response {
         Response::InternalError(e) => {

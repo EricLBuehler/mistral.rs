@@ -5,13 +5,11 @@ use std::{
     error::Error,
     fs::OpenOptions,
     io::Write,
-    sync::{
-        mpsc::{channel, Sender},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::mpsc::{channel, Sender};
 
 use candle_core::quantized::GgmlDType;
 use engine::Engine;
@@ -147,8 +145,8 @@ impl MistralRs {
         let prefix_cache_n = prefix_cache_n.unwrap_or(16);
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
 
-        let (tx, rx) = channel();
-        let (isq_tx, isq_rx) = channel();
+        let (tx, rx) = channel(10_000);
+        let (isq_tx, isq_rx) = channel(10_000);
 
         let this = Arc::new(Self {
             sender: tx,
@@ -189,7 +187,9 @@ impl MistralRs {
     /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
     /// then nothing will happen.
     pub fn send_re_isq(&self, dtype: GgmlDType) {
-        self.sender_isq.send(dtype).expect("Engine is not present.")
+        self.sender_isq
+            .blocking_send(dtype)
+            .expect("Engine is not present.")
     }
 
     pub fn get_id(&self) -> String {

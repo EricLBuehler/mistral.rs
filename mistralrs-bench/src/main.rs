@@ -6,9 +6,12 @@ use mistralrs_core::{
     ModelSelected, Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
     Usage,
 };
+use std::fmt::Display;
 use std::sync::Arc;
-use std::{fmt::Display, sync::mpsc::channel};
-use tracing::{info, warn};
+use tokio::sync::mpsc::channel;
+use tracing::info;
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::EnvFilter;
 
 enum TestName {
     Prompt(usize),
@@ -63,7 +66,7 @@ fn run_bench(
         n_choices: 1,
     };
     let sender = mistralrs.get_sender();
-    let (tx, rx) = channel();
+    let (tx, mut rx) = channel(10_000);
 
     let req = Request {
         id: mistralrs.next_request_id(),
@@ -80,11 +83,13 @@ fn run_bench(
 
     for _ in 0..repetitions {
         for _ in 0..concurrency {
-            sender.send(req.clone()).expect("Expected receiver.");
+            sender
+                .blocking_send(req.clone())
+                .expect("Expected receiver.");
         }
         for _ in 0..concurrency {
-            match rx.recv() {
-                Ok(r) => match r {
+            match rx.blocking_recv() {
+                Some(r) => match r {
                     Response::InternalError(e) => {
                         unreachable!("Got an internal error: {e:?}");
                     }
@@ -103,7 +108,7 @@ fn run_bench(
                         usages.push(res.usage);
                     }
                 },
-                Err(e) => unreachable!("Expected a Done response, got: {:?}", e),
+                None => unreachable!("Expected a Done response, got None",),
             }
         }
     }
@@ -251,7 +256,11 @@ fn main() -> anyhow::Result<()> {
     #[cfg(not(feature = "metal"))]
     let device = Device::cuda_if_available(0)?;
 
-    tracing_subscriber::fmt().init();
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+    tracing_subscriber::fmt().with_env_filter(filter).init();
+
     let token_source = TokenSource::CacheToken;
     info!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
@@ -274,7 +283,7 @@ fn main() -> anyhow::Result<()> {
                 | ModelKind::XLoraGGUF
         )
     {
-        warn!("Using flash attention with a quantized model has no effect!")
+        info!("⚠️ WARNING: Using flash attention with a quantized model has no effect!")
     }
     info!("Model kind is: {}", loader.get_kind().as_ref());
     let pipeline = loader.load_model(

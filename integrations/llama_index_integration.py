@@ -8,6 +8,7 @@ from llama_index.core.base.llms.types import (
     CompletionResponseGen,
     LLMMetadata,
     MessageRole,
+    LogProb,
 )
 from llama_index.core.bridge.pydantic import Field, PrivateAttr
 from llama_index.core.callbacks import CallbackManager
@@ -18,9 +19,6 @@ from llama_index.core.constants import (
 )
 from llama_index.core.llms.callbacks import llm_chat_callback, llm_completion_callback
 from llama_index.core.llms.custom import CustomLLM
-from llama_index.core.base.llms.generic_utils import (
-    completion_response_to_chat_response,
-)
 from llama_index.core.types import BaseOutputParser, PydanticProgramMode
 
 from mistralrs import (
@@ -31,17 +29,8 @@ from mistralrs import (
     Role,
 )
 
-DEFAULT_MISTRAL_RS_GGML_MODEL = (
-    "https://huggingface.co/TheBloke/Llama-2-13B-chat-GGML/resolve"
-    "/main/llama-2-13b-chat.ggmlv3.q4_0.bin"
-)
-DEFAULT_MISTRAL_RS_GGUF_MODEL = (
-    "https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve"
-    "/main/llama-2-13b-chat.Q4_0.gguf"
-)
 DEFAULT_TOPK = 32
 DEFAULT_TOPP = 0.1
-DEFAULT_TOP_LOGPROBS = 10
 DEFAULT_REPEAT_LAST_N = 64
 DEFAULT_MAX_SEQS = 16
 DEFAULT_PREFIX_CACHE_N = 16
@@ -64,6 +53,40 @@ def llama_index_to_mistralrs_messages(messages: Sequence[ChatMessage]) -> list[M
                 f"Unsupported chat role `{message.role}` for `mistralrs` automatic chat templating: supported are `user`, `assistant`, `system`. Please specify `messages_to_prompt`."
             )
     return messages_new
+
+
+def extract_logprobs_choice(choice) -> Optional[list[LogProb]]:
+    if choice.logprobs is not None:
+        logprobs = []
+        for logprob in choice.logprobs.content:
+            logprobs.append(
+                LogProb(
+                    logprob=logprob.logprob,
+                    bytes=logprob.bytes,
+                    token=logprob.token,
+                )
+            )
+    else:
+        logprobs = None
+    return logprobs
+
+
+def extract_logprobs(response) -> Optional[list[list[LogProb]]]:
+    if response.choices[0].logprobs is not None:
+        choice_logprobs = []
+        for choice in response.choices:
+            choice_logprobs.append(extract_logprobs_choice(choice))
+    else:
+        choice_logprobs = None
+    return choice_logprobs
+
+
+def extract_logprobs_stream(response) -> Optional[list[list[LogProb]]]:
+    if response.choices[0].logprobs is not None:
+        logprobs = [extract_logprobs_choice(response.choices[0])]
+    else:
+        logprobs = None
+    return logprobs
 
 
 class MistralRS(CustomLLM):
@@ -105,12 +128,8 @@ class MistralRS(CustomLLM):
         ```
     """
 
-    model_url: Optional[str] = Field(
-        description="The URL llama-cpp model to download and use."
-    )
-    model_path: Optional[str] = Field(
-        description="The path to the llama-cpp model to use."
-    )
+    model_url: Optional[str] = Field(description="local")
+    model_path: Optional[str] = Field(description="local")
     temperature: float = Field(
         default=DEFAULT_TEMPERATURE,
         description="The temperature to use for sampling.",
@@ -144,10 +163,17 @@ class MistralRS(CustomLLM):
         context_window: int = DEFAULT_CONTEXT_WINDOW,
         top_k: int = DEFAULT_TOPK,
         top_p: int = DEFAULT_TOPP,
-        top_logprobs: Optional[int] = DEFAULT_TOP_LOGPROBS,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+        in_situ_quant: Optional[str] = None,
+        max_seqs: int = DEFAULT_MAX_SEQS,
+        token_source: str = "cache",
+        prefix_cache_n: str = DEFAULT_PREFIX_CACHE_N,
+        no_kv_cache: bool = False,
+        chat_template: Optional[str] = None,
+        top_logprobs: Optional[int] = None,
         callback_manager: Optional[CallbackManager] = None,
         generate_kwargs: Optional[Dict[str, Any]] = None,
-        model_kwargs: Optional[Dict[str, Any]] = {},
         system_prompt: Optional[str] = None,
         messages_to_prompt: Optional[Callable[[Sequence[ChatMessage]], str]] = None,
         completion_to_prompt: Optional[Callable[[str], str]] = None,
@@ -162,6 +188,9 @@ class MistralRS(CustomLLM):
                 "top_k": top_k,
                 "top_p": top_p,
                 "top_logprobs": top_logprobs,
+                "logprobs": top_logprobs is not None,
+                "frequency_penalty": frequency_penalty,
+                "presence_penalty": presence_penalty,
             }
         )
 
@@ -184,17 +213,18 @@ class MistralRS(CustomLLM):
 
         self._runner = Runner(
             which=which,
-            token_source=model_kwargs.get("token_source", "cache"),
-            max_seqs=model_kwargs.get("max_seqs", DEFAULT_MAX_SEQS),
-            prefix_cache_n=model_kwargs.get("prefix_cache_n", DEFAULT_PREFIX_CACHE_N),
-            no_kv_cache=model_kwargs.get("no_kv_cache", False),
-            chat_template=model_kwargs.get("chat_template", None),
+            token_source=token_source,
+            max_seqs=max_seqs,
+            prefix_cache_n=prefix_cache_n,
+            no_kv_cache=no_kv_cache,
+            chat_template=chat_template,
+            in_situ_quant=in_situ_quant,
         )
         self._has_messages_to_prompt = messages_to_prompt is not None
 
     @classmethod
     def class_name(cls) -> str:
-        return "MistralRS_llm"
+        return "MistralRS"
 
     @property
     def metadata(self) -> LLMMetadata:
@@ -217,12 +247,14 @@ class MistralRS(CustomLLM):
             messages=messages,
             model="",
             logit_bias=None,
-            logprobs=False,
             **self.generate_kwargs,
         )
 
         response = self._runner.send_chat_completion_request(request)
-        return CompletionResponse(text=response.choices[0].message.content)
+        return CompletionResponse(
+            text=response.choices[0].message.content,
+            logprobs=extract_logprobs(response),
+        )
 
     @llm_chat_callback()
     def stream_chat(
@@ -238,7 +270,6 @@ class MistralRS(CustomLLM):
             messages=messages,
             model="",
             logit_bias=None,
-            logprobs=False,
             **self.generate_kwargs,
         )
 
@@ -255,6 +286,7 @@ class MistralRS(CustomLLM):
                         content=delta,
                     ),
                     delta=delta,
+                    logprobs=extract_logprobs_stream(response),
                 )
 
         return gen()
@@ -271,11 +303,13 @@ class MistralRS(CustomLLM):
             messages=prompt,
             model="",
             logit_bias=None,
-            logprobs=False,
             **self.generate_kwargs,
         )
         completion_response = self._runner.send_chat_completion_request(request)
-        return CompletionResponse(text=completion_response.choices[0].message.content)
+        return CompletionResponse(
+            text=completion_response.choices[0].message.content,
+            logprobs=extract_logprobs(completion_response),
+        )
 
     @llm_completion_callback()
     def stream_complete(
@@ -289,7 +323,6 @@ class MistralRS(CustomLLM):
             messages=prompt,
             model="",
             logit_bias=None,
-            logprobs=False,
             **self.generate_kwargs,
         )
 
@@ -300,6 +333,10 @@ class MistralRS(CustomLLM):
             for response in streamer:
                 delta = response.choices[0].delta.content
                 text += delta
-                yield CompletionResponse(delta=delta, text=text)
+                yield CompletionResponse(
+                    delta=delta,
+                    text=text,
+                    logprobs=extract_logprobs_stream(response),
+                )
 
         return gen()

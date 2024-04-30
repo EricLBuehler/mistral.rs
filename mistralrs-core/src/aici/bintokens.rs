@@ -6,7 +6,7 @@ use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use tokenizers::{normalizers::Sequence, NormalizerWrapper, Tokenizer};
-use tracing::{error, warn};
+use tracing::{error, info};
 
 #[derive(Serialize, Deserialize)]
 pub struct ByteTokenizer {
@@ -155,7 +155,7 @@ impl ByteTokenizer {
                     panic!();
                 }
             } else {
-                warn!("missing token: {}", tok_id);
+                info!("⚠️ WARNING: missing token: {}", tok_id);
             }
         }
 

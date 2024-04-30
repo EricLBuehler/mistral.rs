@@ -12,11 +12,7 @@ use tracing::info;
 use crate::{
     device_map::DeviceMapper,
     layers::RmsNorm,
-    models::{
-        self, flash_attn,
-        llama::{Config, MAX_SEQ_LEN},
-        repeat_kv, LayerCaches,
-    },
+    models::{self, flash_attn, llama::Config, repeat_kv, LayerCaches},
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
@@ -60,6 +56,7 @@ struct CausalSelfAttention {
     head_dim: usize,
     use_flash_attn: bool,
     rotary_emb: Arc<RotaryEmbedding>,
+    max_seq_len: usize,
 }
 
 impl CausalSelfAttention {
@@ -131,15 +128,15 @@ impl CausalSelfAttention {
             k = candle_nn::ops::kvconcat(cache_k, &k, 2)?.contiguous()?;
             v = candle_nn::ops::kvconcat(cache_v, &v, 2)?.contiguous()?;
             let k_seq_len = k.dims()[1];
-            if k_seq_len > MAX_SEQ_LEN {
+            if k_seq_len > self.max_seq_len {
                 k = k
-                    .narrow(D::Minus1, k_seq_len - MAX_SEQ_LEN, MAX_SEQ_LEN)?
+                    .narrow(D::Minus1, k_seq_len - self.max_seq_len, self.max_seq_len)?
                     .contiguous()?
             }
             let v_seq_len = v.dims()[1];
-            if v_seq_len > 2 * MAX_SEQ_LEN {
+            if v_seq_len > 2 * self.max_seq_len {
                 v = v
-                    .narrow(D::Minus1, v_seq_len - MAX_SEQ_LEN, MAX_SEQ_LEN)?
+                    .narrow(D::Minus1, v_seq_len - self.max_seq_len, self.max_seq_len)?
                     .contiguous()?
             }
         }
@@ -246,6 +243,7 @@ impl CausalSelfAttention {
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             use_flash_attn: cfg.use_flash_attn,
             rotary_emb: rope,
+            max_seq_len: cfg.max_position_embeddings,
         })
     }
 }
@@ -528,6 +526,7 @@ impl XLoraLlama {
                 &start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
+                &context_lens,
             )?;
 
             if no_kv_cache {
@@ -620,7 +619,7 @@ impl XLoraLlama {
                     RotaryEmbedding::new(
                         cfg.rope_theta,
                         head_dim,
-                        MAX_SEQ_LEN,
+                        cfg.max_position_embeddings,
                         mapper.device_for(i, false).unwrap_or(&real_device),
                         is_gptx,
                         vb.dtype(),
@@ -694,6 +693,7 @@ impl NormalModel for XLoraLlama {
         _seqlen_offsets: &[usize],
         _start_offsets_kernel: Tensor,
         _context_lens: Vec<usize>,
+        _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -708,6 +708,7 @@ impl NormalModel for XLoraLlama {
         no_kv_cache: bool,
         non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         context_lens: Vec<usize>,
+        _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
@@ -731,7 +732,7 @@ impl NormalModel for XLoraLlama {
         true
     }
     fn max_seq_len(&self) -> usize {
-        MAX_SEQ_LEN
+        self.blocks[0].attn.max_seq_len
     }
     fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
@@ -783,6 +784,7 @@ impl ScalingsMaker for XLoraLlama {
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
+        _context_lens: &[usize],
     ) -> Result<Tensor> {
         self.inner_forward(
             input_ids,

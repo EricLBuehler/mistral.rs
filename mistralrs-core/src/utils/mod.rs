@@ -21,6 +21,7 @@ macro_rules! handle_seq_error {
                 use $crate::response::Response;
                 $response
                     .send(Response::InternalError(e.into()))
+                    .await
                     .expect("Expected receiver.");
                 return;
             }
@@ -37,26 +38,9 @@ macro_rules! handle_seq_error_ok {
                 use $crate::response::Response;
                 $response
                     .send(Response::InternalError(e.into()))
+                    .await
                     .expect("Expected receiver.");
                 return Ok(());
-            }
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! handle_seq_error_stateaware {
-    ($fallible:expr, $seq:expr) => {
-        match $fallible {
-            Ok(v) => v,
-            Err(e) => {
-                use $crate::response::Response;
-                use $crate::sequence::SequenceState;
-                $seq.responder()
-                    .send(Response::InternalError(e.into()))
-                    .expect("Expected receiver.");
-                $seq.set_state(SequenceState::Error);
-                return;
             }
         }
     };
@@ -72,6 +56,7 @@ macro_rules! handle_seq_error_stateaware_ok {
                 use $crate::sequence::SequenceState;
                 $seq.responder()
                     .send(Response::InternalError(e.into()))
+                    .await
                     .expect("Expected receiver.");
                 $seq.set_state(SequenceState::Error);
                 return Ok(());
@@ -86,7 +71,12 @@ macro_rules! handle_pipeline_forward_error {
         match $fallible {
             Ok(v) => v,
             Err(e) => {
-                let mut pipeline = $pipeline;
+                let (tokenizer, pipeline_name) = {
+                    let pipeline = get_mut_arcmutex!($pipeline);
+                    let pipeline_name = pipeline.name();
+                    let tokenizer = pipeline.tokenizer();
+                    (tokenizer, pipeline_name)
+                };
                 use $crate::response::Response;
                 use $crate::sequence::SequenceState;
                 use $crate::Engine;
@@ -95,8 +85,7 @@ macro_rules! handle_pipeline_forward_error {
                 error!("{} - Model failed with error: {:?}", $stage, &e);
                 for seq in $seq_slice.iter_mut() {
                     // Step 1: Add all choices to groups
-                    let res = match pipeline
-                        .tokenizer()
+                    let res = match tokenizer
                         .decode(&seq.get_toks()[seq.prompt_tokens()..], false)
                     {
                         Ok(v) => v,
@@ -133,7 +122,7 @@ macro_rules! handle_pipeline_forward_error {
                             id: seq.id().to_string(),
                             choices: group.get_choices().to_vec(),
                             created: seq.creation_time(),
-                            model: pipeline.name(),
+                            model: pipeline_name.clone(),
                             system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                             object: "chat.completion".to_string(),
                             usage: group.get_usage(),
@@ -144,13 +133,14 @@ macro_rules! handle_pipeline_forward_error {
                                 e.to_string(),
                                 partial_completion_response
                             ))
+                            .await
                             .unwrap();
                     } else {
                         let partial_completion_response = CompletionResponse {
                             id: seq.id().to_string(),
                             choices: group.get_completion_choices().to_vec(),
                             created: seq.creation_time(),
-                            model: pipeline.name(),
+                            model: pipeline_name.clone(),
                             system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                             object: "text_completion".to_string(),
                             usage: group.get_usage(),
@@ -161,6 +151,7 @@ macro_rules! handle_pipeline_forward_error {
                                 e.to_string(),
                                 partial_completion_response
                             ))
+                            .await
                             .unwrap();
                     }
                 }
@@ -169,7 +160,7 @@ macro_rules! handle_pipeline_forward_error {
                     seq.set_state(SequenceState::Error);
                 }
 
-                Engine::set_none_cache(&mut *pipeline);
+                Engine::set_none_cache(&mut *get_mut_arcmutex!($pipeline));
                 $prefix_cacher.evict_all_to_cpu().unwrap();
 
                 continue $label;
@@ -182,7 +173,7 @@ macro_rules! handle_pipeline_forward_error {
 macro_rules! get_mut_group {
     ($this:expr) => {
         loop {
-            if let Ok(inner) = $this.group.try_borrow_mut() {
+            if let Ok(inner) = $this.group.try_lock() {
                 break inner;
             }
         }
