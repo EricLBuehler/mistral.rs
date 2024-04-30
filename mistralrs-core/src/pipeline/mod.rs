@@ -317,13 +317,7 @@ pub trait Pipeline: Send + Sync {
         )
     }
     fn get_chat_template(&self) -> Arc<ChatTemplate>;
-    //fn get_non_granular_state(&self) -> &Option<NonGranularState>;
-    fn reset_non_granular_state(&self) {
-        if let Some(s) = self.get_non_granular_state().as_ref() {
-            *self.cache().get_scalings_cache() = None;
-            *get_mut_arcmutex!(s.non_granular_index) = 0;
-        }
-    }
+    fn reset_non_granular_state(&self);
     fn get_repeat_last_n(&self) -> usize;
 
     fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()>;

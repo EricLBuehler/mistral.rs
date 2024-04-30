@@ -9,7 +9,7 @@ use crate::pipeline::chat_template::calculate_eos_tokens;
 use crate::pipeline::{ChatTemplate, SimpleModelPaths};
 use crate::utils::varbuilder_utils::from_mmaped_safetensors;
 use crate::xlora_models::NonGranularState;
-use crate::{deserialize_chat_template, get_paths, DeviceMapMetadata};
+use crate::{deserialize_chat_template, get_mut_arcmutex, get_paths, DeviceMapMetadata};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama, utils::tokens::get_token,
     xlora_models::XLoraModelWeights as XLoraQLlama,
@@ -424,8 +424,11 @@ impl Pipeline for GGMLPipeline {
     fn get_chat_template(&self) -> Arc<ChatTemplate> {
         self.chat_template.clone()
     }
-    fn get_non_granular_state(&self) -> &Option<NonGranularState> {
-        &None
+    fn reset_non_granular_state(&self) {
+        if let Some(s) = self.non_granular_state.as_ref() {
+            *self.cache().get_scalings_cache() = None;
+            *get_mut_arcmutex!(s.non_granular_index) = 0;
+        }
     }
     fn tok_trie(&self) -> Arc<TokTrie> {
         self.tok_trie.clone()

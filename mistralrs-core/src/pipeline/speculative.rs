@@ -12,7 +12,6 @@ use crate::{
     models::Cache,
     pipeline::{sample_sequence, sampling::sample_target_sequence_speculative},
     sequence::{Sequence, SequenceState},
-    xlora_models::NonGranularState,
     Pipeline,
 };
 
@@ -229,8 +228,9 @@ impl Pipeline for SpeculativePipeline {
     fn get_chat_template(&self) -> Arc<ChatTemplate> {
         get_mut_arcmutex!(self.target).get_chat_template()
     }
-    fn get_non_granular_state(&self) -> &Option<NonGranularState> {
-        get_mut_arcmutex!(self.target).get_non_granular_state()
+    fn reset_non_granular_state(&self) {
+        get_mut_arcmutex!(self.target).reset_non_granular_state();
+        get_mut_arcmutex!(self.draft).reset_non_granular_state();
     }
     fn tok_trie(&self) -> Arc<TokTrie> {
         get_mut_arcmutex!(self.target).tok_trie()

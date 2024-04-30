@@ -14,7 +14,7 @@ use crate::pipeline::{ChatTemplate, SimpleModelPaths};
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
 use crate::{
-    deserialize_chat_template, get_paths, lora_model_loader, normal_model_loader,
+    deserialize_chat_template, get_mut_arcmutex, get_paths, lora_model_loader, normal_model_loader,
     xlora_model_loader, DeviceMapMetadata,
 };
 use anyhow::Result;
@@ -379,8 +379,11 @@ impl Pipeline for NormalPipeline {
     fn get_chat_template(&self) -> Arc<ChatTemplate> {
         self.chat_template.clone()
     }
-    fn get_non_granular_state(&self) -> &Option<NonGranularState> {
-        &self.non_granular_state
+    fn reset_non_granular_state(&self) {
+        if let Some(s) = self.non_granular_state.as_ref() {
+            *self.cache().get_scalings_cache() = None;
+            *get_mut_arcmutex!(s.non_granular_index) = 0;
+        }
     }
     fn tok_trie(&self) -> Arc<TokTrie> {
         self.tok_trie.clone()
