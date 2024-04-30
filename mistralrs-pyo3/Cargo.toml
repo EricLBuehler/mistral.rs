@@ -17,7 +17,7 @@ doc = false
 
 [dependencies]
 pyo3.workspace = true
-mistralrs-core = { version = "0.1.1", path = "../mistralrs-core" }
+mistralrs-core = { version = "0.1.2", path = "../mistralrs-core" }
 serde.workspace = true
 serde_json.workspace = true
 candle-core.workspace = true
