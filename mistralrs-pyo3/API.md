@@ -96,7 +96,7 @@ class Which(Enum):
 
 ## Example
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest, Message, Role
+from mistralrs import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
     which=Which.GGUF(

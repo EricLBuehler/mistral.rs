@@ -85,7 +85,7 @@ Python API for mistral.rs.
 - [Cookbook](examples/python/cookbook.ipynb)
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest, Message, Role
+from mistralrs import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
     which=Which.GGUF(
