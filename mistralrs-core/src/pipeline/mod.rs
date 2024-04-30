@@ -8,6 +8,9 @@ mod sampling;
 mod speculative;
 use crate::aici::toktree::TokTrie;
 use crate::device_map::DeviceMapper;
+use crate::prefix_cacher::PrefixCacheManager;
+use crate::sampler::Logprobs;
+mod default_sampling_pipeline;
 use crate::{api_dir_list, api_get_file, DeviceMapMetadata};
 use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
 use candle_nn::VarBuilder;
@@ -28,6 +31,7 @@ pub use loaders::{
 };
 use mistralrs_lora::{LoraConfig, Ordering};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
+use rand_isaac::Isaac64Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 pub(crate) use sampling::sample_sequence;
 use std::path::Path;
@@ -41,7 +45,6 @@ use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 
 use crate::{
-    get_mut_arcmutex,
     models::Cache,
     sequence::Sequence,
     utils::tokens::get_token,
@@ -275,10 +278,10 @@ pub trait Pipeline: Send + Sync {
     fn num_hidden_layers(&self) -> usize;
     fn cache(&self) -> &Cache;
     fn tokenizer(&self) -> Arc<Tokenizer>;
-    fn tok_trie(&self) -> Arc<TokTrie>;
-    fn eos_tok(&self) -> &[u32];
+    //fn tok_trie(&self) -> Arc<TokTrie>;
+    //fn eos_tok(&self) -> &[u32];
     fn name(&self) -> String;
-    fn get_max_seq_len(&self) -> usize;
+    //fn get_max_seq_len(&self) -> usize;
     fn is_xlora(&self) -> bool;
     fn has_no_kv_cache(&self) -> bool;
     fn apply_chat_template(
@@ -286,7 +289,8 @@ pub trait Pipeline: Send + Sync {
         messages: Vec<IndexMap<String, String>>,
         add_generation_prompt: bool,
     ) -> Result<String> {
-        let template = self.get_chat_template().chat_template.as_ref().unwrap();
+        let chat_template = self.get_chat_template();
+        let template = chat_template.chat_template.as_ref().unwrap();
         let bos_tok = if let Some(ref bos) = self.get_chat_template().bos_token {
             match bos.0 {
                 Either::Left(ref lit) => Some(lit.to_string()),
@@ -295,7 +299,7 @@ pub trait Pipeline: Send + Sync {
         } else {
             None
         };
-        let eos_tok = match self.get_chat_template().eos_token {
+        let eos_tok = match chat_template.eos_token {
             Either::Left(ref lit) => lit,
             Either::Right(ref added) => &added.content,
         };
@@ -318,9 +322,21 @@ pub trait Pipeline: Send + Sync {
     }
     fn get_chat_template(&self) -> Arc<ChatTemplate>;
     fn reset_non_granular_state(&self);
-    fn get_repeat_last_n(&self) -> usize;
+    //fn get_repeat_last_n(&self) -> usize;
 
     fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()>;
+}
+
+pub trait SamplingPipeline {
+    /// Sample and 
+    async fn sample(
+        &self,
+        pipeline: Arc<Mutex<dyn Pipeline>>,
+        seqs: &mut [&mut Sequence],
+        logits: Tensor,
+        prefix_cacher: &mut PrefixCacheManager,
+        disable_eos_stop: bool,
+    ) -> Result<()>;
 }
 
 pub trait ConfigMarker {}
