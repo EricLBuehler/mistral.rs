@@ -525,12 +525,16 @@
 <a href="#523" id="523">523</a>
 <a href="#524" id="524">524</a>
 <a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
-    cell::{Cell, RefCell, RefMut},
-    rc::Rc,
-    sync::mpsc::{SendError, Sender},
+    cell::Cell,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
+};
+<span class="kw">use </span>tokio::sync::{
+    mpsc::{error::SendError, Sender},
+    Mutex, MutexGuard,
 };
 
 <span class="kw">use crate</span>::{
@@ -621,7 +625,7 @@
     <span class="comment">// GPU things
     </span><span class="kw">pub </span>prompt_tok_per_sec: f32,
     <span class="kw">pub </span>prompt_timestamp: <span class="prelude-ty">Option</span>&lt;u128&gt;,
-    group: Rc&lt;RefCell&lt;SequenceGroup&gt;&gt;,
+    group: Arc&lt;Mutex&lt;SequenceGroup&gt;&gt;,
     state: Cell&lt;SequenceState&gt;,
 }
 <span class="kw">impl </span>Sequence {
@@ -638,7 +642,7 @@
         max_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
         return_logprobs: bool,
         is_xlora: bool,
-        group: Rc&lt;RefCell&lt;SequenceGroup&gt;&gt;,
+        group: Arc&lt;Mutex&lt;SequenceGroup&gt;&gt;,
         response_index: usize,
         creation_time: u64,
         recognizer: SequenceRecognizer,
@@ -926,7 +930,7 @@
         <span class="self">self</span>.response_index
     }
 
-    <span class="kw">pub fn </span>get_mut_group(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; RefMut&lt;<span class="lifetime">'_</span>, SequenceGroup&gt; {
+    <span class="kw">pub fn </span>get_mut_group(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; MutexGuard&lt;<span class="lifetime">'_</span>, SequenceGroup&gt; {
         <span class="macro">get_mut_group!</span>(<span class="self">self</span>)
     }
 
@@ -1003,19 +1007,19 @@
         }
     }
 
-    <span class="kw">pub fn </span>maybe_send_done_response(
+    <span class="kw">pub async fn </span>maybe_send_done_response(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         response: ChatCompletionResponse,
         sender: Sender&lt;Response&gt;,
-    ) {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), SendError&lt;Response&gt;&gt; {
         <span class="kw">if </span><span class="self">self</span>.choices.len() == <span class="self">self</span>.n_choices {
-            sender
-                .send(Response::Done(response))
-                .expect(<span class="string">"Expected receiver."</span>);
+            sender.send(Response::Done(response)).<span class="kw">await</span><span class="question-mark">?</span>;
         }
+
+        <span class="prelude-val">Ok</span>(())
     }
 
-    <span class="kw">pub fn </span>maybe_send_streaming_response(
+    <span class="kw">pub async fn </span>maybe_send_streaming_response(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         seq: <span class="kw-2">&amp;</span>Sequence,
         model: String,
@@ -1033,21 +1037,21 @@
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: <span class="string">"chat.completion.chunk"</span>.to_string(),
-                }))<span class="question-mark">?</span>;
+                }))
+                .<span class="kw">await</span><span class="question-mark">?</span>;
         }
         <span class="prelude-val">Ok</span>(())
     }
 
-    <span class="kw">pub fn </span>maybe_send_completion_done_response(
+    <span class="kw">pub async fn </span>maybe_send_completion_done_response(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         response: CompletionResponse,
         sender: Sender&lt;Response&gt;,
-    ) {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), Box&lt;SendError&lt;Response&gt;&gt;&gt; {
         <span class="kw">if </span><span class="self">self</span>.completion_choices.len() == <span class="self">self</span>.n_choices {
-            sender
-                .send(Response::CompletionDone(response))
-                .expect(<span class="string">"Expected receiver."</span>);
+            sender.send(Response::CompletionDone(response)).<span class="kw">await</span><span class="question-mark">?</span>;
         }
+        <span class="prelude-val">Ok</span>(())
     }
 }
 </code></pre></div></section></main></body></html>

@@ -347,6 +347,9 @@
 <a href="#345" id="345">345</a>
 <a href="#346" id="346">346</a>
 <a href="#347" id="347">347</a>
+<a href="#348" id="348">348</a>
+<a href="#349" id="349">349</a>
+<a href="#350" id="350">350</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
@@ -355,8 +358,9 @@
     ModelSelected, Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
     Usage,
 };
+<span class="kw">use </span>std::fmt::Display;
 <span class="kw">use </span>std::sync::Arc;
-<span class="kw">use </span>std::{fmt::Display, sync::mpsc::channel};
+<span class="kw">use </span>tokio::sync::mpsc::channel;
 <span class="kw">use </span>tracing::info;
 <span class="kw">use </span>tracing::level_filters::LevelFilter;
 <span class="kw">use </span>tracing_subscriber::EnvFilter;
@@ -414,7 +418,7 @@
         n_choices: <span class="number">1</span>,
     };
     <span class="kw">let </span>sender = mistralrs.get_sender();
-    <span class="kw">let </span>(tx, rx) = channel();
+    <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">10_000</span>);
 
     <span class="kw">let </span>req = Request {
         id: mistralrs.next_request_id(),
@@ -431,11 +435,13 @@
 
     <span class="kw">for _ in </span><span class="number">0</span>..repetitions {
         <span class="kw">for _ in </span><span class="number">0</span>..concurrency {
-            sender.send(req.clone()).expect(<span class="string">"Expected receiver."</span>);
+            sender
+                .blocking_send(req.clone())
+                .expect(<span class="string">"Expected receiver."</span>);
         }
         <span class="kw">for _ in </span><span class="number">0</span>..concurrency {
-            <span class="kw">match </span>rx.recv() {
-                <span class="prelude-val">Ok</span>(r) =&gt; <span class="kw">match </span>r {
+            <span class="kw">match </span>rx.blocking_recv() {
+                <span class="prelude-val">Some</span>(r) =&gt; <span class="kw">match </span>r {
                     Response::InternalError(e) =&gt; {
                         <span class="macro">unreachable!</span>(<span class="string">"Got an internal error: {e:?}"</span>);
                     }
@@ -454,7 +460,7 @@
                         usages.push(res.usage);
                     }
                 },
-                <span class="prelude-val">Err</span>(e) =&gt; <span class="macro">unreachable!</span>(<span class="string">"Expected a Done response, got: {:?}"</span>, e),
+                <span class="prelude-val">None </span>=&gt; <span class="macro">unreachable!</span>(<span class="string">"Expected a Done response, got None"</span>,),
             }
         }
     }

@@ -533,7 +533,7 @@
     .build();
 
     <span class="kw">if </span>args.interactive_mode {
-        interactive_mode(mistralrs);
+        interactive_mode(mistralrs).<span class="kw">await</span>;
         <span class="kw">return </span><span class="prelude-val">Ok</span>(());
     }
 

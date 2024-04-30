@@ -257,13 +257,11 @@
     error::Error,
     fs::OpenOptions,
     io::Write,
-    sync::{
-        mpsc::{channel, Sender},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
+<span class="kw">use </span>tokio::sync::mpsc::{channel, Sender};
 
 <span class="kw">use </span>candle_core::quantized::GgmlDType;
 <span class="kw">use </span>engine::Engine;
@@ -399,8 +397,8 @@
         <span class="kw">let </span>prefix_cache_n = prefix_cache_n.unwrap_or(<span class="number">16</span>);
         <span class="kw">let </span>disable_eos_stop = disable_eos_stop.unwrap_or(<span class="bool-val">false</span>);
 
-        <span class="kw">let </span>(tx, rx) = channel();
-        <span class="kw">let </span>(isq_tx, isq_rx) = channel();
+        <span class="kw">let </span>(tx, rx) = channel(<span class="number">10_000</span>);
+        <span class="kw">let </span>(isq_tx, isq_rx) = channel(<span class="number">10_000</span>);
 
         <span class="kw">let </span>this = Arc::new(<span class="self">Self </span>{
             sender: tx,
@@ -441,7 +439,9 @@
     <span class="doccomment">/// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
     /// then nothing will happen.
     </span><span class="kw">pub fn </span>send_re_isq(<span class="kw-2">&amp;</span><span class="self">self</span>, dtype: GgmlDType) {
-        <span class="self">self</span>.sender_isq.send(dtype).expect(<span class="string">"Engine is not present."</span>)
+        <span class="self">self</span>.sender_isq
+            .blocking_send(dtype)
+            .expect(<span class="string">"Engine is not present."</span>)
     }
 
     <span class="kw">pub fn </span>get_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {

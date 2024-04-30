@@ -913,14 +913,38 @@
 <a href="#911" id="911">911</a>
 <a href="#912" id="912">912</a>
 <a href="#913" id="913">913</a>
+<a href="#914" id="914">914</a>
+<a href="#915" id="915">915</a>
+<a href="#916" id="916">916</a>
+<a href="#917" id="917">917</a>
+<a href="#918" id="918">918</a>
+<a href="#919" id="919">919</a>
+<a href="#920" id="920">920</a>
+<a href="#921" id="921">921</a>
+<a href="#922" id="922">922</a>
+<a href="#923" id="923">923</a>
+<a href="#924" id="924">924</a>
+<a href="#925" id="925">925</a>
+<a href="#926" id="926">926</a>
+<a href="#927" id="927">927</a>
+<a href="#928" id="928">928</a>
+<a href="#929" id="929">929</a>
+<a href="#930" id="930">930</a>
+<a href="#931" id="931">931</a>
+<a href="#932" id="932">932</a>
+<a href="#933" id="933">933</a>
+<a href="#934" id="934">934</a>
+<a href="#935" id="935">935</a>
+<a href="#936" id="936">936</a>
+<a href="#937" id="937">937</a>
+<a href="#938" id="938">938</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
-    cell::RefCell,
     collections::{HashMap, VecDeque},
     iter::zip,
-    rc::Rc,
-    sync::{mpsc::Receiver, Arc, Mutex},
+    sync::{Arc, Mutex},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
+<span class="kw">use </span>tokio::sync::mpsc::Receiver;
 
 <span class="kw">use crate</span>::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
@@ -1005,7 +1029,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>last_completion_ids: Vec&lt;usize&gt; = <span class="macro">vec!</span>[];
         <span class="lifetime">'lp</span>: <span class="kw">loop </span>{
             <span class="kw">while let </span><span class="prelude-val">Ok</span>(request) = <span class="self">self</span>.rx.try_recv() {
-                <span class="self">self</span>.add_request(request);
+                <span class="self">self</span>.add_request(request).<span class="kw">await</span>;
             }
             <span class="kw">let </span>run_start = Instant::now();
             <span class="kw">let </span><span class="kw-2">mut </span>scheduled = <span class="self">self</span>.scheduler.schedule();
@@ -1019,26 +1043,31 @@
                 <span class="kw">let </span>current_completion_ids: Vec&lt;usize&gt; =
                     scheduled.completion.iter().map(|seq| <span class="kw-2">*</span>seq.id()).collect();
                 <span class="kw">let </span>logits = {
-                    <span class="kw">let </span><span class="kw-2">mut </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
-                    <span class="comment">// Run the completion seqs
-                    // Run the completion seqs
-                    </span><span class="kw">if </span>!<span class="self">self</span>.no_kv_cache &amp;&amp; last_completion_ids != current_completion_ids {
-                        <span class="self">Self</span>::clone_in_cache(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.completion);
-                    }
-                    <span class="kw">let </span>logits = pipeline.forward(<span class="kw-2">&amp;</span>scheduled.completion, <span class="bool-val">false</span>);
+                    <span class="kw">let </span>logits = {
+                        <span class="kw">let </span><span class="kw-2">mut </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
+                        <span class="comment">// Run the completion seqs
+                        // Run the completion seqs
+                        </span><span class="kw">if </span>!<span class="self">self</span>.no_kv_cache &amp;&amp; last_completion_ids != current_completion_ids {
+                            <span class="self">Self</span>::clone_in_cache(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.completion);
+                        }
+                        pipeline.forward(<span class="kw-2">&amp;</span>scheduled.completion, <span class="bool-val">false</span>)
+                    };
                     <span class="kw">let </span>logits = <span class="macro">handle_pipeline_forward_error!</span>(
                         <span class="string">"completion"</span>,
                         logits,
                         <span class="kw-2">&amp;mut </span>scheduled.completion,
-                        pipeline,
+                        <span class="self">self</span>.pipeline,
                         <span class="lifetime">'lp</span>,
                         <span class="self">self</span>.prefix_cacher
                     );
 
-                    <span class="kw">if </span>!<span class="self">self</span>.no_kv_cache {
-                        <span class="self">Self</span>::clone_out_cache(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.completion);
-                    } <span class="kw">else </span>{
-                        <span class="self">Self</span>::set_none_cache(<span class="kw-2">&amp;mut *</span>pipeline);
+                    {
+                        <span class="kw">let </span><span class="kw-2">mut </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
+                        <span class="kw">if </span>!<span class="self">self</span>.no_kv_cache {
+                            <span class="self">Self</span>::clone_out_cache(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.completion);
+                        } <span class="kw">else </span>{
+                            <span class="self">Self</span>::set_none_cache(<span class="kw-2">&amp;mut *</span>pipeline);
+                        }
                     }
                     logits
                 };
@@ -1056,7 +1085,7 @@
                     <span class="string">"sampling"</span>,
                     sampled_result,
                     <span class="kw-2">&amp;mut </span>scheduled.completion,
-                    <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline),
+                    <span class="self">self</span>.pipeline,
                     <span class="lifetime">'lp</span>,
                     <span class="self">self</span>.prefix_cacher
                 );
@@ -1069,23 +1098,25 @@
 
                     <span class="comment">// Run the prompt seqs
                     </span><span class="self">Self</span>::set_none_cache(<span class="kw-2">&amp;mut *</span>pipeline);
-                    <span class="kw">let </span>logits = pipeline.forward(<span class="kw-2">&amp;</span>scheduled.prompt, <span class="bool-val">true</span>);
-                    <span class="kw">let </span>logits = <span class="macro">handle_pipeline_forward_error!</span>(
-                        <span class="string">"prompt"</span>,
-                        logits,
-                        <span class="kw-2">&amp;mut </span>scheduled.prompt,
-                        pipeline,
-                        <span class="lifetime">'lp</span>,
-                        <span class="self">self</span>.prefix_cacher
-                    );
+                    pipeline.forward(<span class="kw-2">&amp;</span>scheduled.prompt, <span class="bool-val">true</span>)
+                };
+                <span class="kw">let </span>logits = <span class="macro">handle_pipeline_forward_error!</span>(
+                    <span class="string">"prompt"</span>,
+                    logits,
+                    <span class="kw-2">&amp;mut </span>scheduled.prompt,
+                    <span class="self">self</span>.pipeline,
+                    <span class="lifetime">'lp</span>,
+                    <span class="self">self</span>.prefix_cacher
+                );
 
+                {
+                    <span class="kw">let </span><span class="kw-2">mut </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
                     <span class="kw">if </span>!<span class="self">self</span>.no_kv_cache {
                         <span class="self">Self</span>::clone_out_cache(<span class="kw-2">&amp;mut *</span>pipeline, <span class="kw-2">&amp;mut </span>scheduled.prompt);
                     } <span class="kw">else </span>{
                         <span class="self">Self</span>::set_none_cache(<span class="kw-2">&amp;mut *</span>pipeline);
                     }
-                    logits
-                };
+                }
 
                 <span class="kw">let </span>sampled_result = <span class="self">Self</span>::sample_seqs(
                     <span class="self">self</span>.pipeline.clone(),
@@ -1100,7 +1131,7 @@
                     <span class="string">"sampling"</span>,
                     sampled_result,
                     <span class="kw-2">&amp;mut </span>scheduled.prompt,
-                    <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline),
+                    <span class="self">self</span>.pipeline,
                     <span class="lifetime">'lp</span>,
                     <span class="self">self</span>.prefix_cacher
                 );
@@ -1150,8 +1181,8 @@
                 </span>&amp;&amp; <span class="self">self</span>.scheduler.waiting_len() == <span class="number">0
             </span>{
                 <span class="comment">// If there is nothing to do, sleep until a request comes in
-                </span><span class="kw">if let </span><span class="prelude-val">Ok</span>(request) = <span class="self">self</span>.rx.recv() {
-                    <span class="self">self</span>.add_request(request);
+                </span><span class="kw">if let </span><span class="prelude-val">Some</span>(request) = <span class="self">self</span>.rx.recv().<span class="kw">await </span>{
+                    <span class="self">self</span>.add_request(request).<span class="kw">await</span>;
                 }
             }
         }
@@ -1314,7 +1345,8 @@
                         <span class="kw">if </span>seq
                             .get_mut_group()
                             .maybe_send_streaming_response(seq, pipeline_name.clone())
-                            .is_err()
+                            .<span class="kw">await
+                            </span>.is_err()
                         {
                             <span class="comment">// If we can't send the response, cancel the sequence
                             </span>seq.set_state(SequenceState::Done(StopReason::Canceled));
@@ -1323,25 +1355,29 @@
                     }
                 }
             } <span class="kw">else if let </span><span class="prelude-val">Some</span>(reason) = is_done {
-                <span class="kw">let </span><span class="kw-2">mut </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(pipeline);
-                <span class="self">Self</span>::finish_seq(<span class="kw-2">&amp;mut *</span>pipeline, seq, reason, prefix_cacher)<span class="question-mark">?</span>;
-                pipeline.reset_non_granular_state();
+                <span class="self">Self</span>::finish_seq(pipeline.clone(), seq, reason, prefix_cacher).<span class="kw">await</span><span class="question-mark">?</span>;
+                <span class="macro">get_mut_arcmutex!</span>(pipeline).reset_non_granular_state();
             }
         }
 
         <span class="prelude-val">Ok</span>(())
     }
 
-    <span class="kw">fn </span>finish_seq(
-        pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline,
+    <span class="kw">async fn </span>finish_seq(
+        pipeline: Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
         seq: <span class="kw-2">&amp;mut </span>Sequence,
         reason: StopReason,
         prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         seq.set_state(SequenceState::Done(reason));
+        <span class="kw">let </span>(tokenizer, pipeline_name) = {
+            <span class="kw">let </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(pipeline);
+            <span class="kw">let </span>pipeline_name = pipeline.name();
+            <span class="kw">let </span>tokenizer = pipeline.tokenizer();
+            (tokenizer, pipeline_name)
+        };
 
         <span class="kw">let </span>logprobs = <span class="kw">if </span>seq.return_logprobs() {
-            <span class="kw">let </span>tokenizer = pipeline.tokenizer().clone();
             <span class="kw">let </span><span class="kw-2">mut </span>logprobs = Vec::new();
             <span class="kw">for </span>logprob <span class="kw">in </span>seq.logprobs() {
                 <span class="kw">let </span>resp_logprob = ResponseLogprob {
@@ -1403,31 +1439,37 @@
 
         <span class="kw">let </span>group = seq.get_mut_group();
         <span class="kw">if </span>group.is_chat {
-            group.maybe_send_done_response(
-                ChatCompletionResponse {
-                    id: seq.id().to_string(),
-                    choices: group.get_choices().to_vec(),
-                    created: seq.creation_time(),
-                    model: pipeline.name(),
-                    system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
-                    object: <span class="string">"chat.completion"</span>.to_string(),
-                    usage: group.get_usage(),
-                },
-                seq.responder(),
-            );
+            group
+                .maybe_send_done_response(
+                    ChatCompletionResponse {
+                        id: seq.id().to_string(),
+                        choices: group.get_choices().to_vec(),
+                        created: seq.creation_time(),
+                        model: pipeline_name,
+                        system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                        object: <span class="string">"chat.completion"</span>.to_string(),
+                        usage: group.get_usage(),
+                    },
+                    seq.responder(),
+                )
+                .<span class="kw">await
+                </span>.map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
         } <span class="kw">else </span>{
-            group.maybe_send_completion_done_response(
-                CompletionResponse {
-                    id: seq.id().to_string(),
-                    choices: group.get_completion_choices().to_vec(),
-                    created: seq.creation_time(),
-                    model: pipeline.name(),
-                    system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
-                    object: <span class="string">"text_completion"</span>.to_string(),
-                    usage: group.get_usage(),
-                },
-                seq.responder(),
-            );
+            group
+                .maybe_send_completion_done_response(
+                    CompletionResponse {
+                        id: seq.id().to_string(),
+                        choices: group.get_completion_choices().to_vec(),
+                        created: seq.creation_time(),
+                        model: pipeline_name,
+                        system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                        object: <span class="string">"text_completion"</span>.to_string(),
+                        usage: group.get_usage(),
+                    },
+                    seq.responder(),
+                )
+                .<span class="kw">await
+                </span>.map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
         }
 
         <span class="prelude-val">Ok</span>(())
@@ -1582,7 +1624,7 @@
         }
     }
 
-    <span class="kw">fn </span>add_request(<span class="kw-2">&amp;mut </span><span class="self">self</span>, request: Request) {
+    <span class="kw">async fn </span>add_request(<span class="kw-2">&amp;mut </span><span class="self">self</span>, request: Request) {
         <span class="kw">let </span>is_chat = <span class="macro">matches!</span>(request.messages, RequestMessage::Chat(<span class="kw">_</span>));
         <span class="kw">let </span>echo_prompt = <span class="macro">matches!</span>(
             request.messages,
@@ -1605,17 +1647,15 @@
                     .response
                     .send(Response::ValidationError(
                         <span class="string">"Received messages for a model which does not have a chat template. Either use a different model or pass a single string as the prompt"</span>.into(),
-                    )).expect(<span class="string">"Expected receiver."</span>);
+                    )).<span class="kw">await</span>.expect(<span class="string">"Expected receiver."</span>);
             <span class="kw">return</span>;
         }
 
         <span class="kw">let </span><span class="kw-2">mut </span>force_tokens = <span class="prelude-val">None</span>;
         <span class="kw">let </span>formatted_prompt = <span class="kw">match </span>request.messages {
             RequestMessage::Chat(messages) =&gt; {
-                <span class="macro">handle_seq_error!</span>(
-                    <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).apply_chat_template(messages, <span class="bool-val">true</span>),
-                    request.response
-                )
+                <span class="kw">let </span>template = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).apply_chat_template(messages, <span class="bool-val">true</span>);
+                <span class="macro">handle_seq_error!</span>(template, request.response)
             }
             RequestMessage::Completion { text, .. } =&gt; text,
             RequestMessage::CompletionTokens(it) =&gt; {
@@ -1633,15 +1673,16 @@
                 .send(Response::ValidationError(
                     <span class="string">"Received an empty prompt."</span>.into(),
                 ))
-                .expect(<span class="string">"Expected receiver."</span>);
+                .<span class="kw">await
+                </span>.expect(<span class="string">"Expected receiver."</span>);
             <span class="kw">return</span>;
         }
         <span class="kw">let </span><span class="kw-2">mut </span>prompt = <span class="kw">match </span>force_tokens {
             <span class="prelude-val">Some</span>(tks) =&gt; tks,
-            <span class="prelude-val">None </span>=&gt; <span class="macro">handle_seq_error!</span>(
-                <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenize_prompt(<span class="kw-2">&amp;</span>formatted_prompt),
-                request.response
-            ),
+            <span class="prelude-val">None </span>=&gt; {
+                <span class="kw">let </span>prompt = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenize_prompt(<span class="kw-2">&amp;</span>formatted_prompt);
+                <span class="macro">handle_seq_error!</span>(prompt, request.response)
+            }
         };
 
         <span class="kw">if </span>prompt.len() &gt; <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_max_seq_len() {
@@ -1650,7 +1691,7 @@
                     .response
                     .send(Response::ValidationError(
                         <span class="macro">format!</span>(<span class="string">"Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?"</span>, <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_max_seq_len()).into(),
-                    )).expect(<span class="string">"Expected receiver."</span>);
+                    )).<span class="kw">await</span>.expect(<span class="string">"Expected receiver."</span>);
                 <span class="kw">return</span>;
             } <span class="kw">else </span>{
                 <span class="kw">let </span>prompt_len = prompt.len();
@@ -1685,8 +1726,10 @@
         <span class="kw">let </span>(stop_toks, stop_strings) = <span class="kw">match </span>request.sampling_params.stop_toks {
             <span class="prelude-val">None </span>=&gt; (<span class="macro">vec!</span>[], <span class="macro">vec!</span>[]),
             <span class="prelude-val">Some</span>(StopTokens::Ids(<span class="kw-2">ref </span>i)) =&gt; {
-                <span class="kw">let </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
-                <span class="kw">let </span>tok_trie = pipeline.tok_trie();
+                <span class="kw">let </span>tok_trie = {
+                    <span class="kw">let </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
+                    pipeline.tok_trie()
+                };
                 <span class="kw">for </span>id <span class="kw">in </span>i {
                     <span class="comment">// We can't use ` ` (space) as a stop token because other tokens like ` moon` start with a space.
                     </span><span class="kw">if </span>tok_trie.has_extensions(tok_trie.token(<span class="kw-2">*</span>id)) {
@@ -1695,7 +1738,7 @@
                             .send(Response::ValidationError(
                                 <span class="macro">format!</span>(<span class="string">"Stop token {:?} is also a prefix of other tokens and cannot be used as a stop token."</span>, tok_trie.token_str(<span class="kw-2">*</span>id)).into(),
                             ))
-                            .expect(<span class="string">"Expected receiver."</span>);
+                            .<span class="kw">await </span>.expect(<span class="string">"Expected receiver."</span>);
                         <span class="kw">return</span>;
                     }
                 }
@@ -1706,9 +1749,12 @@
                 <span class="kw">let </span><span class="kw-2">mut </span>stop_toks = Vec::new();
                 <span class="kw">let </span><span class="kw-2">mut </span>stop_strings: Vec&lt;String&gt; = Vec::new();
 
-                <span class="kw">let </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
-                <span class="kw">let </span>tok_trie = pipeline.tok_trie();
-                <span class="kw">let </span>tokenizer = pipeline.tokenizer();
+                <span class="kw">let </span>(tok_trie, tokenizer) = {
+                    <span class="kw">let </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
+                    <span class="kw">let </span>tok_trie = pipeline.tok_trie();
+                    <span class="kw">let </span>tokenizer = pipeline.tokenizer();
+                    (tok_trie, tokenizer)
+                };
 
                 <span class="kw">for </span>stop_txt <span class="kw">in </span>s {
                     <span class="kw">let </span>encoded = tokenizer.encode(stop_txt.to_string(), <span class="bool-val">false</span>);
@@ -1730,7 +1776,8 @@
                 (stop_toks, stop_strings)
             }
         };
-        <span class="kw">let </span>group = Rc::new(RefCell::new(SequenceGroup::new(
+
+        <span class="kw">let </span>group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
             request.sampling_params.n_choices,
             request.is_streaming,
             is_chat,
@@ -1748,7 +1795,8 @@
                     .send(Response::ValidationError(
                         <span class="macro">format!</span>(<span class="string">"Failed creation of logits bias. {}"</span>, err).into(),
                     ))
-                    .expect(<span class="string">"Expected receiver."</span>);
+                    .<span class="kw">await
+                    </span>.expect(<span class="string">"Expected receiver."</span>);
                 <span class="kw">return</span>;
             }
         };
@@ -1772,7 +1820,8 @@
                     .send(Response::ValidationError(
                         <span class="macro">format!</span>(<span class="string">"Invalid grammar. {}"</span>, err).into(),
                     ))
-                    .expect(<span class="string">"Expected receiver."</span>);
+                    .<span class="kw">await
+                    </span>.expect(<span class="string">"Expected receiver."</span>);
                 <span class="kw">return</span>;
             }
         };
@@ -1783,7 +1832,8 @@
                 .send(Response::ValidationError(
                     <span class="string">"Number of choices must be greater than 0."</span>.into(),
                 ))
-                .expect(<span class="string">"Expected receiver."</span>);
+                .<span class="kw">await
+                </span>.expect(<span class="string">"Expected receiver."</span>);
             <span class="kw">return</span>;
         }
 

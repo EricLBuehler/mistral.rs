@@ -215,15 +215,6 @@
 <a href="#213" id="213">213</a>
 <a href="#214" id="214">214</a>
 <a href="#215" id="215">215</a>
-<a href="#216" id="216">216</a>
-<a href="#217" id="217">217</a>
-<a href="#218" id="218">218</a>
-<a href="#219" id="219">219</a>
-<a href="#220" id="220">220</a>
-<a href="#221" id="221">221</a>
-<a href="#222" id="222">222</a>
-<a href="#223" id="223">223</a>
-<a href="#224" id="224">224</a>
 </pre></div><pre class="rust"><code><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>tokens;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>varbuilder_utils;
 
@@ -247,7 +238,8 @@
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::response::Response</span>;
                 <span class="macro-nonterminal">$response
                     </span>.send(Response::InternalError(e.into()))
-                    .expect(<span class="string">"Expected receiver."</span>);
+                    .<span class="kw">await
+                    </span>.expect(<span class="string">"Expected receiver."</span>);
                 <span class="kw">return</span>;
             }
         }
@@ -263,26 +255,9 @@
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::response::Response</span>;
                 <span class="macro-nonterminal">$response
                     </span>.send(Response::InternalError(e.into()))
-                    .expect(<span class="string">"Expected receiver."</span>);
+                    .<span class="kw">await
+                    </span>.expect(<span class="string">"Expected receiver."</span>);
                 <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-            }
-        }
-    };
-}
-
-<span class="attr">#[macro_export]
-</span><span class="macro">macro_rules! </span>handle_seq_error_stateaware {
-    (<span class="macro-nonterminal">$fallible</span>:expr, <span class="macro-nonterminal">$seq</span>:expr) =&gt; {
-        <span class="kw">match </span><span class="macro-nonterminal">$fallible </span>{
-            <span class="prelude-val">Ok</span>(v) =&gt; v,
-            <span class="prelude-val">Err</span>(e) =&gt; {
-                <span class="kw">use </span><span class="macro-nonterminal">$crate::response::Response</span>;
-                <span class="kw">use </span><span class="macro-nonterminal">$crate::sequence::SequenceState</span>;
-                <span class="macro-nonterminal">$seq</span>.responder()
-                    .send(Response::InternalError(e.into()))
-                    .expect(<span class="string">"Expected receiver."</span>);
-                <span class="macro-nonterminal">$seq</span>.set_state(SequenceState::Error);
-                <span class="kw">return</span>;
             }
         }
     };
@@ -298,7 +273,8 @@
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::sequence::SequenceState</span>;
                 <span class="macro-nonterminal">$seq</span>.responder()
                     .send(Response::InternalError(e.into()))
-                    .expect(<span class="string">"Expected receiver."</span>);
+                    .<span class="kw">await
+                    </span>.expect(<span class="string">"Expected receiver."</span>);
                 <span class="macro-nonterminal">$seq</span>.set_state(SequenceState::Error);
                 <span class="kw">return </span><span class="prelude-val">Ok</span>(());
             }
@@ -312,7 +288,12 @@
         <span class="kw">match </span><span class="macro-nonterminal">$fallible </span>{
             <span class="prelude-val">Ok</span>(v) =&gt; v,
             <span class="prelude-val">Err</span>(e) =&gt; {
-                <span class="kw">let </span><span class="kw-2">mut </span>pipeline = <span class="macro-nonterminal">$pipeline</span>;
+                <span class="kw">let </span>(tokenizer, pipeline_name) = {
+                    <span class="kw">let </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="macro-nonterminal">$pipeline</span>);
+                    <span class="kw">let </span>pipeline_name = pipeline.name();
+                    <span class="kw">let </span>tokenizer = pipeline.tokenizer();
+                    (tokenizer, pipeline_name)
+                };
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::response::Response</span>;
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::sequence::SequenceState</span>;
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::Engine</span>;
@@ -321,8 +302,7 @@
                 <span class="macro">error!</span>(<span class="string">"{} - Model failed with error: {:?}"</span>, <span class="macro-nonterminal">$stage</span>, <span class="kw-2">&amp;</span>e);
                 <span class="kw">for </span>seq <span class="kw">in </span><span class="macro-nonterminal">$seq_slice</span>.iter_mut() {
                     <span class="comment">// Step 1: Add all choices to groups
-                    </span><span class="kw">let </span>res = <span class="kw">match </span>pipeline
-                        .tokenizer()
+                    </span><span class="kw">let </span>res = <span class="kw">match </span>tokenizer
                         .decode(<span class="kw-2">&amp;</span>seq.get_toks()[seq.prompt_tokens()..], <span class="bool-val">false</span>)
                     {
                         <span class="prelude-val">Ok</span>(v) =&gt; v,
@@ -359,7 +339,7 @@
                             id: seq.id().to_string(),
                             choices: group.get_choices().to_vec(),
                             created: seq.creation_time(),
-                            model: pipeline.name(),
+                            model: pipeline_name.clone(),
                             system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                             object: <span class="string">"chat.completion"</span>.to_string(),
                             usage: group.get_usage(),
@@ -370,13 +350,14 @@
                                 e.to_string(),
                                 partial_completion_response
                             ))
-                            .unwrap();
+                            .<span class="kw">await
+                            </span>.unwrap();
                     } <span class="kw">else </span>{
                         <span class="kw">let </span>partial_completion_response = CompletionResponse {
                             id: seq.id().to_string(),
                             choices: group.get_completion_choices().to_vec(),
                             created: seq.creation_time(),
-                            model: pipeline.name(),
+                            model: pipeline_name.clone(),
                             system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                             object: <span class="string">"text_completion"</span>.to_string(),
                             usage: group.get_usage(),
@@ -387,7 +368,8 @@
                                 e.to_string(),
                                 partial_completion_response
                             ))
-                            .unwrap();
+                            .<span class="kw">await
+                            </span>.unwrap();
                     }
                 }
                 <span class="kw">for </span>seq <span class="kw">in </span><span class="macro-nonterminal">$seq_slice</span>.iter_mut() {
@@ -395,7 +377,7 @@
                     </span>seq.set_state(SequenceState::Error);
                 }
 
-                Engine::set_none_cache(<span class="kw-2">&amp;mut *</span>pipeline);
+                Engine::set_none_cache(<span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="macro-nonterminal">$pipeline</span>));
                 <span class="macro-nonterminal">$prefix_cacher</span>.evict_all_to_cpu().unwrap();
 
                 <span class="kw">continue </span><span class="macro-nonterminal">$label</span>;
@@ -408,7 +390,7 @@
 </span><span class="macro">macro_rules! </span>get_mut_group {
     (<span class="macro-nonterminal">$this</span>:expr) =&gt; {
         <span class="kw">loop </span>{
-            <span class="kw">if let </span><span class="prelude-val">Ok</span>(inner) = <span class="macro-nonterminal">$this</span>.group.try_borrow_mut() {
+            <span class="kw">if let </span><span class="prelude-val">Ok</span>(inner) = <span class="macro-nonterminal">$this</span>.group.try_lock() {
                 <span class="kw">break </span>inner;
             }
         }

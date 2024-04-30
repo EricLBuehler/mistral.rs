@@ -91,16 +91,16 @@
 <a href="#89" id="89">89</a>
 <a href="#90" id="90">90</a>
 <a href="#91" id="91">91</a>
-<a href="#92" id="92">92</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_core::{Constraint, MistralRs, Request, RequestMessage, Response, SamplingParams};
 <span class="kw">use </span>std::{
     io::{<span class="self">self</span>, Write},
-    sync::{mpsc::channel, Arc},
+    sync::Arc,
 };
+<span class="kw">use </span>tokio::sync::mpsc::channel;
 <span class="kw">use </span>tracing::{error, info};
 
-<span class="kw">pub fn </span>interactive_mode(mistralrs: Arc&lt;MistralRs&gt;) {
+<span class="kw">pub async fn </span>interactive_mode(mistralrs: Arc&lt;MistralRs&gt;) {
     <span class="kw">let </span>sender = mistralrs.get_sender();
     <span class="kw">let </span><span class="kw-2">mut </span>messages = Vec::new();
 
@@ -129,7 +129,7 @@
         user_message.insert(<span class="string">"content"</span>.to_string(), prompt);
         messages.push(user_message);
 
-        <span class="kw">let </span>(tx, rx) = channel();
+        <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">10_000</span>);
         <span class="kw">let </span>req = Request {
             id: mistralrs.next_request_id(),
             messages: RequestMessage::Chat(messages.clone()),
@@ -140,41 +140,39 @@
             constraint: Constraint::None,
             suffix: <span class="prelude-val">None</span>,
         };
-        sender.send(req).unwrap();
+        sender.send(req).<span class="kw">await</span>.unwrap();
 
         <span class="kw">let </span><span class="kw-2">mut </span>assistant_output = String::new();
-        <span class="kw">loop </span>{
-            <span class="kw">let </span>resp = rx.try_recv();
-            <span class="kw">if let </span><span class="prelude-val">Ok</span>(resp) = resp {
-                <span class="kw">match </span>resp {
-                    Response::Chunk(chunk) =&gt; {
-                        <span class="kw">let </span>choice = <span class="kw-2">&amp;</span>chunk.choices[<span class="number">0</span>];
-                        assistant_output.push_str(<span class="kw-2">&amp;</span>choice.delta.content);
-                        <span class="macro">print!</span>(<span class="string">"{}"</span>, choice.delta.content);
-                        io::stdout().flush().unwrap();
-                        <span class="kw">if </span>choice.finish_reason.is_some() {
-                            <span class="kw">if </span><span class="macro">matches!</span>(choice.finish_reason.as_ref().unwrap().as_str(), <span class="string">"length"</span>) {
-                                <span class="macro">print!</span>(<span class="string">"..."</span>);
-                            }
-                            <span class="kw">break</span>;
+
+        <span class="kw">while let </span><span class="prelude-val">Some</span>(resp) = rx.recv().<span class="kw">await </span>{
+            <span class="kw">match </span>resp {
+                Response::Chunk(chunk) =&gt; {
+                    <span class="kw">let </span>choice = <span class="kw-2">&amp;</span>chunk.choices[<span class="number">0</span>];
+                    assistant_output.push_str(<span class="kw-2">&amp;</span>choice.delta.content);
+                    <span class="macro">print!</span>(<span class="string">"{}"</span>, choice.delta.content);
+                    io::stdout().flush().unwrap();
+                    <span class="kw">if </span>choice.finish_reason.is_some() {
+                        <span class="kw">if </span><span class="macro">matches!</span>(choice.finish_reason.as_ref().unwrap().as_str(), <span class="string">"length"</span>) {
+                            <span class="macro">print!</span>(<span class="string">"..."</span>);
                         }
+                        <span class="kw">break</span>;
                     }
-                    Response::InternalError(e) =&gt; {
-                        <span class="macro">error!</span>(<span class="string">"Got an internal error: {e:?}"</span>);
-                        <span class="kw">break </span><span class="lifetime">'outer</span>;
-                    }
-                    Response::ModelError(e, resp) =&gt; {
-                        <span class="macro">error!</span>(<span class="string">"Got a model error: {e:?}, response: {resp:?}"</span>);
-                        <span class="kw">break </span><span class="lifetime">'outer</span>;
-                    }
-                    Response::ValidationError(e) =&gt; {
-                        <span class="macro">error!</span>(<span class="string">"Got a validation error: {e:?}"</span>);
-                        <span class="kw">break </span><span class="lifetime">'outer</span>;
-                    }
-                    Response::Done(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-                    Response::CompletionDone(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-                    Response::CompletionModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 }
+                Response::InternalError(e) =&gt; {
+                    <span class="macro">error!</span>(<span class="string">"Got an internal error: {e:?}"</span>);
+                    <span class="kw">break </span><span class="lifetime">'outer</span>;
+                }
+                Response::ModelError(e, resp) =&gt; {
+                    <span class="macro">error!</span>(<span class="string">"Got a model error: {e:?}, response: {resp:?}"</span>);
+                    <span class="kw">break </span><span class="lifetime">'outer</span>;
+                }
+                Response::ValidationError(e) =&gt; {
+                    <span class="macro">error!</span>(<span class="string">"Got a validation error: {e:?}"</span>);
+                    <span class="kw">break </span><span class="lifetime">'outer</span>;
+                }
+                Response::Done(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+                Response::CompletionDone(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+                Response::CompletionModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
             }
         }
         <span class="kw">let </span><span class="kw-2">mut </span>assistant_message = IndexMap::new();
