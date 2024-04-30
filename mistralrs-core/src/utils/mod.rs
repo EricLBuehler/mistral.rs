@@ -8,8 +8,7 @@ pub(crate) fn new_progress_bar(len: u64) -> ProgressBar {
     bar.set_style(
         ProgressStyle::default_bar()
             .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
-            .unwrap()
-            .progress_chars("#>-"),
+            .unwrap(),
     );
     bar
 }

@@ -199,7 +199,6 @@ impl AsRef<str> for ModelKind {
 ///     TokenSource::CacheToken,
 ///     None,
 ///     &Device::cuda_if_available(0).unwrap(),
-///     false,
 ///     DeviceMapMetadata::dummy(),
 ///     None,
 /// ).unwrap();
