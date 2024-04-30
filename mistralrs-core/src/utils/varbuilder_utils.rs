@@ -7,6 +7,7 @@ use candle_nn::{
     var_builder::{SimpleBackend, VarBuilderArgs},
     VarBuilder,
 };
+use tracing::info;
 
 use crate::utils::new_progress_bar;
 
@@ -19,7 +20,9 @@ pub(crate) fn from_mmaped_safetensors<'a>(
     device: &Device,
 ) -> Result<VarBuilderArgs<'a, Box<dyn SimpleBackend>>> {
     let mut handles = Vec::new();
-    let bar = new_progress_bar((paths.len() + xlora_paths.len()) as u64);
+    let n_shards = paths.len() + xlora_paths.len();
+    info!("Loading {n_shards} shards.");
+    let bar = new_progress_bar(n_shards as u64);
     for path in paths {
         fn load(path: PathBuf, device: Device, dtype: DType) -> Result<HashMap<String, Tensor>> {
             let mut accum = HashMap::new();
