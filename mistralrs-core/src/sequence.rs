@@ -1,9 +1,11 @@
 use std::{
-    cell::{Cell, RefCell, RefMut},
-    rc::Rc,
-    sync::mpsc::{SendError, Sender},
+    cell::Cell,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
+};
+use tokio::sync::{
+    mpsc::{error::SendError, Sender},
+    Mutex, MutexGuard,
 };
 
 use crate::{
@@ -94,7 +96,7 @@ pub struct Sequence {
     // GPU things
     pub prompt_tok_per_sec: f32,
     pub prompt_timestamp: Option<u128>,
-    group: Rc<RefCell<SequenceGroup>>,
+    group: Arc<Mutex<SequenceGroup>>,
     state: Cell<SequenceState>,
 }
 impl Sequence {
@@ -111,7 +113,7 @@ impl Sequence {
         max_len: Option<usize>,
         return_logprobs: bool,
         is_xlora: bool,
-        group: Rc<RefCell<SequenceGroup>>,
+        group: Arc<Mutex<SequenceGroup>>,
         response_index: usize,
         creation_time: u64,
         recognizer: SequenceRecognizer,
@@ -399,7 +401,7 @@ impl Sequence {
         self.response_index
     }
 
-    pub fn get_mut_group(&self) -> RefMut<'_, SequenceGroup> {
+    pub fn get_mut_group(&self) -> MutexGuard<'_, SequenceGroup> {
         get_mut_group!(self)
     }
 
@@ -476,19 +478,19 @@ impl SequenceGroup {
         }
     }
 
-    pub fn maybe_send_done_response(
+    pub async fn maybe_send_done_response(
         &self,
         response: ChatCompletionResponse,
         sender: Sender<Response>,
-    ) {
+    ) -> Result<(), SendError<Response>> {
         if self.choices.len() == self.n_choices {
-            sender
-                .send(Response::Done(response))
-                .expect("Expected receiver.");
+            sender.send(Response::Done(response)).await?;
         }
+
+        Ok(())
     }
 
-    pub fn maybe_send_streaming_response(
+    pub async fn maybe_send_streaming_response(
         &mut self,
         seq: &Sequence,
         model: String,
@@ -506,20 +508,20 @@ impl SequenceGroup {
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "chat.completion.chunk".to_string(),
-                }))?;
+                }))
+                .await?;
         }
         Ok(())
     }
 
-    pub fn maybe_send_completion_done_response(
+    pub async fn maybe_send_completion_done_response(
         &self,
         response: CompletionResponse,
         sender: Sender<Response>,
-    ) {
+    ) -> Result<(), Box<SendError<Response>>> {
         if self.completion_choices.len() == self.n_choices {
-            sender
-                .send(Response::CompletionDone(response))
-                .expect("Expected receiver.");
+            sender.send(Response::CompletionDone(response)).await?;
         }
+        Ok(())
     }
 }

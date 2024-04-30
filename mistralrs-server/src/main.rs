@@ -255,7 +255,7 @@ async fn main() -> Result<()> {
     .build();
 
     if args.interactive_mode {
-        interactive_mode(mistralrs);
+        interactive_mode(mistralrs).await;
         return Ok(());
     }
 
