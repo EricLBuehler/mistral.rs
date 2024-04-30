@@ -1,7 +1,11 @@
 name: deploy_cuda_docker
 
 # gh workflow run deploy_cuda_docker
-on: workflow_dispatch
+# This also runs on release deploy
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
 
 jobs:
     build-and-push-image:
