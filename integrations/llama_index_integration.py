@@ -31,7 +31,6 @@ from mistralrs import (
 
 DEFAULT_TOPK = 32
 DEFAULT_TOPP = 0.1
-DEFAULT_TOP_LOGPROBS = 10
 DEFAULT_REPEAT_LAST_N = 64
 DEFAULT_MAX_SEQS = 16
 DEFAULT_PREFIX_CACHE_N = 16
@@ -172,7 +171,7 @@ class MistralRS(CustomLLM):
         prefix_cache_n: str = DEFAULT_PREFIX_CACHE_N,
         no_kv_cache: bool = False,
         chat_template: Optional[str] = None,
-        top_logprobs: Optional[int] = DEFAULT_TOP_LOGPROBS,
+        top_logprobs: Optional[int] = None,
         callback_manager: Optional[CallbackManager] = None,
         generate_kwargs: Optional[Dict[str, Any]] = None,
         system_prompt: Optional[str] = None,
