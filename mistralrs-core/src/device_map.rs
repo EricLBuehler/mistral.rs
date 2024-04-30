@@ -63,14 +63,15 @@ pub trait DeviceMapper: Debug {
     fn set_device<'a>(
         &self,
         layer: usize,
-        varbuilder: VarBuilder<'a>,
+        tensor_loader: VarBuilder<'a>,
         loading_isq: bool,
     ) -> VarBuilder<'a>;
     /// If ISQ layer, then do not change the device (return None). *They will do it later in NormalModel::quantize*
     fn device_for(&self, layer: usize, loading_isq: bool) -> Option<&Device>;
     /// Set non mapped layer device. This is for ISQ + device mapping support
     /// If ISQ layer, then do not change the device. *They will do it later in NormalModel::quantize*
-    fn set_nm_device<'a>(&self, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a>;
+    fn set_nm_device<'a>(&self, tensor_loader: VarBuilder<'a>, loading_isq: bool)
+        -> VarBuilder<'a>;
 }
 
 #[derive(Debug)]
@@ -86,13 +87,13 @@ impl DeviceMapper for LayerDeviceMapper {
     fn set_device<'a>(
         &self,
         layer: usize,
-        varbuilder: VarBuilder<'a>,
+        tensor_loader: VarBuilder<'a>,
         loading_isq: bool,
     ) -> VarBuilder<'a> {
         if loading_isq {
-            return varbuilder;
+            return tensor_loader;
         }
-        varbuilder.set_device(self.mappings[layer].clone())
+        tensor_loader.set_device(self.mappings[layer].clone())
     }
     fn device_for(&self, layer: usize, loading_isq: bool) -> Option<&Device> {
         if loading_isq {
@@ -100,11 +101,15 @@ impl DeviceMapper for LayerDeviceMapper {
         }
         self.mappings.get(layer)
     }
-    fn set_nm_device<'a>(&self, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a> {
+    fn set_nm_device<'a>(
+        &self,
+        tensor_loader: VarBuilder<'a>,
+        loading_isq: bool,
+    ) -> VarBuilder<'a> {
         if loading_isq {
-            varbuilder
+            tensor_loader
         } else {
-            varbuilder.set_device(self.nm_device.clone())
+            tensor_loader.set_device(self.nm_device.clone())
         }
     }
 }
@@ -121,13 +126,13 @@ impl DeviceMapper for DummyDeviceMapper {
     fn set_device<'a>(
         &self,
         _: usize,
-        varbuilder: VarBuilder<'a>,
+        tensor_loader: VarBuilder<'a>,
         loading_isq: bool,
     ) -> VarBuilder<'a> {
         if loading_isq {
-            varbuilder
+            tensor_loader
         } else {
-            varbuilder.set_device(self.nm_device.clone())
+            tensor_loader.set_device(self.nm_device.clone())
         }
     }
     fn device_for(&self, _: usize, loading_isq: bool) -> Option<&Device> {
@@ -136,11 +141,15 @@ impl DeviceMapper for DummyDeviceMapper {
         }
         None
     }
-    fn set_nm_device<'a>(&self, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a> {
+    fn set_nm_device<'a>(
+        &self,
+        tensor_loader: VarBuilder<'a>,
+        loading_isq: bool,
+    ) -> VarBuilder<'a> {
         if loading_isq {
-            varbuilder
+            tensor_loader
         } else {
-            varbuilder.set_device(self.nm_device.clone())
+            tensor_loader.set_device(self.nm_device.clone())
         }
     }
 }

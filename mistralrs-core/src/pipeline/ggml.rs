@@ -7,7 +7,7 @@ use crate::aici::toktree::TokTrie;
 use crate::models::Cache;
 use crate::pipeline::chat_template::calculate_eos_tokens;
 use crate::pipeline::{ChatTemplate, SimpleModelPaths};
-use crate::utils::varbuilder_utils::from_mmaped_safetensors;
+use crate::utils::tensor_loader_utils::from_mmaped_safetensors;
 use crate::xlora_models::NonGranularState;
 use crate::{deserialize_chat_template, get_paths, DeviceMapMetadata};
 use crate::{

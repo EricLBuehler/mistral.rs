@@ -1,7 +1,7 @@
 use indicatif::{ProgressBar, ProgressStyle};
 
+pub(crate) mod tensor_loader_utils;
 pub(crate) mod tokens;
-pub(crate) mod varbuilder_utils;
 
 pub(crate) fn new_progress_bar(len: u64) -> ProgressBar {
     let bar = ProgressBar::new(len);

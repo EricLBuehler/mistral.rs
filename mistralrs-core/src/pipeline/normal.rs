@@ -18,7 +18,7 @@ use crate::{
 };
 use crate::{
     sequence::Sequence,
-    utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
+    utils::{tensor_loader_utils::from_mmaped_safetensors, tokens::get_token},
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
