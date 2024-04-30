@@ -69,7 +69,7 @@ def extract_logprobs_choice(choice) -> Optional[list[LogProb]]:
             )
     else:
         logprobs = None
-    return choice
+    return logprobs
 
 
 def extract_logprobs(response) -> Optional[list[list[LogProb]]]:
