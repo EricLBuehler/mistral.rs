@@ -9,7 +9,7 @@ class ChatCompletionRequest:
     about input data, sampling, and how to return the response.
     """
 
-    messages: list[Message] | str
+    messages: list[dict[str,str]] | str
     model: str
     logit_bias: dict[int, float] | None = None
     logprobs: bool = False
@@ -191,25 +191,6 @@ class Runner:
         """
         Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML then nothing will happen.
         """
-
-@dataclass
-class Role(Enum):
-    """
-    The role for each `Message` of a chat completion request.
-    """
-
-    User = 1
-    Assistant = 2
-    System = 3
-
-@dataclass
-class Message:
-    """
-    A message for a chat completion request.
-    """
-
-    role: Role
-    content: str
 
 @dataclass
 class Usage:
