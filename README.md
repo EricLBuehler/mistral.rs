@@ -32,7 +32,7 @@ Mistral.rs is a fast LLM inference platform supporting inference on a variety of
 - Quantized model support: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit for faster inference and optimized memory usage.
 - Continuous batching.
 - Prefix caching.
-- Device mapping: load and run some layers on the device and the reset on the CPU.
+- Device mapping: load and run some layers on the device and the rest on the CPU.
 
 **Accelerator support**:
 - Apple silicon support with the Metal framework.
