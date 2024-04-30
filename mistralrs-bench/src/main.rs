@@ -6,7 +6,6 @@ use mistralrs_core::{
     ModelSelected, Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
     Usage,
 };
-use std::fmt::Display;
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 use std::fmt::Display;
