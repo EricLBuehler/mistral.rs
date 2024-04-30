@@ -32,7 +32,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
 use tokenizers::Tokenizer;
-use tracing::{info, warn};
+use tracing::info;
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -55,6 +55,53 @@ pub trait ModelPaths {
     fn get_classifier_path(&self) -> &Option<PathBuf>;
     fn get_classifier_config(&self) -> &Option<XLoraConfig>;
     fn get_ordering(&self) -> &Option<Ordering>;
+    fn get_gen_conf_filename(&self) -> Option<&PathBuf>;
+}
+
+pub struct SimpleModelPaths<P> {
+    tokenizer_filename: P,
+    config_filename: P,
+    template_filename: P,
+    filenames: Vec<P>,
+    xlora_adapter_filenames: Option<Vec<(String, P)>>,
+    xlora_adapter_configs: Option<Vec<(String, LoraConfig)>>,
+    classifier_path: Option<P>,
+    classifier_config: Option<XLoraConfig>,
+    xlora_ordering: Option<Ordering>,
+    gen_conf: Option<P>,
+}
+
+impl ModelPaths for SimpleModelPaths<PathBuf> {
+    fn get_config_filename(&self) -> &PathBuf {
+        &self.config_filename
+    }
+    fn get_tokenizer_filename(&self) -> &PathBuf {
+        &self.tokenizer_filename
+    }
+    fn get_weight_filenames(&self) -> &[PathBuf] {
+        &self.filenames
+    }
+    fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>> {
+        &self.xlora_adapter_filenames
+    }
+    fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>> {
+        &self.xlora_adapter_configs
+    }
+    fn get_classifier_config(&self) -> &Option<XLoraConfig> {
+        &self.classifier_config
+    }
+    fn get_classifier_path(&self) -> &Option<PathBuf> {
+        &self.classifier_path
+    }
+    fn get_ordering(&self) -> &Option<Ordering> {
+        &self.xlora_ordering
+    }
+    fn get_template_filename(&self) -> &PathBuf {
+        &self.template_filename
+    }
+    fn get_gen_conf_filename(&self) -> Option<&PathBuf> {
+        self.gen_conf.as_ref()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -302,6 +349,7 @@ pub trait NormalModel {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<usize>,
+        position_ids: Vec<usize>,
     ) -> candle_core::Result<Tensor>;
     #[allow(clippy::too_many_arguments)]
     fn xlora_forward(
@@ -315,6 +363,7 @@ pub trait NormalModel {
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
         context_lens: Vec<usize>,
+        position_ids: Vec<usize>,
     ) -> candle_core::Result<Tensor>;
     fn is_xlora(&self) -> bool;
     fn device(&self) -> &Device;
@@ -368,6 +417,7 @@ struct InputMetadata {
     positions: Vec<usize>,
     positions_kernel: Tensor, // [bs, seq len]
     context_lens: Vec<usize>,
+    position_ids: Vec<usize>,
 }
 
 fn get_prompt_input(input_seqs: &[&mut Sequence], device: &Device) -> Result<InputMetadata> {
@@ -381,12 +431,14 @@ fn get_prompt_input(input_seqs: &[&mut Sequence], device: &Device) -> Result<Inp
     let mut seqs_tensors = Vec::new();
     let mut seqlen_offsets = Vec::new();
     let mut context_lens = Vec::new();
+    let mut position_ids = Vec::new();
     for seq in input_seqs.iter() {
         let mut ctxt = seq.get_toks().to_vec();
         seqlen_offsets.push(0);
 
         ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));
         context_lens.push(seq.len() - 1);
+        position_ids.push(seq.len());
 
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
     }
@@ -404,6 +456,7 @@ fn get_prompt_input(input_seqs: &[&mut Sequence], device: &Device) -> Result<Inp
         positions: seqlen_offsets,
         positions_kernel,
         context_lens,
+        position_ids,
     })
 }
 
@@ -419,11 +472,13 @@ fn get_completion_input(
     let mut seqs_tensors = Vec::new();
     let mut seqlen_offsets = Vec::new();
     let mut context_lens = Vec::new();
+    let mut position_ids = Vec::new();
     for seq in input_seqs.iter() {
         let start_pos = seq.get_toks().len().saturating_sub(1);
         let ctxt = seq.get_toks()[start_pos..].to_vec();
         seqlen_offsets.push(start_pos);
         context_lens.push(0);
+        position_ids.push(seq.len());
 
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
     }
@@ -440,6 +495,7 @@ fn get_completion_input(
         positions: seqlen_offsets,
         positions_kernel,
         context_lens,
+        position_ids,
     })
 }
 
@@ -451,6 +507,7 @@ struct ModelInputs {
     seqlen_offsets_kernel: Tensor,
     seqlen_offsets_kernel_full: Option<Tensor>,
     context_lens: Vec<usize>,
+    position_ids: Vec<usize>,
 }
 
 fn calculate_inputs(
@@ -466,12 +523,14 @@ fn calculate_inputs(
             positions: seqlen_offsets_full,
             positions_kernel: seqlen_offsets_kernel_full,
             context_lens: _,
+            position_ids,
         } = get_prompt_input(input_seqs, device)?;
         let InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
+            position_ids: _,
         } = get_completion_input(input_seqs, device, no_kv_cache)?;
         Ok(ModelInputs {
             input_ids,
@@ -481,6 +540,7 @@ fn calculate_inputs(
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel_full),
             context_lens,
+            position_ids,
         })
     } else if is_xlora && is_prompt {
         let InputMetadata {
@@ -488,6 +548,7 @@ fn calculate_inputs(
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
+            position_ids,
         } = get_prompt_input(input_seqs, device)?;
         Ok(ModelInputs {
             input_ids: input_ids.clone(),
@@ -497,6 +558,7 @@ fn calculate_inputs(
             seqlen_offsets_kernel: seqlen_offsets_kernel.clone(),
             seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel),
             context_lens,
+            position_ids,
         })
     } else if is_prompt {
         let InputMetadata {
@@ -504,6 +566,7 @@ fn calculate_inputs(
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
+            position_ids,
         } = get_prompt_input(input_seqs, device)?;
         Ok(ModelInputs {
             input_ids,
@@ -513,6 +576,7 @@ fn calculate_inputs(
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full: None,
             context_lens,
+            position_ids,
         })
     } else {
         let InputMetadata {
@@ -520,6 +584,7 @@ fn calculate_inputs(
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
+            position_ids,
         } = get_completion_input(input_seqs, device, no_kv_cache)?;
         Ok(ModelInputs {
             input_ids,
@@ -529,6 +594,7 @@ fn calculate_inputs(
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full: None,
             context_lens,
+            position_ids,
         })
     }
 }
@@ -572,15 +638,15 @@ fn get_xlora_paths(
             .filter(|x| x.contains("xlora_classifier.safetensors"))
             .collect::<Vec<_>>();
         if xlora_classifier.len() != 1 {
-            warn!("Detected multiple X-LoRA classifiers: {xlora_classifier:?}");
-            warn!("Selected classifier: `{}`", &xlora_classifier[0]);
+            info!("⚠️ WARNING: Detected multiple X-LoRA classifiers: {xlora_classifier:?}");
+            info!("⚠️ WARNING: Selected classifier: `{}`", &xlora_classifier[0]);
         }
         let xlora_classifier = &xlora_classifier[0];
         let xlora_configs = &api_dir_list!(api, model_id)
             .filter(|x| x.contains("xlora_config.json"))
             .collect::<Vec<_>>();
         if xlora_configs.len() != 1 {
-            warn!("Detected multiple X-LoRA configs: {xlora_configs:?}");
+            info!("⚠️ WARNING: Detected multiple X-LoRA configs: {xlora_configs:?}");
         }
 
         let classifier_path = api_get_file!(api, xlora_classifier, Path::new(""));
@@ -589,7 +655,7 @@ fn get_xlora_paths(
         let mut last_err: Option<serde_json::Error> = None;
         for (i, config_path) in xlora_configs.iter().enumerate() {
             if xlora_configs.len() != 1 {
-                warn!("Selecting config: `{}`", config_path);
+                info!("⚠️ WARNING: Selecting config: `{}`", config_path);
             }
             let config_path = api_get_file!(api, config_path, Path::new(""));
             let conf = fs::read_to_string(config_path)?;
@@ -601,7 +667,7 @@ fn get_xlora_paths(
                 }
                 Err(e) => {
                     if i != xlora_configs.len() - 1 {
-                        warn!("Config is broken with error `{e}`");
+                        info!("⚠️ WARNING: Config is broken with error `{e}`");
                     }
                     last_err = Some(e);
                 }

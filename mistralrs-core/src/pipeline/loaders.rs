@@ -242,6 +242,7 @@ struct LlamaBasicConfig {
     rms_norm_eps: f64,
     #[serde(default = "default_rope")]
     rope_theta: f32,
+    max_position_embeddings: usize,
 }
 
 fn default_rope() -> f32 {
@@ -263,6 +264,7 @@ impl LlamaBasicConfig {
             rms_norm_eps: basic_config.rms_norm_eps,
             rope_theta: basic_config.rope_theta,
             use_flash_attn,
+            max_position_embeddings: basic_config.max_position_embeddings,
         })
     }
 }
@@ -520,6 +522,7 @@ struct Phi3BasicConfig {
     rope_scaling: Option<HashMap<String, RopeScaling>>,
     max_position_embeddings: usize,
     original_max_position_embeddings: usize,
+    sliding_window: Option<usize>,
 }
 
 impl Phi3BasicConfig {
@@ -545,6 +548,7 @@ impl Phi3BasicConfig {
             }),
             original_max_position_embeddings: basic_config.original_max_position_embeddings,
             use_flash_attn,
+            sliding_window: basic_config.sliding_window,
         })
     }
 }

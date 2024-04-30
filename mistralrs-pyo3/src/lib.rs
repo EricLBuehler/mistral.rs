@@ -13,6 +13,7 @@ use std::{
 };
 use stream::ChatCompletionStreamer;
 use tokio::sync::mpsc::channel;
+use tracing_subscriber::{filter::LevelFilter, EnvFilter};
 
 use candle_core::Device;
 use mistralrs_core::{
@@ -64,8 +65,8 @@ fn parse_isq(s: &str) -> std::result::Result<GgmlDType, String> {
         "Q4_1" => Ok(GgmlDType::Q4_1),
         "Q5_0" => Ok(GgmlDType::Q5_0),
         "Q5_1" => Ok(GgmlDType::Q5_1),
-        "Q8_0" => Ok(GgmlDType::Q8_1),
-        "Q8_1" => Ok(GgmlDType::Q4_0),
+        "Q8_0" => Ok(GgmlDType::Q8_0),
+        "Q8_1" => Ok(GgmlDType::Q8_1),
         "Q2K" => Ok(GgmlDType::Q2K),
         "Q3K" => Ok(GgmlDType::Q3K),
         "Q4K" => Ok(GgmlDType::Q4K),
@@ -792,6 +793,11 @@ impl ChatCompletionRequest {
 
 #[pymodule]
 fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+    tracing_subscriber::fmt().with_env_filter(filter).init();
+
     m.add_class::<Runner>()?;
     m.add_class::<Which>()?;
     m.add_class::<ChatCompletionRequest>()?;

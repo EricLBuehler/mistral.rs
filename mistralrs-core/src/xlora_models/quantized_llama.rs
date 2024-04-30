@@ -460,6 +460,10 @@ impl ModelWeights {
             .unwrap_or(10000f32);
         let head_dim = embedding_length / head_count;
 
+        let max_seq_len = md_get("llama.context_length")
+            .and_then(|m| m.to_u64())
+            .unwrap_or(MAX_SEQ_LEN as u64) as usize;
+
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
         let norm = QRmsNorm::new(
@@ -477,7 +481,7 @@ impl ModelWeights {
                 rope_freq_base,
                 head_dim,
                 rope_dim,
-                MAX_SEQ_LEN as usize,
+                max_seq_len,
                 device,
                 false,
                 DType::F32,
@@ -672,9 +676,7 @@ impl ModelWeights {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb.clone(), true)
                     .unwrap()
             }),
-            max_seq_len: md_get("llama.context_length")
-                .and_then(|m| m.to_u64())
-                .unwrap_or(MAX_SEQ_LEN as u64) as usize,
+            max_seq_len,
             mapper: Some(mapper),
         })
     }
@@ -787,6 +789,7 @@ impl ModelWeights {
                 &start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
+                &context_lens,
             )?;
 
             if no_kv_cache {
@@ -862,6 +865,7 @@ impl ScalingsMaker for ModelWeights {
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
+        _context_lens: &[usize],
     ) -> Result<Tensor> {
         self.inner_forward(
             input_ids,

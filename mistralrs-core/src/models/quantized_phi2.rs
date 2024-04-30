@@ -136,15 +136,16 @@ fn precomput_freqs_cis(
     head_dim: usize,
     freq_base: f32,
     device: &Device,
+    max_seq_len: usize,
 ) -> Result<(Tensor, Tensor)> {
     let theta: Vec<_> = (0..head_dim)
         .step_by(2)
         .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))
         .collect();
     let theta = Tensor::new(theta.as_slice(), device)?;
-    let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, device)?
+    let idx_theta = Tensor::arange(0, max_seq_len as u32, device)?
         .to_dtype(DType::F32)?
-        .reshape((MAX_SEQ_LEN, 1))?
+        .reshape((max_seq_len, 1))?
         .matmul(&theta.reshape((1, theta.elem_count()))?)?;
     let cos = idx_theta.cos()?;
     let sin = idx_theta.sin()?;
@@ -177,12 +178,11 @@ impl ModelWeights {
         let embedding_length = md_get("phi2.embedding_length")?.to_u32()? as usize;
         let rope_dim = md_get("phi2.rope.dimension_count")?.to_u32()? as usize;
         let ln_eps = md_get("phi2.attention.layer_norm_epsilon")?.to_f32()? as f64;
-        let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device)?;
-        let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
-
         let max_seq_len = md_get("phi2.context_length")
             .and_then(|m| m.to_u64())
             .unwrap_or(MAX_SEQ_LEN as u64) as usize;
+        let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, max_seq_len)?;
+        let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;

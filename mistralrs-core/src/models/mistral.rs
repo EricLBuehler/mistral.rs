@@ -85,6 +85,7 @@ struct Attention {
     hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
     use_flash_attn: bool,
+    sliding_window: Option<usize>,
 }
 
 impl Attention {
@@ -110,6 +111,7 @@ impl Attention {
             hidden_size: hidden_sz,
             rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
+            sliding_window: cfg.sliding_window,
         })
     }
 
@@ -157,12 +159,40 @@ impl Attention {
                 .contiguous()?;
         }
 
-        let (k, v) = match &*kv_cache {
-            None => (k, v),
-            Some((prev_k, prev_v)) => {
-                let k = candle_nn::ops::kvconcat(prev_k, &k, 2)?;
-                let v = candle_nn::ops::kvconcat(prev_v, &v, 2)?;
-                (k, v)
+        let (k, v, attn_mask) = match kv_cache.clone() {
+            None => (k, v, attention_mask.cloned()),
+            Some((mut prev_k, mut prev_v)) => {
+                let mut mask = attention_mask.cloned();
+                if let Some(sliding_window) = self.sliding_window {
+                    let kv_seq_len = prev_k.dim(2)?;
+                    if kv_seq_len > sliding_window {
+                        prev_k = prev_k.narrow(
+                            2,
+                            kv_seq_len - (sliding_window - 1),
+                            sliding_window - 1,
+                        )?;
+                        prev_v = prev_v.narrow(
+                            2,
+                            kv_seq_len - (sliding_window - 1),
+                            sliding_window - 1,
+                        )?;
+                        if let Some(ref mut mask) = mask {
+                            let mask_len = mask.dim(1)?;
+                            *mask = mask.narrow(
+                                1,
+                                mask_len - (sliding_window - 1),
+                                sliding_window - 1,
+                            )?;
+                            *mask = Tensor::cat(
+                                &[&*mask, &mask.narrow(1, mask_len - 1, 1)?.ones_like()?],
+                                D::Minus1,
+                            )?;
+                        }
+                    }
+                }
+                let k = candle_nn::ops::kvconcat(&prev_k, &k, 2)?;
+                let v = candle_nn::ops::kvconcat(&prev_v, &v, 2)?;
+                (k, v, mask)
             }
         };
         *kv_cache = Some((k.clone(), v.clone()));
@@ -181,9 +211,9 @@ impl Attention {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
             let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
 
-            let attn_weights = match attention_mask {
+            let attn_weights = match attn_mask {
                 None => attn_weights,
-                Some(mask) => attn_weights.broadcast_add(mask)?,
+                Some(mask) => attn_weights.broadcast_add(&mask)?,
             };
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
             attn_weights.matmul(&v)?
@@ -440,6 +470,7 @@ impl NormalModel for Model {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<usize>,
+        _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
@@ -459,6 +490,7 @@ impl NormalModel for Model {
         _no_kv_cache: bool,
         _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         _context_lens: Vec<usize>,
+        _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         unimplemented!()
     }

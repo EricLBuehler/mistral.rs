@@ -66,6 +66,10 @@ macro_rules! deserialize_chat_template {
         let template: ChatTemplate = serde_json::from_str(&fs::read_to_string(
             $paths.get_template_filename(),
         )?).unwrap();
+        let gen_conf: Option<$crate::pipeline::chat_template::GenerationConfig> = $paths.get_gen_conf_filename()
+            .map(|f| serde_json::from_str(&fs::read_to_string(
+                f
+            ).unwrap()).unwrap());
         #[derive(Debug, serde::Deserialize)]
         struct SpecifiedTemplate {
             chat_template: String,
@@ -73,7 +77,7 @@ macro_rules! deserialize_chat_template {
             eos_token: Option<String>,
         }
         match template.chat_template {
-            Some(_) => template,
+            Some(_) => (template, gen_conf),
             None => {
                 info!("`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
                 let mut deser: HashMap<String, Value> =
@@ -118,7 +122,7 @@ macro_rules! deserialize_chat_template {
                     }
                 };
                 let ser = serde_json::to_string_pretty(&deser).expect("Serialization of modified chat template failed.");
-                serde_json::from_str(&ser).unwrap()
+                (serde_json::from_str(&ser).unwrap(), gen_conf)
             }
         }
     }};
@@ -171,6 +175,19 @@ macro_rules! get_paths {
             &$this.xlora_order,
         )?;
 
+        let gen_conf = if $crate::api_dir_list!(api, model_id)
+            .collect::<Vec<_>>()
+            .contains(&"generation_config.json".to_string())
+        {
+            Some($crate::api_get_file!(
+                api,
+                "generation_config.json",
+                model_id
+            ))
+        } else {
+            None
+        };
+
         let template_filename = $crate::api_get_file!(api, "tokenizer_config.json", model_id);
 
         Ok(Box::new($path_name {
@@ -183,6 +200,7 @@ macro_rules! get_paths {
             classifier_config: xlora_config,
             xlora_ordering: xlora_order,
             template_filename,
+            gen_conf,
         }))
     }};
 }

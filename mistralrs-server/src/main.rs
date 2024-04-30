@@ -13,6 +13,7 @@ use mistralrs_core::{
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use std::sync::Arc;
+use tracing_subscriber::EnvFilter;
 mod chat_completion;
 mod completions;
 use crate::{chat_completion::__path_chatcompletions, completions::completions};
@@ -23,7 +24,7 @@ mod openai;
 
 use interactive_mode::interactive_mode;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tracing::{info, warn};
+use tracing::{info, level_filters::LevelFilter};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -37,8 +38,8 @@ fn parse_isq(s: &str) -> Result<GgmlDType, String> {
         "Q4_1" => Ok(GgmlDType::Q4_1),
         "Q5_0" => Ok(GgmlDType::Q5_0),
         "Q5_1" => Ok(GgmlDType::Q5_1),
-        "Q8_0" => Ok(GgmlDType::Q8_1),
-        "Q8_1" => Ok(GgmlDType::Q4_0),
+        "Q8_0" => Ok(GgmlDType::Q8_0),
+        "Q8_1" => Ok(GgmlDType::Q8_1),
         "Q2K" => Ok(GgmlDType::Q2K),
         "Q3K" => Ok(GgmlDType::Q3K),
         "Q4K" => Ok(GgmlDType::Q4K),
@@ -201,7 +202,10 @@ async fn main() -> Result<()> {
     #[cfg(not(feature = "metal"))]
     let device = Device::cuda_if_available(0)?;
 
-    tracing_subscriber::fmt().init();
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     info!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
@@ -224,7 +228,7 @@ async fn main() -> Result<()> {
                 | ModelKind::XLoraGGUF
         )
     {
-        warn!("Using flash attention with a quantized model has no effect!")
+        info!("⚠️ WARNING: Using flash attention with a quantized model has no effect!")
     }
     info!("Model kind is: {}", loader.get_kind().as_ref());
     let pipeline = loader.load_model(

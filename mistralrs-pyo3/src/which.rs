@@ -9,6 +9,7 @@ pub enum Architecture {
     Mixtral,
     Llama,
     Phi2,
+    Phi3,
 }
 
 impl From<Architecture> for NormalLoaderType {
@@ -19,6 +20,7 @@ impl From<Architecture> for NormalLoaderType {
             Architecture::Mistral => Self::Mistral,
             Architecture::Mixtral => Self::Mixtral,
             Architecture::Phi2 => Self::Phi2,
+            Architecture::Phi3 => Self::Phi3,
         }
     }
 }

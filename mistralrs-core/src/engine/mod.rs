@@ -16,7 +16,7 @@ use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
 use futures::future;
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
-use tracing::warn;
+use tracing::info;
 
 use crate::{
     get_mut_arcmutex, handle_pipeline_forward_error, handle_seq_error,
@@ -95,7 +95,7 @@ impl Engine {
             let mut scheduled = self.scheduler.schedule();
             if let Ok(dtype) = self.isq_rx.try_recv() {
                 if let Err(e) = get_mut_arcmutex!(self.pipeline).re_isq_model(dtype) {
-                    warn!("ISQ requantization failed: {e:?}");
+                    info!("⚠️ WARNING: ISQ requantization failed: {e:?}");
                 }
             }
 
@@ -767,7 +767,7 @@ impl Engine {
                     10
                 };
                 prompt = prompt[(currently_over + sampling_max)..].to_vec();
-                warn!("Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation.", request.id, currently_over, prompt_len - prompt.len());
+                info!("⚠️ WARNING: Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation.", request.id, currently_over, prompt_len - prompt.len());
             }
         }
         let prefill_cache = handle_seq_error!(
