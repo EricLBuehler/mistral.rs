@@ -1,13 +1,11 @@
 name: py-release
 
+# gh workflow run py-release
+# This also runs on release deploy
 on:
   workflow_dispatch:
-    inputs:
-      # Create the sdist and build the wheels, but do not publish to PyPI / GitHub.
-      dry-run:
-        description: Dry run
-        type: boolean
-        default: false
+  release:
+    types: [published]
 
 permissions:
   contents: write
@@ -19,112 +17,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  create-sdist:
+  upload:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        package: [mistralrs]
+        rust: [stable]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v3
+        
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust }}
+          override: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: 3.8
       
-      - name: Install dependencies
+      - name: Upload
         run: |
-          sudo apt install openssl
+          sudo apt install libssl-dev
           sudo apt install pkg-config
-      
-      - name: Create source distribution
-        uses: PyO3/maturin-action@v1
-        with:
-          command: sdist
-          args: >
-            --manifest-path mistralrs-pyo3/Cargo.toml
-            --out dist
-
-      - name: Test sdist
-        run: |
-          pip install --force-reinstall --verbose dist/*.tar.gz
-          python -c 'import mistralrs'
-
-      - name: Upload sdist
-        uses: actions/upload-artifact@v4
-        with:
-          name: sdist-mistralrs
-          path: dist/*.tar.gz
-  
-  build-wheels:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        package: [mistralrs]
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        architecture: [x86-64, aarch64]
-        exclude:
-          - os: windows-latest
-            architecture: aarch64
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: 3.8
-      
-      - name: Install dependencies
-        run: |
-          sudo apt install openssl
-          sudo apt install pkg-config
-      
-      - name: Build wheel
-        uses: PyO3/maturin-action@v1
-        with:
-          command: build
-          target: ${{ steps.target.outputs.target }}
-          args: >
-            --release
-            --manifest-path mistralrs-pyo3/Cargo.toml
-            --out dist
-          manylinux: ${{ matrix.architecture == 'aarch64' && '2_24' || 'auto' }}
-
-      - name: Test sdist
-        run: |
-          pip install --force-reinstall --verbose dist/*.tar.gz
-          python -c 'import mistralrs'
-
-      - name: Upload wheel
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheel-${{ matrix.package }}-${{ matrix.os }}-${{ matrix.architecture }}
-          path: dist/*.whl
-  
-  publish-to-pypi:
-    needs: [create-sdist, build-wheels]
-    environment:
-      name: release-python
-      url: https://pypi.org/project/mistralrs
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-
-    steps:
-      - name: Download sdists and wheels
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Publish to PyPI
-        if: inputs.dry-run == false
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          verbose: true
+          pip install maturin[patchelf]==1.4.0
+          python3 mistralrs-pyo3/upload.py
