@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, VecDeque},
-    iter::zip,
     sync::{Arc, Mutex},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -8,13 +7,10 @@ use tokio::sync::mpsc::Receiver;
 
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
-    handle_seq_error_ok, handle_seq_error_stateaware_ok,
-    pipeline::sample_sequence,
     response::CompletionChoice,
-    CompletionResponse, RequestMessage,
+    CompletionResponse, RequestMessage, Response,
 };
-use candle_core::{quantized::GgmlDType, Device, Result, Tensor};
-use futures::future;
+use candle_core::{quantized::GgmlDType, Result, Tensor};
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
 use tracing::info;
@@ -24,13 +20,10 @@ use crate::{
     pipeline::Pipeline,
     prefix_cacher::PrefixCacheManager,
     request::Request,
-    response::{
-        ChatCompletionResponse, Choice, ChunkChoice, Delta, Logprobs, Response, ResponseLogprob,
-        ResponseMessage, SYSTEM_FINGERPRINT,
-    },
+    response::{ChatCompletionResponse, Choice, ResponseMessage},
     sampler::Sampler,
     scheduler::{Scheduler, SchedulerMethod},
-    sequence::{Sequence, SequenceGroup, SequenceRecognizer, SequenceState, StopReason},
+    sequence::{Sequence, SequenceGroup, SequenceRecognizer, SequenceState},
     Constraint, StopTokens,
 };
 
@@ -103,53 +96,40 @@ impl Engine {
             if scheduled.completion.len() > 0 {
                 let current_completion_ids: Vec<usize> =
                     scheduled.completion.iter().map(|seq| *seq.id()).collect();
-                let logits = {
-                    let logits = {
-                        let mut pipeline = get_mut_arcmutex!(self.pipeline);
-                        // Run the completion seqs
-                        // Run the completion seqs
-                        if !self.no_kv_cache && last_completion_ids != current_completion_ids {
-                            Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
-                        }
-                        pipeline.forward(&mut scheduled.completion, false)
-                    };
-                    let logits = handle_pipeline_forward_error!(
-                        "completion",
-                        logits,
-                        &mut scheduled.completion,
-                        self.pipeline,
-                        'lp,
-                        self.prefix_cacher
-                    );
-
-                    {
-                        let mut pipeline = get_mut_arcmutex!(self.pipeline);
-                        if !self.no_kv_cache {
-                            Self::clone_out_cache(&mut *pipeline, &mut scheduled.completion);
-                        } else {
-                            Self::set_none_cache(&mut *pipeline);
-                        }
+                let res = {
+                    let mut pipeline = get_mut_arcmutex!(self.pipeline);
+                    if !self.no_kv_cache && last_completion_ids != current_completion_ids {
+                        Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
                     }
-                    logits
+
+                    pipeline
+                        .step(
+                            &mut scheduled.completion,
+                            false,
+                            &mut self.prefix_cacher,
+                            self.disable_eos_stop,
+                            rng.clone(),
+                        )
+                        .await
                 };
 
-                let sampled_result = Self::sample_seqs(
-                    self.pipeline.clone(),
-                    &mut scheduled.completion,
-                    logits,
-                    &mut self.prefix_cacher,
-                    self.disable_eos_stop,
-                    rng.clone(),
-                )
-                .await;
-                handle_pipeline_forward_error!(
-                    "sampling",
-                    sampled_result,
+                let _ = handle_pipeline_forward_error!(
+                    "completion step",
+                    res,
                     &mut scheduled.completion,
                     self.pipeline,
                     'lp,
                     self.prefix_cacher
                 );
+
+                {
+                    let mut pipeline = get_mut_arcmutex!(self.pipeline);
+                    if !self.no_kv_cache {
+                        Self::clone_out_cache(&mut *pipeline, &mut scheduled.completion);
+                    } else {
+                        Self::set_none_cache(&mut *pipeline);
+                    }
+                }
                 last_completion_ids = current_completion_ids;
             }
 
@@ -159,10 +139,19 @@ impl Engine {
 
                     // Run the prompt seqs
                     Self::set_none_cache(&mut *pipeline);
-                    pipeline.forward(&mut scheduled.prompt, true)
+                    pipeline
+                        .step(
+                            &mut scheduled.completion,
+                            true,
+                            &mut self.prefix_cacher,
+                            self.disable_eos_stop,
+                            rng.clone(),
+                        )
+                        .await
                 };
-                let logits = handle_pipeline_forward_error!(
-                    "prompt",
+
+                let _ = handle_pipeline_forward_error!(
+                    "prompt step",
                     logits,
                     &mut scheduled.prompt,
                     self.pipeline,
@@ -178,24 +167,6 @@ impl Engine {
                         Self::set_none_cache(&mut *pipeline);
                     }
                 }
-
-                let sampled_result = Self::sample_seqs(
-                    self.pipeline.clone(),
-                    &mut scheduled.prompt,
-                    logits,
-                    &mut self.prefix_cacher,
-                    self.disable_eos_stop,
-                    rng.clone(),
-                )
-                .await;
-                handle_pipeline_forward_error!(
-                    "sampling",
-                    sampled_result,
-                    &mut scheduled.prompt,
-                    self.pipeline,
-                    'lp,
-                    self.prefix_cacher
-                );
 
                 for seq in scheduled.prompt.iter_mut() {
                     seq.set_state(SequenceState::RunningCompletion);
@@ -247,227 +218,6 @@ impl Engine {
                 }
             }
         }
-    }
-
-    async fn sample_seqs(
-        pipeline: Arc<Mutex<dyn Pipeline>>,
-        seqs: &mut [&mut Sequence],
-        logits: Tensor,
-        prefix_cacher: &mut PrefixCacheManager,
-        disable_eos_stop: bool,
-        rng: Arc<Mutex<Isaac64Rng>>,
-    ) -> Result<()> {
-        let seqs_len = seqs.len();
-        let logits_seq = logits.to_device(&Device::Cpu)?.chunk(seqs_len, 0)?;
-        debug_assert_eq!(logits_seq.len(), seqs_len);
-
-        let (tok_trie, repeat_last_n, eos_tok, max_seq_len, pipeline_name) = {
-            let pipeline = get_mut_arcmutex!(pipeline);
-            let repeat_last_n = pipeline.get_repeat_last_n();
-            let tok_trie = pipeline.tok_trie();
-            let eos_tok = pipeline.eos_tok().to_vec();
-            let max_seq_len = pipeline.get_max_seq_len();
-            let pipeline_name = pipeline.name();
-            (tok_trie, repeat_last_n, eos_tok, max_seq_len, pipeline_name)
-        };
-
-        let use_async_pool = seqs_len > 1;
-
-        let sampling_futures: Vec<_> = zip(logits_seq, seqs.iter_mut())
-            .map(|(logits_per_seq, seq)| {
-                let return_logprobs = seq.return_logprobs();
-                sample_sequence(
-                    logits_per_seq,
-                    seq,
-                    return_logprobs,
-                    repeat_last_n,
-                    tok_trie.clone(),
-                    rng.clone(),
-                    use_async_pool,
-                )
-            })
-            .collect();
-        let sampled_vec = future::join_all(sampling_futures).await;
-
-        for (sampled, seq) in zip(sampled_vec, seqs.iter_mut()) {
-            let next_token = handle_seq_error_stateaware_ok!(sampled, seq);
-            let next_token_id = next_token.token;
-
-            let eos_tok = if disable_eos_stop {
-                None
-            } else {
-                Some(eos_tok.as_ref())
-            };
-            let is_done = seq.is_done(next_token_id, eos_tok, max_seq_len);
-            seq.add_token(
-                next_token.clone(),
-                tok_trie.decode(&[next_token_id]),
-                &is_done,
-            );
-            // Handle streaming requests
-            if seq.get_mut_group().is_streaming && seq.get_mut_group().is_chat {
-                let token_index = seq.get_toks().len();
-                let rate_limit_allowed = is_done.is_some() || token_index % 3 == 0;
-
-                if rate_limit_allowed {
-                    if let Some(delta) = handle_seq_error_ok!(seq.get_delta(), seq.responder()) {
-                        seq.add_streaming_chunk_choice_to_group(ChunkChoice {
-                            delta: Delta {
-                                content: delta.clone(),
-                                role: "assistant".to_string(),
-                            },
-                            index: seq.get_response_index(),
-                            finish_reason: is_done.map(|x| x.to_string()),
-                            logprobs: if seq.return_logprobs() {
-                                Some(ResponseLogprob {
-                                    token: delta,
-                                    bytes: next_token.bytes.clone().into_bytes(),
-                                    logprob: next_token.logprob,
-                                    top_logprobs: next_token.top_logprobs.unwrap().clone(),
-                                })
-                            } else {
-                                None
-                            },
-                        });
-
-                        if let Some(reason) = is_done {
-                            prefix_cacher.add_sequence(seq);
-                            prefix_cacher.evict_to_cpu()?;
-                            seq.set_state(SequenceState::Done(reason));
-                            get_mut_arcmutex!(pipeline).reset_non_granular_state();
-                        }
-
-                        if seq
-                            .get_mut_group()
-                            .maybe_send_streaming_response(seq, pipeline_name.clone())
-                            .await
-                            .is_err()
-                        {
-                            // If we can't send the response, cancel the sequence
-                            seq.set_state(SequenceState::Done(StopReason::Canceled));
-                            get_mut_arcmutex!(pipeline).reset_non_granular_state();
-                        }
-                    }
-                }
-            } else if let Some(reason) = is_done {
-                Self::finish_seq(pipeline.clone(), seq, reason, prefix_cacher).await?;
-                get_mut_arcmutex!(pipeline).reset_non_granular_state();
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn finish_seq(
-        pipeline: Arc<Mutex<dyn Pipeline>>,
-        seq: &mut Sequence,
-        reason: StopReason,
-        prefix_cacher: &mut PrefixCacheManager,
-    ) -> Result<()> {
-        seq.set_state(SequenceState::Done(reason));
-        let (tokenizer, pipeline_name) = {
-            let pipeline = get_mut_arcmutex!(pipeline);
-            let pipeline_name = pipeline.name();
-            let tokenizer = pipeline.tokenizer();
-            (tokenizer, pipeline_name)
-        };
-
-        let logprobs = if seq.return_logprobs() {
-            let mut logprobs = Vec::new();
-            for logprob in seq.logprobs() {
-                let resp_logprob = ResponseLogprob {
-                    token: handle_seq_error_ok!(
-                        tokenizer.decode(&[logprob.token], false),
-                        seq.responder()
-                    ),
-                    bytes: logprob.bytes.clone().into_bytes(),
-                    logprob: logprob.logprob,
-                    top_logprobs: logprob.top_logprobs.clone().unwrap(),
-                };
-                logprobs.push(resp_logprob);
-            }
-            Some(logprobs)
-        } else {
-            None
-        };
-
-        let text = match reason {
-            StopReason::Length(_)
-            | StopReason::ModelLength(_)
-            | StopReason::Eos
-            | StopReason::StopTok(_)
-            | StopReason::Canceled => String::from_utf8_lossy(seq.completion_bytes())
-                .trim_start()
-                .to_string(),
-            StopReason::StopString {
-                completion_bytes_pos,
-                ..
-            } => {
-                let txt = String::from_utf8_lossy(seq.completion_bytes());
-                txt[..completion_bytes_pos].trim_start().to_string()
-            }
-        };
-
-        if seq.get_mut_group().is_chat {
-            let choice = Choice {
-                finish_reason: reason.to_string(),
-                index: seq.get_response_index(),
-                message: ResponseMessage {
-                    content: text,
-                    role: "assistant".to_string(),
-                },
-                logprobs: logprobs.map(|l| Logprobs { content: Some(l) }),
-            };
-            seq.add_choice_to_group(choice);
-        } else {
-            let choice = CompletionChoice {
-                finish_reason: reason.to_string(),
-                index: seq.get_response_index(),
-                text,
-                logprobs: None,
-            };
-            seq.add_completion_choice_to_group(choice);
-        }
-
-        prefix_cacher.add_sequence(seq);
-        prefix_cacher.evict_to_cpu()?;
-
-        let group = seq.get_mut_group();
-        if group.is_chat {
-            group
-                .maybe_send_done_response(
-                    ChatCompletionResponse {
-                        id: seq.id().to_string(),
-                        choices: group.get_choices().to_vec(),
-                        created: seq.creation_time(),
-                        model: pipeline_name,
-                        system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
-                        object: "chat.completion".to_string(),
-                        usage: group.get_usage(),
-                    },
-                    seq.responder(),
-                )
-                .await
-                .map_err(candle_core::Error::msg)?;
-        } else {
-            group
-                .maybe_send_completion_done_response(
-                    CompletionResponse {
-                        id: seq.id().to_string(),
-                        choices: group.get_completion_choices().to_vec(),
-                        created: seq.creation_time(),
-                        model: pipeline_name,
-                        system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
-                        object: "text_completion".to_string(),
-                        usage: group.get_usage(),
-                    },
-                    seq.responder(),
-                )
-                .await
-                .map_err(candle_core::Error::msg)?;
-        }
-
-        Ok(())
     }
 
     /// Clone the cache FROM the sequences' cache TO the model cache. Only used for completion seqs.

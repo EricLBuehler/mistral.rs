@@ -6,11 +6,9 @@ mod macros;
 mod normal;
 mod sampling;
 mod speculative;
-use crate::aici::toktree::TokTrie;
 use crate::device_map::DeviceMapper;
 use crate::prefix_cacher::PrefixCacheManager;
-use crate::sampler::Logprobs;
-mod default_sampling_pipeline;
+mod sampling_pipeline;
 use crate::{api_dir_list, api_get_file, DeviceMapMetadata};
 use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
 use candle_nn::VarBuilder;
@@ -249,15 +247,20 @@ pub trait Loader {
     fn get_kind(&self) -> ModelKind;
 }
 
+#[async_trait::async_trait]
 pub trait Pipeline: Send + Sync {
     fn forward_inputs(&mut self, inputs: ModelInputs) -> Result<Tensor, candle_core::Error>;
-    fn forward(
+    /// This does forward pass of model followed by run.
+    async fn step(
         &mut self,
-        input_toks: &mut [&mut Sequence],
+        input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
-    ) -> Result<Tensor, candle_core::Error> {
+        prefix_cacher: &mut PrefixCacheManager,
+        disable_eos_stop: bool,
+        rng: Arc<Mutex<Isaac64Rng>>,
+    ) -> Result<(), candle_core::Error> {
         let inputs = calculate_inputs(
-            input_toks,
+            input_seqs,
             is_prompt,
             self.is_xlora(),
             self.device(),
@@ -265,8 +268,19 @@ pub trait Pipeline: Send + Sync {
             None,
         )
         .unwrap();
-        self.forward_inputs(inputs)
+        let logits = self.forward_inputs(inputs)?;
+        self.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
+            .await?;
+        Ok(())
     }
+    async fn sample(
+        &self,
+        seqs: &mut [&mut Sequence],
+        logits: Tensor,
+        prefix_cacher: &mut PrefixCacheManager,
+        disable_eos_stop: bool,
+        rng: Arc<Mutex<Isaac64Rng>>,
+    ) -> Result<(), candle_core::Error>;
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
         let encoding = self
             .tokenizer()
@@ -325,18 +339,6 @@ pub trait Pipeline: Send + Sync {
     //fn get_repeat_last_n(&self) -> usize;
 
     fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()>;
-}
-
-pub trait SamplingPipeline {
-    /// Sample and 
-    async fn sample(
-        &self,
-        pipeline: Arc<Mutex<dyn Pipeline>>,
-        seqs: &mut [&mut Sequence],
-        logits: Tensor,
-        prefix_cacher: &mut PrefixCacheManager,
-        disable_eos_stop: bool,
-    ) -> Result<()>;
 }
 
 pub trait ConfigMarker {}

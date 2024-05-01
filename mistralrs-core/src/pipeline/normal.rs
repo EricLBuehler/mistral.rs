@@ -11,17 +11,20 @@ use crate::aici::toktree::TokTrie;
 use crate::models::Cache;
 use crate::pipeline::chat_template::calculate_eos_tokens;
 use crate::pipeline::{ChatTemplate, SimpleModelPaths};
+use crate::prefix_cacher::PrefixCacheManager;
+use crate::sequence::Sequence;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
 use crate::{
-    deserialize_chat_template, get_mut_arcmutex, get_paths, lora_model_loader, normal_model_loader,
-    xlora_model_loader, DeviceMapMetadata,
+    deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, lora_model_loader,
+    normal_model_loader, xlora_model_loader, DeviceMapMetadata,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::Ordering;
+use rand_isaac::Isaac64Rng;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -43,6 +46,8 @@ pub struct NormalPipeline {
     model_id: String,
     is_lora: bool,
     eos_tok: Vec<u32>,
+    repeat_last_n: usize,
+    max_seq_len: usize,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -282,6 +287,7 @@ impl Loader for NormalLoader {
             model.quantize(in_situ_quant, device.clone())?;
         }
 
+        let max_seq_len = model.max_seq_len();
         Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
             eos_tok: calculate_eos_tokens(&chat_template, gen_conf, &tokenizer),
@@ -298,6 +304,8 @@ impl Loader for NormalLoader {
             }),
             model_id: self.model_id.clone(),
             is_lora,
+            repeat_last_n: self.config.repeat_last_n,
+            max_seq_len,
         })))
     }
 
@@ -310,6 +318,7 @@ impl Loader for NormalLoader {
     }
 }
 
+#[async_trait::async_trait]
 impl Pipeline for NormalPipeline {
     fn forward_inputs(
         &mut self,
@@ -346,6 +355,16 @@ impl Pipeline for NormalPipeline {
             ),
         }
     }
+    async fn sample(
+        &self,
+        seqs: &mut [&mut Sequence],
+        logits: Tensor,
+        prefix_cacher: &mut PrefixCacheManager,
+        disable_eos_stop: bool,
+        rng: Arc<Mutex<Isaac64Rng>>,
+    ) -> Result<(), candle_core::Error> {
+        do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
+    }
     fn device(&self) -> &Device {
         self.model.device()
     }
@@ -355,20 +374,11 @@ impl Pipeline for NormalPipeline {
     fn cache(&self) -> &Cache {
         self.model.cache()
     }
-    fn get_repeat_last_n(&self) -> usize {
-        self.config.repeat_last_n
-    }
     fn tokenizer(&self) -> Arc<Tokenizer> {
         self.tokenizer.clone()
     }
-    fn eos_tok(&self) -> &[u32] {
-        &self.eos_tok
-    }
     fn name(&self) -> String {
         self.model_id.clone()
-    }
-    fn get_max_seq_len(&self) -> usize {
-        self.model.max_seq_len()
     }
     fn is_xlora(&self) -> bool {
         self.model.is_xlora() && !self.is_lora
@@ -384,9 +394,6 @@ impl Pipeline for NormalPipeline {
             *self.cache().get_scalings_cache() = None;
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
-    }
-    fn tok_trie(&self) -> Arc<TokTrie> {
-        self.tok_trie.clone()
     }
     fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()> {
         let device = self.device().clone();

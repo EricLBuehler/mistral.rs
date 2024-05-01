@@ -7,9 +7,11 @@ use crate::aici::toktree::TokTrie;
 use crate::models::Cache;
 use crate::pipeline::chat_template::calculate_eos_tokens;
 use crate::pipeline::{ChatTemplate, SimpleModelPaths};
+use crate::prefix_cacher::PrefixCacheManager;
+use crate::sequence::Sequence;
 use crate::utils::varbuilder_utils::from_mmaped_safetensors;
 use crate::xlora_models::NonGranularState;
-use crate::{deserialize_chat_template, get_mut_arcmutex, get_paths, DeviceMapMetadata};
+use crate::{deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama, models::quantized_phi2::ModelWeights as QPhi,
     utils::tokens::get_token, xlora_models::XLoraModelWeights as XLoraQLlama,
@@ -19,6 +21,7 @@ use candle_core::quantized::{gguf_file, GgmlDType};
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::Ordering;
+use rand_isaac::Isaac64Rng;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -46,6 +49,8 @@ pub struct GGUFPipeline {
     eos_tok: Vec<u32>,
     non_granular_state: Option<NonGranularState>,
     is_lora: bool,
+    repeat_last_n: usize,
+    max_seq_len: usize,
 }
 
 pub struct GGUFLoader {
@@ -370,6 +375,11 @@ impl Loader for GGUFLoader {
 
         let (chat_template, gen_conf) = deserialize_chat_template!(paths, self);
 
+        let max_seq_len = match model {
+            Model::Llama(l) => l.max_seq_len,
+            Model::Phi2(p) => p.max_seq_len,
+            Model::XLoraLlama(xl) => xl.max_seq_len,
+        };
         Ok(Arc::new(Mutex::new(GGUFPipeline {
             model,
             config: self.config,
@@ -386,6 +396,8 @@ impl Loader for GGUFLoader {
                 }
             }),
             is_lora,
+            repeat_last_n: self.config.repeat_last_n,
+            max_seq_len,
         })))
     }
 
@@ -398,6 +410,7 @@ impl Loader for GGUFLoader {
     }
 }
 
+#[async_trait::async_trait]
 impl Pipeline for GGUFPipeline {
     fn forward_inputs(
         &mut self,
@@ -433,6 +446,16 @@ impl Pipeline for GGUFPipeline {
             ),
         }
     }
+    async fn sample(
+        &self,
+        seqs: &mut [&mut Sequence],
+        logits: Tensor,
+        prefix_cacher: &mut PrefixCacheManager,
+        disable_eos_stop: bool,
+        rng: Arc<Mutex<Isaac64Rng>>,
+    ) -> Result<(), candle_core::Error> {
+        do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
+    }
     fn device(&self) -> &Device {
         match self.model {
             Model::Llama(ref model) => &model.device,
@@ -450,24 +473,11 @@ impl Pipeline for GGUFPipeline {
             Model::XLoraLlama(ref model) => &model.cache,
         }
     }
-    fn get_repeat_last_n(&self) -> usize {
-        self.config.repeat_last_n
-    }
     fn tokenizer(&self) -> Arc<Tokenizer> {
         self.tokenizer.clone()
     }
-    fn eos_tok(&self) -> &[u32] {
-        &self.eos_tok
-    }
     fn name(&self) -> String {
         self.model_id.clone()
-    }
-    fn get_max_seq_len(&self) -> usize {
-        match &self.model {
-            Model::Llama(model) => model.max_seq_len,
-            Model::Phi2(model) => model.max_seq_len,
-            Model::XLoraLlama(model) => model.max_seq_len,
-        }
     }
     fn is_xlora(&self) -> bool {
         match &self.model {
@@ -486,9 +496,6 @@ impl Pipeline for GGUFPipeline {
             *self.cache().get_scalings_cache() = None;
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
-    }
-    fn tok_trie(&self) -> Arc<TokTrie> {
-        self.tok_trie.clone()
     }
     fn re_isq_model(&mut self, _dtype: GgmlDType) -> Result<()> {
         anyhow::bail!(

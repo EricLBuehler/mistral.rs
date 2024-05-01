@@ -7,10 +7,10 @@ use tokenizers::Tokenizer;
 use tokio::runtime::Runtime;
 
 use crate::{
-    aici::toktree::TokTrie,
     get_mut_arcmutex,
     models::Cache,
     pipeline::{sample_sequence, sampling::sample_target_sequence_speculative},
+    prefix_cacher::PrefixCacheManager,
     sequence::{Sequence, SequenceState},
     Pipeline,
 };
@@ -65,8 +65,16 @@ impl SpeculativePipeline {
     }
 }
 
+#[async_trait::async_trait]
 impl Pipeline for SpeculativePipeline {
-    fn forward(&mut self, input_seqs: &mut [&mut Sequence], is_prompt: bool) -> Result<Tensor> {
+    async fn step(
+        &mut self,
+        input_seqs: &mut [&mut Sequence],
+        is_prompt: bool,
+        prefix_cacher: &mut PrefixCacheManager,
+        disable_eos_stop: bool,
+        rng: Arc<Mutex<Isaac64Rng>>,
+    ) -> Result<()> {
         let n_seqs = input_seqs.len();
         let mut draft_model = get_mut_arcmutex!(self.draft);
         let mut target_model = get_mut_arcmutex!(self.target);
@@ -191,6 +199,16 @@ impl Pipeline for SpeculativePipeline {
     fn forward_inputs(&mut self, _: ModelInputs) -> anyhow::Result<Tensor, candle_core::Error> {
         unreachable!()
     }
+    async fn sample(
+        &self,
+        seqs: &mut [&mut Sequence],
+        logits: Tensor,
+        prefix_cacher: &mut PrefixCacheManager,
+        disable_eos_stop: bool,
+        rng: Arc<Mutex<Isaac64Rng>>,
+    ) -> Result<()> {
+        unreachable!()
+    }
     fn device(&self) -> &Device {
         get_mut_arcmutex!(self.target).device()
     }
@@ -200,14 +218,8 @@ impl Pipeline for SpeculativePipeline {
     fn cache(&self) -> &Cache {
         get_mut_arcmutex!(self.target).cache()
     }
-    fn get_repeat_last_n(&self) -> usize {
-        get_mut_arcmutex!(self.target).get_repeat_last_n()
-    }
     fn tokenizer(&self) -> Arc<Tokenizer> {
         get_mut_arcmutex!(self.target).tokenizer()
-    }
-    fn eos_tok(&self) -> &[u32] {
-        get_mut_arcmutex!(self.target).eos_tok()
     }
     fn name(&self) -> String {
         format!(
@@ -215,9 +227,6 @@ impl Pipeline for SpeculativePipeline {
             get_mut_arcmutex!(self.target).name(),
             get_mut_arcmutex!(self.draft).name()
         )
-    }
-    fn get_max_seq_len(&self) -> usize {
-        get_mut_arcmutex!(self.target).get_max_seq_len()
     }
     fn is_xlora(&self) -> bool {
         get_mut_arcmutex!(self.target).is_xlora()
@@ -231,9 +240,6 @@ impl Pipeline for SpeculativePipeline {
     fn reset_non_granular_state(&self) {
         get_mut_arcmutex!(self.target).reset_non_granular_state();
         get_mut_arcmutex!(self.draft).reset_non_granular_state();
-    }
-    fn tok_trie(&self) -> Arc<TokTrie> {
-        get_mut_arcmutex!(self.target).tok_trie()
     }
     fn re_isq_model(&mut self, dtype: GgmlDType) -> anyhow::Result<()> {
         get_mut_arcmutex!(self.target).re_isq_model(dtype)?;
