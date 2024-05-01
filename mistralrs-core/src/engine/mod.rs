@@ -56,7 +56,7 @@ impl Engine {
         disable_eos_stop: bool,
     ) -> Self {
         let device = get_mut_arcmutex!(pipeline).device().clone();
-        let is_xlora = get_mut_arcmutex!(pipeline).is_xlora();
+        let is_xlora = get_mut_arcmutex!(pipeline).get_metadata().is_xlora;
         Self {
             rx,
             isq_rx,
@@ -99,7 +99,7 @@ impl Engine {
                 let res = {
                     let mut pipeline = get_mut_arcmutex!(self.pipeline);
                     if !self.no_kv_cache && last_completion_ids != current_completion_ids {
-                        Self::clone_in_cache(&mut *pipeline, &mut scheduled.completion);
+                        pipeline.clone_in_cache(&mut scheduled.completion);
                     }
 
                     pipeline
@@ -125,9 +125,9 @@ impl Engine {
                 {
                     let mut pipeline = get_mut_arcmutex!(self.pipeline);
                     if !self.no_kv_cache {
-                        Self::clone_out_cache(&mut *pipeline, &mut scheduled.completion);
+                        pipeline.clone_out_cache(&mut scheduled.completion);
                     } else {
-                        Self::set_none_cache(&mut *pipeline);
+                        pipeline.set_none_cache();
                     }
                 }
                 last_completion_ids = current_completion_ids;
@@ -138,7 +138,7 @@ impl Engine {
                     let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
                     // Run the prompt seqs
-                    Self::set_none_cache(&mut *pipeline);
+                    pipeline.set_none_cache();
                     pipeline
                         .step(
                             &mut scheduled.completion,
@@ -162,9 +162,9 @@ impl Engine {
                 {
                     let mut pipeline = get_mut_arcmutex!(self.pipeline);
                     if !self.no_kv_cache {
-                        Self::clone_out_cache(&mut *pipeline, &mut scheduled.prompt);
+                        pipeline.clone_out_cache(&mut scheduled.prompt);
                     } else {
-                        Self::set_none_cache(&mut *pipeline);
+                        pipeline.set_none_cache();
                     }
                 }
 
@@ -216,127 +216,6 @@ impl Engine {
                 if let Some(request) = self.rx.recv().await {
                     self.add_request(request).await;
                 }
-            }
-        }
-    }
-
-    /// Clone the cache FROM the sequences' cache TO the model cache. Only used for completion seqs.
-    fn clone_in_cache(pipeline: &mut dyn Pipeline, seqs: &mut [&mut Sequence]) {
-        let mut new_cache = Vec::new();
-        for layer in 0..pipeline.num_hidden_layers() {
-            let mut k_vec = Vec::new();
-            let mut v_vec = Vec::new();
-            for seq in &mut *seqs {
-                let seq_cache = &*seq.cache();
-                let cache = seq_cache.get(layer).unwrap();
-                let cache = cache
-                    .as_ref()
-                    .expect("Not handling completions in `clone_in_cache`.");
-                k_vec.push(cache.0.clone());
-                v_vec.push(cache.1.clone());
-            }
-            new_cache.push(Some((
-                if k_vec.len() > 1 {
-                    Tensor::cat(&k_vec, 0).unwrap()
-                } else {
-                    k_vec[0].clone()
-                },
-                if v_vec.len() > 1 {
-                    Tensor::cat(&v_vec, 0).unwrap()
-                } else {
-                    v_vec[0].clone()
-                },
-            )));
-        }
-        if pipeline.is_xlora() && !pipeline.get_metadata().has_no_kv_cache {
-            let mut new_cache = Vec::new();
-            for layer in 0..pipeline.num_hidden_layers() {
-                let mut k_vec = Vec::new();
-                let mut v_vec = Vec::new();
-                for seq in &mut *seqs {
-                    let seq_cache = &*seq.xlora_cache();
-                    let cache = seq_cache.get(layer).unwrap();
-                    let cache = cache
-                        .as_ref()
-                        .expect("Not handling completions in `clone_in_cache`.");
-                    k_vec.push(cache.0.clone());
-                    v_vec.push(cache.1.clone());
-                }
-                new_cache.push(Some((
-                    if k_vec.len() > 1 {
-                        Tensor::cat(&k_vec, 0).unwrap()
-                    } else {
-                        k_vec[0].clone()
-                    },
-                    if v_vec.len() > 1 {
-                        Tensor::cat(&v_vec, 0).unwrap()
-                    } else {
-                        v_vec[0].clone()
-                    },
-                )));
-            }
-            *pipeline.cache().xlora_lock() = new_cache;
-        }
-        if pipeline.is_xlora() {
-            *pipeline.cache().get_scalings_cache() = seqs[0].scaling_cache().clone();
-        }
-        *pipeline.cache().lock() = new_cache;
-    }
-
-    /// Set the model cache to all None. Only used for prompt seqs.
-    fn set_none_cache(pipeline: &mut dyn Pipeline) {
-        let mut new_cache = Vec::new();
-        for _ in 0..pipeline.num_hidden_layers() {
-            new_cache.push(None);
-        }
-        *pipeline.cache().lock() = new_cache.clone();
-        if pipeline.cache().is_xlora() {
-            *pipeline.cache().xlora_lock() = new_cache;
-        }
-    }
-
-    /// Clone the cache FROM the model cache TO the sequences. Used for prompt, completion seqs.
-    fn clone_out_cache(pipeline: &mut dyn Pipeline, seqs: &mut [&mut Sequence]) {
-        let num_hidden_layers = pipeline.num_hidden_layers();
-        for layer in 0..num_hidden_layers {
-            let cache = pipeline.cache().lock();
-            let cache = cache.get(layer).unwrap();
-            let k_cache = cache.as_ref().unwrap().0.clone();
-            let v_cache = cache.as_ref().unwrap().1.clone();
-
-            let k_caches = k_cache.chunk(seqs.len(), 0).unwrap();
-            debug_assert_eq!(k_caches.len(), seqs.len());
-            let v_caches = v_cache.chunk(seqs.len(), 0).unwrap();
-            debug_assert_eq!(v_caches.len(), seqs.len());
-
-            for (seq_i, seq) in seqs.iter_mut().enumerate() {
-                let seq_cache = seq.cache();
-                let seq_cache = &mut seq_cache[layer];
-                let k = k_caches.get(seq_i).unwrap().clone();
-                let v = v_caches.get(seq_i).unwrap().clone();
-                *seq_cache = Some((k, v));
-            }
-            if pipeline.is_xlora() && !pipeline.get_metadata().has_no_kv_cache {
-                let cache = pipeline.cache().xlora_lock();
-                let cache = cache.get(layer).unwrap();
-                let k_cache = cache.as_ref().unwrap().0.clone();
-                let v_cache = cache.as_ref().unwrap().1.clone();
-
-                let k_caches = k_cache.chunk(seqs.len(), 0).unwrap();
-                debug_assert_eq!(k_caches.len(), seqs.len());
-                let v_caches = v_cache.chunk(seqs.len(), 0).unwrap();
-                debug_assert_eq!(v_caches.len(), seqs.len());
-
-                for (seq_i, seq) in seqs.iter_mut().enumerate() {
-                    let seq_cache = seq.xlora_cache();
-                    let seq_cache = &mut seq_cache[layer];
-                    let k = k_caches.get(seq_i).unwrap().clone();
-                    let v = v_caches.get(seq_i).unwrap().clone();
-                    *seq_cache = Some((k, v));
-                }
-            }
-            if pipeline.is_xlora() {
-                *seqs[0].scaling_cache() = pipeline.cache().get_scalings_cache().clone();
             }
         }
     }
@@ -466,7 +345,9 @@ impl Engine {
             .map(|x| x as i64)
             .unwrap_or(-1);
         let topp = request.sampling_params.top_p.unwrap_or(1.0);
-        let num_hidden_layers = get_mut_arcmutex!(self.pipeline).num_hidden_layers();
+        let num_hidden_layers = get_mut_arcmutex!(self.pipeline)
+            .get_metadata()
+            .num_hidden_layers;
 
         let (stop_toks, stop_strings) = match request.sampling_params.stop_toks {
             None => (vec![], vec![]),
@@ -596,7 +477,7 @@ impl Engine {
                 stop_strings.clone(),
                 request.sampling_params.max_len,
                 request.return_logprobs,
-                get_mut_arcmutex!(self.pipeline).is_xlora(),
+                get_mut_arcmutex!(self.pipeline).get_metadata().is_xlora,
                 group.clone(),
                 response_index,
                 now.as_secs(),

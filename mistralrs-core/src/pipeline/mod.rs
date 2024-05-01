@@ -1,3 +1,4 @@
+mod cache_manager;
 mod chat_template;
 mod ggml;
 mod gguf;
@@ -254,6 +255,8 @@ pub struct GeneralMetadata {
     pub repeat_last_n: usize,
     pub tok_trie: Arc<TokTrie>,
     pub has_no_kv_cache: bool,
+    pub is_xlora: bool,
+    pub num_hidden_layers: usize,
 }
 
 #[async_trait::async_trait]
@@ -271,8 +274,8 @@ pub trait Pipeline: Send + Sync {
         let inputs = calculate_inputs(
             input_seqs,
             is_prompt,
-            self.is_xlora(),
-            self.device(),
+            self.get_metadata().is_xlora,
+            &self.device(),
             self.get_metadata().has_no_kv_cache,
             None,
         )
@@ -297,12 +300,9 @@ pub trait Pipeline: Send + Sync {
             .map_err(|e| anyhow::Error::msg(e.to_string()))?;
         Ok(encoding.get_ids().to_vec())
     }
-    fn device(&self) -> &Device;
-    fn num_hidden_layers(&self) -> usize;
-    fn cache(&self) -> &Cache;
+    fn device(&self) -> Device;
     fn tokenizer(&self) -> Arc<Tokenizer>;
     fn name(&self) -> String;
-    fn is_xlora(&self) -> bool;
     fn apply_chat_template(
         &self,
         messages: Vec<IndexMap<String, String>>,
@@ -342,11 +342,27 @@ pub trait Pipeline: Send + Sync {
     fn get_chat_template(&self) -> Arc<ChatTemplate>;
     fn reset_non_granular_state(&self);
     fn get_metadata(&self) -> &GeneralMetadata;
-
     fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()>;
+    /// Clone the cache FROM the sequences' cache TO the model cache. Only called for completion seqs.
+    /// It is not a guarantee that this will be called for each completion step.
+    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence]);
+    /// Clone the cache FROM the model cache TO the sequences. Called for prompt and completion seqs.
+    /// It is not a guarantee that this will be called for each step.
+    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence]);
+    /// Set the model cache to all None. Only called for prompt seqs.
+    /// It is not a guarantee that this will be called for each prompt step.
+    fn set_none_cache(&mut self);
 }
 
-pub trait ConfigMarker {}
+pub trait PipelineWithCache: Pipeline {
+    fn cache(&self) -> &Cache;
+}
+
+pub trait CacheManager {
+    fn clone_in_cache(&self, pipeline: &mut dyn PipelineWithCache, seqs: &mut [&mut Sequence]);
+    fn clone_out_cache(&self, pipeline: &mut dyn PipelineWithCache, seqs: &mut [&mut Sequence]);
+    fn set_none_cache(&self, pipeline: &mut dyn PipelineWithCache);
+}
 
 pub trait NormalModelLoader {
     fn load(
@@ -537,7 +553,7 @@ fn get_completion_input(
 }
 
 #[derive(Clone)]
-struct ModelInputs {
+pub struct ModelInputs {
     input_ids: Tensor,
     input_ids_full: Option<Tensor>,
     seqlen_offsets: Vec<usize>,

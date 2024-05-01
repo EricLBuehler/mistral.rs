@@ -8,7 +8,7 @@ use cfgrammar::{
 use lrtable::{from_yacc, Action, Minimiser, StIdx, StateTable};
 use rustc_hash::FxHashMap;
 use std::sync::{Arc, RwLock};
-use std::{cell::RefCell, vec};
+use std::vec;
 use tracing::debug;
 use vob::{vob, Vob};
 

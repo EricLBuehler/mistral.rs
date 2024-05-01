@@ -1,6 +1,7 @@
+use super::cache_manager::DefaultCacheManager;
 use super::{
-    get_model_paths, get_xlora_paths, GeneralMetadata, Loader, ModelInputs, ModelKind, ModelPaths,
-    Pipeline, TokenSource, XLoraPaths,
+    get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
+    ModelKind, ModelPaths, Pipeline, PipelineWithCache, TokenSource, XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -39,7 +40,6 @@ enum Model {
 
 pub struct GGMLPipeline {
     model: Model,
-    config: GGMLSpecificConfig,
     tokenizer: Arc<Tokenizer>,
     tok_trie: Arc<TokTrie>,
     no_kv_cache: bool,
@@ -47,7 +47,6 @@ pub struct GGMLPipeline {
     model_id: String,
     eos_tok: Vec<u32>,
     non_granular_state: Option<NonGranularState>,
-    is_lora: bool,
     metadata: GeneralMetadata,
 }
 
@@ -326,9 +325,16 @@ impl Loader for GGMLLoader {
             Model::XLoraLlama(ref xl) => xl.max_seq_len,
         };
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
+        let is_xlora = match &model {
+            Model::Llama(_) => false,
+            Model::XLoraLlama(_) => !is_lora,
+        };
+        let num_hidden_layers = match model {
+            Model::Llama(ref model) => model.cache.lock().len(),
+            Model::XLoraLlama(ref model) => model.cache.lock().len(),
+        };
         Ok(Arc::new(Mutex::new(GGMLPipeline {
             model,
-            config: self.config,
             eos_tok: calculate_eos_tokens(&chat_template, gen_conf, &tokenizer),
             tok_trie: tok_trie.clone(),
             tokenizer: tokenizer.into(),
@@ -341,12 +347,13 @@ impl Loader for GGMLLoader {
                     tgt_non_granular_index,
                 }
             }),
-            is_lora,
             metadata: GeneralMetadata {
                 max_seq_len,
                 repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
                 has_no_kv_cache: self.no_kv_cache,
+                is_xlora,
+                num_hidden_layers,
             },
         })))
     }
@@ -357,6 +364,15 @@ impl Loader for GGMLLoader {
 
     fn get_kind(&self) -> ModelKind {
         self.kind
+    }
+}
+
+impl PipelineWithCache for GGMLPipeline {
+    fn cache(&self) -> &Cache {
+        match self.model {
+            Model::Llama(ref model) => &model.cache,
+            Model::XLoraLlama(ref model) => &model.cache,
+        }
     }
 }
 
@@ -405,19 +421,10 @@ impl Pipeline for GGMLPipeline {
     ) -> Result<(), candle_core::Error> {
         do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
     }
-    fn device(&self) -> &Device {
+    fn device(&self) -> Device {
         match self.model {
-            Model::Llama(ref model) => &model.device,
-            Model::XLoraLlama(ref model) => &model.device,
-        }
-    }
-    fn num_hidden_layers(&self) -> usize {
-        self.cache().lock().len()
-    }
-    fn cache(&self) -> &Cache {
-        match self.model {
-            Model::Llama(ref model) => &model.cache,
-            Model::XLoraLlama(ref model) => &model.cache,
+            Model::Llama(ref model) => model.device.clone(),
+            Model::XLoraLlama(ref model) => model.device.clone(),
         }
     }
     fn tokenizer(&self) -> Arc<Tokenizer> {
@@ -425,12 +432,6 @@ impl Pipeline for GGMLPipeline {
     }
     fn name(&self) -> String {
         self.model_id.clone()
-    }
-    fn is_xlora(&self) -> bool {
-        match &self.model {
-            Model::Llama(_) => false,
-            Model::XLoraLlama(_) => !self.is_lora,
-        }
     }
     fn get_chat_template(&self) -> Arc<ChatTemplate> {
         self.chat_template.clone()
@@ -448,5 +449,14 @@ impl Pipeline for GGMLPipeline {
     }
     fn get_metadata(&self) -> &GeneralMetadata {
         &self.metadata
+    }
+    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence]) {
+        DefaultCacheManager.clone_in_cache(self, seqs)
+    }
+    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence]) {
+        DefaultCacheManager.clone_out_cache(self, seqs)
+    }
+    fn set_none_cache(&mut self) {
+        DefaultCacheManager.set_none_cache(self)
     }
 }

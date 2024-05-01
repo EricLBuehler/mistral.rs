@@ -8,7 +8,6 @@ use tokio::runtime::Runtime;
 
 use crate::{
     get_mut_arcmutex,
-    models::Cache,
     pipeline::{sample_sequence, sampling::sample_target_sequence_speculative},
     prefix_cacher::PrefixCacheManager,
     sequence::{Sequence, SequenceState},
@@ -77,7 +76,7 @@ impl Pipeline for SpeculativePipeline {
         let n_seqs = input_seqs.len();
         let mut draft_model = get_mut_arcmutex!(self.draft);
         let mut target_model = get_mut_arcmutex!(self.target);
-        let draft_cache_len = draft_model.cache().lock().len();
+        let draft_cache_len = draft_model.get_metadata().num_hidden_layers;
 
         let mut draft_samples = vec![Vec::new(); n_seqs];
 
@@ -87,8 +86,8 @@ impl Pipeline for SpeculativePipeline {
             let inputs = calculate_inputs(
                 input_seqs,
                 i == 0,
-                self.is_xlora(),
-                self.device(),
+                draft_model.get_metadata().is_xlora,
+                &draft_model.device(),
                 draft_model.get_metadata().has_no_kv_cache,
                 None,
             )
@@ -118,7 +117,7 @@ impl Pipeline for SpeculativePipeline {
             }
         }
         // Reset the cache
-        *draft_model.cache().lock() = vec![None; draft_cache_len];
+        draft_model.set_none_cache();
         // TODO: xlora cache reset too
 
         // =========== Now run base model with draft tokens ============
@@ -132,8 +131,8 @@ impl Pipeline for SpeculativePipeline {
         let inputs_target = calculate_inputs(
             input_seqs,
             is_prompt,
-            self.is_xlora(),
-            self.device(),
+            target_model.get_metadata().is_xlora,
+            &target_model.device(),
             target_model.get_metadata().has_no_kv_cache,
             Some(self.gamma),
         )
@@ -207,27 +206,18 @@ impl Pipeline for SpeculativePipeline {
     ) -> Result<()> {
         unreachable!("Speculative pipeline handles sampling in `.step`")
     }
-    fn device(&self) -> &Device {
+    fn device(&self) -> Device {
         get_mut_arcmutex!(self.target).device()
-    }
-    fn num_hidden_layers(&self) -> usize {
-        self.cache().lock().len()
-    }
-    fn cache(&self) -> &Cache {
-        get_mut_arcmutex!(self.target).cache()
     }
     fn tokenizer(&self) -> Arc<Tokenizer> {
         get_mut_arcmutex!(self.target).tokenizer()
     }
     fn name(&self) -> String {
         format!(
-            "Speculative: p = {}, q = {}",
+            "Speculative: tgt = `{}`, draft = `{}`",
             get_mut_arcmutex!(self.target).name(),
             get_mut_arcmutex!(self.draft).name()
         )
-    }
-    fn is_xlora(&self) -> bool {
-        get_mut_arcmutex!(self.target).is_xlora()
     }
     fn get_chat_template(&self) -> Arc<ChatTemplate> {
         get_mut_arcmutex!(self.target).get_chat_template()
@@ -242,5 +232,17 @@ impl Pipeline for SpeculativePipeline {
     }
     fn get_metadata(&self) -> &GeneralMetadata {
         &self.metadata
+    }
+    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence]) {
+        get_mut_arcmutex!(self.draft).clone_in_cache(seqs);
+        get_mut_arcmutex!(self.target).clone_in_cache(seqs);
+    }
+    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence]) {
+        get_mut_arcmutex!(self.draft).clone_out_cache(seqs);
+        get_mut_arcmutex!(self.target).clone_out_cache(seqs);
+    }
+    fn set_none_cache(&mut self) {
+        get_mut_arcmutex!(self.draft).set_none_cache();
+        get_mut_arcmutex!(self.target).set_none_cache();
     }
 }

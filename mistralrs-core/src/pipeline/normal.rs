@@ -1,10 +1,12 @@
+use super::cache_manager::DefaultCacheManager;
 use super::loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
     Phi3Loader, Qwen2Loader,
 };
 use super::{
-    get_model_paths, get_xlora_paths, GeneralMetadata, Loader, ModelInputs, ModelKind, ModelPaths,
-    NormalModel, NormalModelLoader, Pipeline, TokenSource, XLoraPaths,
+    get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
+    ModelKind, ModelPaths, NormalModel, NormalModelLoader, Pipeline, PipelineWithCache,
+    TokenSource, XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -39,12 +41,10 @@ pub struct NormalPipeline {
     model: Box<dyn NormalModel + Send + Sync>,
     tokenizer: Arc<Tokenizer>,
     tok_trie: Arc<TokTrie>,
-    config: NormalSpecificConfig,
     no_kv_cache: bool,
     chat_template: Arc<ChatTemplate>,
     non_granular_state: Option<NonGranularState>,
     model_id: String,
-    is_lora: bool,
     eos_tok: Vec<u32>,
     metadata: GeneralMetadata,
 }
@@ -288,12 +288,13 @@ impl Loader for NormalLoader {
 
         let max_seq_len = model.max_seq_len();
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
+        let is_xlora = model.is_xlora() && !is_lora;
+        let num_hidden_layers = model.cache().lock().len();
         Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
             eos_tok: calculate_eos_tokens(&chat_template, gen_conf, &tokenizer),
             tok_trie: tok_trie.clone(),
             tokenizer: tokenizer.into(),
-            config: self.config,
             no_kv_cache: self.no_kv_cache,
             chat_template: Arc::new(chat_template),
             non_granular_state: self.tgt_non_granular_index.map(|tgt_non_granular_index| {
@@ -303,12 +304,13 @@ impl Loader for NormalLoader {
                 }
             }),
             model_id: self.model_id.clone(),
-            is_lora,
             metadata: GeneralMetadata {
                 max_seq_len,
                 repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
                 has_no_kv_cache: self.no_kv_cache,
+                is_xlora,
+                num_hidden_layers,
             },
         })))
     }
@@ -319,6 +321,12 @@ impl Loader for NormalLoader {
 
     fn get_kind(&self) -> ModelKind {
         self.kind
+    }
+}
+
+impl PipelineWithCache for NormalPipeline {
+    fn cache(&self) -> &Cache {
+        self.model.cache()
     }
 }
 
@@ -369,23 +377,14 @@ impl Pipeline for NormalPipeline {
     ) -> Result<(), candle_core::Error> {
         do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
     }
-    fn device(&self) -> &Device {
-        self.model.device()
-    }
-    fn num_hidden_layers(&self) -> usize {
-        self.cache().lock().len()
-    }
-    fn cache(&self) -> &Cache {
-        self.model.cache()
+    fn device(&self) -> Device {
+        self.model.device().clone()
     }
     fn tokenizer(&self) -> Arc<Tokenizer> {
         self.tokenizer.clone()
     }
     fn name(&self) -> String {
         self.model_id.clone()
-    }
-    fn is_xlora(&self) -> bool {
-        self.model.is_xlora() && !self.is_lora
     }
     fn get_chat_template(&self) -> Arc<ChatTemplate> {
         self.chat_template.clone()
@@ -404,5 +403,14 @@ impl Pipeline for NormalPipeline {
     }
     fn get_metadata(&self) -> &GeneralMetadata {
         &self.metadata
+    }
+    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence]) {
+        DefaultCacheManager.clone_in_cache(self, seqs)
+    }
+    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence]) {
+        DefaultCacheManager.clone_out_cache(self, seqs)
+    }
+    fn set_none_cache(&mut self) {
+        DefaultCacheManager.set_none_cache(self)
     }
 }
