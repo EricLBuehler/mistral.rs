@@ -257,6 +257,7 @@ pub struct GeneralMetadata {
     pub has_no_kv_cache: bool,
     pub is_xlora: bool,
     pub num_hidden_layers: usize,
+    pub eos_tok: Vec<u32>,
 }
 
 #[async_trait::async_trait]
@@ -351,7 +352,8 @@ pub trait Pipeline: Send + Sync {
     fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence]);
     /// Set the model cache to all None. Only called for prompt seqs.
     /// It is not a guarantee that this will be called for each prompt step.
-    fn set_none_cache(&mut self);
+    /// This may also reset the non granular state if applicable.
+    fn set_none_cache(&mut self, reset_non_granular: bool);
 }
 
 pub trait PipelineWithCache: Pipeline {

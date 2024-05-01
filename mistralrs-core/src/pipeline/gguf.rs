@@ -46,7 +46,6 @@ pub struct GGUFPipeline {
     no_kv_cache: bool,
     chat_template: Arc<ChatTemplate>,
     model_id: String,
-    eos_tok: Vec<u32>,
     non_granular_state: Option<NonGranularState>,
     metadata: GeneralMetadata,
 }
@@ -388,9 +387,9 @@ impl Loader for GGUFLoader {
             Model::Phi2(ref model) => model.cache.lock().len(),
             Model::XLoraLlama(ref model) => model.cache.lock().len(),
         };
+        let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         Ok(Arc::new(Mutex::new(GGUFPipeline {
             model,
-            eos_tok: calculate_eos_tokens(&chat_template, gen_conf, &tokenizer),
             tok_trie: tok_trie.clone(),
             tokenizer: tokenizer.into(),
             no_kv_cache: self.no_kv_cache,
@@ -409,6 +408,7 @@ impl Loader for GGUFLoader {
                 has_no_kv_cache: self.no_kv_cache,
                 is_xlora,
                 num_hidden_layers,
+                eos_tok: eos,
             },
         })))
     }
@@ -514,7 +514,10 @@ impl Pipeline for GGUFPipeline {
     fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence]) {
         DefaultCacheManager.clone_out_cache(self, seqs)
     }
-    fn set_none_cache(&mut self) {
-        DefaultCacheManager.set_none_cache(self)
+    fn set_none_cache(&mut self, reset_non_granular: bool) {
+        DefaultCacheManager.set_none_cache(self);
+        if reset_non_granular {
+            self.reset_non_granular_state()
+        }
     }
 }

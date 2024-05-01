@@ -113,7 +113,7 @@ impl Engine {
                         .await
                 };
 
-                let _ = handle_pipeline_forward_error!(
+                handle_pipeline_forward_error!(
                     "completion step",
                     res,
                     &mut scheduled.completion,
@@ -127,7 +127,8 @@ impl Engine {
                     if !self.no_kv_cache {
                         pipeline.clone_out_cache(&mut scheduled.completion);
                     } else {
-                        pipeline.set_none_cache();
+                        // Do not reset non granular state because the sequence is still running.
+                        pipeline.set_none_cache(false);
                     }
                 }
                 last_completion_ids = current_completion_ids;
@@ -138,7 +139,10 @@ impl Engine {
                     let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
                     // Run the prompt seqs
-                    pipeline.set_none_cache();
+
+                    // Reset non granular state because the old sequence must be dead.
+                    // Technically we don't need to do this but it is better to be safe.
+                    pipeline.set_none_cache(true);
                     pipeline
                         .step(
                             &mut scheduled.completion,
@@ -150,7 +154,7 @@ impl Engine {
                         .await
                 };
 
-                let _ = handle_pipeline_forward_error!(
+                handle_pipeline_forward_error!(
                     "prompt step",
                     logits,
                     &mut scheduled.prompt,
@@ -164,7 +168,8 @@ impl Engine {
                     if !self.no_kv_cache {
                         pipeline.clone_out_cache(&mut scheduled.prompt);
                     } else {
-                        pipeline.set_none_cache();
+                        // Do not reset non granular state because the sequence is still running.
+                        pipeline.set_none_cache(false);
                     }
                 }
 

@@ -10,6 +10,7 @@ use crate::{
     sequence::{Sequence, SequenceRecognizer},
 };
 
+/// Async sample optionally adding to trie.
 pub async fn sample_sequence(
     logits: Tensor,
     seq: &mut Sequence,
@@ -18,6 +19,7 @@ pub async fn sample_sequence(
     tok_trie: Arc<TokTrie>,
     rng: Arc<Mutex<Isaac64Rng>>,
     use_async_pool: bool,
+    add_to_trie: bool,
 ) -> Result<Logprobs> {
     let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
     let start_at = seq.get_toks().len().saturating_sub(repeat_last_n);
@@ -65,18 +67,27 @@ pub async fn sample_sequence(
         None => first_lobprobs_response,
     };
 
-    match seq.recognizer {
-        SequenceRecognizer::Regex(ref mut rx) => {
-            tok_trie.append_token(rx.as_mut(), second_logprobs_response.token);
+    if add_to_trie {
+        match seq.recognizer {
+            SequenceRecognizer::Regex(ref mut rx) => {
+                tok_trie.append_token(rx.as_mut(), second_logprobs_response.token);
+            }
+            SequenceRecognizer::Cfg(ref mut cfg) => {
+                tok_trie.append_token(cfg.as_mut(), second_logprobs_response.token);
+            }
+            SequenceRecognizer::None => {}
         }
-        SequenceRecognizer::Cfg(ref mut cfg) => {
-            tok_trie.append_token(cfg.as_mut(), second_logprobs_response.token);
-        }
-        SequenceRecognizer::None => {}
     }
     Ok(second_logprobs_response)
 }
 
+#[derive(Clone)]
+pub struct SpeculativeSample {
+    pub distribution: Tensor,
+    pub sample: Logprobs,
+}
+
+/// Async sample without modifying sequence.
 pub async fn sample_target_sequence_speculative(
     logits: Tensor,
     seq: &mut Sequence,
@@ -85,21 +96,23 @@ pub async fn sample_target_sequence_speculative(
     tok_trie: Arc<TokTrie>,
     rng: Arc<Mutex<Isaac64Rng>>,
     n_toks: usize,
-) -> Result<Vec<Logprobs>> {
+) -> Result<Vec<SpeculativeSample>> {
     let mut sampled = Vec::new();
     for chunk in logits.chunk(n_toks, 1)? {
-        sampled.push(
-            sample_sequence(
+        sampled.push(SpeculativeSample {
+            distribution: chunk.clone(),
+            sample: sample_sequence(
                 chunk,
                 seq,
                 return_logprobs,
                 repeat_last_n,
                 tok_trie.clone(),
                 rng.clone(),
-                true, // TODO: does this hurt perf?
+                true,  // TODO(EricLBuehler): does this hurt perf?
+                false, // Do not append to trie (yet)
             )
             .await?,
-        );
+        });
     }
     Ok(sampled)
 }

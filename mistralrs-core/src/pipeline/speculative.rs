@@ -7,14 +7,17 @@ use tokenizers::Tokenizer;
 use tokio::runtime::Runtime;
 
 use crate::{
-    get_mut_arcmutex,
+    finish_and_add_tokens_to_seq, get_mut_arcmutex,
     pipeline::{sample_sequence, sampling::sample_target_sequence_speculative},
     prefix_cacher::PrefixCacheManager,
-    sequence::{Sequence, SequenceState},
+    sequence::{Sequence, SequenceRecognizer, SequenceState},
     Pipeline,
 };
 
-use super::{calculate_inputs, chat_template::ChatTemplate, GeneralMetadata, ModelInputs};
+use super::{
+    calculate_inputs, chat_template::ChatTemplate, sampling::SpeculativeSample, GeneralMetadata,
+    ModelInputs,
+};
 
 /// Speculative decoding pipeline: https://arxiv.org/pdf/2211.17192
 ///
@@ -52,7 +55,7 @@ impl SpeculativePipeline {
             candle_core::bail!("Target and draft models' tokenzier vocab do not match. This is required for speculative decoding.");
         }
         let metadata = get_mut_arcmutex!(target).get_metadata().clone();
-        // todo: some checks here
+        // todo: some checks here?
         Ok(Self {
             target,
             draft,
@@ -74,51 +77,56 @@ impl Pipeline for SpeculativePipeline {
         rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<()> {
         let n_seqs = input_seqs.len();
-        let mut draft_model = get_mut_arcmutex!(self.draft);
-        let mut target_model = get_mut_arcmutex!(self.target);
-        let draft_cache_len = draft_model.get_metadata().num_hidden_layers;
 
         let mut draft_samples = vec![Vec::new(); n_seqs];
 
-        let repeat_last_n = draft_model.get_metadata().repeat_last_n;
+        let repeat_last_n = get_mut_arcmutex!(self.draft).get_metadata().repeat_last_n;
         // Get the draft tokens
         for i in 0..self.gamma {
             let inputs = calculate_inputs(
                 input_seqs,
                 i == 0,
-                draft_model.get_metadata().is_xlora,
-                &draft_model.device(),
-                draft_model.get_metadata().has_no_kv_cache,
+                get_mut_arcmutex!(self.draft).get_metadata().is_xlora,
+                &get_mut_arcmutex!(self.draft).device(),
+                get_mut_arcmutex!(self.draft).get_metadata().has_no_kv_cache,
                 None,
             )
             .unwrap();
-            let logits = draft_model.forward_inputs(inputs.clone())?;
+            let logits = get_mut_arcmutex!(self.draft).forward_inputs(inputs.clone())?;
             for ((i, seq), logits) in input_seqs
                 .iter_mut()
                 .enumerate()
                 .zip(logits.to_device(&Device::Cpu)?.chunk(n_seqs, 0)?)
             {
-                let t = draft_model.get_metadata().tok_trie.clone(); // TODO: do we need to reset it?
+                let t = get_mut_arcmutex!(self.draft)
+                    .get_metadata()
+                    .tok_trie
+                    .clone();
                 let r = rng.clone();
                 let sampled = self.rt.block_on(async {
                     sample_sequence(
-                        logits,
-                        *seq,
+                        logits.clone(),
+                        seq,
                         seq.return_logprobs(),
                         repeat_last_n,
                         t,
                         r,
                         n_seqs > 1,
+                        false, // Do not add to trie
                     )
                     .await
                 })?;
                 seq.add_tmp_token(sampled.token);
-                draft_samples[i].push(sampled);
+                draft_samples[i].push(SpeculativeSample {
+                    sample: sampled,
+                    distribution: logits,
+                });
             }
         }
-        // Reset the cache
-        draft_model.set_none_cache();
-        // TODO: xlora cache reset too
+
+        // Reset the cache (xlora and normal), and reset non granular state
+        // So no more cache at all
+        get_mut_arcmutex!(self.draft).set_none_cache(true);
 
         // =========== Now run base model with draft tokens ============
 
@@ -131,28 +139,34 @@ impl Pipeline for SpeculativePipeline {
         let inputs_target = calculate_inputs(
             input_seqs,
             is_prompt,
-            target_model.get_metadata().is_xlora,
-            &target_model.device(),
-            target_model.get_metadata().has_no_kv_cache,
+            get_mut_arcmutex!(self.target).get_metadata().is_xlora,
+            &get_mut_arcmutex!(self.target).device(),
+            get_mut_arcmutex!(self.target)
+                .get_metadata()
+                .has_no_kv_cache,
             Some(self.gamma),
         )
         .unwrap();
-        let target_logits = target_model.forward_inputs(inputs_target)?;
+        let target_logits = get_mut_arcmutex!(self.target).forward_inputs(inputs_target)?;
 
         // Sample the tokens for each one we're testing and apply the algorithm
         // Remove γ raw tokens
-        let repeat_last_n = target_model.get_metadata().repeat_last_n;
+        let repeat_last_n = get_mut_arcmutex!(self.target).get_metadata().repeat_last_n;
         let mut target_samples = Vec::new();
         for (seq, target_logits) in input_seqs.iter_mut().zip(target_logits.chunk(n_seqs, 0)?) {
             seq.set_state(SequenceState::RunningCompletion); // Back to normal
             seq.remove_tmp_tokens(self.gamma);
 
-            let t = target_model.get_metadata().tok_trie.clone();
+            let t = get_mut_arcmutex!(self.target)
+                .get_metadata()
+                .tok_trie
+                .clone();
             let r = rng.clone();
+            // Sample. Do not add results to trie yet, and do not add tokens to the seq
             let samples = self.rt.block_on(async {
                 sample_target_sequence_speculative(
                     target_logits,
-                    *seq,
+                    seq,
                     seq.return_logprobs(),
                     repeat_last_n,
                     t,
@@ -164,34 +178,127 @@ impl Pipeline for SpeculativePipeline {
             target_samples.push(samples);
         }
 
-        for (draft_samples, tgt_samples) in draft_samples.into_iter().zip(target_samples) {
+        // Note: know that all seqs here have same cache length
+        let initial_cache_len = input_seqs[0].cache()[0]
+            .as_ref()
+            .map(|(k, _)| k.dims()[2])
+            .unwrap_or(0);
+
+        let mut n_accepted_toks = Vec::new();
+        for (seq, (draft_samples, tgt_samples)) in input_seqs
+            .iter_mut()
+            .zip(draft_samples.into_iter().zip(target_samples))
+        {
             let mut accepted_tokens = Vec::new();
             for (draft_sample, tgt_sample) in draft_samples.into_iter().zip(tgt_samples) {
-                if draft_sample.token == tgt_sample.token {
-                    if draft_sample.logprob <= tgt_sample.logprob {
+                if draft_sample.sample.token == tgt_sample.sample.token {
+                    if draft_sample.sample.logprob <= tgt_sample.sample.logprob {
                         // Target model agrees.
-                        accepted_tokens.push(tgt_sample);
+                        accepted_tokens.push(tgt_sample.sample);
                     } else {
                         // Target model disagrees.
-                        let acceptance_prob = tgt_sample.logprob / draft_sample.logprob;
+                        let acceptance_prob =
+                            tgt_sample.sample.logprob / draft_sample.sample.logprob;
                         let is_accepted = get_mut_arcmutex!(rng).gen_bool(acceptance_prob as f64);
                         if is_accepted {
-                            accepted_tokens.push(tgt_sample);
+                            accepted_tokens.push(tgt_sample.sample);
                         } else {
-                            // Do not accept. Resample with updated prob dist norm(max(0, p(x) − q(x)))
-                            // todo: resample and done with seq
+                            // Do not accept. Resample with updated prob dist relu(p(x) − q(x))
+                            let corrected_distribution =
+                                (tgt_sample.distribution - draft_sample.distribution)?.relu()?;
+                            let t = get_mut_arcmutex!(self.target)
+                                .get_metadata()
+                                .tok_trie
+                                .clone();
+                            let r = rng.clone();
+                            let sampled = self.rt.block_on(async {
+                                sample_sequence(
+                                    corrected_distribution,
+                                    seq,
+                                    seq.return_logprobs(),
+                                    repeat_last_n,
+                                    t,
+                                    r,
+                                    n_seqs > 1,
+                                    false, // Do not add to trie
+                                )
+                                .await
+                            })?;
+                            accepted_tokens.push(sampled);
+                            break;
                         }
                     }
                 } else {
                     // Did not agree. Use the target model's choice. Return it.
-                    accepted_tokens.push(tgt_sample);
+                    accepted_tokens.push(tgt_sample.sample);
+                    break;
+                }
+            }
+
+            n_accepted_toks.push(accepted_tokens.len());
+            // Add the tokens to the seq and the trie
+            for accepted in accepted_tokens {
+                let eos_owned = get_mut_arcmutex!(self.target)
+                    .get_metadata()
+                    .eos_tok
+                    .clone();
+                let eos_tok = if disable_eos_stop {
+                    None
+                } else {
+                    Some(&eos_owned[..])
+                };
+                finish_and_add_tokens_to_seq!(self, prefix_cacher, seq, accepted, eos_tok);
+                match seq.recognizer {
+                    SequenceRecognizer::Regex(ref mut rx) => {
+                        get_mut_arcmutex!(self.target)
+                            .get_metadata()
+                            .tok_trie
+                            .append_token(rx.as_mut(), accepted.token);
+                    }
+                    SequenceRecognizer::Cfg(ref mut cfg) => {
+                        get_mut_arcmutex!(self.target)
+                            .get_metadata()
+                            .tok_trie
+                            .append_token(cfg.as_mut(), accepted.token);
+                    }
+                    SequenceRecognizer::None => {}
                 }
             }
         }
 
-        // todo: fix up the kv cache of the base model based on accepted tokens
+        // Fix up the kv cache of the base model based on accepted tokens
+        get_mut_arcmutex!(self.target).clone_out_cache(input_seqs);
+        for (seq, n_accepted) in input_seqs.iter_mut().zip(n_accepted_toks) {
+            let cache = seq.cache();
+            for layer in cache {
+                if let Some((k, v)) = layer {
+                    let computed_len = initial_cache_len + n_accepted;
+                    *k = k.narrow(2, 0, computed_len)?;
+                    *v = v.narrow(2, 0, computed_len)?;
+                }
+            }
+            if seq.is_xlora() {
+                let cache = seq.xlora_cache();
+                for layer in cache {
+                    if let Some((k, v)) = layer {
+                        let computed_len = initial_cache_len + n_accepted;
+                        *k = k.narrow(2, 0, computed_len)?;
+                        *v = v.narrow(2, 0, computed_len)?;
+                    }
+                }
+            }
+        }
 
-        todo!()
+        // Done! We have:
+        // - Run the draft model gamma times
+        // - Reset draft model cache fully
+        // - Sampled draft model's distributions
+        // - Run target model
+        // - Execute speculative decoding algorithm on the resulting distributions
+        // - Added the accepted tokens to buffer and trie
+        // - Maybe fixed up cache of base model based on accepted tokens.
+
+        Ok(())
     }
     fn forward_inputs(&mut self, _: ModelInputs) -> anyhow::Result<Tensor, candle_core::Error> {
         unreachable!("Speculative pipeline handles the forward pass in `.step`")
@@ -241,8 +348,8 @@ impl Pipeline for SpeculativePipeline {
         get_mut_arcmutex!(self.draft).clone_out_cache(seqs);
         get_mut_arcmutex!(self.target).clone_out_cache(seqs);
     }
-    fn set_none_cache(&mut self) {
-        get_mut_arcmutex!(self.draft).set_none_cache();
-        get_mut_arcmutex!(self.target).set_none_cache();
+    fn set_none_cache(&mut self, reset_non_granular: bool) {
+        get_mut_arcmutex!(self.draft).set_none_cache(reset_non_granular);
+        get_mut_arcmutex!(self.target).set_none_cache(reset_non_granular);
     }
 }

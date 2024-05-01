@@ -45,7 +45,6 @@ pub struct NormalPipeline {
     chat_template: Arc<ChatTemplate>,
     non_granular_state: Option<NonGranularState>,
     model_id: String,
-    eos_tok: Vec<u32>,
     metadata: GeneralMetadata,
 }
 
@@ -290,9 +289,9 @@ impl Loader for NormalLoader {
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
         let is_xlora = model.is_xlora() && !is_lora;
         let num_hidden_layers = model.cache().lock().len();
+        let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
-            eos_tok: calculate_eos_tokens(&chat_template, gen_conf, &tokenizer),
             tok_trie: tok_trie.clone(),
             tokenizer: tokenizer.into(),
             no_kv_cache: self.no_kv_cache,
@@ -311,6 +310,7 @@ impl Loader for NormalLoader {
                 has_no_kv_cache: self.no_kv_cache,
                 is_xlora,
                 num_hidden_layers,
+                eos_tok: eos,
             },
         })))
     }
@@ -410,7 +410,10 @@ impl Pipeline for NormalPipeline {
     fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence]) {
         DefaultCacheManager.clone_out_cache(self, seqs)
     }
-    fn set_none_cache(&mut self) {
-        DefaultCacheManager.set_none_cache(self)
+    fn set_none_cache(&mut self, reset_non_granular: bool) {
+        DefaultCacheManager.set_none_cache(self);
+        if reset_non_granular {
+            self.reset_non_granular_state()
+        }
     }
 }
