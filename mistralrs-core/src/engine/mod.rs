@@ -7,6 +7,7 @@ use tokio::sync::mpsc::Receiver;
 
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
+    pipeline::CacheInstruction,
     response::CompletionChoice,
     CompletionResponse, RequestMessage, Response,
 };
@@ -98,9 +99,19 @@ impl Engine {
                     scheduled.completion.iter().map(|seq| *seq.id()).collect();
                 let res = {
                     let mut pipeline = get_mut_arcmutex!(self.pipeline);
-                    if !self.no_kv_cache && last_completion_ids != current_completion_ids {
-                        pipeline.clone_in_cache(&mut scheduled.completion);
-                    }
+                    let pre_op =
+                        if !self.no_kv_cache && last_completion_ids != current_completion_ids {
+                            CacheInstruction::In
+                        } else {
+                            CacheInstruction::Nonthing
+                        };
+                    let post_op = if !self.no_kv_cache {
+                        CacheInstruction::Out
+                    } else {
+                        CacheInstruction::Reset {
+                            reset_non_granular: false,
+                        }
+                    };
 
                     pipeline
                         .step(
@@ -109,6 +120,8 @@ impl Engine {
                             &mut self.prefix_cacher,
                             self.disable_eos_stop,
                             rng.clone(),
+                            pre_op,
+                            post_op,
                         )
                         .await
                 };
@@ -122,15 +135,6 @@ impl Engine {
                     self.prefix_cacher
                 );
 
-                {
-                    let mut pipeline = get_mut_arcmutex!(self.pipeline);
-                    if !self.no_kv_cache {
-                        pipeline.clone_out_cache(&mut scheduled.completion);
-                    } else {
-                        // Do not reset non granular state because the sequence is still running.
-                        pipeline.set_none_cache(false);
-                    }
-                }
                 last_completion_ids = current_completion_ids;
             }
 
@@ -139,10 +143,16 @@ impl Engine {
                     let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
                     // Run the prompt seqs
+                    let post_op = if !self.no_kv_cache {
+                        CacheInstruction::Out
+                    } else {
+                        CacheInstruction::Reset {
+                            reset_non_granular: false,
+                        }
+                    };
 
                     // Reset non granular state because the old sequence must be dead.
                     // Technically we don't need to do this but it is better to be safe.
-                    pipeline.set_none_cache(true);
                     pipeline
                         .step(
                             &mut scheduled.completion,
@@ -150,6 +160,10 @@ impl Engine {
                             &mut self.prefix_cacher,
                             self.disable_eos_stop,
                             rng.clone(),
+                            CacheInstruction::Reset {
+                                reset_non_granular: false,
+                            },
+                            post_op,
                         )
                         .await
                 };
@@ -162,16 +176,6 @@ impl Engine {
                     'lp,
                     self.prefix_cacher
                 );
-
-                {
-                    let mut pipeline = get_mut_arcmutex!(self.pipeline);
-                    if !self.no_kv_cache {
-                        pipeline.clone_out_cache(&mut scheduled.prompt);
-                    } else {
-                        // Do not reset non granular state because the sequence is still running.
-                        pipeline.set_none_cache(false);
-                    }
-                }
 
                 for seq in scheduled.prompt.iter_mut() {
                     seq.set_state(SequenceState::RunningCompletion);

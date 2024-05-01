@@ -15,8 +15,8 @@ use crate::{
 };
 
 use super::{
-    calculate_inputs, chat_template::ChatTemplate, sampling::SpeculativeSample, GeneralMetadata,
-    ModelInputs,
+    calculate_inputs, chat_template::ChatTemplate, sampling::SpeculativeSample, CacheInstruction,
+    GeneralMetadata, ModelInputs,
 };
 
 /// Speculative decoding pipeline: https://arxiv.org/pdf/2211.17192
@@ -75,8 +75,19 @@ impl Pipeline for SpeculativePipeline {
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
+        pre_op: CacheInstruction,
+        post_op: CacheInstruction,
     ) -> Result<()> {
         let n_seqs = input_seqs.len();
+
+        match pre_op {
+            CacheInstruction::In => self.clone_in_cache(input_seqs),
+            CacheInstruction::Nonthing => (),
+            CacheInstruction::Reset { reset_non_granular } => {
+                self.set_none_cache(reset_non_granular)
+            }
+            _ => unreachable!("Unreachable pre cache op."),
+        }
 
         let mut draft_samples = vec![Vec::new(); n_seqs];
 
@@ -266,27 +277,36 @@ impl Pipeline for SpeculativePipeline {
             }
         }
 
-        // Fix up the kv cache of the base model based on accepted tokens
-        get_mut_arcmutex!(self.target).clone_out_cache(input_seqs);
-        for (seq, n_accepted) in input_seqs.iter_mut().zip(n_accepted_toks) {
-            let cache = seq.cache();
-            for layer in cache {
-                if let Some((k, v)) = layer {
-                    let computed_len = initial_cache_len + n_accepted;
-                    *k = k.narrow(2, 0, computed_len)?;
-                    *v = v.narrow(2, 0, computed_len)?;
-                }
-            }
-            if seq.is_xlora() {
-                let cache = seq.xlora_cache();
-                for layer in cache {
-                    if let Some((k, v)) = layer {
-                        let computed_len = initial_cache_len + n_accepted;
-                        *k = k.narrow(2, 0, computed_len)?;
-                        *v = v.narrow(2, 0, computed_len)?;
+        match post_op {
+            CacheInstruction::Out => {
+                // Fix up the kv cache of the base model based on accepted tokens
+                get_mut_arcmutex!(self.target).clone_out_cache(input_seqs);
+                for (seq, n_accepted) in input_seqs.iter_mut().zip(n_accepted_toks) {
+                    let cache = seq.cache();
+                    for layer in cache {
+                        if let Some((k, v)) = layer {
+                            let computed_len = initial_cache_len + n_accepted;
+                            *k = k.narrow(2, 0, computed_len)?;
+                            *v = v.narrow(2, 0, computed_len)?;
+                        }
+                    }
+                    if seq.is_xlora() {
+                        let cache = seq.xlora_cache();
+                        for layer in cache {
+                            if let Some((k, v)) = layer {
+                                let computed_len = initial_cache_len + n_accepted;
+                                *k = k.narrow(2, 0, computed_len)?;
+                                *v = v.narrow(2, 0, computed_len)?;
+                            }
+                        }
                     }
                 }
             }
+            CacheInstruction::Nonthing => (),
+            CacheInstruction::Reset { reset_non_granular } => {
+                self.set_none_cache(reset_non_granular)
+            }
+            _ => unreachable!("Unreachable pre cache op."),
         }
 
         // Done! We have:

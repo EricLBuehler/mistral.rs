@@ -260,6 +260,13 @@ pub struct GeneralMetadata {
     pub eos_tok: Vec<u32>,
 }
 
+pub enum CacheInstruction {
+    In,
+    Out,
+    Reset { reset_non_granular: bool },
+    Nonthing,
+}
+
 #[async_trait::async_trait]
 pub trait Pipeline: Send + Sync {
     fn forward_inputs(&mut self, inputs: ModelInputs) -> Result<Tensor, candle_core::Error>;
@@ -271,6 +278,8 @@ pub trait Pipeline: Send + Sync {
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
+        pre_op: CacheInstruction,
+        post_op: CacheInstruction,
     ) -> Result<(), candle_core::Error> {
         let inputs = calculate_inputs(
             input_seqs,
@@ -281,7 +290,27 @@ pub trait Pipeline: Send + Sync {
             None,
         )
         .unwrap();
+
+        match pre_op {
+            CacheInstruction::In => self.clone_in_cache(input_seqs),
+            CacheInstruction::Nonthing => (),
+            CacheInstruction::Reset { reset_non_granular } => {
+                self.set_none_cache(reset_non_granular)
+            }
+            _ => unreachable!("Unreachable PRE cache op."),
+        }
+
         let logits = self.forward_inputs(inputs)?;
+
+        match post_op {
+            CacheInstruction::Out => self.clone_out_cache(input_seqs),
+            CacheInstruction::Nonthing => (),
+            CacheInstruction::Reset { reset_non_granular } => {
+                self.set_none_cache(reset_non_granular)
+            }
+            _ => unreachable!("Unreachable POST cache op."),
+        }
+
         self.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
             .await?;
         Ok(())
