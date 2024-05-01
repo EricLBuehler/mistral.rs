@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use candle_core::{DType, Device, Result, Tensor};
 use rand_isaac::Isaac64Rng;
@@ -11,13 +11,14 @@ use crate::{
 };
 
 /// Async sample optionally adding to trie.
+#[allow(clippy::too_many_arguments)]
 pub async fn sample_sequence(
     logits: Tensor,
     seq: &mut Sequence,
     return_logprobs: bool,
     repeat_last_n: usize,
     tok_trie: Arc<TokTrie>,
-    rng: Arc<Mutex<Isaac64Rng>>,
+    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     use_async_pool: bool,
     add_to_trie: bool,
 ) -> Result<Logprobs> {
@@ -94,7 +95,7 @@ pub async fn sample_target_sequence_speculative(
     return_logprobs: bool,
     repeat_last_n: usize,
     tok_trie: Arc<TokTrie>,
-    rng: Arc<Mutex<Isaac64Rng>>,
+    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     n_toks: usize,
 ) -> Result<Vec<SpeculativeSample>> {
     let mut sampled = Vec::new();

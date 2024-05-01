@@ -1,9 +1,9 @@
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::{mpsc::Receiver, Mutex};
 
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
@@ -80,7 +80,7 @@ impl Engine {
     }
 
     pub async fn run(&mut self) {
-        let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
+        let rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
         let mut last_completion_ids: Vec<usize> = vec![];
         'lp: loop {
             while let Ok(request) = self.rx.try_recv() {

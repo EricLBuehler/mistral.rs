@@ -283,21 +283,17 @@ impl Pipeline for SpeculativePipeline {
                 get_mut_arcmutex!(self.target).clone_out_cache(input_seqs);
                 for (seq, n_accepted) in input_seqs.iter_mut().zip(n_accepted_toks) {
                     let cache = seq.cache();
-                    for layer in cache {
-                        if let Some((k, v)) = layer {
-                            let computed_len = initial_cache_len + n_accepted;
-                            *k = k.narrow(2, 0, computed_len)?;
-                            *v = v.narrow(2, 0, computed_len)?;
-                        }
+                    for (k, v) in cache.iter_mut().flatten() {
+                        let computed_len = initial_cache_len + n_accepted;
+                        *k = k.narrow(2, 0, computed_len)?;
+                        *v = v.narrow(2, 0, computed_len)?;
                     }
                     if seq.is_xlora() {
                         let cache = seq.xlora_cache();
-                        for layer in cache {
-                            if let Some((k, v)) = layer {
-                                let computed_len = initial_cache_len + n_accepted;
-                                *k = k.narrow(2, 0, computed_len)?;
-                                *v = v.narrow(2, 0, computed_len)?;
-                            }
+                        for (k, v) in cache.iter_mut().flatten() {
+                            let computed_len = initial_cache_len + n_accepted;
+                            *k = k.narrow(2, 0, computed_len)?;
+                            *v = v.narrow(2, 0, computed_len)?;
                         }
                     }
                 }

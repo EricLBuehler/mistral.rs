@@ -29,8 +29,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::Mutex;
 use tokenizers::Tokenizer;
+use tokio::sync::Mutex;
 use tracing::info;
 
 enum Model {
@@ -474,7 +474,7 @@ impl Pipeline for GGUFPipeline {
         logits: Tensor,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
-        rng: Arc<Mutex<Isaac64Rng>>,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
         do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
     }

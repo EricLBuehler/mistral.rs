@@ -37,8 +37,9 @@ pub(crate) use sampling::sample_sequence;
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
-use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
+use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr};
 use tokenizers::Tokenizer;
+use tokio::sync::Mutex;
 use tracing::info;
 
 use anyhow::Result;
@@ -271,13 +272,14 @@ pub enum CacheInstruction {
 pub trait Pipeline: Send + Sync {
     fn forward_inputs(&mut self, inputs: ModelInputs) -> Result<Tensor, candle_core::Error>;
     /// This does forward pass of model followed by run.
+    #[allow(clippy::too_many_arguments)]
     async fn step(
         &mut self,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
-        rng: Arc<Mutex<Isaac64Rng>>,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
         pre_op: CacheInstruction,
         post_op: CacheInstruction,
     ) -> Result<(), candle_core::Error> {
@@ -321,7 +323,7 @@ pub trait Pipeline: Send + Sync {
         logits: Tensor,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
-        rng: Arc<Mutex<Isaac64Rng>>,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error>;
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
         let encoding = self
