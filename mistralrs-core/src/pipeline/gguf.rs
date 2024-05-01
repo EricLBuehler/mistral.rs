@@ -1,6 +1,6 @@
 use super::{
-    get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths, Pipeline,
-    TokenSource, XLoraPaths,
+    get_model_paths, get_xlora_paths, GeneralMetadata, Loader, ModelInputs, ModelKind, ModelPaths,
+    Pipeline, TokenSource, XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -49,8 +49,7 @@ pub struct GGUFPipeline {
     eos_tok: Vec<u32>,
     non_granular_state: Option<NonGranularState>,
     is_lora: bool,
-    repeat_last_n: usize,
-    max_seq_len: usize,
+    metadata: GeneralMetadata,
 }
 
 pub struct GGUFLoader {
@@ -376,15 +375,16 @@ impl Loader for GGUFLoader {
         let (chat_template, gen_conf) = deserialize_chat_template!(paths, self);
 
         let max_seq_len = match model {
-            Model::Llama(l) => l.max_seq_len,
-            Model::Phi2(p) => p.max_seq_len,
-            Model::XLoraLlama(xl) => xl.max_seq_len,
+            Model::Llama(ref l) => l.max_seq_len,
+            Model::Phi2(ref p) => p.max_seq_len,
+            Model::XLoraLlama(ref xl) => xl.max_seq_len,
         };
+        let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
         Ok(Arc::new(Mutex::new(GGUFPipeline {
             model,
             config: self.config,
             eos_tok: calculate_eos_tokens(&chat_template, gen_conf, &tokenizer),
-            tok_trie: build_tok_trie(tokenizer.clone()).into(),
+            tok_trie: tok_trie.clone(),
             tokenizer: tokenizer.into(),
             no_kv_cache: self.no_kv_cache,
             chat_template: Arc::new(chat_template),
@@ -396,8 +396,12 @@ impl Loader for GGUFLoader {
                 }
             }),
             is_lora,
-            repeat_last_n: self.config.repeat_last_n,
-            max_seq_len,
+            metadata: GeneralMetadata {
+                max_seq_len,
+                repeat_last_n: self.config.repeat_last_n,
+                tok_trie,
+                has_no_kv_cache: self.no_kv_cache,
+            },
         })))
     }
 
@@ -485,9 +489,6 @@ impl Pipeline for GGUFPipeline {
             Model::XLoraLlama(_) => !self.is_lora,
         }
     }
-    fn has_no_kv_cache(&self) -> bool {
-        self.no_kv_cache
-    }
     fn get_chat_template(&self) -> Arc<ChatTemplate> {
         self.chat_template.clone()
     }
@@ -501,5 +502,8 @@ impl Pipeline for GGUFPipeline {
         anyhow::bail!(
             "You are trying to in-situ requantize a GGML model. This will not do anything."
         )
+    }
+    fn get_metadata(&self) -> &GeneralMetadata {
+        &self.metadata
     }
 }

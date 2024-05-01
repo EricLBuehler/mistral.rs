@@ -1,6 +1,5 @@
 use std::{
-    cell::Cell,
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{
@@ -57,12 +56,12 @@ pub enum SequenceState {
     RunningPrefillPrompt,
 }
 
-#[derive(Clone)]
 pub enum SequenceRecognizer {
     Regex(Box<StackRecognizer<StateID, RecRx>>),
     Cfg(Box<CfgParser>),
     None,
 }
+
 pub struct Sequence {
     // Metadata, const
     id: usize,
@@ -97,8 +96,9 @@ pub struct Sequence {
     pub prompt_tok_per_sec: f32,
     pub prompt_timestamp: Option<u128>,
     group: Arc<Mutex<SequenceGroup>>,
-    state: Cell<SequenceState>,
+    state: RwLock<SequenceState>,
 }
+
 impl Sequence {
     #[allow(clippy::too_many_arguments)]
     pub fn new_waiting(
@@ -127,7 +127,7 @@ impl Sequence {
             prompt_len,
             id,
             timestamp,
-            state: Cell::new(SequenceState::Waiting),
+            state: RwLock::new(SequenceState::Waiting),
             cache: vec![None; layers],
             xlora_cache: if is_xlora {
                 Some(vec![None; layers])
@@ -194,22 +194,22 @@ impl Sequence {
     }
 
     pub fn is_running(&self) -> bool {
-        self.state.get() == SequenceState::RunningCompletion
-            || self.state.get() == SequenceState::RunningPrompt
-            || self.state.get() == SequenceState::RunningPrefillPrompt
+        *self.state.read().unwrap() == SequenceState::RunningCompletion
+            || *self.state.read().unwrap() == SequenceState::RunningPrompt
+            || *self.state.read().unwrap() == SequenceState::RunningPrefillPrompt
     }
 
     pub fn is_completion(&self) -> bool {
-        self.state.get() == SequenceState::RunningCompletion
+        *self.state.read().unwrap() == SequenceState::RunningCompletion
     }
 
     pub fn is_prompt(&self) -> bool {
-        self.state.get() == SequenceState::RunningPrompt
-            || self.state.get() == SequenceState::RunningPrefillPrompt
+        *self.state.read().unwrap() == SequenceState::RunningPrompt
+            || *self.state.read().unwrap() == SequenceState::RunningPrefillPrompt
     }
 
     pub fn is_waiting(&self) -> bool {
-        self.state.get() == SequenceState::Waiting
+        *self.state.read().unwrap() == SequenceState::Waiting
     }
 
     pub fn get_toks(&self) -> &[u32] {
@@ -287,7 +287,7 @@ impl Sequence {
         if matches!(state, SequenceState::Error) {
             get_mut_group!(self).n_choices -= 1;
         }
-        self.state.set(state);
+        *self.state.write().unwrap() = state;
     }
 
     pub fn is_done(

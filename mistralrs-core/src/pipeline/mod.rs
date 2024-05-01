@@ -6,6 +6,7 @@ mod macros;
 mod normal;
 mod sampling;
 mod speculative;
+use crate::aici::toktree::TokTrie;
 use crate::device_map::DeviceMapper;
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
@@ -247,6 +248,14 @@ pub trait Loader {
     fn get_kind(&self) -> ModelKind;
 }
 
+#[derive(Clone)]
+pub struct GeneralMetadata {
+    pub max_seq_len: usize,
+    pub repeat_last_n: usize,
+    pub tok_trie: Arc<TokTrie>,
+    pub has_no_kv_cache: bool,
+}
+
 #[async_trait::async_trait]
 pub trait Pipeline: Send + Sync {
     fn forward_inputs(&mut self, inputs: ModelInputs) -> Result<Tensor, candle_core::Error>;
@@ -264,7 +273,7 @@ pub trait Pipeline: Send + Sync {
             is_prompt,
             self.is_xlora(),
             self.device(),
-            self.has_no_kv_cache(),
+            self.get_metadata().has_no_kv_cache,
             None,
         )
         .unwrap();
@@ -292,12 +301,8 @@ pub trait Pipeline: Send + Sync {
     fn num_hidden_layers(&self) -> usize;
     fn cache(&self) -> &Cache;
     fn tokenizer(&self) -> Arc<Tokenizer>;
-    //fn tok_trie(&self) -> Arc<TokTrie>;
-    //fn eos_tok(&self) -> &[u32];
     fn name(&self) -> String;
-    //fn get_max_seq_len(&self) -> usize;
     fn is_xlora(&self) -> bool;
-    fn has_no_kv_cache(&self) -> bool;
     fn apply_chat_template(
         &self,
         messages: Vec<IndexMap<String, String>>,
@@ -336,7 +341,7 @@ pub trait Pipeline: Send + Sync {
     }
     fn get_chat_template(&self) -> Arc<ChatTemplate>;
     fn reset_non_granular_state(&self);
-    //fn get_repeat_last_n(&self) -> usize;
+    fn get_metadata(&self) -> &GeneralMetadata;
 
     fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()>;
 }

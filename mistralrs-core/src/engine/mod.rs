@@ -248,7 +248,7 @@ impl Engine {
                 },
             )));
         }
-        if pipeline.is_xlora() && !pipeline.has_no_kv_cache() {
+        if pipeline.is_xlora() && !pipeline.get_metadata().has_no_kv_cache {
             let mut new_cache = Vec::new();
             for layer in 0..pipeline.num_hidden_layers() {
                 let mut k_vec = Vec::new();
@@ -316,7 +316,7 @@ impl Engine {
                 let v = v_caches.get(seq_i).unwrap().clone();
                 *seq_cache = Some((k, v));
             }
-            if pipeline.is_xlora() && !pipeline.has_no_kv_cache() {
+            if pipeline.is_xlora() && !pipeline.get_metadata().has_no_kv_cache {
                 let cache = pipeline.cache().xlora_lock();
                 let cache = cache.get(layer).unwrap();
                 let k_cache = cache.as_ref().unwrap().0.clone();
@@ -430,17 +430,17 @@ impl Engine {
             }
         };
 
-        if prompt.len() > get_mut_arcmutex!(self.pipeline).get_max_seq_len() {
+        if prompt.len() > get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len {
             if !self.truncate_sequence {
                 request
                     .response
                     .send(Response::ValidationError(
-                        format!("Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?", get_mut_arcmutex!(self.pipeline).get_max_seq_len()).into(),
+                        format!("Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?", get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len).into(),
                     )).await.expect("Expected receiver.");
                 return;
             } else {
                 let prompt_len = prompt.len();
-                let max_len = get_mut_arcmutex!(self.pipeline).get_max_seq_len();
+                let max_len = get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len;
                 let currently_over = prompt_len - max_len;
                 let sampling_max = if let Some(sampling_max) = request.sampling_params.max_len {
                     if currently_over + sampling_max >= prompt_len {
@@ -473,7 +473,7 @@ impl Engine {
             Some(StopTokens::Ids(ref i)) => {
                 let tok_trie = {
                     let pipeline = get_mut_arcmutex!(self.pipeline);
-                    pipeline.tok_trie()
+                    pipeline.get_metadata().tok_trie.clone()
                 };
                 for id in i {
                     // We can't use ` ` (space) as a stop token because other tokens like ` moon` start with a space.
@@ -496,7 +496,7 @@ impl Engine {
 
                 let (tok_trie, tokenizer) = {
                     let pipeline = get_mut_arcmutex!(self.pipeline);
-                    let tok_trie = pipeline.tok_trie();
+                    let tok_trie = pipeline.get_metadata().tok_trie.clone();
                     let tokenizer = pipeline.tokenizer();
                     (tok_trie, tokenizer)
                 };
@@ -557,19 +557,6 @@ impl Engine {
             topk,
             topp,
         );
-        let recognizer = match Self::build_sequence_recognizer(&request.constraint) {
-            Ok(recognizer) => recognizer,
-            Err(err) => {
-                request
-                    .response
-                    .send(Response::ValidationError(
-                        format!("Invalid grammar. {}", err).into(),
-                    ))
-                    .await
-                    .expect("Expected receiver.");
-                return;
-            }
-        };
 
         if request.sampling_params.n_choices == 0 {
             request
@@ -584,6 +571,20 @@ impl Engine {
 
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {
+            let recognizer = match Self::build_sequence_recognizer(&request.constraint) {
+                Ok(recognizer) => recognizer,
+                Err(err) => {
+                    request
+                        .response
+                        .send(Response::ValidationError(
+                            format!("Invalid grammar. {}", err).into(),
+                        ))
+                        .await
+                        .expect("Expected receiver.");
+                    return;
+                }
+            };
+
             let seq = Sequence::new_waiting(
                 prompt.clone(),
                 self.id,
@@ -599,7 +600,7 @@ impl Engine {
                 group.clone(),
                 response_index,
                 now.as_secs(),
-                recognizer.clone(),
+                recognizer,
                 request.suffix.clone(),
                 if echo_prompt {
                     Some(formatted_prompt.clone())

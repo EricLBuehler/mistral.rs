@@ -14,7 +14,7 @@ macro_rules! do_sample {
                     logits_per_seq,
                     seq,
                     return_logprobs,
-                    $this.repeat_last_n,
+                    $this.metadata.repeat_last_n,
                     $this.tok_trie.clone(),
                     $rng.clone(),
                     use_async_pool,
@@ -33,7 +33,7 @@ macro_rules! do_sample {
                 Some(&$this.eos_tok[..])
             };
 
-            let is_done = seq.is_done(next_token_id, eos_tok, $this.max_seq_len);
+            let is_done = seq.is_done(next_token_id, eos_tok, $this.metadata.max_seq_len);
             seq.add_token(
                 next_token.clone(),
                 $this.tok_trie.decode(&[next_token_id]),

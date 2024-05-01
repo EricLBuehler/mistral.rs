@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use candle_core::{quantized::GgmlDType, Device, Result, Tensor};
-use rand::{Rng, SeedableRng};
+use rand::Rng;
 use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
 use tokio::runtime::Runtime;
@@ -15,9 +15,7 @@ use crate::{
     Pipeline,
 };
 
-use super::{calculate_inputs, chat_template::ChatTemplate, ModelInputs};
-
-const SEED: u64 = 0;
+use super::{calculate_inputs, chat_template::ChatTemplate, GeneralMetadata, ModelInputs};
 
 /// Speculative decoding pipeline: https://arxiv.org/pdf/2211.17192
 ///
@@ -34,8 +32,8 @@ pub struct SpeculativePipeline {
     target: Arc<Mutex<dyn Pipeline>>,
     draft: Arc<Mutex<dyn Pipeline>>,
     gamma: usize,
-    rng: Arc<Mutex<Isaac64Rng>>,
     rt: Runtime,
+    metadata: GeneralMetadata,
 }
 
 pub struct SpeculativeConfig {
@@ -54,13 +52,14 @@ impl SpeculativePipeline {
         {
             candle_core::bail!("Target and draft models' tokenzier vocab do not match. This is required for speculative decoding.");
         }
+        let metadata = get_mut_arcmutex!(target).get_metadata().clone();
         // todo: some checks here
         Ok(Self {
             target,
             draft,
             gamma: config.gamma,
-            rng: Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(SEED))),
             rt: Runtime::new().expect("Failed to create runtime"),
+            metadata,
         })
     }
 }
@@ -82,7 +81,7 @@ impl Pipeline for SpeculativePipeline {
 
         let mut draft_samples = vec![Vec::new(); n_seqs];
 
-        let repeat_last_n = draft_model.get_repeat_last_n();
+        let repeat_last_n = draft_model.get_metadata().repeat_last_n;
         // Get the draft tokens
         for i in 0..self.gamma {
             let inputs = calculate_inputs(
@@ -90,7 +89,7 @@ impl Pipeline for SpeculativePipeline {
                 i == 0,
                 self.is_xlora(),
                 self.device(),
-                self.has_no_kv_cache(),
+                draft_model.get_metadata().has_no_kv_cache,
                 None,
             )
             .unwrap();
@@ -100,8 +99,8 @@ impl Pipeline for SpeculativePipeline {
                 .enumerate()
                 .zip(logits.to_device(&Device::Cpu)?.chunk(n_seqs, 0)?)
             {
-                let t = draft_model.tok_trie().clone(); // TODO: do we need to reset it?
-                let r = self.rng.clone();
+                let t = draft_model.get_metadata().tok_trie.clone(); // TODO: do we need to reset it?
+                let r = rng.clone();
                 let sampled = self.rt.block_on(async {
                     sample_sequence(
                         logits,
@@ -135,7 +134,7 @@ impl Pipeline for SpeculativePipeline {
             is_prompt,
             self.is_xlora(),
             self.device(),
-            self.has_no_kv_cache(),
+            target_model.get_metadata().has_no_kv_cache,
             Some(self.gamma),
         )
         .unwrap();
@@ -143,14 +142,14 @@ impl Pipeline for SpeculativePipeline {
 
         // Sample the tokens for each one we're testing and apply the algorithm
         // Remove γ raw tokens
-        let repeat_last_n = target_model.get_repeat_last_n();
+        let repeat_last_n = target_model.get_metadata().repeat_last_n;
         let mut target_samples = Vec::new();
         for (seq, target_logits) in input_seqs.iter_mut().zip(target_logits.chunk(n_seqs, 0)?) {
             seq.set_state(SequenceState::RunningCompletion); // Back to normal
             seq.remove_tmp_tokens(self.gamma);
 
-            let t = target_model.tok_trie().clone();
-            let r = self.rng.clone();
+            let t = target_model.get_metadata().tok_trie.clone();
+            let r = rng.clone();
             let samples = self.rt.block_on(async {
                 sample_target_sequence_speculative(
                     target_logits,
@@ -176,8 +175,7 @@ impl Pipeline for SpeculativePipeline {
                     } else {
                         // Target model disagrees.
                         let acceptance_prob = tgt_sample.logprob / draft_sample.logprob;
-                        let is_accepted =
-                            get_mut_arcmutex!(self.rng).gen_bool(acceptance_prob as f64);
+                        let is_accepted = get_mut_arcmutex!(rng).gen_bool(acceptance_prob as f64);
                         if is_accepted {
                             accepted_tokens.push(tgt_sample);
                         } else {
@@ -197,17 +195,17 @@ impl Pipeline for SpeculativePipeline {
         todo!()
     }
     fn forward_inputs(&mut self, _: ModelInputs) -> anyhow::Result<Tensor, candle_core::Error> {
-        unreachable!()
+        unreachable!("Speculative pipeline handles the forward pass in `.step`")
     }
     async fn sample(
         &self,
-        seqs: &mut [&mut Sequence],
-        logits: Tensor,
-        prefix_cacher: &mut PrefixCacheManager,
-        disable_eos_stop: bool,
-        rng: Arc<Mutex<Isaac64Rng>>,
+        _seqs: &mut [&mut Sequence],
+        _logits: Tensor,
+        _prefix_cacher: &mut PrefixCacheManager,
+        _disable_eos_stop: bool,
+        __rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<()> {
-        unreachable!()
+        unreachable!("Speculative pipeline handles sampling in `.step`")
     }
     fn device(&self) -> &Device {
         get_mut_arcmutex!(self.target).device()
@@ -231,9 +229,6 @@ impl Pipeline for SpeculativePipeline {
     fn is_xlora(&self) -> bool {
         get_mut_arcmutex!(self.target).is_xlora()
     }
-    fn has_no_kv_cache(&self) -> bool {
-        get_mut_arcmutex!(self.target).has_no_kv_cache()
-    }
     fn get_chat_template(&self) -> Arc<ChatTemplate> {
         get_mut_arcmutex!(self.target).get_chat_template()
     }
@@ -244,5 +239,8 @@ impl Pipeline for SpeculativePipeline {
     fn re_isq_model(&mut self, dtype: GgmlDType) -> anyhow::Result<()> {
         get_mut_arcmutex!(self.target).re_isq_model(dtype)?;
         get_mut_arcmutex!(self.draft).re_isq_model(dtype)
+    }
+    fn get_metadata(&self) -> &GeneralMetadata {
+        &self.metadata
     }
 }

@@ -3,8 +3,8 @@ use super::loaders::{
     Phi3Loader, Qwen2Loader,
 };
 use super::{
-    get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths, NormalModel,
-    NormalModelLoader, Pipeline, TokenSource, XLoraPaths,
+    get_model_paths, get_xlora_paths, GeneralMetadata, Loader, ModelInputs, ModelKind, ModelPaths,
+    NormalModel, NormalModelLoader, Pipeline, TokenSource, XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -46,8 +46,7 @@ pub struct NormalPipeline {
     model_id: String,
     is_lora: bool,
     eos_tok: Vec<u32>,
-    repeat_last_n: usize,
-    max_seq_len: usize,
+    metadata: GeneralMetadata,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -288,10 +287,11 @@ impl Loader for NormalLoader {
         }
 
         let max_seq_len = model.max_seq_len();
+        let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
         Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
             eos_tok: calculate_eos_tokens(&chat_template, gen_conf, &tokenizer),
-            tok_trie: build_tok_trie(tokenizer.clone()).into(),
+            tok_trie: tok_trie.clone(),
             tokenizer: tokenizer.into(),
             config: self.config,
             no_kv_cache: self.no_kv_cache,
@@ -304,8 +304,12 @@ impl Loader for NormalLoader {
             }),
             model_id: self.model_id.clone(),
             is_lora,
-            repeat_last_n: self.config.repeat_last_n,
-            max_seq_len,
+            metadata: GeneralMetadata {
+                max_seq_len,
+                repeat_last_n: self.config.repeat_last_n,
+                tok_trie,
+                has_no_kv_cache: self.no_kv_cache,
+            },
         })))
     }
 
@@ -383,9 +387,6 @@ impl Pipeline for NormalPipeline {
     fn is_xlora(&self) -> bool {
         self.model.is_xlora() && !self.is_lora
     }
-    fn has_no_kv_cache(&self) -> bool {
-        self.no_kv_cache
-    }
     fn get_chat_template(&self) -> Arc<ChatTemplate> {
         self.chat_template.clone()
     }
@@ -400,5 +401,8 @@ impl Pipeline for NormalPipeline {
         self.model
             .quantize(dtype, device)
             .map_err(anyhow::Error::msg)
+    }
+    fn get_metadata(&self) -> &GeneralMetadata {
+        &self.metadata
     }
 }
