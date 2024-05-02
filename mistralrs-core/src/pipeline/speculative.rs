@@ -134,10 +134,19 @@ impl Pipeline for SpeculativePipeline {
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
-        _pre_op: CacheInstruction,
-        _post_op: CacheInstruction,
+        pre_op: CacheInstruction,
+        post_op: CacheInstruction,
     ) -> Result<()> {
         let n_seqs = input_seqs.len();
+
+        match pre_op {
+            CacheInstruction::In => self.clone_in_cache(input_seqs),
+            CacheInstruction::Nonthing => (),
+            CacheInstruction::Reset { reset_non_granular } => {
+                self.set_none_cache(reset_non_granular)
+            }
+            _ => unreachable!("Unreachable pre cache op."),
+        }
 
         assert_eq!(input_seqs.len(), 1);
 
@@ -189,8 +198,8 @@ impl Pipeline for SpeculativePipeline {
         // ======================= Reset the draft. ============================
         get_mut_arcmutex!(self.draft).set_none_cache(true);
 
-        // ======================= Add all draft tokens but the last one. ============================
-        let mut draft_prefill_tokens = seq.get_toks().to_vec();
+        // ======================= Add all draft tokens but the last one. Add the last from the seq. ============================
+        let mut draft_prefill_tokens = vec![*seq.get_toks().last().unwrap()];
         for (i, sample) in draft_samples.iter().enumerate() {
             if i == draft_samples.len() - 1 {
                 continue;
@@ -201,12 +210,32 @@ impl Pipeline for SpeculativePipeline {
 
         // ======================= Run the model with all draft tokens. ============================
         // x{} and y{} are the output logits for each token and are the distribubtion for the next token.
-        // In the next example, the prefix's last token is at position x2.
+        // In the next example, the prefix's last token is x2.
         // gamma=2
         // Target result:  [x0,x1,x2,y1]
         // Draft toks:  [y1,y2]
         // Draft prompt:  [x0,x1,x2,y1,y2]
         // Comparing the following: x2->y1, y1->y2
+        // KV cache optimization: narrow the kv cache for last token. Add the prefix last token (x2) to the
+        // target input tokens.
+
+        // ========= Narrow the kv cache ============
+
+        let cache = seq.cache();
+        let initial_cache_len = cache[0].as_ref().map(|(k, _)| k.dims()[2]).unwrap_or(0);
+        for (k, v) in cache.iter_mut().flatten() {
+            *k = k.narrow(2, 0, initial_cache_len - 1)?;
+            *v = v.narrow(2, 0, initial_cache_len - 1)?;
+        }
+        if seq.is_xlora() {
+            let cache = seq.xlora_cache();
+            for (k, v) in cache.iter_mut().flatten() {
+                *k = k.narrow(2, 0, initial_cache_len - 1)?;
+                *v = v.narrow(2, 0, initial_cache_len - 1)?;
+            }
+        }
+        
+        // ========= Run the model ============
         let is_xlora = get_mut_arcmutex!(self.target).get_metadata().is_xlora;
         let device = get_mut_arcmutex!(self.target).device();
         let has_no_kv_cache = get_mut_arcmutex!(self.target)
@@ -317,7 +346,16 @@ impl Pipeline for SpeculativePipeline {
             }
         }
 
-        self.set_none_cache(false);
+        match post_op {
+            CacheInstruction::Out => {
+                get_mut_arcmutex!(self.target).clone_out_cache(input_seqs);
+            }
+            CacheInstruction::Nonthing => (),
+            CacheInstruction::Reset { reset_non_granular } => {
+                self.set_none_cache(reset_non_granular)
+            }
+            _ => unreachable!("Unreachable pre cache op."),
+        }
 
         // Done! We have:
         // - Run the draft model gamma times
