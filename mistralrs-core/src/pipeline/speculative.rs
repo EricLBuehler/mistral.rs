@@ -257,7 +257,7 @@ impl Pipeline for SpeculativePipeline {
         )
         .unwrap();
 
-        let logits = get_mut_arcmutex!(self.draft).forward_inputs(inputs)?;
+        let logits = get_mut_arcmutex!(self.target).forward_inputs(inputs)?;
 
         // Reset the prefill tokens
         seq.reset_prefill_toks();
@@ -415,11 +415,11 @@ impl Pipeline for SpeculativePipeline {
     fn get_metadata(&self) -> &GeneralMetadata {
         &self.metadata
     }
-    fn clone_in_cache(&mut self, _: &mut [&mut Sequence]) {
-        unreachable!()
+    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence]) {
+        DefaultCacheManager.clone_in_cache(&mut *get_mut_arcmutex!(self.target), seqs)
     }
-    fn clone_out_cache(&mut self, _: &mut [&mut Sequence]) {
-        unreachable!();
+    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence]) {
+        DefaultCacheManager.clone_out_cache(&mut *get_mut_arcmutex!(self.target), seqs)
     }
     fn set_none_cache(&mut self, reset_non_granular: bool) {
         DefaultCacheManager.set_none_cache(&mut *get_mut_arcmutex!(self.target));
