@@ -419,7 +419,7 @@ impl Model {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         position_ids: &[usize],
-        context_lens: Vec<usize>,
+        context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
         let past_key_values_length = self.calculate_past_kv_len(seq_len)?;
@@ -470,7 +470,7 @@ impl NormalModel for Model {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         _start_offsets_kernel: Tensor,
-        context_lens: Vec<usize>,
+        context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         self.forward(input_ids, seqlen_offsets, &position_ids, context_lens)
@@ -485,7 +485,7 @@ impl NormalModel for Model {
         _start_offsets_kernel_full: Tensor,
         _no_kv_cache: bool,
         _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
-        _context_lens: Vec<usize>,
+        _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         unimplemented!()

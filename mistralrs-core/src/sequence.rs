@@ -243,14 +243,14 @@ impl Sequence {
         self.sampler.clone()
     }
 
-    /// Add a raw token. Only meant for speculative decoding usage.
-    pub fn add_tmp_token(&mut self, token: u32) {
-        self.tokens.push(token);
+    /// Add a some prefill tokens. Only meant for internal speculative decoding usage.
+    pub fn set_prefill_toks(&mut self, toks: Vec<u32>) {
+        self.prefill_prompt_toks = Some(toks)
     }
 
-    /// Remove `n` raw tokens. Only meant for speculative decoding usage.
-    pub fn remove_tmp_tokens(&mut self, n: usize) {
-        self.tokens.truncate(self.tokens.len() - n);
+    /// Remove the prefill tokens.
+    pub fn reset_prefill_toks(&mut self) {
+        self.prefill_prompt_toks = None
     }
 
     pub fn add_token(

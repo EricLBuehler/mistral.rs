@@ -670,7 +670,7 @@ impl XLoraModel {
         start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
-        context_lens: Vec<usize>,
+        context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
         if self.xlora_classifier.is_some() {
             let scalings = self.get_scalings(
@@ -682,7 +682,7 @@ impl XLoraModel {
                 &start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
-                &context_lens,
+                &vec![usize::MAX; context_lens.len()],
             )?;
 
             if no_kv_cache {
@@ -745,7 +745,7 @@ impl NormalModel for XLoraModel {
         _input_ids: &Tensor,
         _seqlen_offsets: &[usize],
         _start_offsets_kernel: Tensor,
-        _context_lens: Vec<usize>,
+        _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         unreachable!()
@@ -760,7 +760,7 @@ impl NormalModel for XLoraModel {
         start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: &Option<crate::xlora_models::NonGranularState>,
-        context_lens: Vec<usize>,
+        context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         self.forward(

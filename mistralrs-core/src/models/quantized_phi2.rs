@@ -250,7 +250,7 @@ impl ModelWeights {
         &mut self,
         xs: &Tensor,
         seqlen_offsets: &[usize],
-        _context_lens: Vec<usize>,
+        _context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = xs.dims2()?;
         let mask = if seq_len == 1 {

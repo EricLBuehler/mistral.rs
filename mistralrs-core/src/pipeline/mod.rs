@@ -417,7 +417,7 @@ pub trait NormalModel {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        context_lens: Vec<usize>,
+        context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
     ) -> candle_core::Result<Tensor>;
     #[allow(clippy::too_many_arguments)]
@@ -431,7 +431,7 @@ pub trait NormalModel {
         start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
-        context_lens: Vec<usize>,
+        context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
     ) -> candle_core::Result<Tensor>;
     fn is_xlora(&self) -> bool;
@@ -484,8 +484,8 @@ pub trait NormalModel {
 struct InputMetadata {
     input: Tensor,
     positions: Vec<usize>,
-    positions_kernel: Tensor, // [bs, seq len]
-    context_lens: Vec<usize>,
+    positions_kernel: Tensor,          // [bs, seq len]
+    context_lens: Vec<(usize, usize)>, // (start index, len)
     position_ids: Vec<usize>,
 }
 
@@ -510,7 +510,10 @@ fn get_prompt_input(
         seqlen_offsets.push(0);
 
         ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));
-        context_lens.push(seq.len() - 1 - last_n_context_len.unwrap_or(0));
+        context_lens.push((
+            seq.len() - 1 - last_n_context_len.map(|x| x - 1).unwrap_or(0),
+            last_n_context_len.unwrap_or(1),
+        ));
         position_ids.push(seq.len());
 
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
@@ -551,7 +554,7 @@ fn get_completion_input(
         let start_pos = seq.get_toks().len().saturating_sub(1);
         let ctxt = seq.get_toks()[start_pos..].to_vec();
         seqlen_offsets.push(start_pos);
-        context_lens.push(0);
+        context_lens.push((0, 1));
         position_ids.push(seq.len());
 
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
@@ -581,7 +584,7 @@ pub struct ModelInputs {
     seqlen_offsets_full: Option<Vec<usize>>,
     seqlen_offsets_kernel: Tensor,
     seqlen_offsets_kernel_full: Option<Tensor>,
-    context_lens: Vec<usize>,
+    context_lens: Vec<(usize, usize)>,
     position_ids: Vec<usize>,
 }
 
@@ -675,10 +678,13 @@ fn calculate_inputs(
     }
 }
 
-pub fn extract_logits(logits: &Tensor, context_lens: Vec<usize>) -> candle_core::Result<Tensor> {
+pub fn extract_logits(
+    logits: &Tensor,
+    context_lens: Vec<(usize, usize)>,
+) -> candle_core::Result<Tensor> {
     let mut toks = Vec::new();
-    for (dim, start) in logits.chunk(logits.dims()[0], 0)?.iter().zip(context_lens) {
-        toks.push(dim.narrow(1, start, 1)?);
+    for (dim, (start, len)) in logits.chunk(logits.dims()[0], 0)?.iter().zip(context_lens) {
+        toks.push(dim.narrow(1, start, len)?);
     }
     Tensor::cat(&toks, 0)
 }
