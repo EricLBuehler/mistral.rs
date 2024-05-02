@@ -11,7 +11,7 @@ use tokenizers::Tokenizer;
 use crate::{
     finish_and_add_tokens_to_seq, get_mut_arcmutex,
     models::Cache,
-    pipeline::{sample_sequence, sampling::sample_target_sequence_speculative},
+    pipeline::sampling::{sample_sequence, sample_target_sequence_speculative},
     prefix_cacher::PrefixCacheManager,
     sequence::{Sequence, SequenceRecognizer},
     DeviceMapMetadata, Loader, ModelKind, Pipeline, TokenSource,
@@ -284,8 +284,9 @@ impl Pipeline for SpeculativePipeline {
                     accepted_tokens.push(target_sample.sample);
                 } else {
                     // Target model disagrees.
-                    let acceptance_prob =
-                        (target_sample.sample.logprob / draft_sample.sample.logprob).clamp(0.0, 1.0);
+                    let acceptance_prob = (target_sample.sample.logprob
+                        / draft_sample.sample.logprob)
+                        .clamp(0.0, 1.0);
                     let is_accepted = get_mut_arcmutex!(rng).gen_bool(acceptance_prob as f64);
                     if is_accepted {
                         accepted_tokens.push(target_sample.sample);

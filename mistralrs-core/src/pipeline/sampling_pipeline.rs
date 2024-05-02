@@ -189,7 +189,7 @@ macro_rules! do_sample {
         let sampling_futures: Vec<_> = std::iter::zip(logits_seq, $seqs.iter_mut())
             .map(|(logits_per_seq, seq)| {
                 let return_logprobs = seq.return_logprobs();
-                $crate::pipeline::sample_sequence(
+                $crate::pipeline::sampling::sample_sequence(
                     logits_per_seq,
                     seq,
                     return_logprobs,
