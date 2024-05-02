@@ -5,7 +5,7 @@ use crate::{
         GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
         NormalSpecificConfig,
     },
-    Loader, ModelSelected, NormalLoaderBuilder, SpeculativeConfig, SpeculativeLoader,
+    Loader, ModelSelected, NormalLoaderBuilder,
 };
 
 pub struct LoaderBuilder {
@@ -50,8 +50,7 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
         | ModelSelected::GGUF { .. }
         | ModelSelected::LoraGGUF { .. }
         | ModelSelected::GGML { .. }
-        | ModelSelected::LoraGGML { .. }
-        | ModelSelected::SpeculativeGGUF { .. } => None,
+        | ModelSelected::LoraGGML { .. } => None,
         ModelSelected::XLora {
             tgt_non_granular_index,
             ..
@@ -280,39 +279,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tgt_non_granular_index,
         )
         .build(),
-        ModelSelected::SpeculativeGGUF {
-            tok_model_id,
-            tokenizer_json,
-            quantized_model_id,
-            quantized_filename,
-            draft_quantized_model_id,
-            draft_quantized_filename,
-            repeat_last_n,
-        } => {
-            let target_loader = GGUFLoaderBuilder::new(
-                GGUFSpecificConfig { repeat_last_n },
-                args.chat_template.clone(),
-                tokenizer_json.clone(),
-                Some(tok_model_id.clone()),
-                quantized_model_id,
-                quantized_filename,
-            )
-            .build();
-            let draft_loader = GGUFLoaderBuilder::new(
-                GGUFSpecificConfig { repeat_last_n },
-                args.chat_template,
-                tokenizer_json,
-                Some(tok_model_id),
-                draft_quantized_model_id,
-                draft_quantized_filename,
-            )
-            .build();
-            Box::new(SpeculativeLoader {
-                target: target_loader,
-                draft: draft_loader,
-                config: SpeculativeConfig { gamma: 5 },
-            })
-        }
     };
     Ok(loader)
 }
