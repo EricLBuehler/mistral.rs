@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -35,13 +36,13 @@ pub enum StopReason {
     Canceled,
 }
 
-impl ToString for StopReason {
-    fn to_string(&self) -> String {
+impl Display for StopReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StopReason::Eos => "stop".to_string(),
-            StopReason::Length(_) | StopReason::ModelLength(_) => "length".to_string(),
-            StopReason::StopTok(_) | StopReason::StopString { .. } => "stop".to_string(),
-            StopReason::Canceled => "canceled".to_string(),
+            StopReason::Eos => write!(f, "stop"),
+            StopReason::Length(_) | StopReason::ModelLength(_) => write!(f, "length"),
+            StopReason::StopTok(_) | StopReason::StopString { .. } => write!(f, "stop"),
+            StopReason::Canceled => write!(f, "canceled"),
         }
     }
 }

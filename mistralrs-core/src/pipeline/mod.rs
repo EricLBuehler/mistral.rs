@@ -35,6 +35,7 @@ use rand_isaac::Isaac64Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 pub(crate) use sampling::sample_sequence;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
+use std::fmt::Display;
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -180,24 +181,20 @@ pub enum ModelKind {
     },
 }
 
-impl ToString for ModelKind {
-    fn to_string(&self) -> String {
+impl Display for ModelKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ModelKind::Normal => "normal (no quant, no adapters)".to_string(),
-            ModelKind::QuantizedGGML => "quantized from ggml (no adapters)".to_string(),
-            ModelKind::QuantizedGGUF => "quantized from gguf (no adapters)".to_string(),
-            ModelKind::XLoraNormal => "x-lora (no quant)".to_string(),
-            ModelKind::XLoraGGML => "x-lora, quantized from ggml".to_string(),
-            ModelKind::XLoraGGUF => "x-lora, quantized from gguf".to_string(),
-            ModelKind::LoraGGUF => "lora, quantized from gguf".to_string(),
-            ModelKind::LoraGGML => "lora, quantized from ggml".to_string(),
-            ModelKind::LoraNormal => "lora (no quant)".to_string(),
+            ModelKind::Normal => write!(f, "normal (no quant, no adapters)"),
+            ModelKind::QuantizedGGML => write!(f, "quantized from ggml (no adapters)"),
+            ModelKind::QuantizedGGUF => write!(f, "quantized from gguf (no adapters)"),
+            ModelKind::XLoraNormal => write!(f, "x-lora (no quant)"),
+            ModelKind::XLoraGGML => write!(f, "x-lora, quantized from ggml"),
+            ModelKind::XLoraGGUF => write!(f, "x-lora, quantized from gguf"),
+            ModelKind::LoraGGUF => write!(f, "lora, quantized from gguf"),
+            ModelKind::LoraGGML => write!(f, "lora, quantized from ggml"),
+            ModelKind::LoraNormal => write!(f, "lora (no quant)"),
             ModelKind::Speculative { target, draft } => {
-                format!(
-                    "speculative: target: `{}`, draft: `{}`",
-                    target.to_string(),
-                    draft.to_string()
-                )
+                write!(f, "speculative: target: `{target}`, draft: `{draft}`")
             }
         }
     }

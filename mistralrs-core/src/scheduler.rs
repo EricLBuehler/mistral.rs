@@ -1,18 +1,13 @@
-use std::collections::{
-    vec_deque::{Iter, IterMut},
-    HashMap, VecDeque,
-};
+use std::collections::{vec_deque::Iter, HashMap, VecDeque};
 
 use crate::sequence::{Sequence, SequenceState};
 use range_checked::UsizeBounded;
 
 pub trait FcfsBacker: Default {
     fn new() -> Self;
-    fn next(&mut self) -> Option<Sequence>;
     fn add(&mut self, item: Sequence);
     fn into_iter(self) -> impl Iterator<Item = Sequence>;
     fn iter(&self) -> impl Iterator<Item = &Sequence>;
-    fn mut_iter(&mut self) -> impl Iterator<Item = &mut Sequence>;
     fn sort_ascending_ids(&mut self);
 }
 
@@ -23,14 +18,8 @@ impl FcfsBacker for VecDeque<Sequence> {
     fn add(&mut self, item: Sequence) {
         self.push_back(item)
     }
-    fn next(&mut self) -> Option<Sequence> {
-        self.pop_front()
-    }
     fn iter(&self) -> Iter<'_, Sequence> {
         self.iter()
-    }
-    fn mut_iter(&mut self) -> IterMut<'_, Sequence> {
-        self.iter_mut()
     }
     fn into_iter(self) -> impl Iterator<Item = Sequence> {
         <Self as IntoIterator>::into_iter(self)

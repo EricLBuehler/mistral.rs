@@ -68,7 +68,10 @@ impl CacheManager for DefaultCacheManager {
             *pipeline.cache().xlora_lock() = new_cache;
         }
         if pipeline.get_metadata().is_xlora {
-            *pipeline.cache().get_scalings_cache() = seqs[0].scaling_cache().clone();
+            pipeline
+                .cache()
+                .get_scalings_cache()
+                .clone_from(seqs[0].scaling_cache());
         }
         *pipeline.cache().lock() = new_cache;
     }
@@ -116,7 +119,9 @@ impl CacheManager for DefaultCacheManager {
                 }
             }
             if pipeline.get_metadata().is_xlora {
-                *seqs[0].scaling_cache() = pipeline.cache().get_scalings_cache().clone();
+                seqs[0]
+                    .scaling_cache()
+                    .clone_from(&pipeline.cache().get_scalings_cache());
             }
         }
     }
@@ -126,7 +131,7 @@ impl CacheManager for DefaultCacheManager {
         for _ in 0..pipeline.get_metadata().num_hidden_layers {
             new_cache.push(None);
         }
-        *pipeline.cache().lock() = new_cache.clone();
+        pipeline.cache().lock().clone_from(&new_cache);
         if pipeline.cache().is_xlora() {
             *pipeline.cache().xlora_lock() = new_cache;
         }

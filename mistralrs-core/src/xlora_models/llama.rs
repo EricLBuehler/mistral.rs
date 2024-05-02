@@ -476,7 +476,7 @@ impl XLoraLlama {
                     new_cache.push(None);
                 }
 
-                *self.kv_cache.xlora_lock() = new_cache.clone();
+                self.kv_cache.xlora_lock().clone_from(&new_cache);
             }
             self.kv_cache.xlora_lock()
         } else {

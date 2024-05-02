@@ -100,7 +100,7 @@ trait ScalingsMaker {
                     Tensor::zeros((1,), DType::U8, &Device::Cpu)?,
                 )));
             }
-            *self.get_cache().lock() = new_cache.clone();
+            self.get_cache().lock().clone_from(&new_cache);
 
             res
         } else {
