@@ -41,7 +41,7 @@ jobs:
         run: |
           sudo apt install libssl-dev
           sudo apt install pkg-config
-          pip install maturin[patchelf]==1.4.0
+          pip install maturin[patchelf]==1.4.0 twine
           python3 -m venv venv
           source venv/bin/activate
           cd mistralrs-pyo3

@@ -58,9 +58,10 @@ os.system("maturin sdist --out dist")
 if "PYPI_TOKEN" in os.environ:
     password = os.environ["PYPI_TOKEN"]
     print("Using PyPi token as environment variable")
+    target = "pypi"
 else:
     password = input("Enter API token: ")
-target = input("Enter target (testpypi or pypi): ")
+    target = input("Enter target (testpypi or pypi): ")
 print(f"🚀 Uploading to {target} in 5 seconds. Press <CTRL>-C to abort.")
 time.sleep(5)
 
