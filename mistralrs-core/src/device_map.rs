@@ -5,7 +5,7 @@ use candle_nn::VarBuilder;
 use serde::Deserialize;
 use tracing::info;
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Clone)]
 pub struct DeviceMapMetadata {
     device_layers: Option<usize>,
     host_layers: Option<usize>,

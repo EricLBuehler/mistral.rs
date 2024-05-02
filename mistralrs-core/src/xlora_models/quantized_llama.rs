@@ -719,7 +719,7 @@ impl ModelWeights {
                     new_cache.push(None);
                 }
 
-                *self.cache.xlora_lock() = new_cache.clone();
+                self.cache.xlora_lock().clone_from(&new_cache);
             }
             self.cache.xlora_lock()
         } else {
@@ -777,7 +777,7 @@ impl ModelWeights {
         start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
-        context_lens: Vec<usize>,
+        context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
         if self.xlora_classifier.is_some() {
             let scalings = self.get_scalings(
@@ -789,7 +789,7 @@ impl ModelWeights {
                 &start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
-                &context_lens,
+                &vec![usize::MAX; context_lens.len()],
             )?;
 
             if no_kv_cache {

@@ -79,7 +79,6 @@ macro_rules! handle_pipeline_forward_error {
                 };
                 use $crate::response::Response;
                 use $crate::sequence::SequenceState;
-                use $crate::Engine;
                 use $crate::response::SYSTEM_FINGERPRINT;
                 use tracing::error;
                 error!("{} - Model failed with error: {:?}", $stage, &e);
@@ -160,7 +159,11 @@ macro_rules! handle_pipeline_forward_error {
                     seq.set_state(SequenceState::Error);
                 }
 
-                Engine::set_none_cache(&mut *get_mut_arcmutex!($pipeline));
+                let mut p = get_mut_arcmutex!($pipeline);
+                // Also reset non granular state because:
+                // - The sequence is gone
+                // - We should reset the state then.
+                p.set_none_cache(true);
                 $prefix_cacher.evict_all_to_cpu().unwrap();
 
                 continue $label;

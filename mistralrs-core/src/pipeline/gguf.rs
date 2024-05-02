@@ -1,32 +1,36 @@
+use super::cache_manager::DefaultCacheManager;
 use super::{
-    calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
-    Pipeline, TokenSource, XLoraPaths,
+    get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
+    ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::models::Cache;
 use crate::pipeline::chat_template::calculate_eos_tokens;
 use crate::pipeline::{ChatTemplate, SimpleModelPaths};
+use crate::prefix_cacher::PrefixCacheManager;
+use crate::sequence::Sequence;
 use crate::utils::varbuilder_utils::from_mmaped_safetensors;
 use crate::xlora_models::NonGranularState;
-use crate::{deserialize_chat_template, get_paths, DeviceMapMetadata};
+use crate::{deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama, models::quantized_phi2::ModelWeights as QPhi,
-    sequence::Sequence, utils::tokens::get_token, xlora_models::XLoraModelWeights as XLoraQLlama,
+    utils::tokens::get_token, xlora_models::XLoraModelWeights as XLoraQLlama,
 };
 use anyhow::{bail, Result};
 use candle_core::quantized::{gguf_file, GgmlDType};
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::Ordering;
+use rand_isaac::Isaac64Rng;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::Mutex;
 use tokenizers::Tokenizer;
+use tokio::sync::Mutex;
 use tracing::info;
 
 enum Model {
@@ -37,15 +41,13 @@ enum Model {
 
 pub struct GGUFPipeline {
     model: Model,
-    config: GGUFSpecificConfig,
     tokenizer: Arc<Tokenizer>,
     tok_trie: Arc<TokTrie>,
     no_kv_cache: bool,
-    chat_template: ChatTemplate,
+    chat_template: Arc<ChatTemplate>,
     model_id: String,
-    eos_tok: Vec<u32>,
     non_granular_state: Option<NonGranularState>,
-    is_lora: bool,
+    metadata: GeneralMetadata,
 }
 
 pub struct GGUFLoader {
@@ -252,13 +254,18 @@ impl GGUFLoader {
 }
 
 impl Loader for GGUFLoader {
-    fn download_model(
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    fn load_model(
         &self,
         revision: Option<String>,
         token_source: TokenSource,
+        _dtype: Option<DType>,
+        device: &Device,
         silent: bool,
-    ) -> Result<Box<dyn ModelPaths>> {
-        get_paths!(
+        mapper: DeviceMapMetadata,
+        in_situ_quant: Option<GgmlDType>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             SimpleModelPaths,
             &token_source,
             revision,
@@ -266,18 +273,9 @@ impl Loader for GGUFLoader {
             self.quantized_model_id,
             self.quantized_filename,
             silent
-        )
-    }
+        );
+        let paths = paths?;
 
-    fn _setup_model(
-        &self,
-        paths: &dyn ModelPaths,
-        _dtype: Option<DType>,
-        device: &Device,
-        silent: bool,
-        mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
             anyhow::bail!(
                 "You are trying to in-situ quantize a GGUF model. This will not do anything."
@@ -370,14 +368,28 @@ impl Loader for GGUFLoader {
 
         let (chat_template, gen_conf) = deserialize_chat_template!(paths, self);
 
+        let max_seq_len = match model {
+            Model::Llama(ref l) => l.max_seq_len,
+            Model::Phi2(ref p) => p.max_seq_len,
+            Model::XLoraLlama(ref xl) => xl.max_seq_len,
+        };
+        let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
+        let is_xlora = match &model {
+            Model::Llama(_) | Model::Phi2(_) => false,
+            Model::XLoraLlama(_) => !is_lora,
+        };
+        let num_hidden_layers = match model {
+            Model::Llama(ref model) => model.cache.lock().len(),
+            Model::Phi2(ref model) => model.cache.lock().len(),
+            Model::XLoraLlama(ref model) => model.cache.lock().len(),
+        };
+        let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         Ok(Arc::new(Mutex::new(GGUFPipeline {
             model,
-            config: self.config,
-            eos_tok: calculate_eos_tokens(&chat_template, gen_conf, &tokenizer),
-            tok_trie: build_tok_trie(tokenizer.clone()).into(),
+            tok_trie: tok_trie.clone(),
             tokenizer: tokenizer.into(),
             no_kv_cache: self.no_kv_cache,
-            chat_template,
+            chat_template: Arc::new(chat_template),
             model_id: self.model_id.clone(),
             non_granular_state: self.tgt_non_granular_index.map(|tgt_non_granular_index| {
                 NonGranularState {
@@ -385,26 +397,35 @@ impl Loader for GGUFLoader {
                     tgt_non_granular_index,
                 }
             }),
-            is_lora,
+            metadata: GeneralMetadata {
+                max_seq_len,
+                repeat_last_n: self.config.repeat_last_n,
+                tok_trie,
+                has_no_kv_cache: self.no_kv_cache,
+                is_xlora,
+                num_hidden_layers,
+                eos_tok: eos,
+            },
         })))
     }
 
-    fn get_id(&self) -> &str {
-        self.xlora_model_id.as_deref().unwrap_or(&self.model_id)
+    fn get_id(&self) -> String {
+        self.xlora_model_id
+            .as_deref()
+            .unwrap_or(&self.model_id)
+            .to_string()
     }
 
     fn get_kind(&self) -> ModelKind {
-        self.kind
+        self.kind.clone()
     }
 }
 
+#[async_trait::async_trait]
 impl Pipeline for GGUFPipeline {
-    fn forward(
+    fn forward_inputs(
         &mut self,
-        input_toks: &[&mut Sequence],
-        is_prompt: bool,
-    ) -> Result<Tensor, candle_core::Error> {
-        let ModelInputs {
+        ModelInputs {
             input_ids,
             input_ids_full,
             seqlen_offsets,
@@ -413,14 +434,8 @@ impl Pipeline for GGUFPipeline {
             seqlen_offsets_kernel_full,
             context_lens,
             position_ids: _, // NOTE(EricLBuehler): ignore, it is for phi3
-        } = calculate_inputs(
-            input_toks,
-            is_prompt,
-            self.is_xlora(),
-            self.device(),
-            self.no_kv_cache,
-        )
-        .unwrap();
+        }: ModelInputs,
+    ) -> Result<Tensor, candle_core::Error> {
         match self.model {
             Model::Llama(ref mut model) => model.forward(
                 &input_ids,
@@ -442,15 +457,57 @@ impl Pipeline for GGUFPipeline {
             ),
         }
     }
-    fn device(&self) -> &Device {
+    async fn sample(
+        &self,
+        seqs: &mut [&mut Sequence],
+        logits: Tensor,
+        prefix_cacher: &mut PrefixCacheManager,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    ) -> Result<(), candle_core::Error> {
+        do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
+    }
+    fn device(&self) -> Device {
         match self.model {
-            Model::Llama(ref model) => &model.device,
-            Model::Phi2(ref model) => &model.device,
-            Model::XLoraLlama(ref model) => &model.device,
+            Model::Llama(ref model) => model.device.clone(),
+            Model::Phi2(ref model) => model.device.clone(),
+            Model::XLoraLlama(ref model) => model.device.clone(),
         }
     }
-    fn num_hidden_layers(&self) -> usize {
-        self.cache().lock().len()
+    fn tokenizer(&self) -> Arc<Tokenizer> {
+        self.tokenizer.clone()
+    }
+    fn name(&self) -> String {
+        self.model_id.clone()
+    }
+    fn get_chat_template(&self) -> Arc<ChatTemplate> {
+        self.chat_template.clone()
+    }
+    fn reset_non_granular_state(&self) {
+        if let Some(s) = self.non_granular_state.as_ref() {
+            *self.cache().get_scalings_cache() = None;
+            *get_mut_arcmutex!(s.non_granular_index) = 0;
+        }
+    }
+    fn re_isq_model(&mut self, _dtype: GgmlDType) -> Result<()> {
+        anyhow::bail!(
+            "You are trying to in-situ requantize a GGML model. This will not do anything."
+        )
+    }
+    fn get_metadata(&self) -> &GeneralMetadata {
+        &self.metadata
+    }
+    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence]) {
+        DefaultCacheManager.clone_in_cache(self, seqs)
+    }
+    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence]) {
+        DefaultCacheManager.clone_out_cache(self, seqs)
+    }
+    fn set_none_cache(&mut self, reset_non_granular: bool) {
+        DefaultCacheManager.set_none_cache(self);
+        if reset_non_granular {
+            self.reset_non_granular_state()
+        }
     }
     fn cache(&self) -> &Cache {
         match self.model {
@@ -458,47 +515,5 @@ impl Pipeline for GGUFPipeline {
             Model::Phi2(ref model) => &model.cache,
             Model::XLoraLlama(ref model) => &model.cache,
         }
-    }
-    fn get_repeat_last_n(&self) -> usize {
-        self.config.repeat_last_n
-    }
-    fn tokenizer(&self) -> Arc<Tokenizer> {
-        self.tokenizer.clone()
-    }
-    fn eos_tok(&self) -> &[u32] {
-        &self.eos_tok
-    }
-    fn name(&self) -> String {
-        self.model_id.clone()
-    }
-    fn get_max_seq_len(&self) -> usize {
-        match &self.model {
-            Model::Llama(model) => model.max_seq_len,
-            Model::Phi2(model) => model.max_seq_len,
-            Model::XLoraLlama(model) => model.max_seq_len,
-        }
-    }
-    fn is_xlora(&self) -> bool {
-        match &self.model {
-            Model::Llama(_) | Model::Phi2(_) => false,
-            Model::XLoraLlama(_) => !self.is_lora,
-        }
-    }
-    fn has_no_kv_cache(&self) -> bool {
-        self.no_kv_cache
-    }
-    fn get_chat_template(&self) -> &ChatTemplate {
-        &self.chat_template
-    }
-    fn get_non_granular_state(&self) -> &Option<NonGranularState> {
-        &None
-    }
-    fn tok_trie(&self) -> Arc<TokTrie> {
-        self.tok_trie.clone()
-    }
-    fn re_isq_model(&mut self, _dtype: GgmlDType) -> Result<()> {
-        anyhow::bail!(
-            "You are trying to in-situ requantize a GGML model. This will not do anything."
-        )
     }
 }

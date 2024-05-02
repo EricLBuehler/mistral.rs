@@ -285,7 +285,7 @@ fn main() -> anyhow::Result<()> {
     {
         info!("⚠️ WARNING: Using flash attention with a quantized model has no effect!")
     }
-    info!("Model kind is: {}", loader.get_kind().as_ref());
+    info!("Model kind is: {}", loader.get_kind().to_string());
     let pipeline = loader.load_model(
         None,
         token_source,
@@ -343,7 +343,7 @@ fn main() -> anyhow::Result<()> {
             results.push(r);
         }
 
-        print_usage(model_name, &device, results);
+        print_usage(&model_name, &device, results);
     }
 
     Ok(())

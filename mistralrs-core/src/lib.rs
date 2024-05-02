@@ -68,7 +68,7 @@ pub struct MistralRs {
 /// an Engine and a MistralRs instance. The Engine runs on a separate thread, and the MistralRs
 /// instance stays on the calling thread.
 pub struct MistralRsBuilder {
-    pipeline: Arc<Mutex<dyn Pipeline>>,
+    pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     method: SchedulerMethod,
     log: Option<String>,
     truncate_sequence: Option<bool>,
@@ -79,7 +79,7 @@ pub struct MistralRsBuilder {
 }
 
 impl MistralRsBuilder {
-    pub fn new(pipeline: Arc<Mutex<dyn Pipeline>>, method: SchedulerMethod) -> Self {
+    pub fn new(pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>, method: SchedulerMethod) -> Self {
         Self {
             pipeline,
             method,
@@ -152,7 +152,7 @@ impl MistralRs {
             sender: tx,
             sender_isq: isq_tx,
             log,
-            id: pipeline.lock().unwrap().name(),
+            id: pipeline.try_lock().unwrap().name(),
             creation_time: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("Time travel has occurred!")

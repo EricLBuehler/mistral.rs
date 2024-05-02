@@ -230,7 +230,7 @@ async fn main() -> Result<()> {
     {
         info!("⚠️ WARNING: Using flash attention with a quantized model has no effect!")
     }
-    info!("Model kind is: {}", loader.get_kind().as_ref());
+    info!("Model kind is: {}", loader.get_kind().to_string());
     let pipeline = loader.load_model(
         None,
         args.token_source,
