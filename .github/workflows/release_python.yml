@@ -19,8 +19,6 @@ jobs:
       fail-fast: false
       matrix:
         rust: [stable]
-    env:
-      PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
 
     steps:
       - name: Checkout
@@ -38,6 +36,8 @@ jobs:
           python-version: 3.8
       
       - name: Upload
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         run: |
           sudo apt install libssl-dev
           sudo apt install pkg-config
