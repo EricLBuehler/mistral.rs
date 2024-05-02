@@ -316,6 +316,8 @@ impl Pipeline for SpeculativePipeline {
             }
         }
 
+        self.set_none_cache(false);
+
         // Done! We have:
         // - Run the draft model gamma times
         // - Reset draft model cache fully
@@ -368,14 +370,15 @@ impl Pipeline for SpeculativePipeline {
     fn get_metadata(&self) -> &GeneralMetadata {
         &self.metadata
     }
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence]) {
-        DefaultCacheManager.clone_in_cache(&mut *get_mut_arcmutex!(self.target), seqs)
+    fn clone_in_cache(&mut self, _: &mut [&mut Sequence]) {
+        unreachable!()
     }
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence]) {
-        DefaultCacheManager.clone_out_cache(&mut *get_mut_arcmutex!(self.target), seqs)
+    fn clone_out_cache(&mut self, _: &mut [&mut Sequence]) {
+        unreachable!();
     }
     fn set_none_cache(&mut self, reset_non_granular: bool) {
         DefaultCacheManager.set_none_cache(&mut *get_mut_arcmutex!(self.target));
+        DefaultCacheManager.set_none_cache(&mut *get_mut_arcmutex!(self.draft));
         if reset_non_granular {
             self.reset_non_granular_state()
         }
