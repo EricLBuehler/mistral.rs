@@ -285,7 +285,7 @@ impl Pipeline for SpeculativePipeline {
                 } else {
                     // Target model disagrees.
                     let acceptance_prob =
-                        target_sample.sample.logprob / draft_sample.sample.logprob;
+                        (target_sample.sample.logprob / draft_sample.sample.logprob).clamp(0.0, 1.0);
                     let is_accepted = get_mut_arcmutex!(rng).gen_bool(acceptance_prob as f64);
                     if is_accepted {
                         accepted_tokens.push(target_sample.sample);
