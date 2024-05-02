@@ -153,7 +153,9 @@ impl Pipeline for SpeculativePipeline {
         let seq = &mut input_seqs[0];
 
         // ======================= Run draft model gamma times producing tokens ============================
-        let mut draft_logits = Vec::new();
+        // ======================= Sample the `gamma` logits. ============================
+        let mut draft_samples = Vec::new();
+        let repeat_last_n = get_mut_arcmutex!(self.draft).get_metadata().repeat_last_n;
         for i in 0..self.gamma {
             let is_xlora = get_mut_arcmutex!(self.draft).get_metadata().is_xlora;
             let device = get_mut_arcmutex!(self.draft).device();
@@ -168,13 +170,7 @@ impl Pipeline for SpeculativePipeline {
             )
             .unwrap();
             let logits = get_mut_arcmutex!(self.draft).forward_inputs(inputs)?;
-            draft_logits.push(logits);
-        }
 
-        // ======================= Sample the `gamma` logits. ============================
-        let mut draft_samples = Vec::new();
-        let repeat_last_n = get_mut_arcmutex!(self.draft).get_metadata().repeat_last_n;
-        for logits in draft_logits.iter() {
             let sample = sample_sequence(
                 logits.clone(),
                 seq,
@@ -189,11 +185,13 @@ impl Pipeline for SpeculativePipeline {
                 false, // do not add to tok trie yet
             )
             .await?;
+            seq.add_tmp_tok(sample.token);
             draft_samples.push(SpeculativeSample {
                 sample,
                 distribution: logits.clone(),
             });
         }
+        seq.remove_tmp_tok(self.gamma);
 
         // ======================= Reset the draft. ============================
         get_mut_arcmutex!(self.draft).set_none_cache(true);

@@ -254,6 +254,16 @@ impl Sequence {
         self.prefill_prompt_toks = None
     }
 
+    /// Internal api.
+    pub fn add_tmp_tok(&mut self, tok: u32) {
+        self.tokens.push(tok);
+    }
+
+    /// Internal api.
+    pub fn remove_tmp_tok(&mut self, n: usize) {
+        self.tokens.truncate(self.tokens.len() - n);
+    }
+
     pub fn add_token(
         &mut self,
         tok: Logprobs,
