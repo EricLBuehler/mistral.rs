@@ -181,13 +181,18 @@ impl NormalLoaderBuilder {
 }
 
 impl Loader for NormalLoader {
-    fn download_model(
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    fn load_model(
         &self,
         revision: Option<String>,
         token_source: TokenSource,
+        dtype: Option<DType>,
+        device: &Device,
         silent: bool,
-    ) -> Result<Box<dyn ModelPaths>> {
-        get_paths!(
+        mapper: DeviceMapMetadata,
+        in_situ_quant: Option<GgmlDType>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             SimpleModelPaths,
             &token_source,
             revision,
@@ -195,18 +200,9 @@ impl Loader for NormalLoader {
             None,
             None,
             silent
-        )
-    }
+        );
+        let paths = paths?;
 
-    fn _setup_model(
-        &self,
-        paths: &dyn ModelPaths,
-        dtype: Option<DType>,
-        device: &Device,
-        silent: bool,
-        mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         let default_dtype = if device.is_cuda() && mapper.is_dummy() {
             DType::BF16
@@ -274,6 +270,10 @@ impl Loader for NormalLoader {
             ModelKind::XLoraGGML => unreachable!(),
             ModelKind::LoraGGUF => unreachable!(),
             ModelKind::LoraGGML => unreachable!(),
+            ModelKind::Speculative {
+                target: _,
+                draft: _,
+            } => unreachable!(),
         };
 
         let tokenizer =
@@ -315,12 +315,15 @@ impl Loader for NormalLoader {
         })))
     }
 
-    fn get_id(&self) -> &str {
-        self.xlora_model_id.as_deref().unwrap_or(&self.model_id)
+    fn get_id(&self) -> String {
+        self.xlora_model_id
+            .as_deref()
+            .unwrap_or(&self.model_id)
+            .to_string()
     }
 
     fn get_kind(&self) -> ModelKind {
-        self.kind
+        self.kind.clone()
     }
 }
 

@@ -34,6 +34,7 @@ pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 pub(crate) use sampling::sample_sequence;
+pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -160,7 +161,7 @@ impl fmt::Display for TokenSource {
     }
 }
 
-#[derive(Copy, Clone, Default)]
+#[derive(Clone, Default)]
 /// The kind of model to build.
 pub enum ModelKind {
     #[default]
@@ -173,20 +174,31 @@ pub enum ModelKind {
     LoraGGUF,
     LoraGGML,
     LoraNormal,
+    Speculative {
+        target: Box<ModelKind>,
+        draft: Box<ModelKind>,
+    },
 }
 
-impl AsRef<str> for ModelKind {
-    fn as_ref(&self) -> &str {
+impl ToString for ModelKind {
+    fn to_string(&self) -> String {
         match self {
-            ModelKind::Normal => "normal (no quant, no adapters)",
-            ModelKind::QuantizedGGML => "quantized from ggml (no adapters)",
-            ModelKind::QuantizedGGUF => "quantized from gguf (no adapters)",
-            ModelKind::XLoraNormal => "x-lora (no quant)",
-            ModelKind::XLoraGGML => "x-lora, quantized from ggml",
-            ModelKind::XLoraGGUF => "x-lora, quantized from gguf",
-            ModelKind::LoraGGUF => "lora, quantized from gguf",
-            ModelKind::LoraGGML => "lora, quantized from ggml",
-            ModelKind::LoraNormal => "lora (no quant)",
+            ModelKind::Normal => "normal (no quant, no adapters)".to_string(),
+            ModelKind::QuantizedGGML => "quantized from ggml (no adapters)".to_string(),
+            ModelKind::QuantizedGGUF => "quantized from gguf (no adapters)".to_string(),
+            ModelKind::XLoraNormal => "x-lora (no quant)".to_string(),
+            ModelKind::XLoraGGML => "x-lora, quantized from ggml".to_string(),
+            ModelKind::XLoraGGUF => "x-lora, quantized from gguf".to_string(),
+            ModelKind::LoraGGUF => "lora, quantized from gguf".to_string(),
+            ModelKind::LoraGGML => "lora, quantized from ggml".to_string(),
+            ModelKind::LoraNormal => "lora (no quant)".to_string(),
+            ModelKind::Speculative { target, draft } => {
+                format!(
+                    "speculative: target: `{}`, draft: `{}`",
+                    target.to_string(),
+                    draft.to_string()
+                )
+            }
         }
     }
 }
@@ -211,24 +223,6 @@ impl AsRef<str> for ModelKind {
 /// ).unwrap();
 /// ```
 pub trait Loader {
-    fn download_model(
-        &self,
-        revision: Option<String>,
-        token_source: TokenSource,
-        silent: bool,
-    ) -> Result<Box<dyn ModelPaths>>;
-
-    #[allow(clippy::type_complexity)]
-    fn _setup_model(
-        &self,
-        paths: &dyn ModelPaths,
-        dtype: Option<DType>,
-        device: &Device,
-        silent: bool,
-        mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
-
     /// If `revision` is None, then it defaults to `main`.
     /// If `dtype` is None, then it defaults to the model default (usually BF16).
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -241,12 +235,9 @@ pub trait Loader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let paths = self.download_model(revision, token_source, silent)?;
-        self._setup_model(&*paths, dtype, device, silent, mapper, in_situ_quant)
-    }
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
 
-    fn get_id(&self) -> &str;
+    fn get_id(&self) -> String;
     fn get_kind(&self) -> ModelKind;
 }
 

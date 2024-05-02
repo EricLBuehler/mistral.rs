@@ -254,13 +254,18 @@ impl GGUFLoader {
 }
 
 impl Loader for GGUFLoader {
-    fn download_model(
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    fn load_model(
         &self,
         revision: Option<String>,
         token_source: TokenSource,
+        _dtype: Option<DType>,
+        device: &Device,
         silent: bool,
-    ) -> Result<Box<dyn ModelPaths>> {
-        get_paths!(
+        mapper: DeviceMapMetadata,
+        in_situ_quant: Option<GgmlDType>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             SimpleModelPaths,
             &token_source,
             revision,
@@ -268,18 +273,9 @@ impl Loader for GGUFLoader {
             self.quantized_model_id,
             self.quantized_filename,
             silent
-        )
-    }
+        );
+        let paths = paths?;
 
-    fn _setup_model(
-        &self,
-        paths: &dyn ModelPaths,
-        _dtype: Option<DType>,
-        device: &Device,
-        silent: bool,
-        mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
             anyhow::bail!(
                 "You are trying to in-situ quantize a GGUF model. This will not do anything."
@@ -413,12 +409,15 @@ impl Loader for GGUFLoader {
         })))
     }
 
-    fn get_id(&self) -> &str {
-        self.xlora_model_id.as_deref().unwrap_or(&self.model_id)
+    fn get_id(&self) -> String {
+        self.xlora_model_id
+            .as_deref()
+            .unwrap_or(&self.model_id)
+            .to_string()
     }
 
     fn get_kind(&self) -> ModelKind {
-        self.kind
+        self.kind.clone()
     }
 }
 

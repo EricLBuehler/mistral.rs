@@ -11,13 +11,70 @@ use crate::{
     pipeline::{sample_sequence, sampling::sample_target_sequence_speculative},
     prefix_cacher::PrefixCacheManager,
     sequence::{Sequence, SequenceRecognizer, SequenceState},
-    Pipeline,
+    DeviceMapMetadata, Loader, ModelKind, Pipeline, TokenSource,
 };
 
 use super::{
     calculate_inputs, chat_template::ChatTemplate, sampling::SpeculativeSample, CacheInstruction,
     GeneralMetadata, ModelInputs,
 };
+
+pub struct SpeculativeLoader {
+    pub target: Box<dyn Loader>,
+    pub draft: Box<dyn Loader>,
+    pub config: SpeculativeConfig,
+}
+
+impl Loader for SpeculativeLoader {
+    fn load_model(
+        &self,
+        revision: Option<String>,
+        token_source: TokenSource,
+        dtype: Option<candle_core::DType>,
+        device: &Device,
+        silent: bool,
+        mapper: DeviceMapMetadata,
+        in_situ_quant: Option<GgmlDType>,
+    ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
+        let target = self.target.load_model(
+            revision.clone(),
+            token_source.clone(),
+            dtype,
+            device,
+            silent,
+            mapper.clone(),
+            in_situ_quant,
+        )?;
+        let draft = self.draft.load_model(
+            revision,
+            token_source,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+        )?;
+        Ok(Arc::new(tokio::sync::Mutex::new(SpeculativePipeline::new(
+            target,
+            draft,
+            self.config,
+        )?)))
+    }
+    fn get_id(&self) -> String {
+        format!(
+            "Speculative: tgt = `{}`, draft = `{}`, gamma = `{}`",
+            self.target.get_id(),
+            self.draft.get_id(),
+            self.config.gamma,
+        )
+    }
+    fn get_kind(&self) -> ModelKind {
+        ModelKind::Speculative {
+            target: Box::new(self.target.get_kind()),
+            draft: Box::new(self.draft.get_kind()),
+        }
+    }
+}
 
 /// Speculative decoding pipeline: https://arxiv.org/pdf/2211.17192
 ///
@@ -31,13 +88,14 @@ use super::{
 ///     - If rejected, sample token from from p'_i(x) = norm(max(0, p(x) − q(x))) and do not take any more'
 ///
 pub struct SpeculativePipeline {
-    target: Arc<Mutex<dyn Pipeline>>,
-    draft: Arc<Mutex<dyn Pipeline>>,
+    target: Arc<tokio::sync::Mutex<dyn Pipeline>>,
+    draft: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     gamma: usize,
     rt: Runtime,
     metadata: GeneralMetadata,
 }
 
+#[derive(Copy, Clone)]
 pub struct SpeculativeConfig {
     /// γ completions to run of the draft model
     pub gamma: usize,
@@ -45,8 +103,8 @@ pub struct SpeculativeConfig {
 
 impl SpeculativePipeline {
     pub fn new(
-        target: Arc<Mutex<dyn Pipeline>>,
-        draft: Arc<Mutex<dyn Pipeline>>,
+        target: Arc<tokio::sync::Mutex<dyn Pipeline>>,
+        draft: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         config: SpeculativeConfig,
     ) -> Result<Self> {
         if get_mut_arcmutex!(target).tokenizer().get_vocab(true)
@@ -337,9 +395,10 @@ impl Pipeline for SpeculativePipeline {
     }
     fn name(&self) -> String {
         format!(
-            "Speculative: tgt = `{}`, draft = `{}`",
+            "Speculative: tgt = `{}`, draft = `{}`, gamma = `{}`",
             get_mut_arcmutex!(self.target).name(),
-            get_mut_arcmutex!(self.draft).name()
+            get_mut_arcmutex!(self.draft).name(),
+            self.gamma,
         )
     }
     fn get_chat_template(&self) -> Arc<ChatTemplate> {
@@ -356,16 +415,13 @@ impl Pipeline for SpeculativePipeline {
     fn get_metadata(&self) -> &GeneralMetadata {
         &self.metadata
     }
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence]) {
-        get_mut_arcmutex!(self.draft).clone_in_cache(seqs);
-        get_mut_arcmutex!(self.target).clone_in_cache(seqs);
+    fn clone_in_cache(&mut self, _: &mut [&mut Sequence]) {
+        unreachable!()
     }
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence]) {
-        get_mut_arcmutex!(self.draft).clone_out_cache(seqs);
-        get_mut_arcmutex!(self.target).clone_out_cache(seqs);
+    fn clone_out_cache(&mut self, _: &mut [&mut Sequence]) {
+        unreachable!()
     }
-    fn set_none_cache(&mut self, reset_non_granular: bool) {
-        get_mut_arcmutex!(self.draft).set_none_cache(reset_non_granular);
-        get_mut_arcmutex!(self.target).set_none_cache(reset_non_granular);
+    fn set_none_cache(&mut self, _: bool) {
+        unreachable!()
     }
 }
