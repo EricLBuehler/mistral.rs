@@ -298,7 +298,8 @@ impl Pipeline for SpeculativePipeline {
             } else {
                 Some(&eos_owned[..])
             };
-            finish_and_add_tokens_to_seq!(self, prefix_cacher, seq, accepted, eos_tok);
+            // Do not use the prefix cacher
+            finish_and_add_tokens_to_seq!(self, prefix_cacher, seq, accepted, eos_tok, false);
             match seq.recognizer {
                 SequenceRecognizer::Regex(ref mut rx) => {
                     get_mut_arcmutex!(self.target)

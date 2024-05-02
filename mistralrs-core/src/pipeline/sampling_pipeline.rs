@@ -1,6 +1,6 @@
 #[macro_export]
 macro_rules! finish_and_add_tokens_to_seq {
-    ($this:expr, $prefix_cacher:expr, $seq:expr, $logprobs:expr, $eos_tok:expr) => {{
+    ($this:expr, $prefix_cacher:expr, $seq:expr, $logprobs:expr, $eos_tok:expr, $use_prefix_cacher:expr) => {{
         let is_done = $seq.is_done($logprobs.token, $eos_tok, $this.metadata.max_seq_len);
         $seq.add_token(
             $logprobs.clone(),
@@ -36,8 +36,10 @@ macro_rules! finish_and_add_tokens_to_seq {
                     });
 
                     if let Some(reason) = is_done {
-                        $prefix_cacher.add_sequence($seq);
-                        $prefix_cacher.evict_to_cpu()?;
+                        if $use_prefix_cacher {
+                            $prefix_cacher.add_sequence($seq);
+                            $prefix_cacher.evict_to_cpu()?;
+                        }
                         $seq.set_state($crate::sequence::SequenceState::Done(reason));
                         $this.reset_non_granular_state();
                     }
@@ -128,9 +130,11 @@ macro_rules! finish_and_add_tokens_to_seq {
                     };
                     $seq.add_completion_choice_to_group(choice);
                 }
-
-                $prefix_cacher.add_sequence($seq);
-                $prefix_cacher.evict_to_cpu()?;
+                
+                if $use_prefix_cacher {
+                    $prefix_cacher.add_sequence($seq);
+                    $prefix_cacher.evict_to_cpu()?;
+                }
 
                 let group = $seq.get_mut_group();
                 if group.is_chat {
@@ -172,6 +176,7 @@ macro_rules! finish_and_add_tokens_to_seq {
     }};
 }
 
+/// Sample and add to the prefix cache.
 #[macro_export]
 macro_rules! do_sample {
     ($this:expr, $seqs:expr, $logits:expr, $prefix_cacher:expr, $disable_eos_stop:expr, $rng:expr) => {{
@@ -207,7 +212,7 @@ macro_rules! do_sample {
                 Some(&$this.get_metadata().eos_tok[..])
             };
 
-            $crate::finish_and_add_tokens_to_seq!($this, $prefix_cacher, seq, next_token, eos_tok)
+            $crate::finish_and_add_tokens_to_seq!($this, $prefix_cacher, seq, next_token, eos_tok, true)
         }
 
         Ok(())
