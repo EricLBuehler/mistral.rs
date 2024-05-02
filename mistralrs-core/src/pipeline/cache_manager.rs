@@ -1,13 +1,15 @@
 use candle_core::Tensor;
 
-use super::{CacheManager, PipelineWithCache};
+use crate::Pipeline;
+
+use super::CacheManager;
 
 pub struct DefaultCacheManager;
 
 impl CacheManager for DefaultCacheManager {
     fn clone_in_cache(
         &self,
-        pipeline: &mut dyn PipelineWithCache,
+        pipeline: &mut dyn Pipeline,
         seqs: &mut [&mut crate::sequence::Sequence],
     ) {
         let mut new_cache = Vec::new();
@@ -73,7 +75,7 @@ impl CacheManager for DefaultCacheManager {
 
     fn clone_out_cache(
         &self,
-        pipeline: &mut dyn PipelineWithCache,
+        pipeline: &mut dyn Pipeline,
         seqs: &mut [&mut crate::sequence::Sequence],
     ) {
         for layer in 0..pipeline.get_metadata().num_hidden_layers {
@@ -119,7 +121,7 @@ impl CacheManager for DefaultCacheManager {
         }
     }
 
-    fn set_none_cache(&self, pipeline: &mut dyn PipelineWithCache) {
+    fn set_none_cache(&self, pipeline: &mut dyn Pipeline) {
         let mut new_cache = Vec::new();
         for _ in 0..pipeline.get_metadata().num_hidden_layers {
             new_cache.push(None);

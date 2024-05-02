@@ -376,16 +376,13 @@ pub trait Pipeline: Send + Sync {
     /// It is not a guarantee that this will be called for each prompt step.
     /// This may also reset the non granular state if applicable.
     fn set_none_cache(&mut self, reset_non_granular: bool);
-}
-
-pub trait PipelineWithCache: Pipeline {
     fn cache(&self) -> &Cache;
 }
 
 pub trait CacheManager {
-    fn clone_in_cache(&self, pipeline: &mut dyn PipelineWithCache, seqs: &mut [&mut Sequence]);
-    fn clone_out_cache(&self, pipeline: &mut dyn PipelineWithCache, seqs: &mut [&mut Sequence]);
-    fn set_none_cache(&self, pipeline: &mut dyn PipelineWithCache);
+    fn clone_in_cache(&self, pipeline: &mut dyn Pipeline, seqs: &mut [&mut Sequence]);
+    fn clone_out_cache(&self, pipeline: &mut dyn Pipeline, seqs: &mut [&mut Sequence]);
+    fn set_none_cache(&self, pipeline: &mut dyn Pipeline);
 }
 
 pub trait NormalModelLoader {

@@ -8,6 +8,7 @@ use tokio::runtime::Runtime;
 
 use crate::{
     finish_and_add_tokens_to_seq, get_mut_arcmutex,
+    models::Cache,
     pipeline::{sample_sequence, sampling::sample_target_sequence_speculative},
     prefix_cacher::PrefixCacheManager,
     sequence::{Sequence, SequenceRecognizer, SequenceState},
@@ -15,8 +16,8 @@ use crate::{
 };
 
 use super::{
-    calculate_inputs, chat_template::ChatTemplate, sampling::SpeculativeSample, CacheInstruction,
-    GeneralMetadata, ModelInputs,
+    cache_manager::DefaultCacheManager, calculate_inputs, chat_template::ChatTemplate,
+    sampling::SpeculativeSample, CacheInstruction, CacheManager, GeneralMetadata, ModelInputs,
 };
 
 pub struct SpeculativeLoader {
@@ -415,13 +416,19 @@ impl Pipeline for SpeculativePipeline {
     fn get_metadata(&self) -> &GeneralMetadata {
         &self.metadata
     }
-    fn clone_in_cache(&mut self, _: &mut [&mut Sequence]) {
-        unreachable!()
+    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence]) {
+        DefaultCacheManager.clone_in_cache(&mut *get_mut_arcmutex!(self.target), seqs)
     }
-    fn clone_out_cache(&mut self, _: &mut [&mut Sequence]) {
-        unreachable!()
+    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence]) {
+        DefaultCacheManager.clone_out_cache(&mut *get_mut_arcmutex!(self.target), seqs)
     }
-    fn set_none_cache(&mut self, _: bool) {
+    fn set_none_cache(&mut self, reset_non_granular: bool) {
+        DefaultCacheManager.set_none_cache(&mut *get_mut_arcmutex!(self.target));
+        if reset_non_granular {
+            self.reset_non_granular_state()
+        }
+    }
+    fn cache(&self) -> &Cache {
         unreachable!()
     }
 }

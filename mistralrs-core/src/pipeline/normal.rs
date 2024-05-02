@@ -5,8 +5,7 @@ use super::loaders::{
 };
 use super::{
     get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
-    ModelKind, ModelPaths, NormalModel, NormalModelLoader, Pipeline, PipelineWithCache,
-    TokenSource, XLoraPaths,
+    ModelKind, ModelPaths, NormalModel, NormalModelLoader, Pipeline, TokenSource, XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -327,12 +326,6 @@ impl Loader for NormalLoader {
     }
 }
 
-impl PipelineWithCache for NormalPipeline {
-    fn cache(&self) -> &Cache {
-        self.model.cache()
-    }
-}
-
 #[async_trait::async_trait]
 impl Pipeline for NormalPipeline {
     fn forward_inputs(
@@ -418,5 +411,8 @@ impl Pipeline for NormalPipeline {
         if reset_non_granular {
             self.reset_non_granular_state()
         }
+    }
+    fn cache(&self) -> &Cache {
+        self.model.cache()
     }
 }

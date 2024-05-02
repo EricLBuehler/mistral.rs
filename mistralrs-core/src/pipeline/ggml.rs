@@ -1,7 +1,7 @@
 use super::cache_manager::DefaultCacheManager;
 use super::{
     get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
-    ModelKind, ModelPaths, Pipeline, PipelineWithCache, TokenSource, XLoraPaths,
+    ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -366,15 +366,6 @@ impl Loader for GGMLLoader {
     }
 }
 
-impl PipelineWithCache for GGMLPipeline {
-    fn cache(&self) -> &Cache {
-        match self.model {
-            Model::Llama(ref model) => &model.cache,
-            Model::XLoraLlama(ref model) => &model.cache,
-        }
-    }
-}
-
 #[async_trait::async_trait]
 impl Pipeline for GGMLPipeline {
     fn forward_inputs(
@@ -459,6 +450,12 @@ impl Pipeline for GGMLPipeline {
         DefaultCacheManager.set_none_cache(self);
         if reset_non_granular {
             self.reset_non_granular_state()
+        }
+    }
+    fn cache(&self) -> &Cache {
+        match self.model {
+            Model::Llama(ref model) => &model.cache,
+            Model::XLoraLlama(ref model) => &model.cache,
         }
     }
 }
