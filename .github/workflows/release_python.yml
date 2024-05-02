@@ -19,6 +19,8 @@ jobs:
       fail-fast: false
       matrix:
         rust: [stable]
+    env:
+      PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
 
     steps:
       - name: Checkout
