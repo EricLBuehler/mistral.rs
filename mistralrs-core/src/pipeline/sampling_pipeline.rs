@@ -130,7 +130,7 @@ macro_rules! finish_and_add_tokens_to_seq {
                     };
                     $seq.add_completion_choice_to_group(choice);
                 }
-                
+
                 if $use_prefix_cacher {
                     $prefix_cacher.add_sequence($seq);
                     $prefix_cacher.evict_to_cpu()?;
@@ -212,7 +212,14 @@ macro_rules! do_sample {
                 Some(&$this.get_metadata().eos_tok[..])
             };
 
-            $crate::finish_and_add_tokens_to_seq!($this, $prefix_cacher, seq, next_token, eos_tok, true)
+            $crate::finish_and_add_tokens_to_seq!(
+                $this,
+                $prefix_cacher,
+                seq,
+                next_token,
+                eos_tok,
+                true
+            )
         }
 
         Ok(())
