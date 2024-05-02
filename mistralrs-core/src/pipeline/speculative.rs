@@ -116,7 +116,7 @@ impl SpeculativePipeline {
         Ok(Self {
             target,
             draft,
-            gamma: config.gamma,
+            gamma: 1,//config.gamma,
             metadata,
         })
     }
@@ -134,6 +134,8 @@ impl Pipeline for SpeculativePipeline {
         pre_op: CacheInstruction,
         post_op: CacheInstruction,
     ) -> Result<()> {
+        //return get_mut_arcmutex!(self.draft).step(input_seqs,is_prompt,prefix_cacher,disable_eos_stop,rng,pre_op,post_op).await;
+        //println!("CALLED");
         let n_seqs = input_seqs.len();
 
         match pre_op {
@@ -179,7 +181,12 @@ impl Pipeline for SpeculativePipeline {
                     false, // Do not add to trie
                 )
                 .await?;
-                seq.add_tmp_token(sampled.token);
+                //dbg!(&seq.get_toks());
+                //dbg!(&sampled.token);
+                //dbg!(get_mut_arcmutex!(self.draft).tokenizer().decode(&[sampled.token], true));
+                if i > 0 {
+                    seq.add_tmp_token(sampled.token);
+                }
                 draft_samples[i].push(SpeculativeSample {
                     sample: sampled,
                     distribution: logits,
@@ -215,6 +222,7 @@ impl Pipeline for SpeculativePipeline {
         .unwrap();
     
         let target_logits = get_mut_arcmutex!(self.target).forward_inputs(inputs_target)?;
+        //dbg!(&target_logits);
 
         // Sample the tokens for each one we're testing and apply the algorithm
         // Remove γ raw tokens
@@ -222,7 +230,7 @@ impl Pipeline for SpeculativePipeline {
         let mut target_samples = Vec::new();
         for (seq, target_logits) in input_seqs.iter_mut().zip(target_logits.chunk(n_seqs, 0)?) {
             seq.set_state(SequenceState::RunningCompletion); // Back to normal
-            seq.remove_tmp_tokens(self.gamma);
+            seq.remove_tmp_tokens(self.gamma-1);
 
             let t = get_mut_arcmutex!(self.target)
                 .get_metadata()
@@ -243,12 +251,6 @@ impl Pipeline for SpeculativePipeline {
             target_samples.push(samples);
         }
 
-        // Note: know that all seqs here have same cache length
-        let initial_cache_len = input_seqs[0].cache()[0]
-            .as_ref()
-            .map(|(k, _)| k.dims()[2])
-            .unwrap_or(0);
-
         let mut n_accepted_toks = Vec::new();
         for (seq, (draft_samples, tgt_samples)) in input_seqs
             .iter_mut()
@@ -256,18 +258,28 @@ impl Pipeline for SpeculativePipeline {
         {
             let mut accepted_tokens = Vec::new();
             for (draft_sample, tgt_sample) in draft_samples.into_iter().zip(tgt_samples) {
+                //dbg!(get_mut_arcmutex!(self.draft).tokenizer().decode(&[tgt_sample.sample.token], true));
+                
+                //accepted_tokens.push(tgt_sample.sample);
+                //break;
+                //todo!();
                 if draft_sample.sample.token == tgt_sample.sample.token {
                     if draft_sample.sample.logprob <= tgt_sample.sample.logprob {
                         // Target model agrees.
                         accepted_tokens.push(tgt_sample.sample);
+                        println!("AGREES");
                     } else {
                         // Target model disagrees.
                         let acceptance_prob =
-                            tgt_sample.sample.logprob / draft_sample.sample.logprob;
+                            (tgt_sample.sample.logprob / draft_sample.sample.logprob).clamp(0.0, 1.0);
+                        //println!("DISAGREES prob={acceptance_prob}, d={:?}, t={:?}", get_mut_arcmutex!(self.draft).tokenizer().decode(&[draft_sample.sample.token], true), get_mut_arcmutex!(self.draft).tokenizer().decode(&[tgt_sample.sample.token], true));
+                        println!("DISAGREES prob={acceptance_prob}, d={:?}, t={:?}; p_d={:?}, p_t={:?}", draft_sample.sample.token,tgt_sample.sample.token,draft_sample.sample.logprob,tgt_sample.sample.logprob);
                         let is_accepted = get_mut_arcmutex!(rng).gen_bool(acceptance_prob as f64);
                         if is_accepted {
+                            println!("    ACCEPTED");
                             accepted_tokens.push(tgt_sample.sample);
                         } else {
+                            println!("    REJECTED");
                             // Do not accept. Resample with updated prob dist relu(p(x) − q(x))
                             let corrected_distribution =
                                 (tgt_sample.distribution - draft_sample.distribution)?.relu()?;
@@ -334,9 +346,18 @@ impl Pipeline for SpeculativePipeline {
                 // Fix up the kv cache of the base model based on accepted tokens
                 get_mut_arcmutex!(self.target).clone_out_cache(input_seqs);
                 for (seq, n_accepted) in input_seqs.iter_mut().zip(n_accepted_toks) {
+                    //dbg!(&seq.get_toks().len());
                     let cache = seq.cache();
+                    let initial_cache_len = cache[0]
+                        .as_ref()
+                        .map(|(k, _)| k.dims()[2])
+                        .unwrap_or(0);
+                    //dbg!(&initial_cache_len);
                     for (k, v) in cache.iter_mut().flatten() {
-                        let computed_len = initial_cache_len + n_accepted;
+                        let computed_len = initial_cache_len - (self.gamma - n_accepted);
+                        //dbg!(&computed_len);
+                        //dbg!(&k);
+                        
                         *k = k.narrow(2, 0, computed_len)?;
                         *v = v.narrow(2, 0, computed_len)?;
                     }
@@ -344,8 +365,8 @@ impl Pipeline for SpeculativePipeline {
                         let cache = seq.xlora_cache();
                         for (k, v) in cache.iter_mut().flatten() {
                             let computed_len = initial_cache_len + n_accepted;
-                            *k = k.narrow(2, 0, computed_len)?;
-                            *v = v.narrow(2, 0, computed_len)?;
+                            *k = k.narrow(2, 0, computed_len-1)?;
+                            *v = v.narrow(2, 0, computed_len-1)?;
                         }
                     }
                 }
@@ -357,6 +378,7 @@ impl Pipeline for SpeculativePipeline {
             _ => unreachable!("Unreachable pre cache op."),
         }
 
+        //todo!();
         // Done! We have:
         // - Run the draft model gamma times
         // - Reset draft model cache fully
