@@ -4,7 +4,6 @@ use candle_core::{quantized::GgmlDType, Device, Result, Tensor};
 use rand::Rng;
 use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
-use tokio::runtime::Runtime;
 
 use crate::{
     finish_and_add_tokens_to_seq, get_mut_arcmutex,
@@ -92,7 +91,6 @@ pub struct SpeculativePipeline {
     target: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     draft: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     gamma: usize,
-    rt: Runtime,
     metadata: GeneralMetadata,
 }
 
@@ -119,7 +117,6 @@ impl SpeculativePipeline {
             target,
             draft,
             gamma: config.gamma,
-            rt: Runtime::new().expect("Failed to create runtime"),
             metadata,
         })
     }
@@ -153,16 +150,14 @@ impl Pipeline for SpeculativePipeline {
         let repeat_last_n = get_mut_arcmutex!(self.draft).get_metadata().repeat_last_n;
         // Get the draft tokens
         for i in 0..self.gamma {
-            let inputs = calculate_inputs(
-                input_seqs,
-                i == 0,
-                get_mut_arcmutex!(self.draft).get_metadata().is_xlora,
-                &get_mut_arcmutex!(self.draft).device(),
-                get_mut_arcmutex!(self.draft).get_metadata().has_no_kv_cache,
-                None,
-            )
-            .unwrap();
+            let is_xlora = get_mut_arcmutex!(self.draft).get_metadata().is_xlora;
+            let dev = get_mut_arcmutex!(self.draft).device();
+            let has_no_kv = get_mut_arcmutex!(self.draft).get_metadata().has_no_kv_cache;
+            let inputs =
+                calculate_inputs(input_seqs, i == 0, is_xlora, &dev, has_no_kv, None).unwrap();
+
             let logits = get_mut_arcmutex!(self.draft).forward_inputs(inputs.clone())?;
+
             for ((i, seq), logits) in input_seqs
                 .iter_mut()
                 .enumerate()
@@ -173,19 +168,17 @@ impl Pipeline for SpeculativePipeline {
                     .tok_trie
                     .clone();
                 let r = rng.clone();
-                let sampled = self.rt.block_on(async {
-                    sample_sequence(
-                        logits.clone(),
-                        seq,
-                        seq.return_logprobs(),
-                        repeat_last_n,
-                        t,
-                        r,
-                        n_seqs > 1,
-                        false, // Do not add to trie
-                    )
-                    .await
-                })?;
+                let sampled = sample_sequence(
+                    logits.clone(),
+                    seq,
+                    seq.return_logprobs(),
+                    repeat_last_n,
+                    t,
+                    r,
+                    n_seqs > 1,
+                    false, // Do not add to trie
+                )
+                .await?;
                 seq.add_tmp_token(sampled.token);
                 draft_samples[i].push(SpeculativeSample {
                     sample: sampled,
@@ -206,17 +199,21 @@ impl Pipeline for SpeculativePipeline {
         }
 
         // Make inputs for target model
+        let is_xlora = get_mut_arcmutex!(self.target).get_metadata().is_xlora;
+        let dev = get_mut_arcmutex!(self.target).device();
+        let has_no_kv = get_mut_arcmutex!(self.target)
+            .get_metadata()
+            .has_no_kv_cache;
         let inputs_target = calculate_inputs(
             input_seqs,
             is_prompt,
-            get_mut_arcmutex!(self.target).get_metadata().is_xlora,
-            &get_mut_arcmutex!(self.target).device(),
-            get_mut_arcmutex!(self.target)
-                .get_metadata()
-                .has_no_kv_cache,
+            is_xlora,
+            &dev,
+            has_no_kv,
             Some(self.gamma),
         )
         .unwrap();
+    
         let target_logits = get_mut_arcmutex!(self.target).forward_inputs(inputs_target)?;
 
         // Sample the tokens for each one we're testing and apply the algorithm
@@ -233,18 +230,16 @@ impl Pipeline for SpeculativePipeline {
                 .clone();
             let r = rng.clone();
             // Sample. Do not add results to trie yet, and do not add tokens to the seq
-            let samples = self.rt.block_on(async {
-                sample_target_sequence_speculative(
-                    target_logits,
-                    seq,
-                    seq.return_logprobs(),
-                    repeat_last_n,
-                    t,
-                    r,
-                    self.gamma,
-                )
-                .await
-            })?;
+            let samples = sample_target_sequence_speculative(
+                target_logits,
+                seq,
+                seq.return_logprobs(),
+                repeat_last_n,
+                t,
+                r,
+                self.gamma,
+            )
+            .await?;
             target_samples.push(samples);
         }
 
@@ -281,19 +276,17 @@ impl Pipeline for SpeculativePipeline {
                                 .tok_trie
                                 .clone();
                             let r = rng.clone();
-                            let sampled = self.rt.block_on(async {
-                                sample_sequence(
-                                    corrected_distribution,
-                                    seq,
-                                    seq.return_logprobs(),
-                                    repeat_last_n,
-                                    t,
-                                    r,
-                                    n_seqs > 1,
-                                    false, // Do not add to trie
-                                )
-                                .await
-                            })?;
+                            let sampled = sample_sequence(
+                                corrected_distribution,
+                                seq,
+                                seq.return_logprobs(),
+                                repeat_last_n,
+                                t,
+                                r,
+                                n_seqs > 1,
+                                false, // Do not add to trie
+                            )
+                            .await?;
                             accepted_tokens.push(sampled);
                             break;
                         }

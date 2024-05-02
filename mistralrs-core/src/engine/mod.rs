@@ -155,7 +155,7 @@ impl Engine {
                     // Technically we don't need to do this but it is better to be safe.
                     pipeline
                         .step(
-                            &mut scheduled.completion,
+                            &mut scheduled.prompt,
                             true,
                             &mut self.prefix_cacher,
                             self.disable_eos_stop,
