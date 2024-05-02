@@ -130,7 +130,7 @@ impl Pipeline for SpeculativePipeline {
     async fn step(
         &mut self,
         input_seqs: &mut [&mut Sequence],
-        _is_prompt: bool,
+        is_prompt: bool,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
@@ -199,7 +199,11 @@ impl Pipeline for SpeculativePipeline {
         get_mut_arcmutex!(self.draft).set_none_cache(true);
 
         // ======================= Add all draft tokens but the last one. Add the last from the seq. ============================
-        let mut draft_prefill_tokens = vec![*seq.get_toks().last().unwrap()];
+        let mut draft_prefill_tokens = if is_prompt {
+            seq.get_toks().to_vec()
+        } else {
+            vec![*seq.get_toks().last().unwrap()]
+        };
         for (i, sample) in draft_samples.iter().enumerate() {
             if i == draft_samples.len() - 1 {
                 continue;
@@ -221,20 +225,22 @@ impl Pipeline for SpeculativePipeline {
 
         // ========= Narrow the kv cache ============
 
-        let cache = seq.cache();
-        let initial_cache_len = cache[0].as_ref().map(|(k, _)| k.dims()[2]).unwrap_or(0);
-        for (k, v) in cache.iter_mut().flatten() {
-            *k = k.narrow(2, 0, initial_cache_len - 1)?;
-            *v = v.narrow(2, 0, initial_cache_len - 1)?;
-        }
-        if seq.is_xlora() {
-            let cache = seq.xlora_cache();
+        if !is_prompt {
+            let cache = seq.cache();
+            let initial_cache_len = cache[0].as_ref().map(|(k, _)| k.dims()[2]).unwrap_or(0);
             for (k, v) in cache.iter_mut().flatten() {
                 *k = k.narrow(2, 0, initial_cache_len - 1)?;
                 *v = v.narrow(2, 0, initial_cache_len - 1)?;
             }
+            if seq.is_xlora() {
+                let cache = seq.xlora_cache();
+                for (k, v) in cache.iter_mut().flatten() {
+                    *k = k.narrow(2, 0, initial_cache_len - 1)?;
+                    *v = v.narrow(2, 0, initial_cache_len - 1)?;
+                }
+            }
         }
-        
+
         // ========= Run the model ============
         let is_xlora = get_mut_arcmutex!(self.target).get_metadata().is_xlora;
         let device = get_mut_arcmutex!(self.target).device();
