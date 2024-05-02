@@ -12,10 +12,6 @@ permissions:
   pages: write
   id-token: write
 
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
-
 jobs:
   upload:
     runs-on: ubuntu-latest
@@ -44,4 +40,7 @@ jobs:
           sudo apt install libssl-dev
           sudo apt install pkg-config
           pip install maturin[patchelf]==1.4.0
-          python3 mistralrs-pyo3/upload.py
+          python3 -m venv venv
+          source venv/bin/activate
+          cd mistralrs-pyo3
+          python3 upload.py
