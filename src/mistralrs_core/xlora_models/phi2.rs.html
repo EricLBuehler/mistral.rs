@@ -1337,7 +1337,7 @@
                     new_cache.push(<span class="prelude-val">None</span>);
                 }
 
-                <span class="kw-2">*</span><span class="self">self</span>.cache.xlora_lock() = new_cache.clone();
+                <span class="self">self</span>.cache.xlora_lock().clone_from(<span class="kw-2">&amp;</span>new_cache);
             }
             <span class="self">self</span>.cache.xlora_lock()
         } <span class="kw">else </span>{
@@ -1376,7 +1376,7 @@
         start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
-        context_lens: Vec&lt;usize&gt;,
+        context_lens: Vec&lt;(usize, usize)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">if </span><span class="self">self</span>.xlora_classifier.is_some() {
             <span class="kw">let </span>scalings = <span class="self">self</span>.get_scalings(
@@ -1388,7 +1388,7 @@
                 <span class="kw-2">&amp;</span>start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
-                <span class="kw-2">&amp;</span>context_lens,
+                <span class="kw-2">&amp;</span><span class="macro">vec!</span>[usize::MAX; context_lens.len()],
             )<span class="question-mark">?</span>;
 
             <span class="kw">if </span>no_kv_cache {
@@ -1451,7 +1451,7 @@
         _input_ids: <span class="kw-2">&amp;</span>Tensor,
         _seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         _start_offsets_kernel: Tensor,
-        _context_lens: Vec&lt;usize&gt;,
+        _context_lens: Vec&lt;(usize, usize)&gt;,
         _position_ids: Vec&lt;usize&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="macro">unreachable!</span>()
@@ -1466,7 +1466,7 @@
         start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::xlora_models::NonGranularState&gt;,
-        context_lens: Vec&lt;usize&gt;,
+        context_lens: Vec&lt;(usize, usize)&gt;,
         _position_ids: Vec&lt;usize&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="self">self</span>.forward(

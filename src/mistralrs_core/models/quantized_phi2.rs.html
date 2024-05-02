@@ -534,7 +534,7 @@
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         xs: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        _context_lens: Vec&lt;usize&gt;,
+        _context_lens: Vec&lt;(usize, usize)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(_b_sz, seq_len) = xs.dims2()<span class="question-mark">?</span>;
         <span class="kw">let </span>mask = <span class="kw">if </span>seq_len == <span class="number">1 </span>{

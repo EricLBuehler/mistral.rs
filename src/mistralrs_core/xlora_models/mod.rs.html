@@ -137,6 +137,7 @@
 <a href="#135" id="135">135</a>
 <a href="#136" id="136">136</a>
 <a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>classifier;
 <span class="kw">mod </span>config;
 <span class="kw">mod </span>gemma;
@@ -147,7 +148,7 @@
 <span class="kw">mod </span>phi3;
 <span class="kw">mod </span>quantized_llama;
 
-<span class="kw">use </span>std::sync::{Arc, Mutex};
+<span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">pub use </span>config::XLoraConfig;
@@ -159,6 +160,7 @@
 <span class="kw">pub use </span>phi2::Model <span class="kw">as </span>XLoraPhi2;
 <span class="kw">pub use </span>phi3::Model <span class="kw">as </span>XLoraPhi3;
 <span class="kw">pub use </span>quantized_llama::ModelWeights <span class="kw">as </span>XLoraModelWeights;
+<span class="kw">use </span>tokio::sync::Mutex;
 
 <span class="kw">use crate</span>::{get_mut_arcmutex, models::Cache};
 
@@ -238,7 +240,7 @@
                     Tensor::zeros((<span class="number">1</span>,), DType::U8, <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>,
                 )));
             }
-            <span class="kw-2">*</span><span class="self">self</span>.get_cache().lock() = new_cache.clone();
+            <span class="self">self</span>.get_cache().lock().clone_from(<span class="kw-2">&amp;</span>new_cache);
 
             res
         } <span class="kw">else </span>{

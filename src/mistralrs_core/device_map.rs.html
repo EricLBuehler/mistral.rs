@@ -153,7 +153,7 @@
 <span class="kw">use </span>serde::Deserialize;
 <span class="kw">use </span>tracing::info;
 
-<span class="attr">#[derive(Debug, Default, Deserialize)]
+<span class="attr">#[derive(Debug, Default, Deserialize, Clone)]
 </span><span class="kw">pub struct </span>DeviceMapMetadata {
     device_layers: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     host_layers: <span class="prelude-ty">Option</span>&lt;usize&gt;,

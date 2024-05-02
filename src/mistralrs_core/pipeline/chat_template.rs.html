@@ -288,7 +288,7 @@
     <span class="kw">let </span><span class="kw-2">mut </span>bos_tok_ids = chat_template.bos_tok().map(|b| <span class="macro">vec!</span>[b]).unwrap_or_default();
 
     <span class="kw">for </span>alternate <span class="kw">in </span>SUPPORTED_ALTERNATE_EOS {
-        <span class="kw">if </span>tokenizer.get_vocab(<span class="bool-val">true</span>).get(alternate).is_some() {
+        <span class="kw">if </span>tokenizer.get_vocab(<span class="bool-val">true</span>).contains_key(alternate) {
             eos_tok_ids.push(alternate.to_string())
         }
     }

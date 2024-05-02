@@ -495,7 +495,6 @@
 <a href="#493" id="493">493</a>
 <a href="#494" id="494">494</a>
 <a href="#495" id="495">495</a>
-<a href="#496" id="496">496</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">crate</span>::aici::lex::{Lexer, LexerState, StateID, VobIdx, VobSet};
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::{Recognizer, SpecialToken};
 <span class="kw">use </span>anyhow::Result;
@@ -505,8 +504,8 @@
 };
 <span class="kw">use </span>lrtable::{from_yacc, Action, Minimiser, StIdx, StateTable};
 <span class="kw">use </span>rustc_hash::FxHashMap;
-<span class="kw">use </span>std::sync::Arc;
-<span class="kw">use </span>std::{cell::RefCell, vec};
+<span class="kw">use </span>std::sync::{Arc, RwLock};
+<span class="kw">use </span>std::vec;
 <span class="kw">use </span>tracing::debug;
 <span class="kw">use </span>vob::{vob, Vob};
 
@@ -528,15 +527,14 @@
     states_pushed: usize,
 }
 
-<span class="attr">#[derive(Clone)]
-</span><span class="kw">pub struct </span>CfgParser {
+<span class="kw">pub struct </span>CfgParser {
     grm: Arc&lt;YaccGrammar&lt;StorageT&gt;&gt;,
     stable: Arc&lt;StateTable&lt;StorageT&gt;&gt;,
     lexer: Lexer,
     byte_states: Vec&lt;ByteState&gt;,
     pat_idx_to_tidx: Vec&lt;TIdx&lt;u32&gt;&gt;,
     vobset: VobSet,
-    stats: RefCell&lt;CfgStats&gt;,
+    stats: RwLock&lt;CfgStats&gt;,
     tidx_to_pat_idx: FxHashMap&lt;TIdx&lt;u32&gt;, usize&gt;,
     parse_stacks: Vec&lt;Vec&lt;StIdx&lt;u32&gt;&gt;&gt;,
     skip_patterns: Vob,
@@ -740,7 +738,7 @@
             friendly_pattern_names,
             parse_stacks,
             vobset,
-            stats: RefCell::new(CfgStats {
+            stats: RwLock::new(CfgStats {
                 yacc_actions: <span class="number">0</span>,
                 states_pushed: <span class="number">0</span>,
             }),
@@ -871,7 +869,7 @@
 
     <span class="kw">fn </span>run_parser(<span class="kw-2">&amp;mut </span><span class="self">self</span>, pat_idx: usize, top: <span class="kw-2">&amp;</span>ByteState, ls: LexerState) -&gt; <span class="prelude-ty">Option</span>&lt;ByteState&gt; {
         {
-            <span class="kw">let </span><span class="kw-2">mut </span>s = <span class="self">self</span>.stats.borrow_mut();
+            <span class="kw">let </span><span class="kw-2">mut </span>s = <span class="self">self</span>.stats.write().unwrap();
             s.yacc_actions += <span class="number">1</span>;
         }
 
@@ -908,7 +906,7 @@
     }
 
     <span class="kw">pub fn </span>get_stats(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
-        <span class="kw">let </span><span class="kw-2">mut </span>s = <span class="self">self</span>.stats.borrow_mut();
+        <span class="kw">let </span><span class="kw-2">mut </span>s = <span class="self">self</span>.stats.write().unwrap();
         <span class="kw">let </span>r = <span class="macro">format!</span>(<span class="string">"yacc: {}/{}"</span>, s.yacc_actions, s.states_pushed);
         s.yacc_actions = <span class="number">0</span>;
         s.states_pushed = <span class="number">0</span>;
@@ -922,7 +920,7 @@
         viable: VobIdx,
     ) -&gt; <span class="prelude-ty">Option</span>&lt;ByteState&gt; {
         {
-            <span class="kw">let </span><span class="kw-2">mut </span>s = <span class="self">self</span>.stats.borrow_mut();
+            <span class="kw">let </span><span class="kw-2">mut </span>s = <span class="self">self</span>.stats.write().unwrap();
             s.states_pushed += <span class="number">1</span>;
         }
         <span class="kw">if </span><span class="self">self</span>.vobset.and_is_zero(viable, ls.reachable) {

@@ -207,32 +207,16 @@
 <a href="#205" id="205">205</a>
 <a href="#206" id="206">206</a>
 <a href="#207" id="207">207</a>
-<a href="#208" id="208">208</a>
-<a href="#209" id="209">209</a>
-<a href="#210" id="210">210</a>
-<a href="#211" id="211">211</a>
-<a href="#212" id="212">212</a>
-<a href="#213" id="213">213</a>
-<a href="#214" id="214">214</a>
-<a href="#215" id="215">215</a>
-<a href="#216" id="216">216</a>
-<a href="#217" id="217">217</a>
-<a href="#218" id="218">218</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::{
-    vec_deque::{Iter, IterMut},
-    HashMap, VecDeque,
-};
+</pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::{vec_deque::Iter, HashMap, VecDeque};
 
 <span class="kw">use </span><span class="kw">crate</span>::sequence::{Sequence, SequenceState};
 <span class="kw">use </span>range_checked::UsizeBounded;
 
 <span class="kw">pub trait </span>FcfsBacker: Default {
     <span class="kw">fn </span>new() -&gt; <span class="self">Self</span>;
-    <span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Sequence&gt;;
     <span class="kw">fn </span>add(<span class="kw-2">&amp;mut </span><span class="self">self</span>, item: Sequence);
     <span class="kw">fn </span>into_iter(<span class="self">self</span>) -&gt; <span class="kw">impl </span>Iterator&lt;Item = Sequence&gt;;
     <span class="kw">fn </span>iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Iterator&lt;Item = <span class="kw-2">&amp;</span>Sequence&gt;;
-    <span class="kw">fn </span>mut_iter(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Iterator&lt;Item = <span class="kw-2">&amp;mut </span>Sequence&gt;;
     <span class="kw">fn </span>sort_ascending_ids(<span class="kw-2">&amp;mut </span><span class="self">self</span>);
 }
 
@@ -243,14 +227,8 @@
     <span class="kw">fn </span>add(<span class="kw-2">&amp;mut </span><span class="self">self</span>, item: Sequence) {
         <span class="self">self</span>.push_back(item)
     }
-    <span class="kw">fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Sequence&gt; {
-        <span class="self">self</span>.pop_front()
-    }
     <span class="kw">fn </span>iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Iter&lt;<span class="lifetime">'_</span>, Sequence&gt; {
         <span class="self">self</span>.iter()
-    }
-    <span class="kw">fn </span>mut_iter(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; IterMut&lt;<span class="lifetime">'_</span>, Sequence&gt; {
-        <span class="self">self</span>.iter_mut()
     }
     <span class="kw">fn </span>into_iter(<span class="self">self</span>) -&gt; <span class="kw">impl </span>Iterator&lt;Item = Sequence&gt; {
         &lt;<span class="self">Self </span><span class="kw">as </span>IntoIterator&gt;::into_iter(<span class="self">self</span>)

@@ -637,7 +637,7 @@
     {
         <span class="macro">info!</span>(<span class="string">"⚠️ WARNING: Using flash attention with a quantized model has no effect!"</span>)
     }
-    <span class="macro">info!</span>(<span class="string">"Model kind is: {}"</span>, loader.get_kind().as_ref());
+    <span class="macro">info!</span>(<span class="string">"Model kind is: {}"</span>, loader.get_kind().to_string());
     <span class="kw">let </span>pipeline = loader.load_model(
         <span class="prelude-val">None</span>,
         token_source,
@@ -695,7 +695,7 @@
             results.push(r);
         }
 
-        print_usage(model_name, <span class="kw-2">&amp;</span>device, results);
+        print_usage(<span class="kw-2">&amp;</span>model_name, <span class="kw-2">&amp;</span>device, results);
     }
 
     <span class="prelude-val">Ok</span>(())

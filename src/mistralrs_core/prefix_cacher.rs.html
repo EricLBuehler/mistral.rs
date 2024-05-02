@@ -184,12 +184,24 @@
 <a href="#182" id="182">182</a>
 <a href="#183" id="183">183</a>
 <a href="#184" id="184">184</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::{cell::RefCell, rc::Rc};
+<a href="#185" id="185">185</a>
+<a href="#186" id="186">186</a>
+<a href="#187" id="187">187</a>
+<a href="#188" id="188">188</a>
+<a href="#189" id="189">189</a>
+<a href="#190" id="190">190</a>
+<a href="#191" id="191">191</a>
+<a href="#192" id="192">192</a>
+<a href="#193" id="193">193</a>
+<a href="#194" id="194">194</a>
+<a href="#195" id="195">195</a>
+<a href="#196" id="196">196</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex};
 
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>radix_trie::{Trie, TrieCommon, TrieKey};
 
-<span class="kw">use crate</span>::{models::LayerCaches, sequence::Sequence};
+<span class="kw">use crate</span>::{get_mut_arcmutex, models::LayerCaches, sequence::Sequence};
 
 <span class="attr">#[derive(PartialEq, Eq)]
 </span><span class="kw">struct </span>Tokens(Vec&lt;u32&gt;);
@@ -209,11 +221,11 @@
     }
 }
 
-<span class="kw">type </span>EvictionCacheGroup = (Rc&lt;RefCell&lt;LayerCaches&gt;&gt;, <span class="prelude-ty">Option</span>&lt;Rc&lt;RefCell&lt;LayerCaches&gt;&gt;&gt;);
+<span class="kw">type </span>EvictionCacheGroup = (Arc&lt;Mutex&lt;LayerCaches&gt;&gt;, <span class="prelude-ty">Option</span>&lt;Arc&lt;Mutex&lt;LayerCaches&gt;&gt;&gt;);
 
 <span class="kw">pub struct </span>PrefixCacheManager {
-    caches: Trie&lt;Tokens, Rc&lt;RefCell&lt;LayerCaches&gt;&gt;&gt;,
-    xlora_caches: <span class="prelude-ty">Option</span>&lt;Trie&lt;Tokens, Rc&lt;RefCell&lt;LayerCaches&gt;&gt;&gt;&gt;,
+    caches: Trie&lt;Tokens, Arc&lt;Mutex&lt;LayerCaches&gt;&gt;&gt;,
+    xlora_caches: <span class="prelude-ty">Option</span>&lt;Trie&lt;Tokens, Arc&lt;Mutex&lt;LayerCaches&gt;&gt;&gt;&gt;,
     device: Device,
     <span class="kw">pub </span>n_on_device: usize,
     no_prefix_cache: bool,
@@ -245,11 +257,11 @@
         <span class="kw">if </span><span class="self">self</span>.no_prefix_cache {
             <span class="kw">return</span>;
         }
-        <span class="kw">let </span>cache = Rc::new(RefCell::new(seq.cache().clone()));
+        <span class="kw">let </span>cache = Arc::new(Mutex::new(seq.cache().clone()));
         <span class="self">self</span>.caches
             .insert(seq.get_toks().to_vec().into(), cache.clone());
         <span class="kw">if </span>seq.is_xlora() {
-            <span class="kw">let </span>xlora_cache = Rc::new(RefCell::new(seq.xlora_cache().clone()));
+            <span class="kw">let </span>xlora_cache = Arc::new(Mutex::new(seq.xlora_cache().clone()));
             <span class="self">self</span>.xlora_caches
                 .as_mut()
                 .unwrap()
@@ -281,7 +293,11 @@
         <span class="kw">let </span><span class="kw-2">mut </span>n_on_device = <span class="number">0</span>;
         <span class="kw">for </span>(cache, <span class="kw">_</span>) <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.eviction_cache_ptrs {
             <span class="kw">if </span>!<span class="macro">matches!</span>(
-                cache.as_ref().borrow()[<span class="number">0</span>].as_ref().unwrap().<span class="number">0</span>.device(),
+                <span class="macro">get_mut_arcmutex!</span>(cache.as_ref())[<span class="number">0</span>]
+                    .as_ref()
+                    .unwrap()
+                    .<span class="number">0
+                    </span>.device(),
                 Device::Cpu
             ) {
                 n_on_device += <span class="number">1</span>;
@@ -294,11 +310,15 @@
                 <span class="kw">break</span>;
             }
             <span class="kw">if </span>!<span class="macro">matches!</span>(
-                cache.as_ref().borrow()[<span class="number">0</span>].as_ref().unwrap().<span class="number">0</span>.device(),
+                <span class="macro">get_mut_arcmutex!</span>(cache.as_ref())[<span class="number">0</span>]
+                    .as_ref()
+                    .unwrap()
+                    .<span class="number">0
+                    </span>.device(),
                 Device::Cpu
             ) {
-                <span class="kw">let </span><span class="kw-2">mut </span>cache = cache.borrow_mut();
-                <span class="kw">let </span><span class="kw-2">mut </span>xlora_cache = xlora_cache.as_ref().map(|c| c.borrow_mut());
+                <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="macro">get_mut_arcmutex!</span>(cache);
+                <span class="kw">let </span><span class="kw-2">mut </span>xlora_cache = xlora_cache.as_ref().map(|c| <span class="macro">get_mut_arcmutex!</span>(c));
 
                 <span class="self">Self</span>::cache_to(cache.iter_mut(), <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>;
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>xlora_cache) = xlora_cache {
@@ -318,11 +338,15 @@
         <span class="comment">// Intentionally evict the first ones first, as they are the oldest
         </span><span class="kw">for </span>(cache, xlora_cache) <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.eviction_cache_ptrs {
             <span class="kw">if </span>!<span class="macro">matches!</span>(
-                cache.as_ref().borrow()[<span class="number">0</span>].as_ref().unwrap().<span class="number">0</span>.device(),
+                <span class="macro">get_mut_arcmutex!</span>(cache.as_ref())[<span class="number">0</span>]
+                    .as_ref()
+                    .unwrap()
+                    .<span class="number">0
+                    </span>.device(),
                 Device::Cpu
             ) {
-                <span class="kw">let </span><span class="kw-2">mut </span>cache = cache.borrow_mut();
-                <span class="kw">let </span><span class="kw-2">mut </span>xlora_cache = xlora_cache.as_ref().map(|c| c.borrow_mut());
+                <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="macro">get_mut_arcmutex!</span>(cache);
+                <span class="kw">let </span><span class="kw-2">mut </span>xlora_cache = xlora_cache.as_ref().map(|c| <span class="macro">get_mut_arcmutex!</span>(c));
 
                 <span class="self">Self</span>::cache_to(cache.iter_mut(), <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>;
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>xlora_cache) = xlora_cache {
@@ -341,10 +365,10 @@
 
         <span class="kw">let </span>toks = Tokens(toks.to_vec());
         <span class="kw">if let </span><span class="prelude-val">Some</span>(cache) = <span class="self">self</span>.caches.get(<span class="kw-2">&amp;</span>toks) {
-            <span class="self">Self</span>::cache_to(cache.as_ref().borrow_mut().iter_mut(), <span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
-            <span class="kw">let </span>cache = cache.as_ref().borrow().clone();
+            <span class="self">Self</span>::cache_to(<span class="macro">get_mut_arcmutex!</span>(cache.as_ref()).iter_mut(), <span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>cache = <span class="macro">get_mut_arcmutex!</span>(cache.as_ref()).clone();
             <span class="kw">let </span>xlora_cache = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>xlora_caches) = <span class="self">self</span>.xlora_caches {
-                <span class="kw">let </span><span class="kw-2">mut </span>xlora_cache = xlora_caches.get(<span class="kw-2">&amp;</span>toks).unwrap().as_ref().borrow_mut();
+                <span class="kw">let </span><span class="kw-2">mut </span>xlora_cache = <span class="macro">get_mut_arcmutex!</span>(xlora_caches.get(<span class="kw-2">&amp;</span>toks).unwrap().as_ref());
                 <span class="self">Self</span>::cache_to(xlora_cache.iter_mut(), <span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
                 <span class="prelude-val">Some</span>(xlora_cache.clone())
             } <span class="kw">else </span>{

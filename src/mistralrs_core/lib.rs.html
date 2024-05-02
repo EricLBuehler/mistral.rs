@@ -320,7 +320,7 @@
 /// an Engine and a MistralRs instance. The Engine runs on a separate thread, and the MistralRs
 /// instance stays on the calling thread.
 </span><span class="kw">pub struct </span>MistralRsBuilder {
-    pipeline: Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
+    pipeline: Arc&lt;tokio::sync::Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
     method: SchedulerMethod,
     log: <span class="prelude-ty">Option</span>&lt;String&gt;,
     truncate_sequence: <span class="prelude-ty">Option</span>&lt;bool&gt;,
@@ -331,7 +331,7 @@
 }
 
 <span class="kw">impl </span>MistralRsBuilder {
-    <span class="kw">pub fn </span>new(pipeline: Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;, method: SchedulerMethod) -&gt; <span class="self">Self </span>{
+    <span class="kw">pub fn </span>new(pipeline: Arc&lt;tokio::sync::Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;, method: SchedulerMethod) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             pipeline,
             method,
@@ -404,7 +404,7 @@
             sender: tx,
             sender_isq: isq_tx,
             log,
-            id: pipeline.lock().unwrap().name(),
+            id: pipeline.try_lock().unwrap().name(),
             creation_time: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect(<span class="string">"Time travel has occurred!"</span>)

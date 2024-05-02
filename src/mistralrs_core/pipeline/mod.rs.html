@@ -867,14 +867,95 @@
 <a href="#865" id="865">865</a>
 <a href="#866" id="866">866</a>
 <a href="#867" id="867">867</a>
-</pre></div><pre class="rust"><code><span class="kw">mod </span>chat_template;
+<a href="#868" id="868">868</a>
+<a href="#869" id="869">869</a>
+<a href="#870" id="870">870</a>
+<a href="#871" id="871">871</a>
+<a href="#872" id="872">872</a>
+<a href="#873" id="873">873</a>
+<a href="#874" id="874">874</a>
+<a href="#875" id="875">875</a>
+<a href="#876" id="876">876</a>
+<a href="#877" id="877">877</a>
+<a href="#878" id="878">878</a>
+<a href="#879" id="879">879</a>
+<a href="#880" id="880">880</a>
+<a href="#881" id="881">881</a>
+<a href="#882" id="882">882</a>
+<a href="#883" id="883">883</a>
+<a href="#884" id="884">884</a>
+<a href="#885" id="885">885</a>
+<a href="#886" id="886">886</a>
+<a href="#887" id="887">887</a>
+<a href="#888" id="888">888</a>
+<a href="#889" id="889">889</a>
+<a href="#890" id="890">890</a>
+<a href="#891" id="891">891</a>
+<a href="#892" id="892">892</a>
+<a href="#893" id="893">893</a>
+<a href="#894" id="894">894</a>
+<a href="#895" id="895">895</a>
+<a href="#896" id="896">896</a>
+<a href="#897" id="897">897</a>
+<a href="#898" id="898">898</a>
+<a href="#899" id="899">899</a>
+<a href="#900" id="900">900</a>
+<a href="#901" id="901">901</a>
+<a href="#902" id="902">902</a>
+<a href="#903" id="903">903</a>
+<a href="#904" id="904">904</a>
+<a href="#905" id="905">905</a>
+<a href="#906" id="906">906</a>
+<a href="#907" id="907">907</a>
+<a href="#908" id="908">908</a>
+<a href="#909" id="909">909</a>
+<a href="#910" id="910">910</a>
+<a href="#911" id="911">911</a>
+<a href="#912" id="912">912</a>
+<a href="#913" id="913">913</a>
+<a href="#914" id="914">914</a>
+<a href="#915" id="915">915</a>
+<a href="#916" id="916">916</a>
+<a href="#917" id="917">917</a>
+<a href="#918" id="918">918</a>
+<a href="#919" id="919">919</a>
+<a href="#920" id="920">920</a>
+<a href="#921" id="921">921</a>
+<a href="#922" id="922">922</a>
+<a href="#923" id="923">923</a>
+<a href="#924" id="924">924</a>
+<a href="#925" id="925">925</a>
+<a href="#926" id="926">926</a>
+<a href="#927" id="927">927</a>
+<a href="#928" id="928">928</a>
+<a href="#929" id="929">929</a>
+<a href="#930" id="930">930</a>
+<a href="#931" id="931">931</a>
+<a href="#932" id="932">932</a>
+<a href="#933" id="933">933</a>
+<a href="#934" id="934">934</a>
+<a href="#935" id="935">935</a>
+<a href="#936" id="936">936</a>
+<a href="#937" id="937">937</a>
+<a href="#938" id="938">938</a>
+<a href="#939" id="939">939</a>
+<a href="#940" id="940">940</a>
+<a href="#941" id="941">941</a>
+<a href="#942" id="942">942</a>
+<a href="#943" id="943">943</a>
+<a href="#944" id="944">944</a>
+</pre></div><pre class="rust"><code><span class="kw">mod </span>cache_manager;
+<span class="kw">mod </span>chat_template;
 <span class="kw">mod </span>ggml;
 <span class="kw">mod </span>gguf;
 <span class="kw">mod </span>loaders;
 <span class="kw">mod </span>macros;
 <span class="kw">mod </span>normal;
+<span class="kw">mod </span>sampling;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
+<span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
+<span class="kw">mod </span>sampling_pipeline;
 <span class="kw">use crate</span>::{api_dir_list, api_get_file, DeviceMapMetadata};
 <span class="kw">use </span>candle_core::quantized::{GgmlDType, QMatMul, QTensor};
 <span class="kw">use </span>candle_nn::VarBuilder;
@@ -895,19 +976,22 @@
 };
 <span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
 <span class="kw">pub use </span>normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
+<span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>sampling::sample_sequence;
+<span class="kw">use </span>std::fmt::Display;
 <span class="kw">use </span>std::path::Path;
 <span class="kw">use </span>std::sync::atomic::AtomicUsize;
 <span class="kw">use </span>std::sync::Arc;
-<span class="kw">use </span>std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
+<span class="kw">use </span>std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr};
 <span class="kw">use </span>tokenizers::Tokenizer;
+<span class="kw">use </span>tokio::sync::Mutex;
 <span class="kw">use </span>tracing::info;
 
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
 
 <span class="kw">use crate</span>::{
-    get_mut_arcmutex,
     models::Cache,
     sequence::Sequence,
     utils::tokens::get_token,
@@ -1022,7 +1106,7 @@
     }
 }
 
-<span class="attr">#[derive(Copy, Clone, Default)]
+<span class="attr">#[derive(Clone, Default)]
 </span><span class="doccomment">/// The kind of model to build.
 </span><span class="kw">pub enum </span>ModelKind {
     <span class="attr">#[default]
@@ -1035,20 +1119,27 @@
     LoraGGUF,
     LoraGGML,
     LoraNormal,
+    Speculative {
+        target: Box&lt;ModelKind&gt;,
+        draft: Box&lt;ModelKind&gt;,
+    },
 }
 
-<span class="kw">impl </span>AsRef&lt;str&gt; <span class="kw">for </span>ModelKind {
-    <span class="kw">fn </span>as_ref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str {
+<span class="kw">impl </span>Display <span class="kw">for </span>ModelKind {
+    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
         <span class="kw">match </span><span class="self">self </span>{
-            ModelKind::Normal =&gt; <span class="string">"normal (no quant, no adapters)"</span>,
-            ModelKind::QuantizedGGML =&gt; <span class="string">"quantized from ggml (no adapters)"</span>,
-            ModelKind::QuantizedGGUF =&gt; <span class="string">"quantized from gguf (no adapters)"</span>,
-            ModelKind::XLoraNormal =&gt; <span class="string">"x-lora (no quant)"</span>,
-            ModelKind::XLoraGGML =&gt; <span class="string">"x-lora, quantized from ggml"</span>,
-            ModelKind::XLoraGGUF =&gt; <span class="string">"x-lora, quantized from gguf"</span>,
-            ModelKind::LoraGGUF =&gt; <span class="string">"lora, quantized from gguf"</span>,
-            ModelKind::LoraGGML =&gt; <span class="string">"lora, quantized from ggml"</span>,
-            ModelKind::LoraNormal =&gt; <span class="string">"lora (no quant)"</span>,
+            ModelKind::Normal =&gt; <span class="macro">write!</span>(f, <span class="string">"normal (no quant, no adapters)"</span>),
+            ModelKind::QuantizedGGML =&gt; <span class="macro">write!</span>(f, <span class="string">"quantized from ggml (no adapters)"</span>),
+            ModelKind::QuantizedGGUF =&gt; <span class="macro">write!</span>(f, <span class="string">"quantized from gguf (no adapters)"</span>),
+            ModelKind::XLoraNormal =&gt; <span class="macro">write!</span>(f, <span class="string">"x-lora (no quant)"</span>),
+            ModelKind::XLoraGGML =&gt; <span class="macro">write!</span>(f, <span class="string">"x-lora, quantized from ggml"</span>),
+            ModelKind::XLoraGGUF =&gt; <span class="macro">write!</span>(f, <span class="string">"x-lora, quantized from gguf"</span>),
+            ModelKind::LoraGGUF =&gt; <span class="macro">write!</span>(f, <span class="string">"lora, quantized from gguf"</span>),
+            ModelKind::LoraGGML =&gt; <span class="macro">write!</span>(f, <span class="string">"lora, quantized from ggml"</span>),
+            ModelKind::LoraNormal =&gt; <span class="macro">write!</span>(f, <span class="string">"lora (no quant)"</span>),
+            ModelKind::Speculative { target, draft } =&gt; {
+                <span class="macro">write!</span>(f, <span class="string">"speculative: target: `{target}`, draft: `{draft}`"</span>)
+            }
         }
     }
 }
@@ -1073,24 +1164,6 @@
 /// ).unwrap();
 /// ```
 </span><span class="kw">pub trait </span>Loader {
-    <span class="kw">fn </span>download_model(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
-        token_source: TokenSource,
-        silent: bool,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelPaths&gt;&gt;;
-
-    <span class="attr">#[allow(clippy::type_complexity)]
-    </span><span class="kw">fn </span>_setup_model(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        paths: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelPaths,
-        dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
-        device: <span class="kw-2">&amp;</span>Device,
-        silent: bool,
-        mapper: DeviceMapMetadata,
-        in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt;;
-
     <span class="doccomment">/// If `revision` is None, then it defaults to `main`.
     /// If `dtype` is None, then it defaults to the model default (usually BF16).
     </span><span class="attr">#[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -1103,21 +1176,87 @@
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
-        <span class="kw">let </span>paths = <span class="self">self</span>.download_model(revision, token_source, silent)<span class="question-mark">?</span>;
-        <span class="self">self</span>._setup_model(<span class="kw-2">&amp;*</span>paths, dtype, device, silent, mapper, in_situ_quant)
-    }
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt;;
 
-    <span class="kw">fn </span>get_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str;
+    <span class="kw">fn </span>get_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String;
     <span class="kw">fn </span>get_kind(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelKind;
 }
 
-<span class="kw">pub trait </span>Pipeline: Send + Sync {
-    <span class="kw">fn </span>forward(
+<span class="attr">#[derive(Clone)]
+</span><span class="kw">pub struct </span>GeneralMetadata {
+    <span class="kw">pub </span>max_seq_len: usize,
+    <span class="kw">pub </span>repeat_last_n: usize,
+    <span class="kw">pub </span>tok_trie: Arc&lt;TokTrie&gt;,
+    <span class="kw">pub </span>has_no_kv_cache: bool,
+    <span class="kw">pub </span>is_xlora: bool,
+    <span class="kw">pub </span>num_hidden_layers: usize,
+    <span class="kw">pub </span>eos_tok: Vec&lt;u32&gt;,
+}
+
+<span class="kw">pub enum </span>CacheInstruction {
+    In,
+    Out,
+    Reset { reset_non_granular: bool },
+    Nonthing,
+}
+
+<span class="attr">#[async_trait::async_trait]
+</span><span class="kw">pub trait </span>Pipeline: Send + Sync {
+    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;mut </span><span class="self">self</span>, inputs: ModelInputs) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor, candle_core::Error&gt;;
+    <span class="doccomment">/// This does forward pass of model followed by run.
+    </span><span class="attr">#[allow(clippy::too_many_arguments)]
+    </span><span class="kw">async fn </span>step(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-        input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
+        input_seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         is_prompt: bool,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor, candle_core::Error&gt;;
+        prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
+        disable_eos_stop: bool,
+        rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
+        pre_op: CacheInstruction,
+        post_op: CacheInstruction,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), candle_core::Error&gt; {
+        <span class="kw">let </span>inputs = calculate_inputs(
+            input_seqs,
+            is_prompt,
+            <span class="self">self</span>.get_metadata().is_xlora,
+            <span class="kw-2">&amp;</span><span class="self">self</span>.device(),
+            <span class="self">self</span>.get_metadata().has_no_kv_cache,
+            <span class="prelude-val">None</span>,
+        )
+        .unwrap();
+
+        <span class="kw">match </span>pre_op {
+            CacheInstruction::In =&gt; <span class="self">self</span>.clone_in_cache(input_seqs),
+            CacheInstruction::Nonthing =&gt; (),
+            CacheInstruction::Reset { reset_non_granular } =&gt; {
+                <span class="self">self</span>.set_none_cache(reset_non_granular)
+            }
+            <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(<span class="string">"Unreachable PRE cache op."</span>),
+        }
+
+        <span class="kw">let </span>logits = <span class="self">self</span>.forward_inputs(inputs)<span class="question-mark">?</span>;
+
+        <span class="kw">match </span>post_op {
+            CacheInstruction::Out =&gt; <span class="self">self</span>.clone_out_cache(input_seqs),
+            CacheInstruction::Nonthing =&gt; (),
+            CacheInstruction::Reset { reset_non_granular } =&gt; {
+                <span class="self">self</span>.set_none_cache(reset_non_granular)
+            }
+            <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(<span class="string">"Unreachable POST cache op."</span>),
+        }
+
+        <span class="self">self</span>.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
+            .<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(())
+    }
+    <span class="kw">async fn </span>sample(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
+        logits: Tensor,
+        prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
+        disable_eos_stop: bool,
+        rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), candle_core::Error&gt;;
     <span class="kw">fn </span>tokenize_prompt(<span class="kw-2">&amp;</span><span class="self">self</span>, prompt: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u32&gt;&gt; {
         <span class="kw">let </span>encoding = <span class="self">self
             </span>.tokenizer()
@@ -1125,22 +1264,16 @@
             .map_err(|e| anyhow::Error::msg(e.to_string()))<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(encoding.get_ids().to_vec())
     }
-    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device;
-    <span class="kw">fn </span>num_hidden_layers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
-    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache;
+    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Device;
     <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;Tokenizer&gt;;
-    <span class="kw">fn </span>tok_trie(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;TokTrie&gt;;
-    <span class="kw">fn </span>eos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[u32];
     <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String;
-    <span class="kw">fn </span>get_max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
-    <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
-    <span class="kw">fn </span>has_no_kv_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
     <span class="kw">fn </span>apply_chat_template(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         messages: Vec&lt;IndexMap&lt;String, String&gt;&gt;,
         add_generation_prompt: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
-        <span class="kw">let </span>template = <span class="self">self</span>.get_chat_template().chat_template.as_ref().unwrap();
+        <span class="kw">let </span>chat_template = <span class="self">self</span>.get_chat_template();
+        <span class="kw">let </span>template = chat_template.chat_template.as_ref().unwrap();
         <span class="kw">let </span>bos_tok = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>bos) = <span class="self">self</span>.get_chat_template().bos_token {
             <span class="kw">match </span>bos.<span class="number">0 </span>{
                 Either::Left(<span class="kw-2">ref </span>lit) =&gt; <span class="prelude-val">Some</span>(lit.to_string()),
@@ -1149,7 +1282,7 @@
         } <span class="kw">else </span>{
             <span class="prelude-val">None
         </span>};
-        <span class="kw">let </span>eos_tok = <span class="kw">match </span><span class="self">self</span>.get_chat_template().eos_token {
+        <span class="kw">let </span>eos_tok = <span class="kw">match </span>chat_template.eos_token {
             Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit,
             Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="kw-2">&amp;</span>added.content,
         };
@@ -1170,20 +1303,28 @@
             unk_tok,
         )
     }
-    <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ChatTemplate;
-    <span class="kw">fn </span>get_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;NonGranularState&gt;;
-    <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(s) = <span class="self">self</span>.get_non_granular_state().as_ref() {
-            <span class="kw-2">*</span><span class="self">self</span>.cache().get_scalings_cache() = <span class="prelude-val">None</span>;
-            <span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(s.non_granular_index) = <span class="number">0</span>;
-        }
-    }
-    <span class="kw">fn </span>get_repeat_last_n(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
-
+    <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;ChatTemplate&gt;;
+    <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>);
+    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>GeneralMetadata;
     <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: GgmlDType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt;;
+    <span class="doccomment">/// Clone the cache FROM the sequences' cache TO the model cache. Only called for completion seqs.
+    /// It is not a guarantee that this will be called for each completion step.
+    </span><span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]);
+    <span class="doccomment">/// Clone the cache FROM the model cache TO the sequences. Called for prompt and completion seqs.
+    /// It is not a guarantee that this will be called for each step.
+    </span><span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]);
+    <span class="doccomment">/// Set the model cache to all None. Only called for prompt seqs.
+    /// It is not a guarantee that this will be called for each prompt step.
+    /// This may also reset the non granular state if applicable.
+    </span><span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, reset_non_granular: bool);
+    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache;
 }
 
-<span class="kw">pub trait </span>ConfigMarker {}
+<span class="kw">pub trait </span>CacheManager {
+    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]);
+    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]);
+    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline);
+}
 
 <span class="kw">pub trait </span>NormalModelLoader {
     <span class="kw">fn </span>load(
@@ -1217,7 +1358,7 @@
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
-        context_lens: Vec&lt;usize&gt;,
+        context_lens: Vec&lt;(usize, usize)&gt;,
         position_ids: Vec&lt;usize&gt;,
     ) -&gt; candle_core::Result&lt;Tensor&gt;;
     <span class="attr">#[allow(clippy::too_many_arguments)]
@@ -1231,7 +1372,7 @@
         start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
-        context_lens: Vec&lt;usize&gt;,
+        context_lens: Vec&lt;(usize, usize)&gt;,
         position_ids: Vec&lt;usize&gt;,
     ) -&gt; candle_core::Result&lt;Tensor&gt;;
     <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
@@ -1284,12 +1425,16 @@
 <span class="kw">struct </span>InputMetadata {
     input: Tensor,
     positions: Vec&lt;usize&gt;,
-    positions_kernel: Tensor, <span class="comment">// [bs, seq len]
-    </span>context_lens: Vec&lt;usize&gt;,
-    position_ids: Vec&lt;usize&gt;,
+    positions_kernel: Tensor,          <span class="comment">// [bs, seq len]
+    </span>context_lens: Vec&lt;(usize, usize)&gt;, <span class="comment">// (start index, len)
+    </span>position_ids: Vec&lt;usize&gt;,
 }
 
-<span class="kw">fn </span>get_prompt_input(input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence], device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
+<span class="kw">fn </span>get_prompt_input(
+    input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
+    device: <span class="kw-2">&amp;</span>Device,
+    last_n_context_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
     <span class="kw">let </span>max_len = input_seqs
         .iter()
         .map(|seq| seq.len())
@@ -1306,7 +1451,10 @@
         seqlen_offsets.push(<span class="number">0</span>);
 
         ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));
-        context_lens.push(seq.len() - <span class="number">1</span>);
+        context_lens.push((
+            seq.len() - <span class="number">1 </span>- last_n_context_len.map(|x| x - <span class="number">1</span>).unwrap_or(<span class="number">0</span>),
+            last_n_context_len.unwrap_or(<span class="number">1</span>),
+        ));
         position_ids.push(seq.len());
 
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
@@ -1333,9 +1481,10 @@
     input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
     device: <span class="kw-2">&amp;</span>Device,
     no_kv_cache: bool,
+    last_n_context_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
     <span class="kw">if </span>no_kv_cache {
-        <span class="kw">return </span>get_prompt_input(input_seqs, device);
+        <span class="kw">return </span>get_prompt_input(input_seqs, device, last_n_context_len);
     }
     <span class="comment">// Pad each sequence by the padding token to the max len.
     </span><span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
@@ -1346,7 +1495,7 @@
         <span class="kw">let </span>start_pos = seq.get_toks().len().saturating_sub(<span class="number">1</span>);
         <span class="kw">let </span>ctxt = seq.get_toks()[start_pos..].to_vec();
         seqlen_offsets.push(start_pos);
-        context_lens.push(<span class="number">0</span>);
+        context_lens.push((<span class="number">0</span>, <span class="number">1</span>));
         position_ids.push(seq.len());
 
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
@@ -1368,14 +1517,15 @@
     })
 }
 
-<span class="kw">struct </span>ModelInputs {
+<span class="attr">#[derive(Clone)]
+</span><span class="kw">pub struct </span>ModelInputs {
     input_ids: Tensor,
     input_ids_full: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
     seqlen_offsets: Vec&lt;usize&gt;,
     seqlen_offsets_full: <span class="prelude-ty">Option</span>&lt;Vec&lt;usize&gt;&gt;,
     seqlen_offsets_kernel: Tensor,
     seqlen_offsets_kernel_full: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
-    context_lens: Vec&lt;usize&gt;,
+    context_lens: Vec&lt;(usize, usize)&gt;,
     position_ids: Vec&lt;usize&gt;,
 }
 
@@ -1385,6 +1535,7 @@
     is_xlora: bool,
     device: <span class="kw-2">&amp;</span>Device,
     no_kv_cache: bool,
+    last_n_context_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;ModelInputs&gt; {
     <span class="kw">if </span>is_xlora &amp;&amp; !is_prompt {
         <span class="kw">let </span>InputMetadata {
@@ -1393,14 +1544,14 @@
             positions_kernel: seqlen_offsets_kernel_full,
             context_lens: <span class="kw">_</span>,
             position_ids,
-        } = get_prompt_input(input_seqs, device)<span class="question-mark">?</span>;
+        } = get_prompt_input(input_seqs, device, last_n_context_len)<span class="question-mark">?</span>;
         <span class="kw">let </span>InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
             position_ids: <span class="kw">_</span>,
-        } = get_completion_input(input_seqs, device, no_kv_cache)<span class="question-mark">?</span>;
+        } = get_completion_input(input_seqs, device, no_kv_cache, last_n_context_len)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(ModelInputs {
             input_ids,
             input_ids_full: <span class="prelude-val">Some</span>(input_ids_full),
@@ -1418,7 +1569,7 @@
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
             position_ids,
-        } = get_prompt_input(input_seqs, device)<span class="question-mark">?</span>;
+        } = get_prompt_input(input_seqs, device, last_n_context_len)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(ModelInputs {
             input_ids: input_ids.clone(),
             input_ids_full: <span class="prelude-val">Some</span>(input_ids),
@@ -1436,7 +1587,7 @@
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
             position_ids,
-        } = get_prompt_input(input_seqs, device)<span class="question-mark">?</span>;
+        } = get_prompt_input(input_seqs, device, last_n_context_len)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(ModelInputs {
             input_ids,
             input_ids_full: <span class="prelude-val">None</span>,
@@ -1454,7 +1605,7 @@
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
             position_ids,
-        } = get_completion_input(input_seqs, device, no_kv_cache)<span class="question-mark">?</span>;
+        } = get_completion_input(input_seqs, device, no_kv_cache, last_n_context_len)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(ModelInputs {
             input_ids,
             input_ids_full: <span class="prelude-val">None</span>,
@@ -1468,10 +1619,13 @@
     }
 }
 
-<span class="kw">pub fn </span>extract_logits(logits: <span class="kw-2">&amp;</span>Tensor, context_lens: Vec&lt;usize&gt;) -&gt; candle_core::Result&lt;Tensor&gt; {
+<span class="kw">pub fn </span>extract_logits(
+    logits: <span class="kw-2">&amp;</span>Tensor,
+    context_lens: Vec&lt;(usize, usize)&gt;,
+) -&gt; candle_core::Result&lt;Tensor&gt; {
     <span class="kw">let </span><span class="kw-2">mut </span>toks = Vec::new();
-    <span class="kw">for </span>(dim, start) <span class="kw">in </span>logits.chunk(logits.dims()[<span class="number">0</span>], <span class="number">0</span>)<span class="question-mark">?</span>.iter().zip(context_lens) {
-        toks.push(dim.narrow(<span class="number">1</span>, start, <span class="number">1</span>)<span class="question-mark">?</span>);
+    <span class="kw">for </span>(dim, (start, len)) <span class="kw">in </span>logits.chunk(logits.dims()[<span class="number">0</span>], <span class="number">0</span>)<span class="question-mark">?</span>.iter().zip(context_lens) {
+        toks.push(dim.narrow(<span class="number">1</span>, start, len)<span class="question-mark">?</span>);
     }
     Tensor::cat(<span class="kw-2">&amp;</span>toks, <span class="number">0</span>)
 }

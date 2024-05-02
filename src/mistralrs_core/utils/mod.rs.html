@@ -215,6 +215,9 @@
 <a href="#213" id="213">213</a>
 <a href="#214" id="214">214</a>
 <a href="#215" id="215">215</a>
+<a href="#216" id="216">216</a>
+<a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a>
 </pre></div><pre class="rust"><code><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>tokens;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>varbuilder_utils;
 
@@ -296,7 +299,6 @@
                 };
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::response::Response</span>;
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::sequence::SequenceState</span>;
-                <span class="kw">use </span><span class="macro-nonterminal">$crate::Engine</span>;
                 <span class="kw">use </span><span class="macro-nonterminal">$crate::response::SYSTEM_FINGERPRINT</span>;
                 <span class="kw">use </span>tracing::error;
                 <span class="macro">error!</span>(<span class="string">"{} - Model failed with error: {:?}"</span>, <span class="macro-nonterminal">$stage</span>, <span class="kw-2">&amp;</span>e);
@@ -377,7 +379,11 @@
                     </span>seq.set_state(SequenceState::Error);
                 }
 
-                Engine::set_none_cache(<span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="macro-nonterminal">$pipeline</span>));
+                <span class="kw">let </span><span class="kw-2">mut </span>p = <span class="macro">get_mut_arcmutex!</span>(<span class="macro-nonterminal">$pipeline</span>);
+                <span class="comment">// Also reset non granular state because:
+                // - The sequence is gone
+                // - We should reset the state then.
+                </span>p.set_none_cache(<span class="bool-val">true</span>);
                 <span class="macro-nonterminal">$prefix_cacher</span>.evict_all_to_cpu().unwrap();
 
                 <span class="kw">continue </span><span class="macro-nonterminal">$label</span>;

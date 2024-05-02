@@ -527,9 +527,30 @@
 <a href="#525" id="525">525</a>
 <a href="#526" id="526">526</a>
 <a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
-    cell::Cell,
-    sync::Arc,
+    fmt::Display,
+    sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 <span class="kw">use </span>tokio::sync::{
@@ -565,13 +586,13 @@
     Canceled,
 }
 
-<span class="kw">impl </span>ToString <span class="kw">for </span>StopReason {
-    <span class="kw">fn </span>to_string(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+<span class="kw">impl </span>Display <span class="kw">for </span>StopReason {
+    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
         <span class="kw">match </span><span class="self">self </span>{
-            StopReason::Eos =&gt; <span class="string">"stop"</span>.to_string(),
-            StopReason::Length(<span class="kw">_</span>) | StopReason::ModelLength(<span class="kw">_</span>) =&gt; <span class="string">"length"</span>.to_string(),
-            StopReason::StopTok(<span class="kw">_</span>) | StopReason::StopString { .. } =&gt; <span class="string">"stop"</span>.to_string(),
-            StopReason::Canceled =&gt; <span class="string">"canceled"</span>.to_string(),
+            StopReason::Eos =&gt; <span class="macro">write!</span>(f, <span class="string">"stop"</span>),
+            StopReason::Length(<span class="kw">_</span>) | StopReason::ModelLength(<span class="kw">_</span>) =&gt; <span class="macro">write!</span>(f, <span class="string">"length"</span>),
+            StopReason::StopTok(<span class="kw">_</span>) | StopReason::StopString { .. } =&gt; <span class="macro">write!</span>(f, <span class="string">"stop"</span>),
+            StopReason::Canceled =&gt; <span class="macro">write!</span>(f, <span class="string">"canceled"</span>),
         }
     }
 }
@@ -586,12 +607,12 @@
     RunningPrefillPrompt,
 }
 
-<span class="attr">#[derive(Clone)]
-</span><span class="kw">pub enum </span>SequenceRecognizer {
+<span class="kw">pub enum </span>SequenceRecognizer {
     Regex(Box&lt;StackRecognizer&lt;StateID, RecRx&gt;&gt;),
     Cfg(Box&lt;CfgParser&gt;),
     <span class="prelude-val">None</span>,
 }
+
 <span class="kw">pub struct </span>Sequence {
     <span class="comment">// Metadata, const
     </span>id: usize,
@@ -626,8 +647,9 @@
     </span><span class="kw">pub </span>prompt_tok_per_sec: f32,
     <span class="kw">pub </span>prompt_timestamp: <span class="prelude-ty">Option</span>&lt;u128&gt;,
     group: Arc&lt;Mutex&lt;SequenceGroup&gt;&gt;,
-    state: Cell&lt;SequenceState&gt;,
+    state: RwLock&lt;SequenceState&gt;,
 }
+
 <span class="kw">impl </span>Sequence {
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>new_waiting(
@@ -656,7 +678,7 @@
             prompt_len,
             id,
             timestamp,
-            state: Cell::new(SequenceState::Waiting),
+            state: RwLock::new(SequenceState::Waiting),
             cache: <span class="macro">vec!</span>[<span class="prelude-val">None</span>; layers],
             xlora_cache: <span class="kw">if </span>is_xlora {
                 <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="prelude-val">None</span>; layers])
@@ -723,22 +745,22 @@
     }
 
     <span class="kw">pub fn </span>is_running(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-        <span class="self">self</span>.state.get() == SequenceState::RunningCompletion
-            || <span class="self">self</span>.state.get() == SequenceState::RunningPrompt
-            || <span class="self">self</span>.state.get() == SequenceState::RunningPrefillPrompt
+        <span class="kw-2">*</span><span class="self">self</span>.state.read().unwrap() == SequenceState::RunningCompletion
+            || <span class="kw-2">*</span><span class="self">self</span>.state.read().unwrap() == SequenceState::RunningPrompt
+            || <span class="kw-2">*</span><span class="self">self</span>.state.read().unwrap() == SequenceState::RunningPrefillPrompt
     }
 
     <span class="kw">pub fn </span>is_completion(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-        <span class="self">self</span>.state.get() == SequenceState::RunningCompletion
+        <span class="kw-2">*</span><span class="self">self</span>.state.read().unwrap() == SequenceState::RunningCompletion
     }
 
     <span class="kw">pub fn </span>is_prompt(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-        <span class="self">self</span>.state.get() == SequenceState::RunningPrompt
-            || <span class="self">self</span>.state.get() == SequenceState::RunningPrefillPrompt
+        <span class="kw-2">*</span><span class="self">self</span>.state.read().unwrap() == SequenceState::RunningPrompt
+            || <span class="kw-2">*</span><span class="self">self</span>.state.read().unwrap() == SequenceState::RunningPrefillPrompt
     }
 
     <span class="kw">pub fn </span>is_waiting(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-        <span class="self">self</span>.state.get() == SequenceState::Waiting
+        <span class="kw-2">*</span><span class="self">self</span>.state.read().unwrap() == SequenceState::Waiting
     }
 
     <span class="kw">pub fn </span>get_toks(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[u32] {
@@ -770,6 +792,26 @@
 
     <span class="kw">pub fn </span>sampler(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Arc&lt;Sampler&gt; {
         <span class="self">self</span>.sampler.clone()
+    }
+
+    <span class="doccomment">/// Add a some prefill tokens. Only meant for internal speculative decoding usage.
+    </span><span class="kw">pub fn </span>set_prefill_toks(<span class="kw-2">&amp;mut </span><span class="self">self</span>, toks: Vec&lt;u32&gt;) {
+        <span class="self">self</span>.prefill_prompt_toks = <span class="prelude-val">Some</span>(toks)
+    }
+
+    <span class="doccomment">/// Remove the prefill tokens.
+    </span><span class="kw">pub fn </span>reset_prefill_toks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+        <span class="self">self</span>.prefill_prompt_toks = <span class="prelude-val">None
+    </span>}
+
+    <span class="doccomment">/// Internal api.
+    </span><span class="kw">pub fn </span>add_tmp_tok(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tok: u32) {
+        <span class="self">self</span>.tokens.push(tok);
+    }
+
+    <span class="doccomment">/// Internal api.
+    </span><span class="kw">pub fn </span>remove_tmp_tok(<span class="kw-2">&amp;mut </span><span class="self">self</span>, n: usize) {
+        <span class="self">self</span>.tokens.truncate(<span class="self">self</span>.tokens.len() - n);
     }
 
     <span class="kw">pub fn </span>add_token(
@@ -806,7 +848,7 @@
         <span class="kw">if </span><span class="macro">matches!</span>(state, SequenceState::Error) {
             <span class="macro">get_mut_group!</span>(<span class="self">self</span>).n_choices -= <span class="number">1</span>;
         }
-        <span class="self">self</span>.state.set(state);
+        <span class="kw-2">*</span><span class="self">self</span>.state.write().unwrap() = state;
     }
 
     <span class="kw">pub fn </span>is_done(
