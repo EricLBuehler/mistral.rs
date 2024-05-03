@@ -8,10 +8,11 @@ use tokio::sync::{mpsc::Receiver, Mutex};
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
     pipeline::CacheInstruction,
+    request::NormalRequest,
     response::CompletionChoice,
     CompletionResponse, RequestMessage, Response,
 };
-use candle_core::{quantized::GgmlDType, Result, Tensor};
+use candle_core::{Result, Tensor};
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
 use tracing::info;
@@ -32,7 +33,6 @@ const SEED: u64 = 0;
 
 pub struct Engine {
     rx: Receiver<Request>,
-    isq_rx: Receiver<GgmlDType>,
     pipeline: Arc<Mutex<dyn Pipeline>>,
     scheduler: Scheduler<VecDeque<Sequence>>,
     id: usize,
@@ -47,7 +47,6 @@ impl Engine {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         rx: Receiver<Request>,
-        isq_rx: Receiver<GgmlDType>,
         pipeline: Arc<Mutex<dyn Pipeline>>,
         method: SchedulerMethod,
         truncate_sequence: bool,
@@ -60,7 +59,6 @@ impl Engine {
         let is_xlora = get_mut_arcmutex!(pipeline).get_metadata().is_xlora;
         Self {
             rx,
-            isq_rx,
             pipeline,
             scheduler: Scheduler::new(method),
             id: 0,
@@ -84,15 +82,10 @@ impl Engine {
         let mut last_completion_ids: Vec<usize> = vec![];
         'lp: loop {
             while let Ok(request) = self.rx.try_recv() {
-                self.add_request(request).await;
+                self.handle_request(request).await;
             }
             let run_start = Instant::now();
             let mut scheduled = self.scheduler.schedule();
-            if let Ok(dtype) = self.isq_rx.try_recv() {
-                if let Err(e) = get_mut_arcmutex!(self.pipeline).re_isq_model(dtype) {
-                    info!("⚠️ WARNING: ISQ requantization failed: {e:?}");
-                }
-            }
 
             if scheduled.completion.len() > 0 {
                 let current_completion_ids: Vec<usize> =
@@ -223,7 +216,7 @@ impl Engine {
             {
                 // If there is nothing to do, sleep until a request comes in
                 if let Some(request) = self.rx.recv().await {
-                    self.add_request(request).await;
+                    self.handle_request(request).await;
                 }
             }
         }
@@ -257,7 +250,23 @@ impl Engine {
         }
     }
 
-    async fn add_request(&mut self, request: Request) {
+    async fn handle_request(&mut self, request: Request) {
+        match request {
+            Request::ActivateAdapters(adapters) => {
+                if let Err(e) = get_mut_arcmutex!(self.pipeline).activate_adapters(adapters) {
+                    info!("⚠️ WARNING: Adapter activation requantization failed: {e:?}");
+                }
+            }
+            Request::Normal(request) => self.add_request(request).await,
+            Request::ReIsq(level) => {
+                if let Err(e) = get_mut_arcmutex!(self.pipeline).re_isq_model(level) {
+                    info!("⚠️ WARNING: ISQ requantization failed: {e:?}");
+                }
+            }
+        }
+    }
+
+    async fn add_request(&mut self, request: NormalRequest) {
         let is_chat = matches!(request.messages, RequestMessage::Chat(_));
         let echo_prompt = matches!(
             request.messages,

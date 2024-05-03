@@ -3,8 +3,8 @@ use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
     Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelKind,
-    ModelSelected, Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
-    Usage,
+    ModelSelected, NormalRequest, Request, RequestMessage, Response, SamplingParams,
+    SchedulerMethod, TokenSource, Usage,
 };
 use std::fmt::Display;
 use std::sync::Arc;
@@ -68,7 +68,7 @@ fn run_bench(
     let sender = mistralrs.get_sender();
     let (tx, mut rx) = channel(10_000);
 
-    let req = Request {
+    let req = Request::Normal(NormalRequest {
         id: mistralrs.next_request_id(),
         messages: prompt,
         sampling_params: sampling_params.clone(),
@@ -77,7 +77,7 @@ fn run_bench(
         is_streaming: false,
         constraint: Constraint::None,
         suffix: None,
-    };
+    });
 
     let mut usages = Vec::new();
 

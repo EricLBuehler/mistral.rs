@@ -18,8 +18,8 @@ use candle_core::Device;
 use mistralrs_core::{
     ChatCompletionResponse, CompletionResponse, Constraint, DeviceMapMetadata, GGMLLoaderBuilder,
     GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder,
-    NormalLoaderBuilder, NormalSpecificConfig, Request as _Request, RequestMessage, Response,
-    SamplingParams, SchedulerMethod, StopTokens, TokenSource,
+    NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, Request as _Request, RequestMessage,
+    Response, SamplingParams, SchedulerMethod, StopTokens, TokenSource,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
@@ -442,7 +442,7 @@ impl Runner {
             } else {
                 Constraint::None
             };
-            let model_request = _Request {
+            let model_request = _Request::Normal(NormalRequest {
                 id: {
                     let l = NEXT_REQUEST_ID.lock().unwrap();
                     let last = &mut *l.borrow_mut();
@@ -494,7 +494,7 @@ impl Runner {
                 is_streaming: request.stream,
                 constraint,
                 suffix: None,
-            };
+            });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
             let sender = self.runner.get_sender();
@@ -552,7 +552,7 @@ impl Runner {
             } else {
                 Constraint::None
             };
-            let model_request = _Request {
+            let model_request = _Request::Normal(NormalRequest {
                 id: {
                     let l = NEXT_REQUEST_ID.lock().unwrap();
                     let last = &mut *l.borrow_mut();
@@ -582,7 +582,7 @@ impl Runner {
                 is_streaming: false,
                 constraint,
                 suffix: request.suffix.clone(),
-            };
+            });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
             let sender = self.runner.get_sender();
@@ -607,8 +607,9 @@ impl Runner {
     /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
     /// then nothing will happen.
     fn send_re_isq(&self, dtype: String) -> PyResult<()> {
-        self.runner
-            .send_re_isq(parse_isq(&dtype).map_err(|e| PyValueError::new_err(e.to_string()))?);
+        let request =
+            _Request::ReIsq(parse_isq(&dtype).map_err(|e| PyValueError::new_err(e.to_string()))?);
+        self.runner.get_sender().blocking_send(request).unwrap();
         Ok(())
     }
 }

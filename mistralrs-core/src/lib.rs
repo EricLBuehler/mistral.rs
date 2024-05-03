@@ -11,7 +11,6 @@ use std::{
 };
 use tokio::sync::mpsc::{channel, Sender};
 
-use candle_core::quantized::GgmlDType;
 use engine::Engine;
 pub use mistralrs_lora::Ordering;
 pub use pipeline::Pipeline;
@@ -43,7 +42,7 @@ pub use pipeline::{
     NormalLoader, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader,
     Phi3Loader, Qwen2Loader, TokenSource,
 };
-pub use request::{Constraint, Request, RequestMessage};
+pub use request::{Constraint, NormalRequest, Request, RequestMessage};
 pub use response::Response;
 pub use response::*;
 pub use sampler::{SamplingParams, StopTokens, TopLogprob};
@@ -57,7 +56,6 @@ use tokio::runtime::Runtime;
 /// engine.
 pub struct MistralRs {
     sender: Sender<Request>,
-    sender_isq: Sender<GgmlDType>,
     log: Option<String>,
     id: String,
     creation_time: u64,
@@ -146,11 +144,9 @@ impl MistralRs {
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
 
         let (tx, rx) = channel(10_000);
-        let (isq_tx, isq_rx) = channel(10_000);
 
         let this = Arc::new(Self {
             sender: tx,
-            sender_isq: isq_tx,
             log,
             id: pipeline.try_lock().unwrap().name(),
             creation_time: SystemTime::now()
@@ -164,7 +160,6 @@ impl MistralRs {
             rt.block_on(async move {
                 let mut engine = Engine::new(
                     rx,
-                    isq_rx,
                     pipeline,
                     method,
                     truncate_sequence,
@@ -182,14 +177,6 @@ impl MistralRs {
 
     pub fn get_sender(&self) -> Sender<Request> {
         self.sender.clone()
-    }
-
-    /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
-    /// then nothing will happen.
-    pub fn send_re_isq(&self, dtype: GgmlDType) {
-        self.sender_isq
-            .blocking_send(dtype)
-            .expect("Engine is not present.")
     }
 
     pub fn get_id(&self) -> String {
