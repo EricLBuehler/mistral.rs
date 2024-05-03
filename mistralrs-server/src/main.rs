@@ -9,9 +9,10 @@ use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
 use mistralrs_core::{
     get_tgt_non_granular_index, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs,
-    MistralRsBuilder, ModelKind, ModelSelected, SchedulerMethod, TokenSource,
+    MistralRsBuilder, ModelKind, ModelSelected, Request, SchedulerMethod, TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 mod chat_completion;
@@ -25,7 +26,7 @@ mod openai;
 use interactive_mode::interactive_mode;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{info, level_filters::LevelFilter};
-use utoipa::OpenApi;
+use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
@@ -139,6 +140,28 @@ async fn health() -> &'static str {
     "OK"
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+struct AdapterActivationRequest {
+    #[schema(example = json!(vec!["adapter_1","adapter_2"]))]
+    adapter_names: Vec<String>,
+}
+
+#[utoipa::path(
+    post,
+    tag = "Mistral.rs",
+    path = "/activate_adapters",
+    request_body = ChatCompletionRequest,
+    responses((status = 200, description = "Activate a set of pre-loaded LoRA adapters"))
+)]
+async fn activate_adapters(
+    State(state): State<Arc<MistralRs>>,
+    Json(request): Json<AdapterActivationRequest>,
+) -> &'static str {
+    let request = Request::ActivateAdapters(request.adapter_names);
+    state.get_sender().send(request).await.unwrap();
+    "OK"
+}
+
 fn get_router(state: Arc<MistralRs>) -> Router {
     #[derive(OpenApi)]
     #[openapi(
@@ -173,6 +196,7 @@ fn get_router(state: Arc<MistralRs>) -> Router {
         .route("/v1/models", get(models))
         .route("/health", get(health))
         .route("/", get(health))
+        .route("/activate_adapters", get(activate_adapters))
         .with_state(state)
 }
 
