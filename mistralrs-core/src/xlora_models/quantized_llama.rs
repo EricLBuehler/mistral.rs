@@ -284,10 +284,11 @@ impl ModelWeights {
     pub fn from_ggml(
         mut ct: ggml_file::Content,
         gqa: usize,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
         let rotary = RotaryEmbedding::new_partial(
@@ -328,6 +329,7 @@ impl ModelWeights {
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.gate_proj"),
                         &mut count,
+                        preload_adapters,
                     )?,
                     feed_forward_w2: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w2)?,
@@ -337,6 +339,7 @@ impl ModelWeights {
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.down_proj"),
                         &mut count,
+                        preload_adapters,
                     )?,
                     feed_forward_w3: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w3)?,
@@ -346,6 +349,7 @@ impl ModelWeights {
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.up_proj"),
                         &mut count,
+                        preload_adapters,
                     )?,
                 })
             };
@@ -364,6 +368,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.q_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_wk: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wk)?,
@@ -373,6 +378,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.k_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_wv: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wv)?,
@@ -382,6 +388,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.v_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_wo: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wo)?,
@@ -391,6 +398,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.o_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_norm: QRmsNorm::new(attention_norm, 1e-5)?,
                 mlp_or_moe,
@@ -424,11 +432,12 @@ impl ModelWeights {
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
         mapper: DeviceMapMetadata,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle_core::bail!("cannot find {s} in metadata"),
@@ -512,6 +521,7 @@ impl ModelWeights {
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.gate_proj"),
                         &mut count,
+                        preload_adapters,
                     )?,
                     feed_forward_w2: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w2)?,
@@ -521,6 +531,7 @@ impl ModelWeights {
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.down_proj"),
                         &mut count,
+                        preload_adapters,
                     )?,
                     feed_forward_w3: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w3)?,
@@ -530,6 +541,7 @@ impl ModelWeights {
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.up_proj"),
                         &mut count,
+                        preload_adapters,
                     )?,
                 })
             } else {
@@ -555,6 +567,7 @@ impl ModelWeights {
                             ordering,
                             format!("model.layers.{layer_idx}.mlp.gate_proj.{i}"),
                             &mut count,
+                            preload_adapters,
                         )?,
                         feed_forward_w2: QLoraLinear::new(
                             QMatMul::from_qtensor(feed_forward_w2)?,
@@ -564,6 +577,7 @@ impl ModelWeights {
                             ordering,
                             format!("model.layers.{layer_idx}.mlp.down_proj.{i}"),
                             &mut count,
+                            preload_adapters,
                         )?,
                         feed_forward_w3: QLoraLinear::new(
                             QMatMul::from_qtensor(feed_forward_w3)?,
@@ -573,6 +587,7 @@ impl ModelWeights {
                             ordering,
                             format!("model.layers.{layer_idx}.mlp.up_proj.{i}"),
                             &mut count,
+                            preload_adapters,
                         )?,
                     })
                 }
@@ -598,6 +613,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.q_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_wk: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wk)?,
@@ -607,6 +623,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.k_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_wv: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wv)?,
@@ -616,6 +633,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.v_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_wo: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wo)?,
@@ -625,6 +643,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.o_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_norm: QRmsNorm::new(attention_norm, rms_norm_eps)?,
                 mlp_or_moe,

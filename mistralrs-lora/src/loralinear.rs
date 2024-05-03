@@ -1,15 +1,15 @@
-use std::{iter::zip, ops::Mul};
+use std::{collections::HashMap, iter::zip, ops::Mul};
 
 use candle_core::{
     quantized::{QMatMul, QTensor},
     Module, Result, Tensor,
 };
-use candle_nn::{init, Dropout, Linear, VarBuilder};
+use candle_nn::{Linear, VarBuilder};
 use either::Either;
 
 use crate::{
-    apply_scalings_to_x, get_maybe_topk_scalings, layer::QLinear, LinearLayerLike, LoraConfig,
-    LoraLinearConfig, Merge,
+    apply_scalings_to_x, get_maybe_topk_scalings, layer::QLinear, make_adapter, Adapter,
+    LinearLayerLike, LoraConfig, LoraLinearConfig, Merge,
 };
 
 #[derive(Debug)]
@@ -18,47 +18,35 @@ pub struct LoraLinear {
     a_adapters: Either<Vec<Linear>, (Tensor, Vec<Linear>)>,
     b_adapters: Either<Vec<Linear>, (Tensor, Vec<Linear>)>,
     scale_adapters: Vec<f64>,
-    dropout_adapters: Vec<Option<Dropout>>,
     layer_n: usize,
     merged: bool,
+    adapters: HashMap<String, Adapter>,
 }
 
 impl LoraLinear {
     pub fn new(
         old: &dyn LinearLayerLike,
         linear_config: &LoraLinearConfig,
-        config: &[(String, LoraConfig)],
+        config: &[((String, String), LoraConfig)],
         vb: &VarBuilder,
         layer_n: usize,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let mut a_adapters = Vec::with_capacity(config.len());
         let mut b_adapters = Vec::with_capacity(config.len());
         let mut scale_adapters = Vec::with_capacity(config.len());
-        let mut dropout_adapters = Vec::with_capacity(config.len());
         let a_vb = vb.pp("lora_A".to_string());
         let b_vb = vb.pp("lora_B".to_string());
         let mut state = None;
         let mut all_same = true;
-        for (name, cfg) in config.iter() {
-            let a_pp = a_vb.pp(name);
-            assert!(a_pp.contains_tensor("weight"));
-            let a = a_pp.get_with_hints(
-                (cfg.rank, linear_config.in_features),
-                "weight",
-                init::DEFAULT_KAIMING_NORMAL,
-            )?;
-            let b_pp = b_vb.pp(name);
-            assert!(b_pp.contains_tensor("weight"));
-            let b =
-                b_pp.get_with_hints((linear_config.out_features, cfg.rank), "weight", init::ZERO)?;
-            a_adapters.push(Linear::new(a, None));
-            b_adapters.push(Linear::new(b, None));
-            scale_adapters.push(if cfg.rank > 0 {
-                cfg.alpha / cfg.rank as f64
-            } else {
-                1.0
-            });
-            dropout_adapters.push(cfg.dropout.map(Dropout::new));
+        let mut adapters = HashMap::new();
+        for ((name_id, adapter_name), cfg) in config.iter() {
+            let a_pp = a_vb.pp(name_id);
+            let b_pp = b_vb.pp(name_id);
+            let adapter = make_adapter(a_pp, b_pp, cfg, linear_config)?;
+            a_adapters.push(adapter.a.clone());
+            b_adapters.push(adapter.b.clone());
+            scale_adapters.push(adapter.scale);
             if state.is_some_and(|x| {
                 x == (
                     cfg.rank,
@@ -78,6 +66,17 @@ impl LoraLinear {
                 ));
             } else {
                 all_same = false;
+            }
+            adapters.insert(adapter_name.clone(), adapter);
+        }
+
+        if let Some(preload_adapters) = preload_adapters {
+            all_same = false;
+            for (name, (vb, cfg)) in preload_adapters {
+                let a_vb = vb.set_prefix(a_vb.prefix());
+                let b_vb = vb.set_prefix(b_vb.prefix());
+                let adapter = make_adapter(a_vb, b_vb, cfg, linear_config)?;
+                adapters.insert(name.clone(), adapter);
             }
         }
 
@@ -108,9 +107,9 @@ impl LoraLinear {
                 a_adapters: Either::Right((a_adapters_stack.clone(), a_adapters)),
                 b_adapters: Either::Right((b_adapters_stack, b_adapters)),
                 scale_adapters,
-                dropout_adapters,
                 layer_n,
                 merged: false,
+                adapters,
             })
         } else {
             Ok(LoraLinear {
@@ -118,9 +117,9 @@ impl LoraLinear {
                 a_adapters: Either::Left(a_adapters),
                 b_adapters: Either::Left(b_adapters),
                 scale_adapters,
-                dropout_adapters,
                 layer_n,
                 merged: false,
+                adapters,
             })
         }
     }
@@ -206,23 +205,11 @@ impl LinearLayerLike for LoraLinear {
                 self.b_adapters.as_ref().unwrap_left().clone()
             };
             //No fan_in_fan_out so no weight.transpose(0,1)
-            for (i, (adapter_a, (adapter_b, (adapter_scale, adapter_dropout)))) in zip(
-                a_adapters,
-                zip(
-                    b_adapters,
-                    zip(&self.scale_adapters, &self.dropout_adapters),
-                ),
-            )
-            .enumerate()
+            for (i, (adapter_a, (adapter_b, adapter_scale))) in
+                zip(a_adapters, zip(b_adapters, &self.scale_adapters)).enumerate()
             {
                 let mut input_new = input.to_dtype(adapter_a.weight().dtype())?;
                 input_new = apply_scalings_to_x(input_new.clone(), &scalings, i)?;
-
-                input_new = if let Some(ref dropout) = adapter_dropout {
-                    dropout.forward(&input_new, true)?
-                } else {
-                    input_new.clone()
-                };
 
                 let res = adapter_b
                     .forward(&adapter_a.forward(&input_new)?)?
@@ -236,7 +223,6 @@ impl LinearLayerLike for LoraLinear {
             let adapter_b = &self.b_adapters.as_ref().unwrap_right().0;
             let adapter_scales = &self.scale_adapters;
             let n_adapters = adapter_scales.len();
-            let dropout = &self.dropout_adapters[0];
             let scalings = scalings
                 .squeeze(0)?
                 .squeeze(0)?
@@ -246,11 +232,6 @@ impl LinearLayerLike for LoraLinear {
                 .broadcast_mul(&scalings)?
                 .mul(global_scaling_weight)?;
 
-            let input = if let Some(ref d) = dropout {
-                d.forward(input, true)?
-            } else {
-                input.clone()
-            };
             let (b, s, h) = input.dims3()?;
             let input = input.reshape((b * s, h))?;
             let out = adapter_a.broadcast_matmul(&input.t()?)?;

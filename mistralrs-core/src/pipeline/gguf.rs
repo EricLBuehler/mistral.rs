@@ -10,7 +10,7 @@ use crate::pipeline::chat_template::calculate_eos_tokens;
 use crate::pipeline::{ChatTemplate, SimpleModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
-use crate::utils::varbuilder_utils::from_mmaped_safetensors;
+use crate::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 use crate::xlora_models::NonGranularState;
 use crate::{deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata};
 use crate::{
@@ -326,6 +326,12 @@ impl Loader for GGUFLoader {
                         paths.get_ordering().as_ref().unwrap(),
                         Some(paths.get_classifier_config().as_ref().unwrap().clone()),
                         mapper,
+                        &load_preload_adapters(
+                            paths.get_lora_preload_adapter_info(),
+                            DType::F32,
+                            device,
+                            silent,
+                        )?,
                     )?),
                     a => bail!("Unsupported architecture for GGUF X-LoRA `{a:?}`"),
                 }
@@ -356,6 +362,12 @@ impl Loader for GGUFLoader {
                         paths.get_ordering().as_ref().unwrap(),
                         None,
                         mapper,
+                        &load_preload_adapters(
+                            paths.get_lora_preload_adapter_info(),
+                            DType::F32,
+                            device,
+                            silent,
+                        )?,
                     )?),
                     a => bail!("Unsupported architecture for GGUF X-LoRA `{a:?}`"),
                 }

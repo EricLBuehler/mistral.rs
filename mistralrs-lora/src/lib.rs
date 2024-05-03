@@ -4,7 +4,7 @@ use candle_core::{
     quantized::{QMatMul, QTensor},
     IndexOp, Result, Tensor, D,
 };
-use candle_nn::{Linear, Module, VarBuilder};
+use candle_nn::{init, Linear, Module, VarBuilder};
 use loralinear::LoraLinear;
 pub use qloralinear::QLoraLinear;
 use serde::Deserialize;
@@ -16,11 +16,18 @@ mod qloralinear;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct PreloadAdapter {
+    pub name: String,
+    pub adapter_model_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct Ordering {
     #[serde(rename = "order")]
     pub adapters: Option<Vec<String>>,
     pub layers: HashMap<String, usize>,
     pub base_model_id: String,
+    pub preload_adapters: Option<Vec<PreloadAdapter>>,
 }
 
 #[derive(Clone, Debug)]
@@ -70,6 +77,37 @@ impl LoraConfig {
             target_modules,
         }
     }
+}
+
+#[derive(Debug)]
+struct Adapter {
+    a: Linear,
+    b: Linear,
+    scale: f64,
+}
+
+fn make_adapter(
+    a_vb: VarBuilder,
+    b_vb: VarBuilder,
+    cfg: &LoraConfig,
+    linear_cfg: &LoraLinearConfig,
+) -> Result<Adapter> {
+    assert!(a_vb.contains_tensor("weight"));
+    let a = a_vb.get_with_hints(
+        (cfg.rank, linear_cfg.in_features),
+        "weight",
+        init::DEFAULT_KAIMING_NORMAL,
+    )?;
+    assert!(b_vb.contains_tensor("weight"));
+    let b = b_vb.get_with_hints((linear_cfg.out_features, cfg.rank), "weight", init::ZERO)?;
+    let a = Linear::new(a, None);
+    let b = Linear::new(b, None);
+    let scale = if cfg.rank > 0 {
+        cfg.alpha / cfg.rank as f64
+    } else {
+        1.0
+    };
+    Ok(Adapter { a, b, scale })
 }
 
 /// Any layer that is linear-like.
@@ -127,14 +165,16 @@ impl LinearLayerLike for Linear {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn linear(
     d1: usize,
     d2: usize,
     base_vb: crate::VarBuilder,
     vb: VarBuilder,
-    lora_config: &[(String, LoraConfig)],
+    lora_config: &[((String, String), LoraConfig)],
     count: &mut usize,
     ord: &Ordering,
+    preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
     let prefix = vb.prefix();
     let module = prefix.split('.').last().unwrap();
@@ -155,19 +195,28 @@ pub fn linear(
     let name = prefix.split("lora_A").last().unwrap();
     let layer = ord.layers.get(name).unwrap();
 
-    let lorainner = LoraLinear::new(&inner, &linear_config, lora_config, &vb, *layer)?;
+    let lorainner = LoraLinear::new(
+        &inner,
+        &linear_config,
+        lora_config,
+        &vb,
+        *layer,
+        preload_adapters,
+    )?;
     *count += 1;
     Ok(Arc::new(lorainner))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn linear_no_bias(
     d1: usize,
     d2: usize,
     base_vb: crate::VarBuilder,
     vb: VarBuilder,
-    lora_config: &[(String, LoraConfig)],
+    lora_config: &[((String, String), LoraConfig)],
     count: &mut usize,
     ord: &Ordering,
+    preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
     let prefix = vb.prefix();
     let module = prefix.split('.').last().unwrap();
@@ -188,7 +237,14 @@ pub fn linear_no_bias(
     let name = prefix.split("lora_A").last().unwrap();
     let layer = ord.layers.get(name).unwrap();
 
-    let lorainner = LoraLinear::new(&inner, &linear_config, lora_config, &vb, *layer)?;
+    let lorainner = LoraLinear::new(
+        &inner,
+        &linear_config,
+        lora_config,
+        &vb,
+        *layer,
+        preload_adapters,
+    )?;
     *count += 1;
     Ok(Arc::new(lorainner))
 }
@@ -204,14 +260,33 @@ pub fn linear_b(
     bias: bool,
     base_vb: crate::VarBuilder,
     vb: crate::VarBuilder,
-    lora_config: &[(String, LoraConfig)],
+    lora_config: &[((String, String), LoraConfig)],
     count: &mut usize,
     ord: &Ordering,
+    preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
     if bias {
-        linear(in_dim, out_dim, base_vb, vb, lora_config, count, ord)
+        linear(
+            in_dim,
+            out_dim,
+            base_vb,
+            vb,
+            lora_config,
+            count,
+            ord,
+            preload_adapters,
+        )
     } else {
-        linear_no_bias(in_dim, out_dim, base_vb, vb, lora_config, count, ord)
+        linear_no_bias(
+            in_dim,
+            out_dim,
+            base_vb,
+            vb,
+            lora_config,
+            count,
+            ord,
+            preload_adapters,
+        )
     }
 }
 

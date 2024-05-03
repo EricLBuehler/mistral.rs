@@ -58,11 +58,12 @@ pub trait ModelPaths {
     fn get_tokenizer_filename(&self) -> &PathBuf;
     fn get_template_filename(&self) -> &PathBuf;
     fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>>;
-    fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>>;
+    fn get_adapter_configs(&self) -> &Option<Vec<((String, String), LoraConfig)>>; // (id name, name)
     fn get_classifier_path(&self) -> &Option<PathBuf>;
     fn get_classifier_config(&self) -> &Option<XLoraConfig>;
     fn get_ordering(&self) -> &Option<Ordering>;
     fn get_gen_conf_filename(&self) -> Option<&PathBuf>;
+    fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>>;
 }
 
 pub struct SimpleModelPaths<P> {
@@ -71,11 +72,12 @@ pub struct SimpleModelPaths<P> {
     template_filename: P,
     filenames: Vec<P>,
     xlora_adapter_filenames: Option<Vec<(String, P)>>,
-    xlora_adapter_configs: Option<Vec<(String, LoraConfig)>>,
+    xlora_adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
     classifier_path: Option<P>,
     classifier_config: Option<XLoraConfig>,
     xlora_ordering: Option<Ordering>,
     gen_conf: Option<P>,
+    lora_preload_adapter_info: Option<HashMap<String, (P, LoraConfig)>>,
 }
 
 impl ModelPaths for SimpleModelPaths<PathBuf> {
@@ -91,7 +93,7 @@ impl ModelPaths for SimpleModelPaths<PathBuf> {
     fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>> {
         &self.xlora_adapter_filenames
     }
-    fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>> {
+    fn get_adapter_configs(&self) -> &Option<Vec<((String, String), LoraConfig)>> {
         &self.xlora_adapter_configs
     }
     fn get_classifier_config(&self) -> &Option<XLoraConfig> {
@@ -108,6 +110,9 @@ impl ModelPaths for SimpleModelPaths<PathBuf> {
     }
     fn get_gen_conf_filename(&self) -> Option<&PathBuf> {
         self.gen_conf.as_ref()
+    }
+    fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>> {
+        &self.lora_preload_adapter_info
     }
 }
 
@@ -396,12 +401,13 @@ pub trait NormalModelLoader {
         config: &str,
         use_flash_attn: bool,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         mapper: DeviceMapMetadata,
         loading_isq: bool,
         device: Device,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn is_gptx(&self) -> bool;
 }
@@ -685,11 +691,12 @@ pub fn extract_logits(
 }
 
 struct XLoraPaths {
-    adapter_configs: Option<Vec<(String, LoraConfig)>>,
+    adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
     adapter_safetensors: Option<Vec<(String, PathBuf)>>,
     classifier_path: Option<PathBuf>,
     xlora_order: Option<Ordering>,
     xlora_config: Option<XLoraConfig>,
+    lora_preload_adapter_info: Option<HashMap<String, (PathBuf, LoraConfig)>>,
 }
 
 fn get_xlora_paths(
@@ -798,7 +805,7 @@ fn get_xlora_paths(
                 } else {
                     let conf = fs::read_to_string(path)?;
                     let lora_config: LoraConfig = serde_json::from_str(&conf)?;
-                    adapters_configs.push(((i + 1).to_string(), lora_config));
+                    adapters_configs.push((((i + 1).to_string(), name.clone()), lora_config));
                 }
             }
         }
@@ -816,12 +823,66 @@ fn get_xlora_paths(
             );
         }
 
+        let lora_preload_adapter_info = if let Some(xlora_order) = xlora_order {
+            if let Some(preload_adapters) = &xlora_order.preload_adapters {
+                let mut output = HashMap::new();
+                for adapter in preload_adapters {
+                    let adapter_files = api_dir_list!(api, model_id)
+                        .filter_map(|f| {
+                            if *f == adapter.name {
+                                Some((f, adapter.name.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    if adapter_files.is_empty() {
+                        anyhow::bail!("Adapter files are empty. Perhaps the ordering file adapters does not match the actual adapters?")
+                    }
+                    let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
+                    for (file, name) in adapter_files {
+                        if let Some(paths) = adapters_paths.get_mut(&name) {
+                            paths.push(api_get_file!(api, &file, Path::new("")));
+                        } else {
+                            adapters_paths
+                                .insert(name, vec![api_get_file!(api, &file, Path::new(""))]);
+                        }
+                    }
+
+                    let mut config = None;
+                    let mut safetensor = None;
+
+                    let paths = adapters_paths
+                        .get(&adapter.name)
+                        .unwrap_or_else(|| panic!("Adapter {} not found.", adapter.name));
+                    for path in paths {
+                        if path.extension().unwrap() == "safetensors" {
+                            safetensor = Some(path.to_owned());
+                        } else {
+                            let conf = fs::read_to_string(path)?;
+                            let lora_config: LoraConfig = serde_json::from_str(&conf)?;
+                            config = Some(lora_config);
+                        }
+                    }
+
+                    let (config, safetensor) = (config.unwrap(), safetensor.unwrap());
+                    output.insert(adapter.name.clone(), (safetensor, config));
+                }
+                Some(output)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         XLoraPaths {
             adapter_configs: Some(adapters_configs),
             adapter_safetensors: Some(adapters_safetensors),
             classifier_path: Some(classifier_path),
             xlora_order: xlora_order.clone(),
             xlora_config: Some(xlora_config),
+            lora_preload_adapter_info,
         }
     } else {
         XLoraPaths {
@@ -830,6 +891,7 @@ fn get_xlora_paths(
             classifier_path: None,
             xlora_order: None,
             xlora_config: None,
+            lora_preload_adapter_info: None,
         }
     })
 }
