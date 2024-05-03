@@ -362,6 +362,7 @@ impl Loader for GGMLLoader {
                 is_xlora,
                 num_hidden_layers,
                 eos_tok: eos,
+                is_lora,
             },
         })))
     }
@@ -468,6 +469,17 @@ impl Pipeline for GGMLPipeline {
         match self.model {
             Model::Llama(ref model) => &model.cache,
             Model::XLoraLlama(ref model) => &model.cache,
+        }
+    }
+    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<()> {
+        if !self.metadata.is_lora {
+            anyhow::bail!("Cannot activate adapters non-LoRA models.")
+        }
+        match self.model {
+            Model::Llama(_) => unreachable!(),
+            Model::XLoraLlama(ref mut model) => model
+                .activate_adapters(adapter_names)
+                .map_err(anyhow::Error::msg),
         }
     }
 }

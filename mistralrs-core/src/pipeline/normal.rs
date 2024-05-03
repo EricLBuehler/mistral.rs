@@ -310,6 +310,7 @@ impl Loader for NormalLoader {
                 is_xlora,
                 num_hidden_layers,
                 eos_tok: eos,
+                is_lora,
             },
         })))
     }
@@ -414,5 +415,10 @@ impl Pipeline for NormalPipeline {
     }
     fn cache(&self) -> &Cache {
         self.model.cache()
+    }
+    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<()> {
+        self.model
+            .activate_adapters(adapter_names)
+            .map_err(anyhow::Error::msg)
     }
 }

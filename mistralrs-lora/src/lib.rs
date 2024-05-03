@@ -111,7 +111,7 @@ fn make_adapter(
 }
 
 /// Any layer that is linear-like.
-pub trait LinearLayerLike: Debug + Merge {
+pub trait LinearLayerLike: Debug + Merge + AdapterSwapper {
     fn inner(&mut self) -> &mut QMatMul;
     fn is_quant(&self) -> bool;
     fn weight(&self) -> &Tensor;
@@ -133,7 +133,13 @@ pub trait Merge {
 }
 
 pub trait AdapterSwapper {
-    fn activate(&mut self, adapter_names: Vec<String>) -> Result<()>;
+    fn activate(&mut self, adapter_names: &[String]) -> Result<()> {
+        if !self.can_load() {
+            candle_core::bail!("Cannot load.");
+        }
+        self.activate_adapters(adapter_names)
+    }
+    fn activate_adapters(&mut self, adapters: &[String]) -> Result<()>;
     fn has_adapter(&self, adapter: String) -> bool;
     /// Pass the prefix for the layer (exlcuding .lora_?) as `module_prefix`
     fn load_new_adapter(
@@ -151,6 +157,27 @@ impl Merge for Linear {
         Ok(())
     }
     fn get_delta_weight(&self, _adapter: usize) -> Result<Tensor> {
+        unreachable!()
+    }
+}
+
+impl AdapterSwapper for Linear {
+    fn activate_adapters(&mut self, _adapter: &[String]) -> Result<()> {
+        unreachable!()
+    }
+    fn can_load(&self) -> bool {
+        false
+    }
+    fn has_adapter(&self, _adapter: String) -> bool {
+        false
+    }
+    fn load_new_adapter(
+        &mut self,
+        _name: String,
+        _vb: VarBuilder,
+        _cfg: &LoraConfig,
+        _module_prefix: String,
+    ) -> Result<()> {
         unreachable!()
     }
 }

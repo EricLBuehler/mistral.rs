@@ -160,7 +160,7 @@ impl QLoraLinear {
 }
 
 impl AdapterSwapper for QLoraLinear {
-    fn activate(&mut self, adapter_names: Vec<String>) -> Result<()> {
+    fn activate_adapters(&mut self, adapter_names: &[String]) -> Result<()> {
         match (
             &mut self.a_adapters,
             &mut self.b_adapters,
@@ -175,7 +175,7 @@ impl AdapterSwapper for QLoraLinear {
                         a: a_w,
                         b: b_w,
                         scale,
-                    } = match self.adapters.get(&adapter_name) {
+                    } = match self.adapters.get(adapter_name) {
                         Some(a) => a,
                         None => bail!("Cannot load adapter `{adapter_name}`."),
                     };

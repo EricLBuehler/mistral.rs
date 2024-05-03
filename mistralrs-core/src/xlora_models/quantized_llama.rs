@@ -6,7 +6,9 @@ use candle_core::quantized::QMatMul;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
-use mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear};
+use mistralrs_lora::{
+    get_lora_cfg, AdapterSwapper, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear,
+};
 use tqdm::Iter;
 use tracing::info;
 
@@ -698,6 +700,34 @@ impl ModelWeights {
             max_seq_len,
             mapper: Some(mapper),
         })
+    }
+
+    pub fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<()> {
+        for layer in self.layers.iter_mut().tqdm() {
+            layer.attention_wk.activate(&adapter_names)?;
+            layer.attention_wo.activate(&adapter_names)?;
+            layer.attention_wq.activate(&adapter_names)?;
+            layer.attention_wv.activate(&adapter_names)?;
+            match &mut layer.mlp_or_moe {
+                MlpOrMoe::Mlp(ref mut m) => {
+                    m.feed_forward_w1.activate(&adapter_names)?;
+                    m.feed_forward_w2.activate(&adapter_names)?;
+                    m.feed_forward_w3.activate(&adapter_names)?;
+                }
+                MlpOrMoe::MoE {
+                    n_expert_used: _,
+                    feed_forward_gate_inp: _,
+                    experts,
+                } => {
+                    for expert in experts {
+                        expert.feed_forward_w1.activate(&adapter_names)?;
+                        expert.feed_forward_w2.activate(&adapter_names)?;
+                        expert.feed_forward_w3.activate(&adapter_names)?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
