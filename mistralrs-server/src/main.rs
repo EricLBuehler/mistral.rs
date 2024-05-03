@@ -150,7 +150,7 @@ struct AdapterActivationRequest {
     post,
     tag = "Mistral.rs",
     path = "/activate_adapters",
-    request_body = ChatCompletionRequest,
+    request_body = AdapterActivationRequest,
     responses((status = 200, description = "Activate a set of pre-loaded LoRA adapters"))
 )]
 async fn activate_adapters(
@@ -160,6 +160,28 @@ async fn activate_adapters(
     let request = Request::ActivateAdapters(request.adapter_names);
     state.get_sender().send(request).await.unwrap();
     "OK"
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+struct ReIsqRequest {
+    #[schema(example = "Q4K")]
+    ggml_type: String,
+}
+
+#[utoipa::path(
+    post,
+    tag = "Mistral.rs",
+    path = "/re_isq",
+    request_body = ReIsqRequest,
+    responses((status = 200, description = "Reapply ISQ to a non GGUF or GGML model."))
+)]
+async fn re_isq(
+    State(state): State<Arc<MistralRs>>,
+    Json(request): Json<ReIsqRequest>,
+) -> Result<&'static str, String> {
+    let request = Request::ReIsq(parse_isq(&request.ggml_type)?);
+    state.get_sender().send(request).await.unwrap();
+    Ok("OK")
 }
 
 fn get_router(state: Arc<MistralRs>) -> Router {
@@ -196,7 +218,8 @@ fn get_router(state: Arc<MistralRs>) -> Router {
         .route("/v1/models", get(models))
         .route("/health", get(health))
         .route("/", get(health))
-        .route("/activate_adapters", get(activate_adapters))
+        .route("/activate_adapters", post(activate_adapters))
+        .route("/re_isq", post(re_isq))
         .with_state(state)
 }
 
