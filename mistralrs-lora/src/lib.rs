@@ -132,6 +132,20 @@ pub trait Merge {
     fn merge_weights(&mut self) -> Result<()>;
 }
 
+pub trait AdapterSwapper {
+    fn activate(&mut self, adapter_names: Vec<String>) -> Result<()>;
+    fn has_adapter(&self, adapter: String) -> bool;
+    /// Pass the prefix for the layer (exlcuding .lora_?) as `module_prefix`
+    fn load_new_adapter(
+        &mut self,
+        name: String,
+        vb: VarBuilder,
+        cfg: &LoraConfig,
+        module_prefix: String,
+    ) -> Result<()>;
+    fn can_load(&self) -> bool;
+}
+
 impl Merge for Linear {
     fn merge_weights(&mut self) -> Result<()> {
         Ok(())
