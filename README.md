@@ -403,4 +403,4 @@ Consider enabling `RUST_LOG=debug` environment variable.
 If you want to add a new model, please see [our guide](docs/ADDING_MODELS.md).
 
 ## Credits
-This project would not be possible without the excellent work at [`candle`](https://github.com//candle). Additionally, thank you to all contributors! Contributing can range from raising an issue or suggesting a feature to adding some new functionality.
+This project would not be possible without the excellent work at [`candle`](https://github.com/huggingface/candle). Additionally, thank you to all contributors! Contributing can range from raising an issue or suggesting a feature to adding some new functionality.
