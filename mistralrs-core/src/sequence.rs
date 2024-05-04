@@ -304,9 +304,18 @@ impl Sequence {
         self.completion_bytes
             .truncate(self.completion_bytes.len() - self.last_completion_bytes_len);
         self.cumulative_logprob -= self.last_logprob;
-        self.tokens.pop();
+        let tok = self.tokens.pop().unwrap();
         let logprobs = self.logprobs.pop();
-        (logprobs.unwrap(), comple_bytes, self.last_is_done)
+        (
+            logprobs.unwrap_or(Logprobs {
+                token: tok,
+                logprob: 0.0,
+                bytes: "".to_string(),
+                top_logprobs: None,
+            }),
+            comple_bytes,
+            self.last_is_done,
+        )
     }
 
     pub fn responder(&self) -> Sender<Response> {
