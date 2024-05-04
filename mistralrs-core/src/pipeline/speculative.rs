@@ -208,12 +208,10 @@ impl Pipeline for SpeculativePipeline {
             is_xlora,
             &device,
             has_no_kv_cache,
-            Some(self.gamma), // Get the last gamma, see above
+            Some(self.gamma + 1), // Get the last gamma, see above
         )
         .unwrap();
-
         let logits = get_mut_arcmutex!(self.target).forward_inputs(inputs)?;
-
         // Reset the prefill tokens
         seq.reset_prefill_toks();
 
@@ -229,7 +227,7 @@ impl Pipeline for SpeculativePipeline {
                 .tok_trie
                 .clone(),
             rng.clone(),
-            self.gamma,
+            self.gamma + 1,
         )
         .await?;
 
