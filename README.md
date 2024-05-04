@@ -43,7 +43,7 @@ Mistral.rs is a fast LLM inference platform supporting inference on a variety of
 - Lightweight OpenAI API compatible HTTP server.
 - Python API.
 - Grammar support with Regex and Yacc.
-- [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from Huggingface Hub by quantizing them after loading instead of creating a GGUF file. This loads the ISQ-able weights on CPU before quantizing with ISQ and then moving back to the device to avoid memory spikes.
+- [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from Hugging Face Hub by quantizing them after loading instead of creating a GGUF file. This loads the ISQ-able weights on CPU before quantizing with ISQ and then moving back to the device to avoid memory spikes.
 
 **Powerful**:
 - Fast LoRA support with weight merging.
@@ -155,7 +155,7 @@ Please submit more benchmarks via raising an issue!
 
 ## Usage
 ### Installation and Build
-To install mistral.rs, one should ensure they have Rust installed by following [this](https://rustup.rs/) link. Additionally, the Huggingface token should be provided in `~/.cache/huggingface/token` when using the server to enable automatic download of gated models.
+To install mistral.rs, one should ensure they have Rust installed by following [this](https://rustup.rs/) link. Additionally, the Hugging Face token should be provided in `~/.cache/huggingface/token` when using the server to enable automatic download of gated models.
 
 1) Install required packages
     - `openssl` (ex., `sudo apt install libssl-dev`)
