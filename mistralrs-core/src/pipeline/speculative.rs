@@ -208,7 +208,9 @@ impl Pipeline for SpeculativePipeline {
             }
             draft_prefill_tokens.push(sample.sample.token);
         }
+
         seq.set_prefill_toks(draft_prefill_tokens);
+        let (l, c, s) = seq.remove_last_token();
 
         // ======================= Run the model with all draft tokens. ============================
         // x{} and y{} are the output logits for each token and are the distribubtion for the next token.
@@ -224,14 +226,15 @@ impl Pipeline for SpeculativePipeline {
         // ========= Narrow the kv cache ============
 
         if !is_prompt {
-            let cache = seq.cache();
+            let t = get_mut_arcmutex!(self.target);
+            let mut cache = t.cache().lock();
             let initial_cache_len = cache[0].as_ref().map(|(k, _)| k.dims()[2]).unwrap_or(0);
             for (k, v) in cache.iter_mut().flatten() {
                 *k = k.narrow(2, 0, initial_cache_len - 1)?;
                 *v = v.narrow(2, 0, initial_cache_len - 1)?;
             }
             if seq.is_xlora() {
-                let cache = seq.xlora_cache();
+                let mut cache = t.cache().xlora_lock();
                 for (k, v) in cache.iter_mut().flatten() {
                     *k = k.narrow(2, 0, initial_cache_len - 1)?;
                     *v = v.narrow(2, 0, initial_cache_len - 1)?;
@@ -259,6 +262,7 @@ impl Pipeline for SpeculativePipeline {
 
         // Reset the prefill tokens
         seq.reset_prefill_toks();
+        seq.add_token(l, c, &s);
 
         // ======================= Rejection sampling. ============================
         // Map from each target sample to corresponding in draft sample

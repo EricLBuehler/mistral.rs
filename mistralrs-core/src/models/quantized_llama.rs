@@ -203,7 +203,7 @@ pub struct ModelWeights {
     layers: Vec<LayerWeights>,
     norm: QRmsNorm,
     output: QMatMul,
-    masks: HashMap<usize, Tensor>,
+    masks: HashMap<(usize, usize), Tensor>,
     pub device: Device,
     pub cache: Cache,
     pub max_seq_len: usize,
@@ -406,17 +406,27 @@ impl ModelWeights {
         })
     }
 
-    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
-        if let Some(mask) = self.masks.get(&t) {
+    fn mask(&mut self, t: usize, u: usize) -> Result<Tensor> {
+        if let Some(mask) = self.masks.get(&(t, u)) {
             Ok(mask.clone())
         } else {
             let mask: Vec<_> = (0..t)
-                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
+                .flat_map(|i| (0..u).map(move |j| u8::from(j + t > i + u)))
                 .collect();
-            let mask = Tensor::from_slice(&mask, (t, t), device)?;
-            self.masks.insert(t, mask.clone());
+            let mask = Tensor::from_slice(&mask, (t, u), &self.device)?;
+            self.masks.insert((t, u), mask.clone());
             Ok(mask)
         }
+    }
+
+    fn calculate_past_kv_len(&mut self) -> Result<usize> {
+        let cache = self.cache.lock();
+        let kv_cache_1 = cache.first().unwrap();
+        if kv_cache_1.is_none() {
+            return Ok(0);
+        }
+        let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
+        return Ok(k_cache_1.dims()[2]);
     }
 
     pub fn forward(
@@ -427,10 +437,11 @@ impl ModelWeights {
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
+        let pos = self.calculate_past_kv_len()?;
         let mask = if seq_len == 1 {
             None
         } else {
-            Some(self.mask(seq_len, x.device())?)
+            Some(self.mask(seq_len, pos + seq_len)?)
         };
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();

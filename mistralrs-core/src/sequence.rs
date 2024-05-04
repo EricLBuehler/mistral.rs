@@ -89,6 +89,9 @@ pub struct Sequence {
     tokens: Vec<u32>,
     logprobs: Vec<Logprobs>,
     cumulative_logprob: f32,
+    last_logprob: f32,
+    last_completion_bytes_len: usize,
+    last_is_done: Option<StopReason>,
     completion_bytes: Vec<u8>,
     stream_idx: usize,
     pub recognizer: SequenceRecognizer,
@@ -154,6 +157,9 @@ impl Sequence {
             cumulative_logprob: 0.,
             completion_bytes: Vec::new(),
             stream_idx: 0,
+            last_completion_bytes_len: 0,
+            last_logprob: 0.0,
+            last_is_done: None,
         }
     }
 
@@ -172,6 +178,9 @@ impl Sequence {
 
     /// This is the number of tokens. If the KV cache is Some, then it will use that.
     pub fn len(&self) -> usize {
+        if let Some(toks) = &self.prefill_prompt_toks {
+            return toks.len();
+        }
         // Use xlora cache first because of non granular
         if self.xlora_cache.as_ref().is_some_and(|c| c[0].is_some()) {
             self.xlora_cache.as_ref().unwrap()[0]
@@ -183,9 +192,6 @@ impl Sequence {
         } else if let Some((_, x)) = &self.cache[0] {
             x.dims()[2] + 1
         } else {
-            if let Some(toks) = &self.prefill_prompt_toks {
-                return toks.len();
-            }
             self.tokens.len()
         }
     }
@@ -279,11 +285,28 @@ impl Sequence {
             // We don't need to add stop tokens to the completion bytes to check for stop strings.
             // And by not adding it here, we can avoid having to delete these tokens from the output.
             self.completion_bytes.extend_from_slice(&completion_bytes);
+            self.last_completion_bytes_len = completion_bytes.len();
         }
+        self.last_logprob = tok.logprob;
+        self.last_is_done = *is_done;
+
         self.cumulative_logprob += tok.logprob;
         self.tokens.push(tok.token);
         self.logprobs.push(tok);
         self.prefill_prompt_toks = None;
+    }
+
+    /// Internal API
+    pub fn remove_last_token(&mut self) -> (Logprobs, Vec<u8>, Option<StopReason>) {
+        let comple_bytes = self.completion_bytes
+            [self.completion_bytes.len() - self.last_completion_bytes_len..]
+            .to_vec();
+        self.completion_bytes
+            .truncate(self.completion_bytes.len() - self.last_completion_bytes_len);
+        self.cumulative_logprob -= self.last_logprob;
+        self.tokens.pop();
+        let logprobs = self.logprobs.pop();
+        (logprobs.unwrap(), comple_bytes, self.last_is_done)
     }
 
     pub fn responder(&self) -> Sender<Response> {
