@@ -130,23 +130,14 @@ impl Pipeline for SpeculativePipeline {
     async fn step(
         &mut self,
         input_seqs: &mut [&mut Sequence],
-        is_prompt: bool,
+        _is_prompt: bool,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
-        pre_op: CacheInstruction,
-        post_op: CacheInstruction,
+        _pre_op: CacheInstruction,
+        _post_op: CacheInstruction,
     ) -> Result<()> {
         let n_seqs = input_seqs.len();
-
-        match pre_op {
-            CacheInstruction::In => self.clone_in_cache(input_seqs),
-            CacheInstruction::Nonthing => (),
-            CacheInstruction::Reset { reset_non_granular } => {
-                self.set_none_cache(reset_non_granular)
-            }
-            _ => unreachable!("Unreachable pre cache op."),
-        }
 
         assert_eq!(input_seqs.len(), 1);
 
@@ -197,21 +188,9 @@ impl Pipeline for SpeculativePipeline {
         get_mut_arcmutex!(self.draft).set_none_cache(true);
 
         // ======================= Add all draft tokens but the last one. Add the last from the seq. ============================
-        let mut draft_prefill_tokens = if is_prompt {
-            seq.get_toks().to_vec()
-        } else {
-            vec![]
-        };
-        for (i, sample) in draft_samples.iter().enumerate() {
-            if i == draft_samples.len() - 1 && is_prompt {
-                continue;
-            }
+        let mut draft_prefill_tokens = seq.get_toks().to_vec();
+        for sample in &draft_samples {
             draft_prefill_tokens.push(sample.sample.token);
-        }
-        if !is_prompt {
-            assert_eq!(draft_prefill_tokens.len(),self.gamma);
-        } else {
-            assert_eq!(draft_prefill_tokens.len(),seq.get_toks().len()+self.gamma-1);
         }
         seq.set_prefill_toks(draft_prefill_tokens);
 
@@ -254,18 +233,6 @@ impl Pipeline for SpeculativePipeline {
         )
         .await?;
 
-        let mut ts = Vec::new();
-        let mut ds = Vec::new();
-        for s in &samples {
-            let tgt = get_mut_arcmutex!(self.target).tokenizer().decode(&[s.sample.token],true);
-            ts.push(tgt.unwrap());
-        }
-        for s in &draft_samples {
-            let tgt = get_mut_arcmutex!(self.draft).tokenizer().decode(&[s.sample.token],true);
-            ds.push(tgt.unwrap());
-        }
-        dbg!(&ts);
-        dbg!(&ds);
         let mut accepted_tokens = Vec::new();
         for (target_sample, draft_sample) in zip(samples, draft_samples) {
             if draft_sample.sample.token == target_sample.sample.token {
@@ -311,7 +278,6 @@ impl Pipeline for SpeculativePipeline {
             }
         }
 
-        dbg!(&accepted_tokens.len());
         // Add the tokens to the seq and the trie
         for accepted in accepted_tokens {
             let eos_owned = get_mut_arcmutex!(self.target)
@@ -342,16 +308,7 @@ impl Pipeline for SpeculativePipeline {
             }
         }
 
-        match post_op {
-            CacheInstruction::Out => {
-                get_mut_arcmutex!(self.target).clone_out_cache(input_seqs);
-            }
-            CacheInstruction::Nonthing => (),
-            CacheInstruction::Reset { reset_non_granular } => {
-                self.set_none_cache(reset_non_granular)
-            }
-            _ => unreachable!("Unreachable pre cache op."),
-        }
+        self.set_none_cache(false);
 
         // Done! We have:
         // - Run the draft model gamma times
