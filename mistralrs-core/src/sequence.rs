@@ -296,28 +296,6 @@ impl Sequence {
         self.prefill_prompt_toks = None;
     }
 
-    /// Internal API
-    pub fn remove_last_token(&mut self) -> (Logprobs, Vec<u8>, Option<StopReason>) {
-        let comple_bytes = self.completion_bytes
-            [self.completion_bytes.len() - self.last_completion_bytes_len..]
-            .to_vec();
-        self.completion_bytes
-            .truncate(self.completion_bytes.len() - self.last_completion_bytes_len);
-        self.cumulative_logprob -= self.last_logprob;
-        let tok = self.tokens.pop().unwrap();
-        let logprobs = self.logprobs.pop();
-        (
-            logprobs.unwrap_or(Logprobs {
-                token: tok,
-                logprob: 0.0,
-                bytes: "".to_string(),
-                top_logprobs: None,
-            }),
-            comple_bytes,
-            self.last_is_done,
-        )
-    }
-
     pub fn responder(&self) -> Sender<Response> {
         self.responder.clone()
     }

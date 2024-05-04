@@ -200,47 +200,22 @@ impl Pipeline for SpeculativePipeline {
         let mut draft_prefill_tokens = if is_prompt {
             seq.get_toks().to_vec()
         } else {
-            vec![*seq.get_toks().last().unwrap()]
+            vec![]
         };
         for (i, sample) in draft_samples.iter().enumerate() {
-            if i == draft_samples.len() - 1 {
+            if i == draft_samples.len() - 1 && is_prompt {
                 continue;
             }
             draft_prefill_tokens.push(sample.sample.token);
         }
-
+        if !is_prompt {
+            assert_eq!(draft_prefill_tokens.len(),self.gamma);
+        } else {
+            assert_eq!(draft_prefill_tokens.len(),seq.get_toks().len()+self.gamma-1);
+        }
         seq.set_prefill_toks(draft_prefill_tokens);
-        let (l, c, s) = seq.remove_last_token();
 
         // ======================= Run the model with all draft tokens. ============================
-        // x{} and y{} are the output logits for each token and are the distribubtion for the next token.
-        // In the next example, the prefix's last token is x2.
-        // gamma=2
-        // Target result:  [x0,x1,x2,y1]
-        // Draft toks:  [y1,y2]
-        // Draft prompt:  [x0,x1,x2,y1,y2]
-        // Comparing the following: x2->y1, y1->y2
-        // KV cache optimization: narrow the kv cache for last token. Add the prefix last token (x2) to the
-        // target input tokens.
-
-        // ========= Narrow the kv cache ============
-
-        if !is_prompt {
-            let t = get_mut_arcmutex!(self.target);
-            let mut cache = t.cache().lock();
-            let initial_cache_len = cache[0].as_ref().map(|(k, _)| k.dims()[2]).unwrap_or(0);
-            for (k, v) in cache.iter_mut().flatten() {
-                *k = k.narrow(2, 0, initial_cache_len - 1)?;
-                *v = v.narrow(2, 0, initial_cache_len - 1)?;
-            }
-            if seq.is_xlora() {
-                let mut cache = t.cache().xlora_lock();
-                for (k, v) in cache.iter_mut().flatten() {
-                    *k = k.narrow(2, 0, initial_cache_len - 1)?;
-                    *v = v.narrow(2, 0, initial_cache_len - 1)?;
-                }
-            }
-        }
 
         // ========= Run the model ============
         let is_xlora = get_mut_arcmutex!(self.target).get_metadata().is_xlora;
@@ -262,7 +237,6 @@ impl Pipeline for SpeculativePipeline {
 
         // Reset the prefill tokens
         seq.reset_prefill_toks();
-        seq.add_token(l, c, &s);
 
         // ======================= Rejection sampling. ============================
         // Map from each target sample to corresponding in draft sample
@@ -280,6 +254,18 @@ impl Pipeline for SpeculativePipeline {
         )
         .await?;
 
+        let mut ts = Vec::new();
+        let mut ds = Vec::new();
+        for s in &samples {
+            let tgt = get_mut_arcmutex!(self.target).tokenizer().decode(&[s.sample.token],true);
+            ts.push(tgt.unwrap());
+        }
+        for s in &draft_samples {
+            let tgt = get_mut_arcmutex!(self.draft).tokenizer().decode(&[s.sample.token],true);
+            ds.push(tgt.unwrap());
+        }
+        dbg!(&ts);
+        dbg!(&ds);
         let mut accepted_tokens = Vec::new();
         for (target_sample, draft_sample) in zip(samples, draft_samples) {
             if draft_sample.sample.token == target_sample.sample.token {
@@ -325,6 +311,7 @@ impl Pipeline for SpeculativePipeline {
             }
         }
 
+        dbg!(&accepted_tokens.len());
         // Add the tokens to the seq and the trie
         for accepted in accepted_tokens {
             let eos_owned = get_mut_arcmutex!(self.target)
