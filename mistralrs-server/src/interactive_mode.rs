@@ -33,6 +33,9 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>) {
         io::stdin()
             .read_line(&mut prompt)
             .expect("Failed to get input");
+        if prompt.is_empty() {
+            return;
+        }
         let mut user_message = IndexMap::new();
         user_message.insert("role".to_string(), "user".to_string());
         user_message.insert("content".to_string(), prompt);
