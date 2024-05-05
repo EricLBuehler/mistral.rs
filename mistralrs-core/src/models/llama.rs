@@ -5,11 +5,11 @@ use candle_nn::{
     embedding, linear_no_bias as linear, Embedding, Module, RotaryEmbedding, VarBuilder,
 };
 use serde::Deserialize;
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::RmsNorm,
+    layers::{CausalMasker, RmsNorm},
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
@@ -31,32 +31,6 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone)]
-pub struct Cache {
-    masks: HashMap<usize, Tensor>,
-}
-
-impl Cache {
-    pub fn new() -> Result<Self> {
-        Ok(Self {
-            masks: HashMap::new(),
-        })
-    }
-
-    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
-        if let Some(mask) = self.masks.get(&t) {
-            mask.to_device(device)
-        } else {
-            let mask: Vec<_> = (0..t)
-                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
-                .collect();
-            let mask = Tensor::from_slice(&mask, (t, t), device)?;
-            self.masks.insert(t, mask.clone());
-            Ok(mask)
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 struct CausalSelfAttention {
     q_proj: QMatMul,
     k_proj: QMatMul,
@@ -68,17 +42,18 @@ struct CausalSelfAttention {
     use_flash_attn: bool,
     rotary_emb: Arc<RotaryEmbedding>,
     max_seq_len: usize,
+    neg_inf: Tensor,
 }
 
 impl CausalSelfAttention {
     fn forward(
         &self,
         x: &Tensor,
+        attention_mask: &Option<Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         block_idx: usize,
         kv_cache: &mut super::LayerCaches,
-        cache: &mut Cache,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
 
@@ -150,10 +125,7 @@ impl CausalSelfAttention {
             let k = k.to_dtype(DType::F32)?;
             let v = v.to_dtype(DType::F32)?;
             let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-            let mask = cache
-                .mask(seq_len, att.device())?
-                .broadcast_as(att.shape())?;
-            let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
+            let att = CausalMasker.apply_mask(attention_mask, att, &self.neg_inf)?;
             let att = candle_nn::ops::softmax(&att, D::Minus1)?;
             // Convert to contiguous as matmul doesn't support strided vs for now.
             att.matmul(&v.contiguous()?)?.to_dtype(in_dtype)?
@@ -188,15 +160,9 @@ impl CausalSelfAttention {
             use_flash_attn: cfg.use_flash_attn,
             rotary_emb: rope,
             max_seq_len: cfg.max_position_embeddings,
+            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())?.to_dtype(vb.dtype())?,
         })
     }
-}
-
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
-    let shape = mask.shape();
-    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
-    let m = mask.where_cond(&on_true, on_false)?;
-    Ok(m)
 }
 
 #[derive(Debug, Clone)]
@@ -247,21 +213,21 @@ impl Block {
     fn forward(
         &self,
         x: &Tensor,
+        attention_mask: &Option<Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         block_idx: usize,
         kv_cache: &mut super::LayerCaches,
-        cache: &mut Cache,
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
         let x = (self.attn.forward(
             &x,
+            attention_mask,
             seqlen_offsets,
             start_offsets_kernel,
             block_idx,
             kv_cache,
-            cache,
         )? + residual)?;
         let residual = &x;
         let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
@@ -309,7 +275,7 @@ pub struct Llama {
     lm_head: QMatMul,
     pub kv_cache: super::Cache,
     pub device: Device,
-    cache: Cache,
+    dtype: DType,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
@@ -321,17 +287,18 @@ impl Llama {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
+        let mask = CausalMasker.make_causal_mask(x, &self.kv_cache, self.dtype)?;
         let mut x = self.wte.forward(x)?;
         let mut cache = self.kv_cache.lock();
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
             x = block.forward(
                 &x,
+                &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 block_idx,
                 &mut cache,
-                &mut self.cache,
             )?;
         }
         let x = x.to_device(&self.device)?;
@@ -398,9 +365,9 @@ impl Llama {
             blocks,
             ln_f,
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
-            cache: Cache::new()?,
             kv_cache: super::Cache::new(cfg.num_hidden_layers, false),
             device: real_device,
+            dtype: vb.dtype(),
             mapper,
         })
     }

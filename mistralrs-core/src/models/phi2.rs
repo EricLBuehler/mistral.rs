@@ -14,6 +14,7 @@ use serde::Deserialize;
 
 use crate::{
     device_map::DeviceMapper,
+    layers::CausalMasker,
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
@@ -100,20 +101,7 @@ struct Attention {
     num_kv_heads: usize,
     head_dim: usize,
     use_flash_attn: bool,
-}
-
-fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
-    let mask: Vec<_> = (0..size)
-        .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
-        .collect();
-    Tensor::from_slice(&mask, (size, size), device)
-}
-
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
-    let shape = mask.shape();
-    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
-    let m = mask.where_cond(&on_true, on_false)?;
-    Ok(m)
+    neg_inf: Tensor,
 }
 
 impl Attention {
@@ -146,6 +134,7 @@ impl Attention {
             num_kv_heads,
             head_dim,
             use_flash_attn: cfg.use_flash_attn,
+            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())?.to_dtype(vb.dtype())?,
         })
     }
 
@@ -232,14 +221,8 @@ impl Attention {
                 .contiguous()?
                 .matmul(&k.to_dtype(DType::F32)?.t()?)?
                 * self.softmax_scale)?;
-            let attn_weights = match mask {
-                None => attn_weights,
-                Some(mask) => masked_fill(
-                    &attn_weights,
-                    &mask.broadcast_left((b_size, self.num_heads))?,
-                    f32::NEG_INFINITY,
-                )?,
-            };
+            let attn_weights =
+                CausalMasker.apply_mask(&mask.cloned(), attn_weights, &self.neg_inf)?;
             let attn_weights =
                 candle_nn::ops::softmax_last_dim(&attn_weights)?.to_dtype(v.dtype())?;
             attn_weights.matmul(&v)?
@@ -319,6 +302,7 @@ pub struct Model {
     pub device: Device,
     pub max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    dtype: DType,
 }
 
 impl Model {
@@ -379,6 +363,7 @@ impl Model {
             device: real_device,
             max_seq_len: cfg.max_position_embeddings,
             mapper,
+            dtype: vb.dtype(),
         })
     }
 
@@ -389,13 +374,8 @@ impl Model {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
-        let (_b_size, seq_len) = xs.dims2()?;
+        let mask = CausalMasker.make_causal_mask(xs, &self.cache, self.dtype)?;
         let mut xs = xs.apply(&self.embed_tokens)?;
-        let mask = if seq_len <= 1 {
-            None
-        } else {
-            Some(get_mask(seq_len, xs.device())?)
-        };
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
             xs = self.mapper.map(xs, i)?;
