@@ -6,18 +6,27 @@ use super::CacheManager;
 
 pub struct DefaultCacheManager;
 
+enum SeqCache {
+    Normal,
+    XLora,
+}
+
 fn clone_in_cache(
     num_hidden_layers: usize,
     cache: &mut LayerCaches,
     seqs: &mut [&mut crate::sequence::Sequence],
+    src: SeqCache,
 ) {
     let mut new_cache = Vec::new();
     for layer in 0..num_hidden_layers {
         let mut k_vec = Vec::new();
         let mut v_vec = Vec::new();
         for seq in &mut *seqs {
-            let seq_cache = &*seq.cache();
-            let cache = seq_cache.get(layer).unwrap();
+            let src_cache = match src {
+                SeqCache::Normal => seq.cache(),
+                SeqCache::XLora => seq.xlora_cache(),
+            };
+            let cache = src_cache.get(layer).unwrap();
             let cache = cache
                 .as_ref()
                 .expect("Not handling completions in `clone_in_cache`.");
@@ -44,6 +53,7 @@ fn clone_out_cache(
     num_hidden_layers: usize,
     cache: &mut LayerCaches,
     seqs: &mut [&mut crate::sequence::Sequence],
+    target: SeqCache,
 ) {
     for layer in 0..num_hidden_layers {
         let cache = cache.get(layer).unwrap();
@@ -56,8 +66,11 @@ fn clone_out_cache(
         debug_assert_eq!(v_caches.len(), seqs.len());
 
         for (seq_i, seq) in seqs.iter_mut().enumerate() {
-            let seq_cache = seq.cache();
-            let seq_cache = &mut seq_cache[layer];
+            let output_cache = match target {
+                SeqCache::Normal => seq.cache(),
+                SeqCache::XLora => seq.xlora_cache(),
+            };
+            let seq_cache = &mut output_cache[layer];
             let k = k_caches.get(seq_i).unwrap().clone();
             let v = v_caches.get(seq_i).unwrap().clone();
             *seq_cache = Some((k, v));
@@ -76,12 +89,14 @@ impl CacheManager for DefaultCacheManager {
             pipeline.get_metadata().num_hidden_layers,
             &mut pipeline.cache().lock(),
             seqs,
+            SeqCache::Normal,
         );
         if pipeline.get_metadata().is_xlora && !pipeline.get_metadata().has_no_kv_cache {
             clone_in_cache(
                 pipeline.get_metadata().num_hidden_layers,
                 &mut pipeline.cache().xlora_lock(),
                 seqs,
+                SeqCache::XLora,
             );
         }
         if modify_draft_cache {
@@ -89,6 +104,7 @@ impl CacheManager for DefaultCacheManager {
                 pipeline.get_metadata().num_hidden_layers,
                 &mut pipeline.cache().draft_lock(),
                 seqs,
+                SeqCache::Normal,
             );
         }
         if pipeline.get_metadata().is_xlora {
@@ -109,12 +125,14 @@ impl CacheManager for DefaultCacheManager {
             pipeline.get_metadata().num_hidden_layers,
             &mut pipeline.cache().lock(),
             seqs,
+            SeqCache::Normal,
         );
         if pipeline.get_metadata().is_xlora && !pipeline.get_metadata().has_no_kv_cache {
             clone_out_cache(
                 pipeline.get_metadata().num_hidden_layers,
                 &mut pipeline.cache().xlora_lock(),
                 seqs,
+                SeqCache::XLora,
             );
         }
         if modify_draft_cache {
@@ -122,6 +140,7 @@ impl CacheManager for DefaultCacheManager {
                 pipeline.get_metadata().num_hidden_layers,
                 &mut pipeline.cache().draft_lock(),
                 seqs,
+                SeqCache::Normal,
             );
         }
         if pipeline.get_metadata().is_xlora {
