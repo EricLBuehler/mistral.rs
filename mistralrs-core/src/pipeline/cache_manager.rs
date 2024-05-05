@@ -88,6 +88,15 @@ impl CacheManager for DefaultCacheManager {
         seqs: &mut [&mut crate::sequence::Sequence],
         modify_draft_cache: bool,
     ) {
+        if modify_draft_cache {
+            clone_in_cache(
+                pipeline.get_metadata().num_hidden_layers,
+                &mut pipeline.cache().lock(),
+                seqs,
+                SeqCache::Draft,
+            );
+            return;
+        }
         clone_in_cache(
             pipeline.get_metadata().num_hidden_layers,
             &mut pipeline.cache().lock(),
@@ -100,14 +109,6 @@ impl CacheManager for DefaultCacheManager {
                 &mut pipeline.cache().xlora_lock(),
                 seqs,
                 SeqCache::XLora,
-            );
-        }
-        if modify_draft_cache {
-            clone_in_cache(
-                pipeline.get_metadata().num_hidden_layers,
-                &mut pipeline.cache().lock(),
-                seqs,
-                SeqCache::Draft,
             );
         }
         if pipeline.get_metadata().is_xlora {
@@ -124,6 +125,15 @@ impl CacheManager for DefaultCacheManager {
         seqs: &mut [&mut crate::sequence::Sequence],
         modify_draft_cache: bool,
     ) {
+        if modify_draft_cache {
+            clone_out_cache(
+                pipeline.get_metadata().num_hidden_layers,
+                &mut pipeline.cache().lock(),
+                seqs,
+                SeqCache::Draft,
+            );
+            return;
+        }
         clone_out_cache(
             pipeline.get_metadata().num_hidden_layers,
             &mut pipeline.cache().lock(),
@@ -136,14 +146,6 @@ impl CacheManager for DefaultCacheManager {
                 &mut pipeline.cache().xlora_lock(),
                 seqs,
                 SeqCache::XLora,
-            );
-        }
-        if modify_draft_cache {
-            clone_out_cache(
-                pipeline.get_metadata().num_hidden_layers,
-                &mut pipeline.cache().lock(),
-                seqs,
-                SeqCache::Draft,
             );
         }
         if pipeline.get_metadata().is_xlora {
