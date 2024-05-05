@@ -275,7 +275,8 @@ impl CausalMasker {
         if tgt_len == 1 {
             return Ok(None);
         }
-        if let Some(mask) = MASKS.lock().unwrap().get(&(tgt_len, past_kv_len)).cloned() {
+        let res = MASKS.lock().unwrap().get(&(tgt_len, past_kv_len)).cloned();
+        if let Some(mask) = res {
             Ok(Some(mask))
         } else {
             let mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
