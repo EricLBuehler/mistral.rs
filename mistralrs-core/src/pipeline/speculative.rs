@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{quantized::GgmlDType, Device, Result, Tensor};
+use candle_core::{quantized::GgmlDType, Device, IndexOp, Result, Tensor};
 use rand::Rng;
 use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
@@ -162,7 +162,7 @@ impl Pipeline for SpeculativePipeline {
             let has_no_kv_cache = get_mut_arcmutex!(self.draft).get_metadata().has_no_kv_cache;
             let inputs = calculate_inputs(
                 &[seq],
-                i == 0, // Only prompt (no kv cache) if first
+                is_prompt && i == 0, // Only prompt (no kv cache) if first
                 is_xlora,
                 &device,
                 has_no_kv_cache,
@@ -192,9 +192,6 @@ impl Pipeline for SpeculativePipeline {
             });
         }
         seq.remove_tmp_tok(self.gamma);
-
-        // ======================= Reset the draft. ============================
-        get_mut_arcmutex!(self.draft).set_none_cache(true);
 
         // ======================= Add all draft tokens but the last one. Add the last from the seq. ============================
         let mut draft_prefill_tokens = if is_prompt {
@@ -296,6 +293,29 @@ impl Pipeline for SpeculativePipeline {
                 // Did not agree. Use the target model's choice. Return it.
                 accepted_tokens.push(target_sample.sample);
                 break;
+            }
+        }
+
+        // ======================= Narrow cache of draft model. ============================
+        let n_accepted = accepted_tokens.len();
+        for (k, v) in get_mut_arcmutex!(self.draft)
+            .cache()
+            .lock()
+            .iter_mut()
+            .flatten()
+        {
+            *k = k.i((.., .., ..k.dims()[2] - n_accepted, ..))?;
+            *v = v.i((.., .., ..v.dims()[2] - n_accepted, ..))?;
+        }
+        if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
+            for (k, v) in get_mut_arcmutex!(self.draft)
+                .cache()
+                .xlora_lock()
+                .iter_mut()
+                .flatten()
+            {
+                *k = k.i((.., .., ..k.dims()[2] - n_accepted, ..))?;
+                *v = v.i((.., .., ..v.dims()[2] - n_accepted, ..))?;
             }
         }
 
