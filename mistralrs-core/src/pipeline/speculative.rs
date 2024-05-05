@@ -130,14 +130,23 @@ impl Pipeline for SpeculativePipeline {
     async fn step(
         &mut self,
         input_seqs: &mut [&mut Sequence],
-        _is_prompt: bool,
+        is_prompt: bool,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
-        _pre_op: CacheInstruction,
-        _post_op: CacheInstruction,
+        pre_op: CacheInstruction,
+        post_op: CacheInstruction,
     ) -> Result<()> {
         let n_seqs = input_seqs.len();
+
+        match pre_op {
+            CacheInstruction::In => self.clone_in_cache(input_seqs),
+            CacheInstruction::Nonthing => (),
+            CacheInstruction::Reset { reset_non_granular } => {
+                self.set_none_cache(reset_non_granular)
+            }
+            _ => unreachable!("Unreachable pre cache op."),
+        }
 
         assert_eq!(input_seqs.len(), 1);
 
@@ -188,13 +197,25 @@ impl Pipeline for SpeculativePipeline {
         get_mut_arcmutex!(self.draft).set_none_cache(true);
 
         // ======================= Add all draft tokens but the last one. Add the last from the seq. ============================
-        let mut draft_prefill_tokens = seq.get_toks().to_vec();
-        for sample in &draft_samples {
+        let mut draft_prefill_tokens = if is_prompt {
+            seq.get_toks().to_vec()
+        } else {
+            vec![*seq.get_toks().last().unwrap()]
+        };
+        for (i, sample) in draft_samples.iter().enumerate() {
+            if i == draft_samples.len() - 1 {
+                continue;
+            }
             draft_prefill_tokens.push(sample.sample.token);
         }
         seq.set_prefill_toks(draft_prefill_tokens);
 
         // ======================= Run the model with all draft tokens. ============================
+
+        let initial_cache_len = get_mut_arcmutex!(self.target).cache().lock()[0]
+            .as_ref()
+            .map(|(k, _)| k.dims()[2])
+            .unwrap_or(0);
 
         // ========= Run the model ============
         let is_xlora = get_mut_arcmutex!(self.target).get_metadata().is_xlora;
@@ -208,10 +229,12 @@ impl Pipeline for SpeculativePipeline {
             is_xlora,
             &device,
             has_no_kv_cache,
-            Some(self.gamma + 1), // Get the last gamma, see above
+            Some((self.gamma, initial_cache_len)), // Get the last gamma, see above
         )
         .unwrap();
+
         let logits = get_mut_arcmutex!(self.target).forward_inputs(inputs)?;
+
         // Reset the prefill tokens
         seq.reset_prefill_toks();
 
@@ -227,7 +250,7 @@ impl Pipeline for SpeculativePipeline {
                 .tok_trie
                 .clone(),
             rng.clone(),
-            self.gamma + 1,
+            self.gamma,
         )
         .await?;
 
@@ -306,7 +329,16 @@ impl Pipeline for SpeculativePipeline {
             }
         }
 
-        self.set_none_cache(false);
+        match post_op {
+            CacheInstruction::Out => {
+                get_mut_arcmutex!(self.target).clone_out_cache(input_seqs);
+            }
+            CacheInstruction::Nonthing => (),
+            CacheInstruction::Reset { reset_non_granular } => {
+                self.set_none_cache(reset_non_granular)
+            }
+            _ => unreachable!("Unreachable pre cache op."),
+        }
 
         // Done! We have:
         // - Run the draft model gamma times

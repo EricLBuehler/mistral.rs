@@ -488,7 +488,7 @@ struct InputMetadata {
 fn get_prompt_input(
     input_seqs: &[&mut Sequence],
     device: &Device,
-    last_n_context_len: Option<usize>,
+    last_n_context_len: Option<(usize, usize)>,
 ) -> Result<InputMetadata> {
     let max_len = input_seqs
         .iter()
@@ -503,12 +503,17 @@ fn get_prompt_input(
     let mut position_ids = Vec::new();
     for seq in input_seqs.iter() {
         let mut ctxt = seq.get_toks().to_vec();
-        seqlen_offsets.push(0);
+        let offset = if let Some((_, offset)) = last_n_context_len {
+            offset
+        } else {
+            0
+        };
+        seqlen_offsets.push(offset);
 
         ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));
         context_lens.push((
-            seq.len() - 1 - last_n_context_len.map(|x| x - 1).unwrap_or(0),
-            last_n_context_len.unwrap_or(1),
+            seq.len() - last_n_context_len.map(|(a, _)| a).unwrap_or(1),
+            last_n_context_len.map(|(a, _)| a).unwrap_or(1),
         ));
         position_ids.push(seq.len());
 
@@ -516,11 +521,24 @@ fn get_prompt_input(
     }
 
     let mut tmp = Vec::new();
-    for pos in (0..seqs_tensors.len())
-        .map(|_| (0..max_len).map(|x| x as i64).collect::<Vec<_>>())
-        .collect::<Vec<_>>()
-    {
-        tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
+    if last_n_context_len.is_some() {
+        for pos in (0..seqs_tensors.len())
+            .map(|i| {
+                (*seqlen_offsets.get(i).unwrap() as i64
+                    ..*seqlen_offsets.get(i).unwrap() as i64 + max_len as i64)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+        {
+            tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
+        }
+    } else {
+        for pos in (0..seqs_tensors.len())
+            .map(|_| (0..max_len).map(|x| x as i64).collect::<Vec<_>>())
+            .collect::<Vec<_>>()
+        {
+            tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
+        }
     }
     let positions_kernel = Tensor::cat(&tmp, 0)?;
     Ok(InputMetadata {
@@ -536,7 +554,7 @@ fn get_completion_input(
     input_seqs: &[&mut Sequence],
     device: &Device,
     no_kv_cache: bool,
-    last_n_context_len: Option<usize>,
+    last_n_context_len: Option<(usize, usize)>,
 ) -> Result<InputMetadata> {
     if no_kv_cache {
         return get_prompt_input(input_seqs, device, last_n_context_len);
@@ -590,7 +608,7 @@ fn calculate_inputs(
     is_xlora: bool,
     device: &Device,
     no_kv_cache: bool,
-    last_n_context_len: Option<usize>,
+    last_n_context_len: Option<(usize, usize)>,
 ) -> Result<ModelInputs> {
     if is_xlora && !is_prompt {
         let InputMetadata {
