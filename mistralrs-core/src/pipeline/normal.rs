@@ -400,14 +400,14 @@ impl Pipeline for NormalPipeline {
     fn get_metadata(&self) -> &GeneralMetadata {
         &self.metadata
     }
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence]) {
-        DefaultCacheManager.clone_in_cache(self, seqs)
+    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
     }
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence]) {
-        DefaultCacheManager.clone_out_cache(self, seqs)
+    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
     }
-    fn set_none_cache(&mut self, reset_non_granular: bool) {
-        DefaultCacheManager.set_none_cache(self);
+    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
+        DefaultCacheManager.set_none_cache(self, modify_draft_cache);
         if reset_non_granular {
             self.reset_non_granular_state()
         }

@@ -162,8 +162,8 @@ macro_rules! handle_pipeline_forward_error {
                 let mut p = get_mut_arcmutex!($pipeline);
                 // Also reset non granular state because:
                 // - The sequence is gone
-                // - We should reset the state then.
-                p.set_none_cache(true);
+                // - We should reset the state then, including draft.
+                p.set_none_cache(true, true);
                 $prefix_cacher.evict_all_to_cpu().unwrap();
 
                 continue $label;

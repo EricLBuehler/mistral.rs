@@ -281,10 +281,10 @@ pub trait Pipeline: Send + Sync {
         .unwrap();
 
         match pre_op {
-            CacheInstruction::In => self.clone_in_cache(input_seqs),
+            CacheInstruction::In => self.clone_in_cache(input_seqs, false),
             CacheInstruction::Nonthing => (),
             CacheInstruction::Reset { reset_non_granular } => {
-                self.set_none_cache(reset_non_granular)
+                self.set_none_cache(reset_non_granular, false)
             }
             _ => unreachable!("Unreachable PRE cache op."),
         }
@@ -292,10 +292,10 @@ pub trait Pipeline: Send + Sync {
         let logits = self.forward_inputs(inputs)?;
 
         match post_op {
-            CacheInstruction::Out => self.clone_out_cache(input_seqs),
+            CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
             CacheInstruction::Nonthing => (),
             CacheInstruction::Reset { reset_non_granular } => {
-                self.set_none_cache(reset_non_granular)
+                self.set_none_cache(reset_non_granular, false)
             }
             _ => unreachable!("Unreachable POST cache op."),
         }
@@ -364,21 +364,31 @@ pub trait Pipeline: Send + Sync {
     fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()>;
     /// Clone the cache FROM the sequences' cache TO the model cache. Only called for completion seqs.
     /// It is not a guarantee that this will be called for each completion step.
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence]);
+    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool);
     /// Clone the cache FROM the model cache TO the sequences. Called for prompt and completion seqs.
     /// It is not a guarantee that this will be called for each step.
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence]);
+    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool);
     /// Set the model cache to all None. Only called for prompt seqs.
     /// It is not a guarantee that this will be called for each prompt step.
     /// This may also reset the non granular state if applicable.
-    fn set_none_cache(&mut self, reset_non_granular: bool);
+    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool);
     fn cache(&self) -> &Cache;
 }
 
 pub trait CacheManager {
-    fn clone_in_cache(&self, pipeline: &mut dyn Pipeline, seqs: &mut [&mut Sequence]);
-    fn clone_out_cache(&self, pipeline: &mut dyn Pipeline, seqs: &mut [&mut Sequence]);
-    fn set_none_cache(&self, pipeline: &mut dyn Pipeline);
+    fn clone_in_cache(
+        &self,
+        pipeline: &mut dyn Pipeline,
+        seqs: &mut [&mut Sequence],
+        modify_draft_cache: bool,
+    );
+    fn clone_out_cache(
+        &self,
+        pipeline: &mut dyn Pipeline,
+        seqs: &mut [&mut Sequence],
+        modify_draft_cache: bool,
+    );
+    fn set_none_cache(&self, pipeline: &mut dyn Pipeline, modify_draft_cache: bool);
 }
 
 pub trait NormalModelLoader {
