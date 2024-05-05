@@ -71,7 +71,7 @@ fn clone_out_cache(
             let output_cache = match target {
                 SeqCache::Normal => seq.cache(),
                 SeqCache::XLora => seq.xlora_cache(),
-                SeqCache::Draft => unreachable!(),
+                SeqCache::Draft => seq.draft_cache(),
             };
             let seq_cache = &mut output_cache[layer];
             let k = k_caches.get(seq_i).unwrap().clone();
@@ -141,9 +141,9 @@ impl CacheManager for DefaultCacheManager {
         if modify_draft_cache {
             clone_out_cache(
                 pipeline.get_metadata().num_hidden_layers,
-                &mut pipeline.cache().draft_lock(),
+                &mut pipeline.cache().lock(),
                 seqs,
-                SeqCache::Normal,
+                SeqCache::Draft,
             );
         }
         if pipeline.get_metadata().is_xlora {
