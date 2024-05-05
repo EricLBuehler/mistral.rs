@@ -302,7 +302,6 @@ pub struct Model {
     pub device: Device,
     pub max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
-    dtype: DType,
 }
 
 impl Model {
@@ -363,7 +362,6 @@ impl Model {
             device: real_device,
             max_seq_len: cfg.max_position_embeddings,
             mapper,
-            dtype: vb.dtype(),
         })
     }
 
@@ -374,7 +372,7 @@ impl Model {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
-        let mask = CausalMasker.make_causal_mask(xs, &self.cache, self.dtype)?;
+        let mask = CausalMasker.make_causal_mask(xs, &self.cache)?;
         let mut xs = xs.apply(&self.embed_tokens)?;
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {

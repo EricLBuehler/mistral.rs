@@ -225,7 +225,7 @@ impl ModelWeights {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
-        let mask = CausalMasker.make_causal_mask(xs, &self.cache, DType::F32)?;
+        let mask = CausalMasker.make_causal_mask(xs, &self.cache)?;
         let mut xs = self.tok_embeddings.forward(xs)?;
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {

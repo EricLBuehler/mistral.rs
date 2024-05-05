@@ -528,7 +528,7 @@ impl Model {
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let mask = CausalMasker.make_causal_mask(xs, &self.cache, self.dtype)?;
+        let mask = CausalMasker.make_causal_mask(xs, &self.cache)?;
         let mut xs = xs.apply(&self.embed_tokens)?;
         let mut cache = if is_full_pass {
             if no_kv_cache {

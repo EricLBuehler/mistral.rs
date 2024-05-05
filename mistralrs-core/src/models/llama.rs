@@ -275,7 +275,6 @@ pub struct Llama {
     lm_head: QMatMul,
     pub kv_cache: super::Cache,
     pub device: Device,
-    dtype: DType,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
@@ -287,7 +286,7 @@ impl Llama {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
-        let mask = CausalMasker.make_causal_mask(x, &self.kv_cache, self.dtype)?;
+        let mask = CausalMasker.make_causal_mask(x, &self.kv_cache)?;
         let mut x = self.wte.forward(x)?;
         let mut cache = self.kv_cache.lock();
         for (block_idx, block) in self.blocks.iter().enumerate() {
@@ -367,7 +366,6 @@ impl Llama {
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             kv_cache: super::Cache::new(cfg.num_hidden_layers, false),
             device: real_device,
-            dtype: vb.dtype(),
             mapper,
         })
     }

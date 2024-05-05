@@ -269,23 +269,16 @@ impl CausalMasker {
         return Ok(k_cache_1.dims()[2]);
     }
 
-    pub fn make_causal_mask(
-        &self,
-        input_ids: &Tensor,
-        cache: &Cache,
-        dtype: DType,
-    ) -> Result<Option<Tensor>> {
+    pub fn make_causal_mask(&self, input_ids: &Tensor, cache: &Cache) -> Result<Option<Tensor>> {
         let past_kv_len = self.calculate_past_kv_len(cache)?;
         let (_b_sz, tgt_len) = input_ids.dims2()?;
         if tgt_len == 1 {
             return Ok(None);
         }
-        if let Some(mask) = MASKS.lock().unwrap().get(&(tgt_len, past_kv_len)) {
-            Ok(Some(mask.clone()))
+        if let Some(mask) = MASKS.lock().unwrap().get(&(tgt_len, past_kv_len)).cloned() {
+            Ok(Some(mask))
         } else {
-            let mask = self
-                .make_mask(tgt_len, past_kv_len, input_ids.device())?
-                .to_dtype(dtype)?;
+            let mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
 
             MASKS
                 .lock()
@@ -303,7 +296,7 @@ impl CausalMasker {
         dtype: DType,
     ) -> Result<Option<Tensor>> {
         if sliding_window.is_none() {
-            return self.make_causal_mask(input_ids, cache, dtype);
+            return self.make_causal_mask(input_ids, cache);
         }
         let sliding_window = sliding_window.unwrap();
         let past_kv_len = self.calculate_past_kv_len(cache)?;
@@ -311,22 +304,21 @@ impl CausalMasker {
         if tgt_len == 1 {
             return Ok(None);
         }
-        if let Some(mask) = MASKS.lock().unwrap().get(&(tgt_len, past_kv_len)) {
-            Ok(Some(mask.clone()))
+        let res = MASKS.lock().unwrap().get(&(tgt_len, past_kv_len)).cloned();
+        if let Some(mask) = res {
+            Ok(Some(mask))
         } else {
             let mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
             let diagonal = past_kv_len as isize - sliding_window as isize - 1;
             let context_mask = apply_tril(&mask.ones_like()?, diagonal)?;
-            let mask = masked_fill(&mask, &context_mask, f32::MIN)?;
-            let mask = mask
-                .expand((b_sz, 1, tgt_len, tgt_len + past_kv_len))?
-                .to_dtype(dtype)?;
+            let mask = masked_fill(&mask.to_dtype(DType::F32)?, &context_mask, f32::MIN)?;
+            let mask = mask.expand((b_sz, 1, tgt_len, tgt_len + past_kv_len))?;
 
             MASKS
                 .lock()
                 .unwrap()
                 .insert((tgt_len, past_kv_len), mask.clone());
-            Ok(Some(mask))
+            Ok(Some(mask.to_dtype(dtype)?))
         }
     }
 
@@ -339,6 +331,9 @@ impl CausalMasker {
         match mask {
             None => Ok(att),
             Some(mask) => {
+                if mask.dtype() != DType::U8 {
+                    return att.broadcast_add(mask);
+                }
                 let mask = mask.broadcast_as(att.shape())?;
                 mask.where_cond(&neg_inf.broadcast_as(att.dims())?, &att)
             }

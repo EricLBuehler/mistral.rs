@@ -324,7 +324,6 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: QMatMul,
-    dtype: DType,
     hidden_size: usize,
     pub device: Device,
     pub cache: Cache,
@@ -381,7 +380,6 @@ impl Model {
             norm,
             lm_head,
             device: real_device,
-            dtype: vb.dtype(),
             hidden_size: cfg.hidden_size,
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: default_max_position_embeddings(),
@@ -396,7 +394,7 @@ impl Model {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
-        let attention_mask = CausalMasker.make_causal_mask(input_ids, &self.cache, self.dtype)?;
+        let attention_mask = CausalMasker.make_causal_mask(input_ids, &self.cache)?;
         let xs = self.embed_tokens.forward(input_ids)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
         let mut cache = self.cache.lock();
