@@ -297,15 +297,15 @@ impl Pipeline for SpeculativePipeline {
         }
 
         // ======================= Narrow cache of draft model. ============================
-        let n_accepted = accepted_tokens.len();
+        let n_not_accepted = self.gamma - accepted_tokens.len();
         for (k, v) in get_mut_arcmutex!(self.draft)
             .cache()
             .lock()
             .iter_mut()
             .flatten()
         {
-            *k = k.i((.., .., ..k.dims()[2] - n_accepted, ..))?;
-            *v = v.i((.., .., ..v.dims()[2] - n_accepted, ..))?;
+            *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
+            *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
         }
         if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
             for (k, v) in get_mut_arcmutex!(self.draft)
@@ -314,8 +314,8 @@ impl Pipeline for SpeculativePipeline {
                 .iter_mut()
                 .flatten()
             {
-                *k = k.i((.., .., ..k.dims()[2] - n_accepted, ..))?;
-                *v = v.i((.., .., ..v.dims()[2] - n_accepted, ..))?;
+                *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
+                *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
             }
         }
 
