@@ -702,7 +702,7 @@ fn calculate_inputs(
     }
 }
 
-pub fn extract_logits(
+pub(crate) fn extract_logits(
     logits: &Tensor,
     context_lens: Vec<(usize, usize)>,
 ) -> candle_core::Result<Tensor> {
@@ -711,6 +711,16 @@ pub fn extract_logits(
         toks.push(dim.narrow(1, start, len)?);
     }
     Tensor::cat(&toks, 0)
+}
+
+pub(crate) fn calculate_past_kv_len(cache: &Cache) -> candle_core::Result<usize> {
+    let cache = cache.lock();
+    let kv_cache_1 = cache.first().unwrap();
+    if kv_cache_1.is_none() {
+        return Ok(0);
+    }
+    let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
+    return Ok(k_cache_1.dims()[2]);
 }
 
 struct XLoraPaths {

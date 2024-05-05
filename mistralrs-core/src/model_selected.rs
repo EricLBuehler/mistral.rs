@@ -294,7 +294,7 @@ pub enum ModelSelected {
         gqa: usize,
     },
 
-    /// Select a GGUF model.
+    /// Select a speculative GGUF model.
     SpeculativeGGUF {
         /// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
@@ -325,5 +325,36 @@ pub enum ModelSelected {
         /// Control the application of repeat penalty for the last n tokens
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
+
+        /// Number of times to run the draft model per run of target model
+        #[arg(long, default_value_t = 16)]
+        gamma: usize,
+    },
+
+    /// Select a speculative plain model, without quantization or adapters
+    SpeculativePlain {
+        /// Model ID to load from. This may be a HF hub repo or a local path.
+        #[arg(short, long)]
+        model_id: String,
+
+        /// Draft model ID to load from. This may be a HF hub repo or a local path.
+        #[arg(long = "dm")]
+        draft_model_id: String,
+
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(short, long)]
+        tokenizer_json: Option<String>,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
+
+        /// The architecture of the model.
+        #[arg(short, long, value_parser = parse_arch)]
+        arch: NormalLoaderType,
+
+        /// Number of times to run the draft model per run of target model
+        #[arg(long, default_value_t = 16)]
+        gamma: usize,
     },
 }

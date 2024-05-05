@@ -9,7 +9,7 @@ use candle_nn::{Embedding, Module, RotaryEmbedding};
 
 use crate::device_map::DeviceMapper;
 use crate::layers::QRmsNorm;
-use crate::pipeline::extract_logits;
+use crate::pipeline::{calculate_past_kv_len, extract_logits};
 use crate::DeviceMapMetadata;
 
 use super::{repeat_kv, verify_sanity_gguf, Cache};
@@ -419,16 +419,6 @@ impl ModelWeights {
         }
     }
 
-    fn calculate_past_kv_len(&mut self) -> Result<usize> {
-        let cache = self.cache.lock();
-        let kv_cache_1 = cache.first().unwrap();
-        if kv_cache_1.is_none() {
-            return Ok(0);
-        }
-        let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
-        return Ok(k_cache_1.dims()[2]);
-    }
-
     pub fn forward(
         &mut self,
         x: &Tensor,
@@ -437,7 +427,7 @@ impl ModelWeights {
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
-        let pos = self.calculate_past_kv_len()?;
+        let pos = calculate_past_kv_len(&self.cache)?;
         let mask = if seq_len == 1 {
             None
         } else {

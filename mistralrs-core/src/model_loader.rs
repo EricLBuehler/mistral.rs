@@ -51,7 +51,8 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
         | ModelSelected::LoraGGUF { .. }
         | ModelSelected::GGML { .. }
         | ModelSelected::LoraGGML { .. }
-        | ModelSelected::SpeculativeGGUF { .. } => None,
+        | ModelSelected::SpeculativeGGUF { .. }
+        | ModelSelected::SpeculativePlain { .. } => None,
         ModelSelected::XLora {
             tgt_non_granular_index,
             ..
@@ -288,6 +289,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             draft_quantized_model_id,
             draft_quantized_filename,
             repeat_last_n,
+            gamma,
         } => {
             let target_loader = GGUFLoaderBuilder::new(
                 GGUFSpecificConfig { repeat_last_n },
@@ -310,7 +312,41 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             Box::new(SpeculativeLoader {
                 target: target_loader,
                 draft: draft_loader,
-                config: SpeculativeConfig { gamma: 5 },
+                config: SpeculativeConfig { gamma },
+            })
+        }
+        ModelSelected::SpeculativePlain {
+            model_id,
+            draft_model_id,
+            tokenizer_json,
+            repeat_last_n,
+            arch,
+            gamma,
+        } => {
+            let target_loader = NormalLoaderBuilder::new(
+                NormalSpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n,
+                },
+                args.chat_template.clone(),
+                tokenizer_json.clone(),
+                Some(model_id),
+            )
+            .build(arch.clone());
+            let draft_loader = NormalLoaderBuilder::new(
+                NormalSpecificConfig {
+                    use_flash_attn,
+                    repeat_last_n,
+                },
+                args.chat_template,
+                tokenizer_json,
+                Some(draft_model_id),
+            )
+            .build(arch);
+            Box::new(SpeculativeLoader {
+                target: target_loader,
+                draft: draft_loader,
+                config: SpeculativeConfig { gamma },
             })
         }
     };
