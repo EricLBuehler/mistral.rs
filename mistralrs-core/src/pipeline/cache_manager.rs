@@ -9,6 +9,7 @@ pub struct DefaultCacheManager;
 enum SeqCache {
     Normal,
     XLora,
+    Draft,
 }
 
 fn clone_in_cache(
@@ -25,6 +26,7 @@ fn clone_in_cache(
             let src_cache = match src {
                 SeqCache::Normal => seq.cache(),
                 SeqCache::XLora => seq.xlora_cache(),
+                SeqCache::Draft => seq.draft_cache(),
             };
             let cache = src_cache.get(layer).unwrap();
             let cache = cache
@@ -69,6 +71,7 @@ fn clone_out_cache(
             let output_cache = match target {
                 SeqCache::Normal => seq.cache(),
                 SeqCache::XLora => seq.xlora_cache(),
+                SeqCache::Draft => unreachable!(),
             };
             let seq_cache = &mut output_cache[layer];
             let k = k_caches.get(seq_i).unwrap().clone();
@@ -102,9 +105,9 @@ impl CacheManager for DefaultCacheManager {
         if modify_draft_cache {
             clone_in_cache(
                 pipeline.get_metadata().num_hidden_layers,
-                &mut pipeline.cache().draft_lock(),
+                &mut pipeline.cache().lock(),
                 seqs,
-                SeqCache::Normal,
+                SeqCache::Draft,
             );
         }
         if pipeline.get_metadata().is_xlora {

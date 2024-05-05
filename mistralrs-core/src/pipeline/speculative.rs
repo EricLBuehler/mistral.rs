@@ -351,7 +351,7 @@ impl Pipeline for SpeculativePipeline {
 
         match post_op {
             CacheInstruction::Out => {
-                get_mut_arcmutex!(self.target).clone_out_cache(input_seqs, true);
+                self.clone_out_cache(input_seqs, true);
             }
             CacheInstruction::Nonthing => (),
             CacheInstruction::Reset { reset_non_granular } => {
@@ -412,15 +412,25 @@ impl Pipeline for SpeculativePipeline {
     fn get_metadata(&self) -> &GeneralMetadata {
         &self.metadata
     }
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], _: bool) {
-        DefaultCacheManager.clone_in_cache(&mut *get_mut_arcmutex!(self.target), seqs, true)
+    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_in_cache(&mut *get_mut_arcmutex!(self.target), seqs, false);
+        DefaultCacheManager.clone_in_cache(
+            &mut *get_mut_arcmutex!(self.draft),
+            seqs,
+            modify_draft_cache,
+        );
     }
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], _: bool) {
-        DefaultCacheManager.clone_out_cache(&mut *get_mut_arcmutex!(self.target), seqs, true)
+    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_out_cache(&mut *get_mut_arcmutex!(self.target), seqs, false);
+        DefaultCacheManager.clone_out_cache(
+            &mut *get_mut_arcmutex!(self.draft),
+            seqs,
+            modify_draft_cache,
+        );
     }
-    fn set_none_cache(&mut self, reset_non_granular: bool, _: bool) {
-        DefaultCacheManager.set_none_cache(&mut *get_mut_arcmutex!(self.target), true);
-        DefaultCacheManager.set_none_cache(&mut *get_mut_arcmutex!(self.draft), true);
+    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
+        DefaultCacheManager.set_none_cache(&mut *get_mut_arcmutex!(self.target), false);
+        DefaultCacheManager.set_none_cache(&mut *get_mut_arcmutex!(self.draft), modify_draft_cache);
         if reset_non_granular {
             self.reset_non_granular_state()
         }

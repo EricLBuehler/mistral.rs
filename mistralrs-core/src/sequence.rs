@@ -83,6 +83,7 @@ pub struct Sequence {
     // Cache
     scaling_cache: Option<Tensor>,
     cache: LayerCaches,
+    draft_cache: LayerCaches,
     xlora_cache: Option<LayerCaches>,
 
     // Mutables
@@ -133,6 +134,7 @@ impl Sequence {
             timestamp,
             state: RwLock::new(SequenceState::Waiting),
             cache: vec![None; layers],
+            draft_cache: vec![None; layers],
             xlora_cache: if is_xlora {
                 Some(vec![None; layers])
             } else {
@@ -232,6 +234,10 @@ impl Sequence {
 
     pub fn cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
         &mut self.cache
+    }
+
+    pub fn draft_cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
+        &mut self.draft_cache
     }
 
     pub fn xlora_cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
