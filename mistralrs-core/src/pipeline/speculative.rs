@@ -270,8 +270,8 @@ impl Pipeline for SpeculativePipeline {
                         // Do not accept. Resample with updated prob dist relu(p(x) − q(x))
                         let corrected_distribution =
                             (target_sample.distribution - draft_sample.distribution)?.relu()?;
-                        let corrected_distribution = (&corrected_distribution
-                            / corrected_distribution.sum_keepdim(D::Minus1))?;
+                        let corrected_distribution = corrected_distribution
+                            .broadcast_div(&corrected_distribution.sum_keepdim(D::Minus1)?)?;
                         let t = get_mut_arcmutex!(self.target)
                             .get_metadata()
                             .tok_trie
@@ -301,15 +301,14 @@ impl Pipeline for SpeculativePipeline {
         }
 
         // ======================= Narrow cache of draft model. ============================
-        let n_not_accepted = self.gamma - accepted_tokens.len();
         for (k, v) in get_mut_arcmutex!(self.draft)
             .cache()
             .lock()
             .iter_mut()
             .flatten()
         {
-            *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
-            *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+            *k = k.i((.., .., ..seq.get_toks().len(), ..))?;
+            *v = v.i((.., .., ..seq.get_toks().len(), ..))?;
         }
         if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
             for (k, v) in get_mut_arcmutex!(self.draft)
@@ -318,8 +317,8 @@ impl Pipeline for SpeculativePipeline {
                 .iter_mut()
                 .flatten()
             {
-                *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
-                *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                *k = k.i((.., .., ..seq.get_toks().len(), ..))?;
+                *v = v.i((.., .., ..seq.get_toks().len(), ..))?;
             }
         }
 
