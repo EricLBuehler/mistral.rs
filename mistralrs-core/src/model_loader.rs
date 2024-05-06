@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::fs::{self, File};
 
 use crate::{
     pipeline::{
@@ -72,8 +72,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
     let tgt_non_granular_index = get_tgt_non_granular_index(&args.model);
     let loader: Box<dyn Loader> = match args.model {
         ModelSelected::Toml { file } => {
-            let selector: TomlSelector = serde_json::from_reader(
-                File::open(file.clone())
+            let selector: TomlSelector = toml::from_str(
+                &fs::read_to_string(file.clone())
                     .unwrap_or_else(|_| panic!("Could not load toml selector file at {file}")),
             )?;
             let args = TomlLoaderArgs {
