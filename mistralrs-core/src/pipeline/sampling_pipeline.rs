@@ -198,6 +198,7 @@ macro_rules! do_sample {
                     $rng.clone(),
                     use_async_pool,
                     true, // Append result to trie
+                    false,
                 )
             })
             .collect();

@@ -204,15 +204,28 @@ macro_rules! sample_async {
         $logits: expr,
         $ctx: expr,
         $return_logprobs: expr,
-        $rng: expr
+        $rng: expr,
+        $sample_speculative_gumbel: expr
      ) => {
         if $use_async_pool {
             tokio_rayon::spawn(move || {
-                $sampler.sample($logits, Some(&$ctx), $return_logprobs, $rng)
+                $sampler.sample(
+                    $logits,
+                    Some(&$ctx),
+                    $return_logprobs,
+                    $rng,
+                    $sample_speculative_gumbel,
+                )
             })
             .await?
         } else {
-            $sampler.sample($logits, Some(&$ctx), $return_logprobs, $rng)?
+            $sampler.sample(
+                $logits,
+                Some(&$ctx),
+                $return_logprobs,
+                $rng,
+                $sample_speculative_gumbel,
+            )?
         }
     };
 }

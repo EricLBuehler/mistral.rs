@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{quantized::GgmlDType, Device, IndexOp, Result, Tensor};
+use candle_core::{quantized::GgmlDType, Device, IndexOp, Result, Tensor, D};
 use rand::Rng;
 use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
@@ -183,6 +183,7 @@ impl Pipeline for SpeculativePipeline {
                 rng.clone(),
                 false, // todo tune
                 false, // do not add to tok trie yet
+                true,
             )
             .await?;
             seq.add_tmp_tok(sample.token);
@@ -269,6 +270,8 @@ impl Pipeline for SpeculativePipeline {
                         // Do not accept. Resample with updated prob dist relu(p(x) − q(x))
                         let corrected_distribution =
                             (target_sample.distribution - draft_sample.distribution)?.relu()?;
+                        let corrected_distribution = (&corrected_distribution
+                            / corrected_distribution.sum_keepdim(D::Minus1))?;
                         let t = get_mut_arcmutex!(self.target)
                             .get_metadata()
                             .tok_trie
@@ -283,6 +286,7 @@ impl Pipeline for SpeculativePipeline {
                             r,
                             n_seqs > 1,
                             false, // Do not add to trie
+                            true,
                         )
                         .await?;
                         accepted_tokens.push(sampled);
@@ -319,17 +323,17 @@ impl Pipeline for SpeculativePipeline {
             }
         }
 
+        let eos_owned = get_mut_arcmutex!(self.target)
+            .get_metadata()
+            .eos_tok
+            .clone();
+        let eos_tok = if disable_eos_stop {
+            None
+        } else {
+            Some(&eos_owned[..])
+        };
         // Add the tokens to the seq and the trie
         for accepted in accepted_tokens {
-            let eos_owned = get_mut_arcmutex!(self.target)
-                .get_metadata()
-                .eos_tok
-                .clone();
-            let eos_tok = if disable_eos_stop {
-                None
-            } else {
-                Some(&eos_owned[..])
-            };
             // Do not use the prefix cacher
             finish_and_add_tokens_to_seq!(self, prefix_cacher, seq, accepted, eos_tok, false);
             match seq.recognizer {
@@ -348,6 +352,26 @@ impl Pipeline for SpeculativePipeline {
                 SequenceRecognizer::None => {}
             }
         }
+
+        // Trick to improve lower bounds. Sample last token in multinomial
+        /*
+        let sample = sample_sequence(
+            logits.clone(),
+            seq,
+            seq.return_logprobs(),
+            repeat_last_n,
+            get_mut_arcmutex!(self.draft)
+                .get_metadata()
+                .tok_trie
+                .clone(),
+            rng.clone(),
+            false, // todo tune
+            true, // do not add to tok trie yet
+            true,
+        )
+        .await?;
+        finish_and_add_tokens_to_seq!(self, prefix_cacher, seq, sample, eos_tok, false);
+        */
 
         match post_op {
             CacheInstruction::Out => {
