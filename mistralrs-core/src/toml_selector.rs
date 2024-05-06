@@ -17,6 +17,7 @@ fn default_one() -> usize {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(untagged)]
 enum TomlModelSelected {
     /// Select a plain model, without quantization or adapters
     Plain {

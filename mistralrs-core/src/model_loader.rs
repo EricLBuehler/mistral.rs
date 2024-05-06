@@ -72,16 +72,16 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
     let tgt_non_granular_index = get_tgt_non_granular_index(&args.model);
     let loader: Box<dyn Loader> = match args.model {
         ModelSelected::Toml { file } => {
-            let selecter: TomlSelector = serde_json::from_reader(
+            let selector: TomlSelector = serde_json::from_reader(
                 File::open(file.clone())
-                    .unwrap_or_else(|_| panic!("Could not load toml selecter file at {file}")),
+                    .unwrap_or_else(|_| panic!("Could not load toml selector file at {file}")),
             )?;
             let args = TomlLoaderArgs {
                 use_flash_attn,
                 chat_template: args.chat_template,
                 no_kv_cache: args.no_kv_cache,
             };
-            (selecter, args).try_into()?
+            (selector, args).try_into()?
         }
         ModelSelected::Plain {
             model_id,
