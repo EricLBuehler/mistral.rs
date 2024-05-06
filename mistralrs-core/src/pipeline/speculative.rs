@@ -210,6 +210,27 @@ impl Pipeline for SpeculativePipeline {
 
         // ======================= Run the model with all draft tokens. ============================
 
+        for (k, v) in get_mut_arcmutex!(self.target)
+            .cache()
+            .lock()
+            .iter_mut()
+            .flatten()
+        {
+            *k = k.i((.., .., ..k.dims()[2] - 1, ..))?;
+            *v = v.i((.., .., ..v.dims()[2] - 1, ..))?;
+        }
+        if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
+            for (k, v) in get_mut_arcmutex!(self.target)
+                .cache()
+                .xlora_lock()
+                .iter_mut()
+                .flatten()
+            {
+                *k = k.i((.., .., ..k.dims()[2] - 1, ..))?;
+                *v = v.i((.., .., ..v.dims()[2] - 1, ..))?;
+            }
+        }
+
         let initial_cache_len = get_mut_arcmutex!(self.target).cache().lock()[0]
             .as_ref()
             .map(|(k, _)| k.dims()[2])
@@ -300,7 +321,7 @@ impl Pipeline for SpeculativePipeline {
             }
         }
 
-        // ======================= Narrow cache of draft model. ============================
+        // ======================= Narrow caches to account for rejections ============================
         let n_not_accepted = self.gamma - accepted_tokens.len();
         for (k, v) in get_mut_arcmutex!(self.draft)
             .cache()
@@ -313,6 +334,26 @@ impl Pipeline for SpeculativePipeline {
         }
         if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
             for (k, v) in get_mut_arcmutex!(self.draft)
+                .cache()
+                .xlora_lock()
+                .iter_mut()
+                .flatten()
+            {
+                *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
+                *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+            }
+        }
+        for (k, v) in get_mut_arcmutex!(self.target)
+            .cache()
+            .lock()
+            .iter_mut()
+            .flatten()
+        {
+            *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
+            *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+        }
+        if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
+            for (k, v) in get_mut_arcmutex!(self.target)
                 .cache()
                 .xlora_lock()
                 .iter_mut()
