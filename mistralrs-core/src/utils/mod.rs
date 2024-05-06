@@ -205,7 +205,7 @@ macro_rules! sample_async {
         $ctx: expr,
         $return_logprobs: expr,
         $rng: expr,
-        $sample_speculative_gumbel: expr
+        $sample_speculative: expr
      ) => {
         if $use_async_pool {
             tokio_rayon::spawn(move || {
@@ -214,7 +214,7 @@ macro_rules! sample_async {
                     Some(&$ctx),
                     $return_logprobs,
                     $rng,
-                    $sample_speculative_gumbel,
+                    $sample_speculative,
                 )
             })
             .await?
@@ -224,7 +224,7 @@ macro_rules! sample_async {
                 Some(&$ctx),
                 $return_logprobs,
                 $rng,
-                $sample_speculative_gumbel,
+                $sample_speculative,
             )?
         }
     };

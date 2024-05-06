@@ -21,7 +21,7 @@ pub async fn sample_sequence(
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     use_async_pool: bool,
     add_to_trie: bool,
-    sample_speculative_gumbel: bool,
+    sample_speculative: bool,
 ) -> Result<Logprobs> {
     let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
     let start_at = seq.get_toks().len().saturating_sub(repeat_last_n);
@@ -37,7 +37,7 @@ pub async fn sample_sequence(
         ctx_clone,
         return_logprobs,
         rng_clone,
-        sample_speculative_gumbel
+        sample_speculative
     );
 
     let bias_if_not_allowed = match &mut seq.recognizer {
@@ -65,7 +65,7 @@ pub async fn sample_sequence(
                 ctx_clone,
                 return_logprobs,
                 rng_clone,
-                sample_speculative_gumbel
+                sample_speculative
             )
         }
         None => first_lobprobs_response,

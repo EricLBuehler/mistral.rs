@@ -83,18 +83,8 @@ pub struct Logprobs {
     pub top_logprobs: Option<Vec<TopLogprob>>,
 }
 
-const STDDEV_UNIFORM: f64 = 0.28867513459; // 1/sqrt(12)
-
-fn gumbel_noise(logits: &Tensor) -> Result<Tensor> {
-    let noise = Tensor::randn(0.5, STDDEV_UNIFORM, logits.shape(), logits.device())?;
-    (noise.log()?.clamp(1e-20, f32::MAX)?.neg()?)
-        .log()?
-        .clamp(1e-20, f32::MAX)?
-        .neg()
-}
-
-fn gumbel_sample_last_dim(logits: &Tensor) -> Result<Tensor> {
-    (logits + gumbel_noise(logits))?.argmax(D::Minus1)
+fn argmax_sample_last_dim(logits: &Tensor) -> Result<Tensor> {
+    logits.argmax(D::Minus1)
 }
 
 impl Sampler {
@@ -231,7 +221,7 @@ impl Sampler {
 
         let logits = Tensor::from_slice(&probs, logits.shape(), &Device::Cpu)?;
 
-        let next_token = gumbel_sample_last_dim(&logits)?.to_scalar::<u32>()?;
+        let next_token = argmax_sample_last_dim(&logits)?.to_scalar::<u32>()?;
 
         let logprob = probs[next_token as usize].log(10.0);
 
@@ -366,14 +356,14 @@ impl Sampler {
         penalty_ctxt: Option<&[u32]>,
         return_logprobs: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
-        sample_speculative_gumbel: bool,
+        sample_speculative: bool,
     ) -> Result<Logprobs> {
         let logits = self.apply_penalties(logits.to_vec1()?, penalty_ctxt)?;
         let logits = match self.logits_bias {
             Some(ref bias) => (logits + bias)?,
             None => logits,
         };
-        let next_token = if sample_speculative_gumbel {
+        let next_token = if sample_speculative {
             match self.temperature {
                 None => self.sample_speculative_topkp(
                     logits,
