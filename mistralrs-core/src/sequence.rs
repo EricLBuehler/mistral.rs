@@ -79,6 +79,7 @@ pub struct Sequence {
     prefill_prompt_toks: Option<Vec<u32>>,
     suffix: Option<String>,
     prefix: Option<String>,
+    is_tmp: bool,
 
     // Cache
     scaling_cache: Option<Tensor>,
@@ -162,6 +163,7 @@ impl Sequence {
             last_completion_bytes_len: 0,
             last_logprob: 0.0,
             last_is_done: None,
+            is_tmp: false,
         }
     }
 
@@ -182,6 +184,9 @@ impl Sequence {
     pub fn len(&self) -> usize {
         if let Some(toks) = &self.prefill_prompt_toks {
             return toks.len();
+        }
+        if self.is_tmp {
+            return self.tokens.len();
         }
         // Use xlora cache first because of non granular
         if self.xlora_cache.as_ref().is_some_and(|c| c[0].is_some()) {
@@ -268,11 +273,13 @@ impl Sequence {
 
     /// Internal api to add one raw token.
     pub(crate) fn add_tmp_tok(&mut self, tok: u32) {
+        self.is_tmp = true;
         self.tokens.push(tok);
     }
 
     /// Internal api to remove n raw tokens.
     pub(crate) fn remove_tmp_tok(&mut self, n: usize) {
+        self.is_tmp = false;
         self.tokens.truncate(self.tokens.len() - n);
     }
 
