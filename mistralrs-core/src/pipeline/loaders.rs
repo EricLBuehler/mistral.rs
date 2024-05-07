@@ -1,4 +1,4 @@
-use std::{collections::HashMap, str::FromStr};
+use std::{collections::HashMap, fmt::Debug, str::FromStr};
 
 use anyhow::Result;
 use candle_core::Device;
@@ -46,7 +46,7 @@ impl FromStr for NormalLoaderType {
 
 // ======================== Mistral loader
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct MistralBasicConfig {
     vocab_size: usize,
     hidden_size: usize,
@@ -128,6 +128,12 @@ impl NormalModelLoader for MistralLoader {
     }
     fn is_gptx(&self) -> bool {
         true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(MistralBasicConfig::deserialize(
+            config,
+            use_flash_attn,
+        )?))
     }
 }
 
@@ -227,6 +233,12 @@ impl NormalModelLoader for GemmaLoader {
     fn is_gptx(&self) -> bool {
         true
     }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(GemmaBasicConfig::deserialize(
+            config,
+            use_flash_attn,
+        )?))
+    }
 }
 
 // ======================== Llama loader
@@ -316,6 +328,12 @@ impl NormalModelLoader for LlamaLoader {
     }
     fn is_gptx(&self) -> bool {
         true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(LlamaBasicConfig::deserialize(
+            config,
+            use_flash_attn,
+        )?))
     }
 }
 
@@ -408,6 +426,12 @@ impl NormalModelLoader for MixtralLoader {
     fn is_gptx(&self) -> bool {
         true
     }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(MixtralBasicConfig::deserialize(
+            config,
+            use_flash_attn,
+        )?))
+    }
 }
 
 // ======================== Phi2 loader
@@ -498,6 +522,12 @@ impl NormalModelLoader for Phi2Loader {
     }
     fn is_gptx(&self) -> bool {
         true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(Phi2BasicConfig::deserialize(
+            config,
+            use_flash_attn,
+        )?))
     }
 }
 
@@ -601,6 +631,12 @@ impl NormalModelLoader for Phi3Loader {
     fn is_gptx(&self) -> bool {
         true
     }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(Phi3BasicConfig::deserialize(
+            config,
+            use_flash_attn,
+        )?))
+    }
 }
 
 // ======================== Qwen2 loader
@@ -683,5 +719,11 @@ impl NormalModelLoader for Qwen2Loader {
     }
     fn is_gptx(&self) -> bool {
         true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(Qwen2BasicConfig::deserialize(
+            config,
+            use_flash_attn,
+        )?))
     }
 }
