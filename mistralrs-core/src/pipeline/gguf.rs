@@ -18,7 +18,10 @@ use crate::{
     utils::tokens::get_token, xlora_models::XLoraModelWeights as XLoraQLlama,
 };
 use anyhow::{bail, Result};
-use candle_core::quantized::{gguf_file, GgmlDType};
+use candle_core::quantized::{
+    gguf_file::{self, Value as GgufValue},
+    GgmlDType,
+};
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::Ordering;
@@ -253,6 +256,28 @@ impl GGUFLoader {
     }
 }
 
+fn parse_gguf_value(value: &GgufValue) -> String {
+    match value {
+        GgufValue::Array(vs) => vs
+            .iter()
+            .map(parse_gguf_value)
+            .collect::<Vec<String>>()
+            .join(", "),
+        GgufValue::Bool(b) => b.to_string(),
+        GgufValue::F32(x) => x.to_string(),
+        GgufValue::F64(x) => x.to_string(),
+        GgufValue::I8(x) => x.to_string(),
+        GgufValue::I16(x) => x.to_string(),
+        GgufValue::I32(x) => x.to_string(),
+        GgufValue::I64(x) => x.to_string(),
+        GgufValue::String(x) => x.to_string(),
+        GgufValue::U8(x) => x.to_string(),
+        GgufValue::U16(x) => x.to_string(),
+        GgufValue::U32(x) => x.to_string(),
+        GgufValue::U64(x) => x.to_string(),
+    }
+}
+
 impl Loader for GGUFLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model(
@@ -289,6 +314,13 @@ impl Loader for GGUFLoader {
             .unwrap()
             .parse()
             .map_err(anyhow::Error::msg)?;
+
+        for (name, value) in &model.metadata {
+            if !name.contains("tokenizer") {
+                let value = parse_gguf_value(value);
+                println!("{name}: {}", value);
+            }
+        }
 
         let mut is_lora = false;
         let model = match self.kind {
