@@ -222,11 +222,13 @@
 <a href="#220" id="220">220</a>
 <a href="#221" id="221">221</a>
 <a href="#222" id="222">222</a>
+<a href="#223" id="223">223</a>
+<a href="#224" id="224">224</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{ops::Mul, str::FromStr};
 
-<span class="kw">use </span>candle_core::{quantized::QTensor, DType, Device, <span class="prelude-ty">Result</span>, Tensor};
+<span class="kw">use </span>candle_core::{quantized::QTensor, DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{
     layer_norm::{RmsNormNonQuantized, RmsNormQuantized},
     Module, VarBuilder,
@@ -433,11 +435,13 @@
         <span class="kw">let </span><span class="kw-2">mut </span>q_embeds = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>k_embeds = Vec::new();
         <span class="kw">let </span>(sin, cos) = <span class="self">self</span>.get_long_or_short_sin_cos(position_ids);
-        <span class="kw">for </span>offset <span class="kw">in </span>seqlen_offsets {
+        <span class="kw">for </span>(i, offset) <span class="kw">in </span>seqlen_offsets.iter().enumerate() {
             <span class="kw">let </span>cos = cos.narrow(<span class="number">0</span>, <span class="kw-2">*</span>offset, seq_len)<span class="question-mark">?</span>;
             <span class="kw">let </span>sin = sin.narrow(<span class="number">0</span>, <span class="kw-2">*</span>offset, seq_len)<span class="question-mark">?</span>;
-            <span class="kw">let </span>q_embed = candle_nn::rotary_emb::rope(<span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>cos, <span class="kw-2">&amp;</span>sin)<span class="question-mark">?</span>;
-            <span class="kw">let </span>k_embed = candle_nn::rotary_emb::rope(<span class="kw-2">&amp;</span>k.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>cos, <span class="kw-2">&amp;</span>sin)<span class="question-mark">?</span>;
+            <span class="kw">let </span>q_embed =
+                candle_nn::rotary_emb::rope(<span class="kw-2">&amp;</span>q.i(i)<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>cos, <span class="kw-2">&amp;</span>sin)<span class="question-mark">?</span>;
+            <span class="kw">let </span>k_embed =
+                candle_nn::rotary_emb::rope(<span class="kw-2">&amp;</span>k.i(i)<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>cos, <span class="kw-2">&amp;</span>sin)<span class="question-mark">?</span>;
             q_embeds.push(q_embed);
             k_embeds.push(k_embed);
         }
