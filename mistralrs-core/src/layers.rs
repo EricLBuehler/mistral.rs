@@ -2,7 +2,7 @@
 
 use std::{ops::Mul, str::FromStr};
 
-use candle_core::{quantized::QTensor, DType, Device, Result, Tensor};
+use candle_core::{quantized::QTensor, DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{
     layer_norm::{RmsNormNonQuantized, RmsNormQuantized},
     Module, VarBuilder,
@@ -209,11 +209,13 @@ impl PhiRotaryEmbedding {
         let mut q_embeds = Vec::new();
         let mut k_embeds = Vec::new();
         let (sin, cos) = self.get_long_or_short_sin_cos(position_ids);
-        for offset in seqlen_offsets {
+        for (i, offset) in seqlen_offsets.iter().enumerate() {
             let cos = cos.narrow(0, *offset, seq_len)?;
             let sin = sin.narrow(0, *offset, seq_len)?;
-            let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
-            let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
+            let q_embed =
+                candle_nn::rotary_emb::rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+            let k_embed =
+                candle_nn::rotary_emb::rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
             q_embeds.push(q_embed);
             k_embeds.push(k_embed);
         }
