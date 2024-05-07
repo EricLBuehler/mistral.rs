@@ -315,6 +315,7 @@ impl Loader for GGUFLoader {
             .parse()
             .map_err(anyhow::Error::msg)?;
 
+        info!("Model config:");
         for (name, value) in &model.metadata {
             if !name.contains("tokenizer") {
                 let value = parse_gguf_value(value);

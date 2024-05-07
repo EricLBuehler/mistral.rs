@@ -255,6 +255,8 @@ impl Loader for GGMLLoader {
         let model = ggml_file::Content::read(&mut file, device)
             .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
 
+        info!("Model config: {:?}", model.hparams);
+
         let mut is_lora = false;
         let model = match self.kind {
             ModelKind::QuantizedGGML => Model::Llama(QLlama::from_ggml(model, self.config.gqa)?),
