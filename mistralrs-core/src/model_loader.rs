@@ -68,7 +68,6 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
 
 fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loader>> {
     let use_flash_attn = args.use_flash_attn;
-    let tgt_non_granular_index = get_tgt_non_granular_index(&args.model);
     let loader: Box<dyn Loader> = match args.model {
         ModelSelected::Plain {
             model_id,
@@ -134,8 +133,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 File::open(order.clone())
                     .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
             )?,
-            args.no_kv_cache,
-            tgt_non_granular_index,
         )
         .build(arch),
         ModelSelected::GGUF {
@@ -188,7 +185,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             repeat_last_n,
             adapters_model_id,
             order,
-            tgt_non_granular_index,
         } => GGUFLoaderBuilder::new(
             GGUFSpecificConfig { repeat_last_n },
             args.chat_template,
@@ -203,8 +199,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 File::open(order.clone())
                     .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
             )?,
-            args.no_kv_cache,
-            tgt_non_granular_index,
         )
         .build(),
         ModelSelected::GGML {
@@ -259,7 +253,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             repeat_last_n,
             adapters_model_id,
             order,
-            tgt_non_granular_index,
             gqa,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig { repeat_last_n, gqa },
@@ -275,8 +268,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 File::open(order.clone())
                     .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
             )?,
-            args.no_kv_cache,
-            tgt_non_granular_index,
         )
         .build(),
     };

@@ -146,20 +146,9 @@ impl GGMLLoaderBuilder {
         )
     }
 
-    pub fn with_lora(
-        mut self,
-        xlora_model_id: String,
-        xlora_order: Ordering,
-        no_kv_cache: bool,
-        tgt_non_granular_index: Option<usize>,
-    ) -> Self {
+    pub fn with_lora(mut self, lora_model_id: String, lora_order: Ordering) -> Self {
         self.kind = ModelKind::LoraGGML;
-        self.with_adapter(
-            xlora_model_id,
-            xlora_order,
-            no_kv_cache,
-            tgt_non_granular_index,
-        )
+        self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
     pub fn build(self) -> Box<dyn Loader> {

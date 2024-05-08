@@ -177,11 +177,6 @@ pub enum ModelSelected {
         /// Ordering JSON file
         #[arg(short, long)]
         order: String,
-
-        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        /// This makes the maximum running sequences 1.
-        #[arg(long)]
-        tgt_non_granular_index: Option<usize>,
     },
 
     /// Select a GGML model.
@@ -283,11 +278,6 @@ pub enum ModelSelected {
         /// Ordering JSON file
         #[arg(short, long)]
         order: String,
-
-        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        /// This makes the maximum running sequences 1.
-        #[arg(long)]
-        tgt_non_granular_index: Option<usize>,
 
         /// GQA value
         #[arg(short, long, default_value_t = 1)]

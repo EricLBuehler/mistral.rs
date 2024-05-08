@@ -192,6 +192,11 @@ class Runner:
         Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML then nothing will happen.
         """
 
+    def activate_adapters(self, adapter_names: list[str]) -> None:
+        """
+        Send a request to make the specified adapters the active adapters for the model.
+        """
+
 @dataclass
 class Usage:
     completion_tokens: int

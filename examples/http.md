@@ -110,6 +110,23 @@ curl http://localhost:8080/v1/completions \
 }'
 ```
 
+## `POST`: `/activate_adapters`
+Make the specified adapters the active adapters. Pass the names as a JSON object with the key `adapter_names` to an array of strings (the adapter names).
+
+Example with `curl`:
+```bash
+curl http://localhost:<port>/activate_adapters -H "Content-Type: application/json" -H "Authorization: Bearer EMPTY" -d '{"adapter_names":["adapter_2"]}'
+```
+
+## `POST`: `/re_isq`
+Reapply ISQ to the model if possible. Pass the names as a JSON object with the key `ggml_type` to a string (the quantization level).
+
+Example with `curl`:
+```bash
+curl http://localhost:<port>/re_isq -H "Content-Type: application/json" -H "Authorization: Bearer EMPTY" -d '{"ggml_type":"Q4K"}'
+```
+
+
 Streaming requests are not supported.
 
 ## Request

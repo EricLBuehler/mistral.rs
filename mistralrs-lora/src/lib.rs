@@ -143,7 +143,7 @@ pub trait AdapterSwapper {
     }
     fn activate_adapters(&mut self, adapters: &[String]) -> Result<()>;
     fn has_adapter(&self, adapter: String) -> bool;
-    /// Pass the prefix for the layer (exlcuding .lora_?) as `module_prefix`
+    /// Pass the prefix for the layer (excluding .lora_?) as `module_prefix`
     fn load_new_adapter(
         &mut self,
         name: String,
