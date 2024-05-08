@@ -156,10 +156,12 @@ struct AdapterActivationRequest {
 async fn activate_adapters(
     State(state): State<Arc<MistralRs>>,
     Json(request): Json<AdapterActivationRequest>,
-) -> &'static str {
+) -> String {
+    let repr = format!("Adapter activation: {:?}", request.adapter_names);
+    MistralRs::maybe_log_request(state.clone(), repr.clone());
     let request = Request::ActivateAdapters(request.adapter_names);
     state.get_sender().send(request).await.unwrap();
-    "OK"
+    repr
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -178,10 +180,12 @@ struct ReIsqRequest {
 async fn re_isq(
     State(state): State<Arc<MistralRs>>,
     Json(request): Json<ReIsqRequest>,
-) -> Result<&'static str, String> {
+) -> Result<String, String> {
+    let repr = format!("Re ISQ: {:?}", request.ggml_type);
+    MistralRs::maybe_log_request(state.clone(), repr.clone());
     let request = Request::ReIsq(parse_isq(&request.ggml_type)?);
     state.get_sender().send(request).await.unwrap();
-    Ok("OK")
+    Ok(repr)
 }
 
 fn get_router(state: Arc<MistralRs>) -> Router {
