@@ -944,6 +944,7 @@
 <a href="#942" id="942">942</a>
 <a href="#943" id="943">943</a>
 <a href="#944" id="944">944</a>
+<a href="#945" id="945">945</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>cache_manager;
 <span class="kw">mod </span>chat_template;
 <span class="kw">mod </span>ggml;
@@ -979,7 +980,7 @@
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>sampling::sample_sequence;
-<span class="kw">use </span>std::fmt::Display;
+<span class="kw">use </span>std::fmt::{Debug, Display};
 <span class="kw">use </span>std::path::Path;
 <span class="kw">use </span>std::sync::atomic::AtomicUsize;
 <span class="kw">use </span>std::sync::Arc;
@@ -1350,6 +1351,7 @@
         device: Device,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt;;
     <span class="kw">fn </span>is_gptx(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
+    <span class="kw">fn </span>get_config_repr(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str, use_flash_attn: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>Debug&gt;&gt;;
 }
 
 <span class="kw">pub trait </span>NormalModel {

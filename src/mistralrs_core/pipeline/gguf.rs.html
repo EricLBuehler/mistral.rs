@@ -519,6 +519,39 @@
 <a href="#517" id="517">517</a>
 <a href="#518" id="518">518</a>
 <a href="#519" id="519">519</a>
+<a href="#520" id="520">520</a>
+<a href="#521" id="521">521</a>
+<a href="#522" id="522">522</a>
+<a href="#523" id="523">523</a>
+<a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
+<a href="#551" id="551">551</a>
+<a href="#552" id="552">552</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
@@ -539,7 +572,10 @@
     utils::tokens::get_token, xlora_models::XLoraModelWeights <span class="kw">as </span>XLoraQLlama,
 };
 <span class="kw">use </span>anyhow::{bail, <span class="prelude-ty">Result</span>};
-<span class="kw">use </span>candle_core::quantized::{gguf_file, GgmlDType};
+<span class="kw">use </span>candle_core::quantized::{
+    gguf_file::{<span class="self">self</span>, Value <span class="kw">as </span>GgufValue},
+    GgmlDType,
+};
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>mistralrs_lora::Ordering;
@@ -774,6 +810,28 @@
     }
 }
 
+<span class="kw">fn </span>parse_gguf_value(value: <span class="kw-2">&amp;</span>GgufValue) -&gt; String {
+    <span class="kw">match </span>value {
+        GgufValue::Array(vs) =&gt; vs
+            .iter()
+            .map(parse_gguf_value)
+            .collect::&lt;Vec&lt;String&gt;&gt;()
+            .join(<span class="string">", "</span>),
+        GgufValue::Bool(b) =&gt; b.to_string(),
+        GgufValue::F32(x) =&gt; x.to_string(),
+        GgufValue::F64(x) =&gt; x.to_string(),
+        GgufValue::I8(x) =&gt; x.to_string(),
+        GgufValue::I16(x) =&gt; x.to_string(),
+        GgufValue::I32(x) =&gt; x.to_string(),
+        GgufValue::I64(x) =&gt; x.to_string(),
+        GgufValue::String(x) =&gt; x.to_string(),
+        GgufValue::U8(x) =&gt; x.to_string(),
+        GgufValue::U16(x) =&gt; x.to_string(),
+        GgufValue::U32(x) =&gt; x.to_string(),
+        GgufValue::U64(x) =&gt; x.to_string(),
+    }
+}
+
 <span class="kw">impl </span>Loader <span class="kw">for </span>GGUFLoader {
     <span class="attr">#[allow(clippy::type_complexity, clippy::too_many_arguments)]
     </span><span class="kw">fn </span>load_model(
@@ -810,6 +868,14 @@
             .unwrap()
             .parse()
             .map_err(anyhow::Error::msg)<span class="question-mark">?</span>;
+
+        <span class="macro">info!</span>(<span class="string">"Model config:"</span>);
+        <span class="kw">for </span>(name, value) <span class="kw">in </span><span class="kw-2">&amp;</span>model.metadata {
+            <span class="kw">if </span>!name.contains(<span class="string">"tokenizer"</span>) {
+                <span class="kw">let </span>value = parse_gguf_value(value);
+                <span class="macro">println!</span>(<span class="string">"{name}: {}"</span>, value);
+            }
+        }
 
         <span class="kw">let </span><span class="kw-2">mut </span>is_lora = <span class="bool-val">false</span>;
         <span class="kw">let </span>model = <span class="kw">match </span><span class="self">self</span>.kind {

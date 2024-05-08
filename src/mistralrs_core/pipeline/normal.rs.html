@@ -418,6 +418,10 @@
 <a href="#416" id="416">416</a>
 <a href="#417" id="417">417</a>
 <a href="#418" id="418">418</a>
+<a href="#419" id="419">419</a>
+<a href="#420" id="420">420</a>
+<a href="#421" id="421">421</a>
+<a href="#422" id="422">422</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
@@ -631,7 +635,11 @@
             DType::F32
         };
 
-        <span class="macro">info!</span>(<span class="string">"Model config: {config}"</span>);
+        <span class="macro">info!</span>(
+            <span class="string">"Model config: {:?}"</span>,
+            <span class="self">self</span>.inner
+                .get_config_repr(<span class="kw-2">&amp;</span>config, <span class="self">self</span>.config.use_flash_attn)<span class="question-mark">?
+        </span>);
 
         <span class="kw">let </span>load_device = <span class="kw">if </span>in_situ_quant.is_none() {
             device.clone()
