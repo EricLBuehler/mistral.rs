@@ -29,6 +29,9 @@ futures.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
 
+[build-dependencies]
+pyo3-build-config = "0.21"
+
 [features]
 cuda = ["candle-core/cuda", "mistralrs-core/cuda"]
 cudnn = ["candle-core/cudnn", "mistralrs-core/cudnn"]
