@@ -833,9 +833,9 @@ fn get_xlora_paths(
             if let Some(preload_adapters) = &xlora_order.preload_adapters {
                 let mut output = HashMap::new();
                 for adapter in preload_adapters {
-                    let adapter_files = api_dir_list!(api, model_id)
+                    let adapter_files = api_dir_list!(api, &adapter.adapter_model_id)
                         .filter_map(|f| {
-                            if *f == adapter.name {
+                            if f.contains(&adapter.name) {
                                 Some((f, adapter.name.clone()))
                             } else {
                                 None
