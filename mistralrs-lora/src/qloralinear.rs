@@ -266,7 +266,6 @@ impl LinearLayerLike for QLoraLinear {
         if self.merged {
             return Ok(result);
         }
-        let scalings = scalings.unwrap();
 
         if self
             .a_adapters
@@ -277,8 +276,14 @@ impl LinearLayerLike for QLoraLinear {
         {
             return Ok(result);
         }
-        let scalings = get_maybe_topk_scalings(scalings, self.layer_n)?;
-        if self.a_adapters.is_left() || scalings.dims3()?.1 != 1 {
+
+        let scalings =
+            scalings.map(|scalings| get_maybe_topk_scalings(scalings, self.layer_n).unwrap());
+        if self.a_adapters.is_left()
+            || scalings
+                .as_ref()
+                .is_some_and(|scalings| scalings.dims3().unwrap().1 != 1)
+        {
             let a_adapters = if self.a_adapters.is_right() {
                 self.a_adapters.as_ref().unwrap_right().1.clone()
             } else {
@@ -292,7 +297,11 @@ impl LinearLayerLike for QLoraLinear {
             for (i, (adapter_a, (adapter_b, adapter_scale))) in
                 zip(a_adapters, zip(b_adapters, &self.scale_adapters)).enumerate()
             {
-                let input_new = apply_scalings_to_x(input.clone(), &scalings, i)?;
+                let input_new = if let Some(scalings) = &scalings {
+                    apply_scalings_to_x(input.clone(), scalings, i)?
+                } else {
+                    input.clone()
+                };
 
                 let res = adapter_b
                     .forward(&adapter_a.forward(&input_new)?)?
@@ -306,14 +315,18 @@ impl LinearLayerLike for QLoraLinear {
             let adapter_b = &self.b_adapters.as_ref().unwrap_right().0;
             let adapter_scales = &self.scale_adapters;
             let n_adapters = adapter_scales.len();
-            let scalings = scalings
-                .squeeze(0)?
-                .squeeze(0)?
-                .unsqueeze(1)?
-                .unsqueeze(1)?;
-            let adapter_a = adapter_a
-                .broadcast_mul(&scalings)?
-                .mul(global_scaling_weight)?;
+            let adapter_a = if let Some(scalings) = scalings.as_ref() {
+                let scalings = scalings
+                    .squeeze(0)?
+                    .squeeze(0)?
+                    .unsqueeze(1)?
+                    .unsqueeze(1)?;
+                adapter_a
+                    .broadcast_mul(&scalings)?
+                    .mul(global_scaling_weight)?
+            } else {
+                adapter_a.clone().mul(global_scaling_weight)?
+            };
 
             let (b, s, h) = input.dims3()?;
             let input = input.reshape((b * s, h))?;
