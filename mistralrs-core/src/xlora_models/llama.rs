@@ -654,7 +654,7 @@ impl XLoraLlama {
                 .expect("Failed to load block.")
             })
             .collect();
-        if xlora_config.is_none() {
+        if xlora_config.is_none() && preload_adapters.is_none() {
             // We are now a LoRA model so we must merge the weights
             info!("Merging LoRA adapters.");
             for layer in blocks.iter_mut().tqdm() {

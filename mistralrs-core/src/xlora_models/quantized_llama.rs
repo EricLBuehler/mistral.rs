@@ -412,6 +412,34 @@ impl ModelWeights {
                 neg_inf: neg_inf.clone(),
             })
         }
+        if xlora_config.is_none() && preload_adapters.is_none() {
+            // We are now a LoRA model so we must merge the weights
+            info!("Merging LoRA adapters.");
+            for layer in layers.iter_mut().tqdm() {
+                layer.attention_wk.merge_weights()?;
+                layer.attention_wo.merge_weights()?;
+                layer.attention_wq.merge_weights()?;
+                layer.attention_wv.merge_weights()?;
+                match &mut layer.mlp_or_moe {
+                    MlpOrMoe::Mlp(ref mut m) => {
+                        m.feed_forward_w1.merge_weights()?;
+                        m.feed_forward_w2.merge_weights()?;
+                        m.feed_forward_w3.merge_weights()?;
+                    }
+                    MlpOrMoe::MoE {
+                        n_expert_used: _,
+                        feed_forward_gate_inp: _,
+                        experts,
+                    } => {
+                        for expert in experts {
+                            expert.feed_forward_w1.merge_weights()?;
+                            expert.feed_forward_w2.merge_weights()?;
+                            expert.feed_forward_w3.merge_weights()?;
+                        }
+                    }
+                }
+            }
+        }
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, ct.hparams.n_embd as usize),
             layers,
@@ -657,7 +685,7 @@ impl ModelWeights {
                 neg_inf,
             })
         }
-        if xlora_config.is_none() {
+        if xlora_config.is_none() && preload_adapters.is_none() {
             // We are now a LoRA model so we must merge the weights
             info!("Merging LoRA adapters.");
             for layer in layers.iter_mut().tqdm() {
