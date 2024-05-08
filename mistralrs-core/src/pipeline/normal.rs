@@ -211,7 +211,11 @@ impl Loader for NormalLoader {
             DType::F32
         };
 
-        info!("Model config: {config}");
+        info!(
+            "Model config: {:?}",
+            self.inner
+                .get_config_repr(&config, self.config.use_flash_attn)?
+        );
 
         let load_device = if in_situ_quant.is_none() {
             device.clone()
