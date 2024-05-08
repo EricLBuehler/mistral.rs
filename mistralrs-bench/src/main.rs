@@ -209,6 +209,44 @@ fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
     print_stdout(table).expect("print table");
 }
 
+fn warmup_run(mistralrs: Arc<MistralRs>) {
+    let sampling_params = SamplingParams {
+        temperature: Some(0.1),
+        top_k: Some(32),
+        top_p: Some(0.1),
+        top_n_logprobs: 0,
+        frequency_penalty: Some(0.1),
+        presence_penalty: Some(0.1),
+        max_len: Some(5),
+        stop_toks: None,
+        logits_bias: None,
+        n_choices: 1,
+    };
+    let sender = mistralrs.get_sender();
+    let (tx, mut rx) = channel(10_000);
+
+    let req = Request {
+        id: mistralrs.next_request_id(),
+        messages: RequestMessage::Completion {
+            text: "Hello!".to_string(),
+            echo_prompt: false,
+            best_of: 1,
+        },
+        sampling_params: sampling_params.clone(),
+        response: tx,
+        return_logprobs: false,
+        is_streaming: false,
+        constraint: Constraint::None,
+        suffix: None,
+    };
+
+    sender
+        .blocking_send(req.clone())
+        .expect("Expected receiver.");
+
+    let _ = rx.blocking_recv();
+}
+
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -310,6 +348,11 @@ fn main() -> anyhow::Result<()> {
     .with_no_prefix_cache(true)
     .with_disable_eos_stop(true)
     .build();
+
+    info!("Starting warmup run.");
+    warmup_run(mistralrs.clone());
+    info!("Finished warmup run.");
+    info!("Starting benchmarks.");
 
     for concurrency in args.concurrency.as_ref().unwrap() {
         let mut results = vec![];
