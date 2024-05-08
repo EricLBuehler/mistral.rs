@@ -89,7 +89,7 @@ pub enum ModelSelected {
         order: String,
 
         /// The architecture of the model.
-        #[arg(short, long, value_parser = parse_arch)]
+        #[arg(long, value_parser = parse_arch)]
         arch: NormalLoaderType,
     },
 
