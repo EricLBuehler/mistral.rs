@@ -34,7 +34,7 @@ pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -415,6 +415,7 @@ pub trait NormalModelLoader {
         device: Device,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn is_gptx(&self) -> bool;
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
 }
 
 pub trait NormalModel {

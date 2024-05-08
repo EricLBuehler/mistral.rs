@@ -138,20 +138,9 @@ impl NormalLoaderBuilder {
         )
     }
 
-    pub fn with_lora(
-        mut self,
-        xlora_model_id: String,
-        xlora_order: Ordering,
-        no_kv_cache: bool,
-        tgt_non_granular_index: Option<usize>,
-    ) -> Self {
+    pub fn with_lora(mut self, xlora_model_id: String, xlora_order: Ordering) -> Self {
         self.kind = ModelKind::LoraNormal;
-        self.with_adapter(
-            xlora_model_id,
-            xlora_order,
-            no_kv_cache,
-            tgt_non_granular_index,
-        )
+        self.with_adapter(xlora_model_id, xlora_order, false, None)
     }
 
     pub fn build(self, loader: NormalLoaderType) -> Box<dyn Loader> {
@@ -211,7 +200,11 @@ impl Loader for NormalLoader {
             DType::F32
         };
 
-        info!("Model config: {config}");
+        info!(
+            "Model config: {:?}",
+            self.inner
+                .get_config_repr(&config, self.config.use_flash_attn)?
+        );
 
         let load_device = if in_situ_quant.is_none() {
             device.clone()

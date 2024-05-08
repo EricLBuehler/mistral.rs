@@ -116,10 +116,6 @@ enum TomlModelSelected {
 
         /// Ordering JSON file
         order: String,
-
-        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        /// This makes the maximum running sequences 1.
-        tgt_non_granular_index: Option<usize>,
     },
 
     /// Select a GGML model.
@@ -185,10 +181,6 @@ enum TomlModelSelected {
         /// Ordering JSON file
         order: String,
 
-        /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        /// This makes the maximum running sequences 1.
-        tgt_non_granular_index: Option<usize>,
-
         /// GQA value
         #[serde(default = "default_one")]
         gqa: usize,
@@ -235,35 +227,11 @@ pub struct TomlLoaderArgs {
     pub no_kv_cache: bool,
 }
 
-fn get_tgt_non_granular_index(model: &TomlModelSelected) -> Option<usize> {
-    match model {
-        TomlModelSelected::Plain { .. }
-        | TomlModelSelected::Lora { .. }
-        | TomlModelSelected::GGUF { .. }
-        | TomlModelSelected::LoraGGUF { .. }
-        | TomlModelSelected::GGML { .. }
-        | TomlModelSelected::LoraGGML { .. } => None,
-        TomlModelSelected::XLora {
-            tgt_non_granular_index,
-            ..
-        }
-        | TomlModelSelected::XLoraGGUF {
-            tgt_non_granular_index,
-            ..
-        }
-        | TomlModelSelected::XLoraGGML {
-            tgt_non_granular_index,
-            ..
-        } => *tgt_non_granular_index,
-    }
-}
-
 fn loader_from_selected(
     args: TomlLoaderInnerParams,
     model: TomlModelSelected,
 ) -> anyhow::Result<Box<dyn Loader>> {
     let use_flash_attn = args.use_flash_attn;
-    let tgt_non_granular_index = get_tgt_non_granular_index(&model);
     let loader: Box<dyn Loader> = match model {
         TomlModelSelected::Plain { model_id, arch } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
@@ -320,8 +288,6 @@ fn loader_from_selected(
                 File::open(order.clone())
                     .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
             )?,
-            args.no_kv_cache,
-            tgt_non_granular_index,
         )
         .build(arch),
         TomlModelSelected::GGUF {
@@ -372,7 +338,6 @@ fn loader_from_selected(
             quantized_filename,
             adapters_model_id,
             order,
-            tgt_non_granular_index,
         } => GGUFLoaderBuilder::new(
             GGUFSpecificConfig {
                 repeat_last_n: args.repeat_last_n,
@@ -389,8 +354,6 @@ fn loader_from_selected(
                 File::open(order.clone())
                     .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
             )?,
-            args.no_kv_cache,
-            tgt_non_granular_index,
         )
         .build(),
         TomlModelSelected::GGML {
@@ -445,7 +408,6 @@ fn loader_from_selected(
             quantized_filename,
             adapters_model_id,
             order,
-            tgt_non_granular_index,
             gqa,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
@@ -464,8 +426,6 @@ fn loader_from_selected(
                 File::open(order.clone())
                     .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
             )?,
-            args.no_kv_cache,
-            tgt_non_granular_index,
         )
         .build(),
     };

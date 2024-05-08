@@ -146,20 +146,9 @@ impl GGMLLoaderBuilder {
         )
     }
 
-    pub fn with_lora(
-        mut self,
-        xlora_model_id: String,
-        xlora_order: Ordering,
-        no_kv_cache: bool,
-        tgt_non_granular_index: Option<usize>,
-    ) -> Self {
+    pub fn with_lora(mut self, xlora_model_id: String, xlora_order: Ordering) -> Self {
         self.kind = ModelKind::LoraGGML;
-        self.with_adapter(
-            xlora_model_id,
-            xlora_order,
-            no_kv_cache,
-            tgt_non_granular_index,
-        )
+        self.with_adapter(xlora_model_id, xlora_order, false, None)
     }
 
     pub fn build(self) -> Box<dyn Loader> {
@@ -254,6 +243,8 @@ impl Loader for GGMLLoader {
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
         let model = ggml_file::Content::read(&mut file, device)
             .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
+
+        info!("Model config: {:?}", model.hparams);
 
         let mut is_lora = false;
         let model = match self.kind {
