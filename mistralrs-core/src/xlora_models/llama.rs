@@ -777,32 +777,33 @@ impl NormalModel for XLoraLlama {
         }
         (tensors, &*self.mapper)
     }
-    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<()> {
+    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
+        let mut sum = 0;
         for layer in self.blocks.iter_mut().tqdm() {
-            Arc::get_mut(&mut layer.attn.k_proj)
+            sum += Arc::get_mut(&mut layer.attn.k_proj)
                 .unwrap()
                 .activate(&adapter_names)?;
-            Arc::get_mut(&mut layer.attn.o_proj)
+            sum += Arc::get_mut(&mut layer.attn.o_proj)
                 .unwrap()
                 .activate(&adapter_names)?;
-            Arc::get_mut(&mut layer.attn.q_proj)
+            sum += Arc::get_mut(&mut layer.attn.q_proj)
                 .unwrap()
                 .activate(&adapter_names)?;
-            Arc::get_mut(&mut layer.attn.v_proj)
+            sum += Arc::get_mut(&mut layer.attn.v_proj)
                 .unwrap()
                 .activate(&adapter_names)?;
 
-            Arc::get_mut(&mut layer.mlp.c_fc1)
+            sum += Arc::get_mut(&mut layer.mlp.c_fc1)
                 .unwrap()
                 .activate(&adapter_names)?;
-            Arc::get_mut(&mut layer.mlp.c_fc2)
+            sum += Arc::get_mut(&mut layer.mlp.c_fc2)
                 .unwrap()
                 .activate(&adapter_names)?;
-            Arc::get_mut(&mut layer.mlp.c_proj)
+            sum += Arc::get_mut(&mut layer.mlp.c_proj)
                 .unwrap()
                 .activate(&adapter_names)?;
         }
-        Ok(())
+        Ok(sum)
     }
 }
 

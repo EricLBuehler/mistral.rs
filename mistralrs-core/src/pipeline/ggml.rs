@@ -473,7 +473,7 @@ impl Pipeline for GGMLPipeline {
             Model::XLoraLlama(ref model) => &model.cache,
         }
     }
-    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<()> {
+    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
         if !self.metadata.is_lora {
             anyhow::bail!("Cannot activate adapters non-LoRA models.")
         }

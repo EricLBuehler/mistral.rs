@@ -420,7 +420,7 @@ impl Pipeline for NormalPipeline {
     fn cache(&self) -> &Cache {
         self.model.cache()
     }
-    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<()> {
+    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
         self.model
             .activate_adapters(adapter_names)
             .map_err(anyhow::Error::msg)

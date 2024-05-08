@@ -253,8 +253,9 @@ impl Engine {
     async fn handle_request(&mut self, request: Request) {
         match request {
             Request::ActivateAdapters(adapters) => {
-                if let Err(e) = get_mut_arcmutex!(self.pipeline).activate_adapters(adapters) {
-                    info!("⚠️ WARNING: Adapter activation requantization failed: {e:?}");
+                match get_mut_arcmutex!(self.pipeline).activate_adapters(adapters) {
+                    Ok(n) => info!("Swapped adapters in {n} LoRA layers."),
+                    Err(e) => info!("⚠️ WARNING: Adapter activation failed: {e:?}"),
                 }
             }
             Request::Normal(request) => self.add_request(request).await,

@@ -730,17 +730,18 @@ impl ModelWeights {
         })
     }
 
-    pub fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<()> {
+    pub fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
+        let mut sum = 0;
         for layer in self.layers.iter_mut().tqdm() {
-            layer.attention_wk.activate(&adapter_names)?;
-            layer.attention_wo.activate(&adapter_names)?;
-            layer.attention_wq.activate(&adapter_names)?;
-            layer.attention_wv.activate(&adapter_names)?;
+            sum += layer.attention_wk.activate(&adapter_names)?;
+            sum += layer.attention_wo.activate(&adapter_names)?;
+            sum += layer.attention_wq.activate(&adapter_names)?;
+            sum += layer.attention_wv.activate(&adapter_names)?;
             match &mut layer.mlp_or_moe {
                 MlpOrMoe::Mlp(ref mut m) => {
-                    m.feed_forward_w1.activate(&adapter_names)?;
-                    m.feed_forward_w2.activate(&adapter_names)?;
-                    m.feed_forward_w3.activate(&adapter_names)?;
+                    sum += m.feed_forward_w1.activate(&adapter_names)?;
+                    sum += m.feed_forward_w2.activate(&adapter_names)?;
+                    sum += m.feed_forward_w3.activate(&adapter_names)?;
                 }
                 MlpOrMoe::MoE {
                     n_expert_used: _,
@@ -748,14 +749,14 @@ impl ModelWeights {
                     experts,
                 } => {
                     for expert in experts {
-                        expert.feed_forward_w1.activate(&adapter_names)?;
-                        expert.feed_forward_w2.activate(&adapter_names)?;
-                        expert.feed_forward_w3.activate(&adapter_names)?;
+                        sum += expert.feed_forward_w1.activate(&adapter_names)?;
+                        sum += expert.feed_forward_w2.activate(&adapter_names)?;
+                        sum += expert.feed_forward_w3.activate(&adapter_names)?;
                     }
                 }
             }
         }
-        Ok(())
+        Ok(sum)
     }
 
     fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {

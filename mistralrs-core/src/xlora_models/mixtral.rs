@@ -964,37 +964,38 @@ impl NormalModel for XLoraModel {
         }
         (tensors, &*self.mapper)
     }
-    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<()> {
+    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
+        let mut sum = 0;
         for layer in self.layers.iter_mut().tqdm() {
-            Arc::get_mut(&mut layer.self_attn.k_proj)
+            sum += Arc::get_mut(&mut layer.self_attn.k_proj)
                 .unwrap()
                 .activate(&adapter_names)?;
-            Arc::get_mut(&mut layer.self_attn.o_proj)
+            sum += Arc::get_mut(&mut layer.self_attn.o_proj)
                 .unwrap()
                 .activate(&adapter_names)?;
-            Arc::get_mut(&mut layer.self_attn.q_proj)
+            sum += Arc::get_mut(&mut layer.self_attn.q_proj)
                 .unwrap()
                 .activate(&adapter_names)?;
-            Arc::get_mut(&mut layer.self_attn.v_proj)
+            sum += Arc::get_mut(&mut layer.self_attn.v_proj)
                 .unwrap()
                 .activate(&adapter_names)?;
 
-            Arc::get_mut(&mut layer.block_sparse_moe.gate)
+            sum += Arc::get_mut(&mut layer.block_sparse_moe.gate)
                 .unwrap()
                 .activate(&adapter_names)?;
             for expert in &mut layer.block_sparse_moe.experts {
-                Arc::get_mut(&mut expert.w1)
+                sum += Arc::get_mut(&mut expert.w1)
                     .unwrap()
                     .activate(&adapter_names)?;
-                Arc::get_mut(&mut expert.w2)
+                sum += Arc::get_mut(&mut expert.w2)
                     .unwrap()
                     .activate(&adapter_names)?;
-                Arc::get_mut(&mut expert.w3)
+                sum += Arc::get_mut(&mut expert.w3)
                     .unwrap()
                     .activate(&adapter_names)?;
             }
         }
-        Ok(())
+        Ok(sum)
     }
 }
 

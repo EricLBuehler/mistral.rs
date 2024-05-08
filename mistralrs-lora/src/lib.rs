@@ -133,11 +133,13 @@ pub trait Merge {
 }
 
 pub trait AdapterSwapper {
-    fn activate(&mut self, adapter_names: &[String]) -> Result<()> {
-        if !self.can_load() {
-            candle_core::bail!("Cannot load.");
+    fn activate(&mut self, adapter_names: &[String]) -> Result<usize> {
+        if self.can_load() {
+            self.activate_adapters(adapter_names)?;
+            Ok(1)
+        } else {
+            Ok(0)
         }
-        self.activate_adapters(adapter_names)
     }
     fn activate_adapters(&mut self, adapters: &[String]) -> Result<()>;
     fn has_adapter(&self, adapter: String) -> bool;

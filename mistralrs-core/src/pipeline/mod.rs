@@ -378,7 +378,8 @@ pub trait Pipeline: Send + Sync {
     /// This may also reset the non granular state if applicable.
     fn set_none_cache(&mut self, reset_non_granular: bool);
     fn cache(&self) -> &Cache;
-    fn activate_adapters(&mut self, adapters: Vec<String>) -> Result<()>;
+    /// Returns the number of requantized adapters.
+    fn activate_adapters(&mut self, adapters: Vec<String>) -> Result<usize>;
 }
 
 pub trait CacheManager {
@@ -483,7 +484,7 @@ pub trait NormalModel {
         info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors.");
         Ok(())
     }
-    fn activate_adapters(&mut self, _: Vec<String>) -> candle_core::Result<()> {
+    fn activate_adapters(&mut self, _: Vec<String>) -> candle_core::Result<usize> {
         candle_core::bail!("Unable to activate adapters for model without adapters");
     }
 }
