@@ -247,10 +247,11 @@ impl Pipeline for SpeculativePipeline {
 
         // ======================= Rejection sampling. ============================
         // Map from each target sample to corresponding in draft sample
-        let logits = self.latest_logit_cache
-                .as_ref()
-                .map(|c| Tensor::cat(&[c, &logits], 1).unwrap())
-                .unwrap_or(logits.clone());
+        let logits = self
+            .latest_logit_cache
+            .as_ref()
+            .map(|c| Tensor::cat(&[c, &logits], 1).unwrap())
+            .unwrap_or(logits.clone());
         let samples = sample_target_sequence_speculative(
             logits.clone(),
             seq,
@@ -358,11 +359,8 @@ impl Pipeline for SpeculativePipeline {
         dbg!(&n_not_accepted);
         self.latest_logit_cache = Some(
             logits
-                .i((
-                    ..,
-                    logits.dims()[1] - n_not_accepted - 1,
-                    ..,
-                )).unwrap()
+                .i((.., logits.dims()[1] - n_not_accepted - 1, ..))
+                .unwrap()
                 .unsqueeze(1)?,
         );
 
