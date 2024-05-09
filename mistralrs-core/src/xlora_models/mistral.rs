@@ -576,7 +576,6 @@ impl XLoraModel {
             input_ids,
             &self.cache,
             self.sliding_window,
-            self.dtype,
         )?;
         let mut xs = self.embed_tokens.forward(input_ids)?;
         for (i, layer) in self.layers.iter().enumerate() {
