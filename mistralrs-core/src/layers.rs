@@ -290,7 +290,9 @@ impl CausalMasker {
         if let Some(mask) = res {
             Ok(Some(mask))
         } else {
-            let mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
+            let mask = self
+                .make_mask(tgt_len, past_kv_len, input_ids.device())?
+                .to_dtype(DType::U8)?;
 
             MASKS
                 .lock()
@@ -323,13 +325,15 @@ impl CausalMasker {
             let diagonal = past_kv_len as isize - sliding_window as isize - 1;
             let context_mask = apply_tril(&mask.ones_like()?, diagonal)?;
             let mask = masked_fill(&mask.to_dtype(DType::F32)?, &context_mask, f32::MIN)?;
-            let mask = mask.expand((b_sz, 1, tgt_len, tgt_len + past_kv_len))?;
+            let mask = mask
+                .expand((b_sz, 1, tgt_len, tgt_len + past_kv_len))?
+                .to_dtype(DType::U8)?;
 
             MASKS
                 .lock()
                 .unwrap()
                 .insert((tgt_len, past_kv_len), mask.clone());
-            Ok(Some(mask.to_dtype(DType::U8)?))
+            Ok(Some(mask))
         }
     }
 
