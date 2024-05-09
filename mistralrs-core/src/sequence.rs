@@ -179,12 +179,12 @@ impl Sequence {
         self
     }
 
-    /// Simple metric: (scheduling urgency-1) * sqrt(length)
-    /// Takes into account urgency (scales linear) and length (to provide a boost to longer seqs)
-    /// We subtract 1 from urgency so that we give smaller sequences a chance.
+    /// Simple metric: (scheduling urgency) + log2(length)
+    /// Takes into account: urgency (scales linear) and length (scales logarithmic)
+    /// Scaling urgency is the number of scheduling passes where we have not been scheduled.
     pub fn compute_priority(&self) -> f64 {
         #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-        (self.scheduling_urgency.saturating_sub(1) as f64) * (self.len() as f64).sqrt()
+        (self.scheduling_urgency as f64) + (self.len() as f64).log2()
     }
 
     pub fn prefill(
