@@ -305,7 +305,6 @@ impl CausalMasker {
         input_ids: &Tensor,
         cache: &Cache,
         sliding_window: Option<usize>,
-        dtype: DType,
     ) -> Result<Option<Tensor>> {
         if sliding_window.is_none() {
             return self.make_causal_mask(input_ids, cache);
@@ -330,7 +329,7 @@ impl CausalMasker {
                 .lock()
                 .unwrap()
                 .insert((tgt_len, past_kv_len), mask.clone());
-            Ok(Some(mask.to_dtype(dtype)?))
+            Ok(Some(mask.to_dtype(DType::U8)?))
         }
     }
 
@@ -343,9 +342,6 @@ impl CausalMasker {
         match mask {
             None => Ok(att),
             Some(mask) => {
-                if mask.dtype() != DType::U8 {
-                    return att.broadcast_add(mask);
-                }
                 let mask = mask.broadcast_as(att.shape())?;
                 mask.where_cond(&neg_inf.broadcast_as(att.dims())?, &att)
             }
