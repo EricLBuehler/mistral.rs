@@ -347,7 +347,10 @@ impl CausalMasker {
             None => Ok(att),
             Some(mask) => {
                 let mask = mask.broadcast_as(att.shape())?;
-                mask.where_cond(&neg_inf.broadcast_as(att.dims())?, &att)
+                mask.where_cond(
+                    &neg_inf.to_device(att.device())?.broadcast_as(att.dims())?,
+                    &att,
+                )
             }
         }
     }
