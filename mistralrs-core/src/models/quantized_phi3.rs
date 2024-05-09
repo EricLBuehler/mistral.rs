@@ -1,8 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::collections::HashMap;
-
 use crate::device_map::DeviceMapper;
+use crate::layers::CausalMasker;
 use crate::layers::RmsNorm;
 use crate::DeviceMapMetadata;
 use candle_core::quantized::gguf_file;
@@ -52,12 +51,6 @@ struct LayerWeights {
     sin: Tensor,
     neg_inf: Tensor,
     sliding_window: usize,
-}
-
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Tensor> {
-    let shape = mask.shape();
-    let m = mask.where_cond(&on_true.broadcast_as(shape.dims())?, on_false)?;
-    Ok(m)
 }
 
 impl LayerWeights {
@@ -140,13 +133,7 @@ impl LayerWeights {
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
 
         let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-        let att = match attn_mask {
-            None => att,
-            Some(mask) => {
-                let mask = mask.broadcast_as(att.shape())?;
-                masked_fill(&att, &mask, &self.neg_inf)?
-            }
-        };
+        let att = CausalMasker.apply_mask(&attn_mask, att, &self.neg_inf)?;
         let att = candle_nn::ops::softmax_last_dim(&att)?;
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = att.matmul(&v.contiguous()?)?;
@@ -162,7 +149,6 @@ pub struct ModelWeights {
     layers: Vec<LayerWeights>,
     output_norm: RmsNorm,
     output: QMatMul,
-    masks: HashMap<usize, Tensor>,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
     pub device: Device,
     pub cache: Cache,
@@ -274,7 +260,6 @@ impl ModelWeights {
             layers,
             output_norm,
             output,
-            masks: HashMap::new(),
             mapper: Some(mapper),
             device: device.clone(),
             cache: Cache::new(block_count, false),
@@ -282,26 +267,14 @@ impl ModelWeights {
         })
     }
 
-    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
-        if let Some(mask) = self.masks.get(&t) {
-            Ok(mask.clone())
-        } else {
-            let mask: Vec<_> = (0..t)
-                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
-                .collect();
-            let mask = Tensor::from_slice(&mask, (t, t), device)?;
-            self.masks.insert(t, mask.clone());
-            Ok(mask)
-        }
-    }
-
     pub fn forward(&mut self, xs: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
         let (_b_sz, seq_len) = xs.dims2()?;
-        let mask = if seq_len == 1 {
-            None
-        } else {
-            Some(self.mask(seq_len, xs.device())?)
-        };
+        let mask = CausalMasker.make_causal_mask_with_sliding_window(
+            xs,
+            &self.cache,
+            Some(self.max_seq_len),
+            DType::F32,
+        )?;
         let mut xs = self.tok_embeddings.forward(xs)?;
         let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {

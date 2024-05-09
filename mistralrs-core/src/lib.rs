@@ -32,6 +32,7 @@ mod response;
 mod sampler;
 mod scheduler;
 mod sequence;
+mod toml_selector;
 mod utils;
 mod xlora_models;
 
@@ -49,6 +50,7 @@ pub use sampler::{SamplingParams, StopTokens, TopLogprob};
 pub use scheduler::SchedulerMethod;
 use serde::Serialize;
 use tokio::runtime::Runtime;
+pub use toml_selector::{TomlLoaderArgs, TomlSelector};
 
 /// The MistralRs struct handles sending requests to the engine.
 /// It is the core multi-threaded component of mistral.rs, and uses `mspc`

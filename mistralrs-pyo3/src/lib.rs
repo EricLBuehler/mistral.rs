@@ -200,15 +200,13 @@ impl Runner {
                 tokenizer_json,
                 model_id,
             )
-            .with_xlora(
+            .with_lora(
                 adapters_model_id,
                 serde_json::from_reader(
                     File::open(order.clone())
                         .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
                 )
                 .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                no_kv_cache,
-                tgt_non_granular_index,
             )
             .build(arch.into()),
             Which::GGUF {

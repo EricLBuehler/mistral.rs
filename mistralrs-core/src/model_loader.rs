@@ -1,11 +1,11 @@
-use std::fs::File;
+use std::fs::{self, File};
 
 use crate::{
     pipeline::{
         GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
         NormalSpecificConfig,
     },
-    Loader, ModelSelected, NormalLoaderBuilder,
+    Loader, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector,
 };
 
 pub struct LoaderBuilder {
@@ -50,7 +50,8 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
         | ModelSelected::GGUF { .. }
         | ModelSelected::LoraGGUF { .. }
         | ModelSelected::GGML { .. }
-        | ModelSelected::LoraGGML { .. } => None,
+        | ModelSelected::LoraGGML { .. }
+        | ModelSelected::Toml { .. } => None,
         ModelSelected::XLora {
             tgt_non_granular_index,
             ..
@@ -69,6 +70,18 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
 fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loader>> {
     let use_flash_attn = args.use_flash_attn;
     let loader: Box<dyn Loader> = match args.model {
+        ModelSelected::Toml { file } => {
+            let selector: TomlSelector = toml::from_str(
+                &fs::read_to_string(file.clone())
+                    .unwrap_or_else(|_| panic!("Could not load toml selector file at {file}")),
+            )?;
+            let args = TomlLoaderArgs {
+                use_flash_attn,
+                chat_template: args.chat_template,
+                no_kv_cache: args.no_kv_cache,
+            };
+            (selector, args).try_into()?
+        }
         ModelSelected::Plain {
             model_id,
             repeat_last_n,

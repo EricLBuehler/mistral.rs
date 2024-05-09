@@ -16,15 +16,22 @@ use crate::{
 };
 
 #[pyclass]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize)]
 /// The architecture to load the normal model as.
 pub enum NormalLoaderType {
+    #[serde(rename = "mistral")]
     Mistral,
+    #[serde(rename = "gemma")]
     Gemma,
+    #[serde(rename = "mixtral")]
     Mixtral,
+    #[serde(rename = "llama")]
     Llama,
+    #[serde(rename = "phi2")]
     Phi2,
+    #[serde(rename = "phi3")]
     Phi3,
+    #[serde(rename = "qwen2")]
     Qwen2,
 }
 

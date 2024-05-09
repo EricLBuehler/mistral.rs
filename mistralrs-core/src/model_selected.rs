@@ -8,6 +8,13 @@ fn parse_arch(x: &str) -> Result<NormalLoaderType, String> {
 
 #[derive(Debug, Subcommand)]
 pub enum ModelSelected {
+    /// Select the model from a toml file
+    Toml {
+        /// .toml file containing the selector configuration.
+        #[arg(short, long)]
+        file: String,
+    },
+
     /// Select a plain model, without quantization or adapters
     Plain {
         /// Model ID to load from. This may be a HF hub repo or a local path.
