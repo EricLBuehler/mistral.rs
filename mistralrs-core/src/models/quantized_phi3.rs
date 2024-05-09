@@ -64,11 +64,11 @@ impl LayerWeights {
     fn apply_rotary_emb(&self, xs: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
         let (_b_sz, _h, seq_len, _n_embd) = xs.dims4()?;
         let mut outputs = Vec::new();
-        for offset in seqlen_offsets {
+        for (i, offset) in seqlen_offsets.iter().enumerate() {
             let cos = self.cos.narrow(0, *offset, seq_len)?;
             let sin = self.sin.narrow(0, *offset, seq_len)?;
             outputs.push(candle_nn::rotary_emb::rope(
-                &xs.i(*offset)?.unsqueeze(0)?.contiguous()?,
+                &xs.i(i)?.unsqueeze(0)?.contiguous()?,
                 &cos,
                 &sin,
             )?);
