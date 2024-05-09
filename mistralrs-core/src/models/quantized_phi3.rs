@@ -6,10 +6,10 @@ use crate::device_map::DeviceMapper;
 use crate::layers::RmsNorm;
 use crate::DeviceMapMetadata;
 use candle_core::quantized::gguf_file;
+use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Embedding;
-use mistralrs_lora::layer::QLinear;
 
 use super::repeat_kv;
 use super::verify_sanity_gguf;
@@ -17,8 +17,8 @@ use super::Cache;
 
 #[derive(Debug, Clone)]
 struct Mlp {
-    ffn_up: QLinear,
-    ffn_down: QLinear,
+    ffn_up: QMatMul,
+    ffn_down: QMatMul,
     i_size: usize,
 }
 
@@ -40,8 +40,8 @@ fn rms_norm(w: QTensor, eps: f64) -> Result<RmsNorm> {
 
 #[derive(Debug, Clone)]
 struct LayerWeights {
-    attn_qkv: QLinear,
-    attn_output: QLinear,
+    attn_qkv: QMatMul,
+    attn_output: QMatMul,
     attn_norm: RmsNorm,
     ffn_norm: RmsNorm,
     mlp: Mlp,
@@ -161,7 +161,7 @@ pub struct ModelWeights {
     tok_embeddings: Embedding,
     layers: Vec<LayerWeights>,
     output_norm: RmsNorm,
-    output: QLinear,
+    output: QMatMul,
     masks: HashMap<usize, Tensor>,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
     pub device: Device,
@@ -217,14 +217,22 @@ impl ModelWeights {
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
         let output_norm = rms_norm(ct.tensor(reader, "output_norm.weight", device)?, rms_eps)?;
-        let output = QLinear::new(&ct, reader, "output", device)?;
+        let output = QMatMul::from_qtensor(ct.tensor(reader, "output.weight", device)?)?;
         let mut layers = Vec::with_capacity(block_count);
         let mapper = mapper.into_mapper(block_count, device)?;
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
-            let ffn_up = QLinear::new(&ct, reader, &format!("{prefix}.ffn_up"), device)?;
-            let ffn_down = QLinear::new(&ct, reader, &format!("{prefix}.ffn_down"), device)?;
+            let ffn_up = QMatMul::from_qtensor(ct.tensor(
+                reader,
+                &format!("{prefix}.ffn_up.weight"),
+                device,
+            )?)?;
+            let ffn_down = QMatMul::from_qtensor(ct.tensor(
+                reader,
+                &format!("{prefix}.ffn_down.weight"),
+                device,
+            )?)?;
             let mlp = Mlp {
                 ffn_up,
                 ffn_down,
@@ -239,8 +247,16 @@ impl ModelWeights {
                 rms_eps,
             )?;
             layers.push(LayerWeights {
-                attn_qkv: QLinear::new(&ct, reader, &format!("{prefix}.attn_qkv"), device)?,
-                attn_output: QLinear::new(&ct, reader, &format!("{prefix}.attn_output"), device)?,
+                attn_qkv: QMatMul::from_qtensor(ct.tensor(
+                    reader,
+                    &format!("{prefix}.attn_qkv.weight"),
+                    device,
+                )?)?,
+                attn_output: QMatMul::from_qtensor(ct.tensor(
+                    reader,
+                    &format!("{prefix}.attn_output.weight"),
+                    device,
+                )?)?,
                 attn_norm,
                 ffn_norm,
                 mlp,
