@@ -714,7 +714,6 @@ impl XLoraModel {
             input_ids,
             &self.cache,
             Some(self.sliding_window),
-            self.dtype,
         )?;
         let mut cache = if is_full_pass {
             if no_kv_cache {

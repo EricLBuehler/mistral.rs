@@ -273,7 +273,6 @@ impl ModelWeights {
             xs,
             &self.cache,
             Some(self.max_seq_len),
-            DType::F32,
         )?;
         let mut xs = self.tok_embeddings.forward(xs)?;
         let mut cache = self.cache.lock();

@@ -514,7 +514,6 @@ impl Model {
             input_ids,
             &self.cache,
             self.sliding_window,
-            self.dtype,
         )?;
         let position_ids_old = position_ids;
         let mut position_ids = Vec::new();

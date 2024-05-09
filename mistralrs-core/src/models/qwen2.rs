@@ -275,7 +275,6 @@ pub struct Model {
     norm: RmsNorm,
     lm_head: QMatMul,
     sliding_window: usize,
-    dtype: DType,
     pub device: Device,
     pub cache: Cache,
     pub max_seq_len: usize,
@@ -337,7 +336,6 @@ impl Model {
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             sliding_window: cfg.sliding_window,
             device: real_device,
-            dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
@@ -355,7 +353,6 @@ impl Model {
             input_ids,
             &self.cache,
             Some(self.sliding_window),
-            self.dtype,
         )?;
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let mut cache = self.cache.lock();
