@@ -12,6 +12,7 @@ pub(crate) mod phi2;
 pub(crate) mod phi3;
 pub(crate) mod quantized_llama;
 pub(crate) mod quantized_phi2;
+pub(crate) mod quantized_phi3;
 pub(crate) mod qwen2;
 
 pub type LayerCaches = Vec<Option<(Tensor, Tensor)>>;

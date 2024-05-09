@@ -15,7 +15,8 @@ use crate::xlora_models::NonGranularState;
 use crate::{deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama, models::quantized_phi2::ModelWeights as QPhi,
-    utils::tokens::get_token, xlora_models::XLoraModelWeights as XLoraQLlama,
+    models::quantized_phi3::ModelWeights as QPhi3, utils::tokens::get_token,
+    xlora_models::XLoraModelWeights as XLoraQLlama,
 };
 use anyhow::{bail, Result};
 use candle_core::quantized::{
@@ -40,6 +41,7 @@ enum Model {
     Llama(QLlama),
     Phi2(QPhi),
     XLoraLlama(XLoraQLlama),
+    Phi3(QPhi3),
 }
 
 pub struct GGUFPipeline {
@@ -79,6 +81,7 @@ enum GGUFArchitecture {
     Mamba,
     Rwkv,
     Phi2,
+    Phi3,
 }
 
 impl FromStr for GGUFArchitecture {
@@ -96,6 +99,7 @@ impl FromStr for GGUFArchitecture {
             "mamba" => Ok(GGUFArchitecture::Mamba),
             "rwkv" => Ok(GGUFArchitecture::Rwkv),
             "phi2" => Ok(GGUFArchitecture::Phi2),
+            "phi3" => Ok(GGUFArchitecture::Phi3),
             a => Err(format!("Unknown GGUF architecture `{a}`")),
         }
     }
@@ -332,6 +336,9 @@ impl Loader for GGUFLoader {
                 GGUFArchitecture::Phi2 => {
                     Model::Phi2(QPhi::from_gguf(model, &mut file, device, mapper)?)
                 }
+                GGUFArchitecture::Phi3 => {
+                    Model::Phi3(QPhi3::from_gguf(model, &mut file, device, mapper)?)
+                }
                 a => bail!("Unsupported architecture `{a:?}`"),
             },
             ModelKind::XLoraGGUF => {
@@ -405,16 +412,18 @@ impl Loader for GGUFLoader {
             Model::Llama(ref l) => l.max_seq_len,
             Model::Phi2(ref p) => p.max_seq_len,
             Model::XLoraLlama(ref xl) => xl.max_seq_len,
+            Model::Phi3(ref p) => p.max_seq_len,
         };
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
         let is_xlora = match &model {
-            Model::Llama(_) | Model::Phi2(_) => false,
+            Model::Llama(_) | Model::Phi2(_) | Model::Phi3(_) => false,
             Model::XLoraLlama(_) => !is_lora,
         };
         let num_hidden_layers = match model {
             Model::Llama(ref model) => model.cache.lock().len(),
             Model::Phi2(ref model) => model.cache.lock().len(),
             Model::XLoraLlama(ref model) => model.cache.lock().len(),
+            Model::Phi3(ref model) => model.cache.lock().len(),
         };
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         Ok(Arc::new(Mutex::new(GGUFPipeline {
@@ -488,6 +497,7 @@ impl Pipeline for GGUFPipeline {
                 &self.non_granular_state,
                 context_lens,
             ),
+            Model::Phi3(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
         }
     }
     async fn sample(
@@ -505,6 +515,7 @@ impl Pipeline for GGUFPipeline {
             Model::Llama(ref model) => model.device.clone(),
             Model::Phi2(ref model) => model.device.clone(),
             Model::XLoraLlama(ref model) => model.device.clone(),
+            Model::Phi3(ref model) => model.device.clone(),
         }
     }
     fn tokenizer(&self) -> Arc<Tokenizer> {
@@ -547,6 +558,7 @@ impl Pipeline for GGUFPipeline {
             Model::Llama(ref model) => &model.cache,
             Model::Phi2(ref model) => &model.cache,
             Model::XLoraLlama(ref model) => &model.cache,
+            Model::Phi3(ref model) => &model.cache,
         }
     }
 }
