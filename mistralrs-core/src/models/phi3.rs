@@ -300,7 +300,6 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: QMatMul,
-    dtype: DType,
     pub device: Device,
     pub cache: Cache,
     pub max_seq_len: usize,
@@ -358,7 +357,6 @@ impl Model {
             norm,
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             device: real_device,
-            dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
@@ -377,7 +375,6 @@ impl Model {
             input_ids,
             &self.cache,
             self.sliding_window,
-            self.dtype,
         )?;
         let position_ids_old = position_ids;
         let mut position_ids = Vec::new();
