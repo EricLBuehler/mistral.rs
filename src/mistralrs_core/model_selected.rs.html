@@ -293,9 +293,6 @@
 <a href="#291" id="291">291</a>
 <a href="#292" id="292">292</a>
 <a href="#293" id="293">293</a>
-<a href="#294" id="294">294</a>
-<a href="#295" id="295">295</a>
-<a href="#296" id="296">296</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>clap::Subcommand;
 
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::NormalLoaderType;
@@ -306,6 +303,13 @@
 
 <span class="attr">#[derive(Debug, Subcommand)]
 </span><span class="kw">pub enum </span>ModelSelected {
+    <span class="doccomment">/// Select the model from a toml file
+    </span>Toml {
+        <span class="doccomment">/// .toml file containing the selector configuration.
+        </span><span class="attr">#[arg(short, long)]
+        </span>file: String,
+    },
+
     <span class="doccomment">/// Select a plain model, without quantization or adapters
     </span>Plain {
         <span class="doccomment">/// Model ID to load from. This may be a HF hub repo or a local path.
@@ -475,11 +479,6 @@
         <span class="doccomment">/// Ordering JSON file
         </span><span class="attr">#[arg(short, long)]
         </span>order: String,
-
-        <span class="doccomment">/// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        /// This makes the maximum running sequences 1.
-        </span><span class="attr">#[arg(long)]
-        </span>tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     },
 
     <span class="doccomment">/// Select a GGML model.
@@ -581,11 +580,6 @@
         <span class="doccomment">/// Ordering JSON file
         </span><span class="attr">#[arg(short, long)]
         </span>order: String,
-
-        <span class="doccomment">/// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
-        /// This makes the maximum running sequences 1.
-        </span><span class="attr">#[arg(long)]
-        </span>tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 
         <span class="doccomment">/// GQA value
         </span><span class="attr">#[arg(short, long, default_value_t = <span class="number">1</span>)]

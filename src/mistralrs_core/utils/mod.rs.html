@@ -218,6 +218,19 @@
 <a href="#216" id="216">216</a>
 <a href="#217" id="217">217</a>
 <a href="#218" id="218">218</a>
+<a href="#219" id="219">219</a>
+<a href="#220" id="220">220</a>
+<a href="#221" id="221">221</a>
+<a href="#222" id="222">222</a>
+<a href="#223" id="223">223</a>
+<a href="#224" id="224">224</a>
+<a href="#225" id="225">225</a>
+<a href="#226" id="226">226</a>
+<a href="#227" id="227">227</a>
+<a href="#228" id="228">228</a>
+<a href="#229" id="229">229</a>
+<a href="#230" id="230">230</a>
+<a href="#231" id="231">231</a>
 </pre></div><pre class="rust"><code><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>tokens;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>varbuilder_utils;
 
@@ -382,8 +395,8 @@
                 <span class="kw">let </span><span class="kw-2">mut </span>p = <span class="macro">get_mut_arcmutex!</span>(<span class="macro-nonterminal">$pipeline</span>);
                 <span class="comment">// Also reset non granular state because:
                 // - The sequence is gone
-                // - We should reset the state then.
-                </span>p.set_none_cache(<span class="bool-val">true</span>);
+                // - We should reset the state then, including draft.
+                </span>p.set_none_cache(<span class="bool-val">true</span>, <span class="bool-val">true</span>);
                 <span class="macro-nonterminal">$prefix_cacher</span>.evict_all_to_cpu().unwrap();
 
                 <span class="kw">continue </span><span class="macro-nonterminal">$label</span>;
@@ -424,15 +437,28 @@
         <span class="macro-nonterminal">$logits</span>: expr,
         <span class="macro-nonterminal">$ctx</span>: expr,
         <span class="macro-nonterminal">$return_logprobs</span>: expr,
-        <span class="macro-nonterminal">$rng</span>: expr
+        <span class="macro-nonterminal">$rng</span>: expr,
+        <span class="macro-nonterminal">$sample_speculative</span>: expr
      ) =&gt; {
         <span class="kw">if </span><span class="macro-nonterminal">$use_async_pool </span>{
             tokio_rayon::spawn(<span class="kw">move </span>|| {
-                <span class="macro-nonterminal">$sampler</span>.sample(<span class="macro-nonterminal">$logits</span>, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$ctx</span>), <span class="macro-nonterminal">$return_logprobs</span>, <span class="macro-nonterminal">$rng</span>)
+                <span class="macro-nonterminal">$sampler</span>.sample(
+                    <span class="macro-nonterminal">$logits</span>,
+                    <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$ctx</span>),
+                    <span class="macro-nonterminal">$return_logprobs</span>,
+                    <span class="macro-nonterminal">$rng</span>,
+                    <span class="macro-nonterminal">$sample_speculative</span>,
+                )
             })
             .<span class="kw">await</span><span class="question-mark">?
         </span>} <span class="kw">else </span>{
-            <span class="macro-nonterminal">$sampler</span>.sample(<span class="macro-nonterminal">$logits</span>, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$ctx</span>), <span class="macro-nonterminal">$return_logprobs</span>, <span class="macro-nonterminal">$rng</span>)<span class="question-mark">?
+            <span class="macro-nonterminal">$sampler</span>.sample(
+                <span class="macro-nonterminal">$logits</span>,
+                <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$ctx</span>),
+                <span class="macro-nonterminal">$return_logprobs</span>,
+                <span class="macro-nonterminal">$rng</span>,
+                <span class="macro-nonterminal">$sample_speculative</span>,
+            )<span class="question-mark">?
         </span>}
     };
 }

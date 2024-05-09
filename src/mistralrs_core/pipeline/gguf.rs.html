@@ -553,17 +553,6 @@
 <a href="#551" id="551">551</a>
 <a href="#552" id="552">552</a>
 <a href="#553" id="553">553</a>
-<a href="#554" id="554">554</a>
-<a href="#555" id="555">555</a>
-<a href="#556" id="556">556</a>
-<a href="#557" id="557">557</a>
-<a href="#558" id="558">558</a>
-<a href="#559" id="559">559</a>
-<a href="#560" id="560">560</a>
-<a href="#561" id="561">561</a>
-<a href="#562" id="562">562</a>
-<a href="#563" id="563">563</a>
-<a href="#564" id="564">564</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
@@ -753,20 +742,9 @@
         )
     }
 
-    <span class="kw">pub fn </span>with_lora(
-        <span class="kw-2">mut </span><span class="self">self</span>,
-        xlora_model_id: String,
-        xlora_order: Ordering,
-        no_kv_cache: bool,
-        tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-    ) -&gt; <span class="self">Self </span>{
+    <span class="kw">pub fn </span>with_lora(<span class="kw-2">mut </span><span class="self">self</span>, xlora_model_id: String, xlora_order: Ordering) -&gt; <span class="self">Self </span>{
         <span class="self">self</span>.kind = ModelKind::LoraGGUF;
-        <span class="self">self</span>.with_adapter(
-            xlora_model_id,
-            xlora_order,
-            no_kv_cache,
-            tgt_non_granular_index,
-        )
+        <span class="self">self</span>.with_adapter(xlora_model_id, xlora_order, <span class="bool-val">false</span>, <span class="prelude-val">None</span>)
     }
 
     <span class="kw">pub fn </span>build(<span class="self">self</span>) -&gt; Box&lt;<span class="kw">dyn </span>Loader&gt; {
@@ -1107,14 +1085,14 @@
     <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>GeneralMetadata {
         <span class="kw-2">&amp;</span><span class="self">self</span>.metadata
     }
-    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
-        DefaultCacheManager.clone_in_cache(<span class="self">self</span>, seqs)
+    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_in_cache(<span class="self">self</span>, seqs, modify_draft_cache)
     }
-    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
-        DefaultCacheManager.clone_out_cache(<span class="self">self</span>, seqs)
+    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_out_cache(<span class="self">self</span>, seqs, modify_draft_cache)
     }
-    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, reset_non_granular: bool) {
-        DefaultCacheManager.set_none_cache(<span class="self">self</span>);
+    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, reset_non_granular: bool, modify_draft_cache: bool) {
+        DefaultCacheManager.set_none_cache(<span class="self">self</span>, modify_draft_cache);
         <span class="kw">if </span>reset_non_granular {
             <span class="self">self</span>.reset_non_granular_state()
         }

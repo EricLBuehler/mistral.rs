@@ -83,6 +83,9 @@
 <a href="#81" id="81">81</a>
 <a href="#82" id="82">82</a>
 <a href="#83" id="83">83</a>
+<a href="#84" id="84">84</a>
+<a href="#85" id="85">85</a>
+<a href="#86" id="86">86</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
@@ -106,6 +109,7 @@
     rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
     use_async_pool: bool,
     add_to_trie: bool,
+    sample_speculative: bool,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
     <span class="kw">let </span>logits = logits.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
     <span class="kw">let </span>start_at = seq.get_toks().len().saturating_sub(repeat_last_n);
@@ -120,7 +124,8 @@
         logits_clone,
         ctx_clone,
         return_logprobs,
-        rng_clone
+        rng_clone,
+        sample_speculative
     );
 
     <span class="kw">let </span>bias_if_not_allowed = <span class="kw">match </span><span class="kw-2">&amp;mut </span>seq.recognizer {
@@ -147,7 +152,8 @@
                 new_logits,
                 ctx_clone,
                 return_logprobs,
-                rng_clone
+                rng_clone,
+                sample_speculative
             )
         }
         <span class="prelude-val">None </span>=&gt; first_lobprobs_response,

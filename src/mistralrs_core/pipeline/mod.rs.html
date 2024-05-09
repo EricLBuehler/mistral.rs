@@ -945,6 +945,33 @@
 <a href="#943" id="943">943</a>
 <a href="#944" id="944">944</a>
 <a href="#945" id="945">945</a>
+<a href="#946" id="946">946</a>
+<a href="#947" id="947">947</a>
+<a href="#948" id="948">948</a>
+<a href="#949" id="949">949</a>
+<a href="#950" id="950">950</a>
+<a href="#951" id="951">951</a>
+<a href="#952" id="952">952</a>
+<a href="#953" id="953">953</a>
+<a href="#954" id="954">954</a>
+<a href="#955" id="955">955</a>
+<a href="#956" id="956">956</a>
+<a href="#957" id="957">957</a>
+<a href="#958" id="958">958</a>
+<a href="#959" id="959">959</a>
+<a href="#960" id="960">960</a>
+<a href="#961" id="961">961</a>
+<a href="#962" id="962">962</a>
+<a href="#963" id="963">963</a>
+<a href="#964" id="964">964</a>
+<a href="#965" id="965">965</a>
+<a href="#966" id="966">966</a>
+<a href="#967" id="967">967</a>
+<a href="#968" id="968">968</a>
+<a href="#969" id="969">969</a>
+<a href="#970" id="970">970</a>
+<a href="#971" id="971">971</a>
+<a href="#972" id="972">972</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>cache_manager;
 <span class="kw">mod </span>chat_template;
 <span class="kw">mod </span>ggml;
@@ -979,7 +1006,6 @@
 <span class="kw">pub use </span>normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>sampling::sample_sequence;
 <span class="kw">use </span>std::fmt::{Debug, Display};
 <span class="kw">use </span>std::path::Path;
 <span class="kw">use </span>std::sync::atomic::AtomicUsize;
@@ -1227,10 +1253,10 @@
         .unwrap();
 
         <span class="kw">match </span>pre_op {
-            CacheInstruction::In =&gt; <span class="self">self</span>.clone_in_cache(input_seqs),
+            CacheInstruction::In =&gt; <span class="self">self</span>.clone_in_cache(input_seqs, <span class="bool-val">false</span>),
             CacheInstruction::Nonthing =&gt; (),
             CacheInstruction::Reset { reset_non_granular } =&gt; {
-                <span class="self">self</span>.set_none_cache(reset_non_granular)
+                <span class="self">self</span>.set_none_cache(reset_non_granular, <span class="bool-val">false</span>)
             }
             <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(<span class="string">"Unreachable PRE cache op."</span>),
         }
@@ -1238,10 +1264,10 @@
         <span class="kw">let </span>logits = <span class="self">self</span>.forward_inputs(inputs)<span class="question-mark">?</span>;
 
         <span class="kw">match </span>post_op {
-            CacheInstruction::Out =&gt; <span class="self">self</span>.clone_out_cache(input_seqs),
+            CacheInstruction::Out =&gt; <span class="self">self</span>.clone_out_cache(input_seqs, <span class="bool-val">false</span>),
             CacheInstruction::Nonthing =&gt; (),
             CacheInstruction::Reset { reset_non_granular } =&gt; {
-                <span class="self">self</span>.set_none_cache(reset_non_granular)
+                <span class="self">self</span>.set_none_cache(reset_non_granular, <span class="bool-val">false</span>)
             }
             <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(<span class="string">"Unreachable POST cache op."</span>),
         }
@@ -1310,21 +1336,31 @@
     <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: GgmlDType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt;;
     <span class="doccomment">/// Clone the cache FROM the sequences' cache TO the model cache. Only called for completion seqs.
     /// It is not a guarantee that this will be called for each completion step.
-    </span><span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]);
+    </span><span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool);
     <span class="doccomment">/// Clone the cache FROM the model cache TO the sequences. Called for prompt and completion seqs.
     /// It is not a guarantee that this will be called for each step.
-    </span><span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]);
+    </span><span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool);
     <span class="doccomment">/// Set the model cache to all None. Only called for prompt seqs.
     /// It is not a guarantee that this will be called for each prompt step.
     /// This may also reset the non granular state if applicable.
-    </span><span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, reset_non_granular: bool);
+    </span><span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, reset_non_granular: bool, modify_draft_cache: bool);
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache;
 }
 
 <span class="kw">pub trait </span>CacheManager {
-    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]);
-    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]);
-    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline);
+    <span class="kw">fn </span>clone_in_cache(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline,
+        seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
+        modify_draft_cache: bool,
+    );
+    <span class="kw">fn </span>clone_out_cache(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline,
+        seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
+        modify_draft_cache: bool,
+    );
+    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline, modify_draft_cache: bool);
 }
 
 <span class="kw">pub trait </span>NormalModelLoader {
@@ -1435,7 +1471,7 @@
 <span class="kw">fn </span>get_prompt_input(
     input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
     device: <span class="kw-2">&amp;</span>Device,
-    last_n_context_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
     <span class="kw">let </span>max_len = input_seqs
         .iter()
@@ -1450,12 +1486,17 @@
     <span class="kw">let </span><span class="kw-2">mut </span>position_ids = Vec::new();
     <span class="kw">for </span>seq <span class="kw">in </span>input_seqs.iter() {
         <span class="kw">let </span><span class="kw-2">mut </span>ctxt = seq.get_toks().to_vec();
-        seqlen_offsets.push(<span class="number">0</span>);
+        <span class="kw">let </span>offset = <span class="kw">if let </span><span class="prelude-val">Some</span>((<span class="kw">_</span>, offset)) = last_n_context_len {
+            offset
+        } <span class="kw">else </span>{
+            <span class="number">0
+        </span>};
+        seqlen_offsets.push(offset);
 
         ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));
         context_lens.push((
-            seq.len() - <span class="number">1 </span>- last_n_context_len.map(|x| x - <span class="number">1</span>).unwrap_or(<span class="number">0</span>),
-            last_n_context_len.unwrap_or(<span class="number">1</span>),
+            seq.len() - last_n_context_len.map(|(a, <span class="kw">_</span>)| a).unwrap_or(<span class="number">1</span>),
+            last_n_context_len.map(|(a, <span class="kw">_</span>)| a).unwrap_or(<span class="number">1</span>),
         ));
         position_ids.push(seq.len());
 
@@ -1463,11 +1504,24 @@
     }
 
     <span class="kw">let </span><span class="kw-2">mut </span>tmp = Vec::new();
-    <span class="kw">for </span>pos <span class="kw">in </span>(<span class="number">0</span>..seqs_tensors.len())
-        .map(|<span class="kw">_</span>| (<span class="number">0</span>..max_len).map(|x| x <span class="kw">as </span>i64).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
-        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-    {
-        tmp.push(Tensor::from_slice(<span class="kw-2">&amp;</span>pos, pos.len(), device)<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>);
+    <span class="kw">if </span>last_n_context_len.is_some() {
+        <span class="kw">for </span>pos <span class="kw">in </span>(<span class="number">0</span>..seqs_tensors.len())
+            .map(|i| {
+                (<span class="kw-2">*</span>seqlen_offsets.get(i).unwrap() <span class="kw">as </span>i64
+                    ..<span class="kw-2">*</span>seqlen_offsets.get(i).unwrap() <span class="kw">as </span>i64 + max_len <span class="kw">as </span>i64)
+                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+            })
+            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+        {
+            tmp.push(Tensor::from_slice(<span class="kw-2">&amp;</span>pos, pos.len(), device)<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>);
+        }
+    } <span class="kw">else </span>{
+        <span class="kw">for </span>pos <span class="kw">in </span>(<span class="number">0</span>..seqs_tensors.len())
+            .map(|<span class="kw">_</span>| (<span class="number">0</span>..max_len).map(|x| x <span class="kw">as </span>i64).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
+            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+        {
+            tmp.push(Tensor::from_slice(<span class="kw-2">&amp;</span>pos, pos.len(), device)<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>);
+        }
     }
     <span class="kw">let </span>positions_kernel = Tensor::cat(<span class="kw-2">&amp;</span>tmp, <span class="number">0</span>)<span class="question-mark">?</span>;
     <span class="prelude-val">Ok</span>(InputMetadata {
@@ -1483,7 +1537,7 @@
     input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
     device: <span class="kw-2">&amp;</span>Device,
     no_kv_cache: bool,
-    last_n_context_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
     <span class="kw">if </span>no_kv_cache {
         <span class="kw">return </span>get_prompt_input(input_seqs, device, last_n_context_len);
@@ -1537,7 +1591,7 @@
     is_xlora: bool,
     device: <span class="kw-2">&amp;</span>Device,
     no_kv_cache: bool,
-    last_n_context_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;ModelInputs&gt; {
     <span class="kw">if </span>is_xlora &amp;&amp; !is_prompt {
         <span class="kw">let </span>InputMetadata {
@@ -1621,7 +1675,7 @@
     }
 }
 
-<span class="kw">pub fn </span>extract_logits(
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>extract_logits(
     logits: <span class="kw-2">&amp;</span>Tensor,
     context_lens: Vec&lt;(usize, usize)&gt;,
 ) -&gt; candle_core::Result&lt;Tensor&gt; {

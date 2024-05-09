@@ -139,74 +139,150 @@
 <a href="#137" id="137">137</a>
 <a href="#138" id="138">138</a>
 <a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a>
+<a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
+<a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
+<a href="#168" id="168">168</a>
+<a href="#169" id="169">169</a>
+<a href="#170" id="170">170</a>
+<a href="#171" id="171">171</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
 
-<span class="kw">use </span><span class="kw">crate</span>::Pipeline;
+<span class="kw">use crate</span>::{models::LayerCaches, Pipeline};
 
 <span class="kw">use </span><span class="kw">super</span>::CacheManager;
 
 <span class="kw">pub struct </span>DefaultCacheManager;
+
+<span class="kw">enum </span>SeqCache {
+    Normal,
+    XLora,
+    Draft,
+}
+
+<span class="kw">fn </span>clone_in_cache(
+    num_hidden_layers: usize,
+    cache: <span class="kw-2">&amp;mut </span>LayerCaches,
+    seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span><span class="kw">crate</span>::sequence::Sequence],
+    src: SeqCache,
+) {
+    <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
+    <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..num_hidden_layers {
+        <span class="kw">let </span><span class="kw-2">mut </span>k_vec = Vec::new();
+        <span class="kw">let </span><span class="kw-2">mut </span>v_vec = Vec::new();
+        <span class="kw">for </span>seq <span class="kw">in </span><span class="kw-2">&amp;mut *</span>seqs {
+            <span class="kw">let </span>src_cache = <span class="kw">match </span>src {
+                SeqCache::Normal =&gt; seq.cache(),
+                SeqCache::XLora =&gt; seq.xlora_cache(),
+                SeqCache::Draft =&gt; seq.draft_cache(),
+            };
+            <span class="kw">let </span>cache = src_cache.get(layer).unwrap();
+            <span class="kw">let </span>cache = cache
+                .as_ref()
+                .expect(<span class="string">"Not handling completions in `clone_in_cache`."</span>);
+            k_vec.push(cache.<span class="number">0</span>.clone());
+            v_vec.push(cache.<span class="number">1</span>.clone());
+        }
+        new_cache.push(<span class="prelude-val">Some</span>((
+            <span class="kw">if </span>k_vec.len() &gt; <span class="number">1 </span>{
+                Tensor::cat(<span class="kw-2">&amp;</span>k_vec, <span class="number">0</span>).unwrap()
+            } <span class="kw">else </span>{
+                k_vec[<span class="number">0</span>].clone()
+            },
+            <span class="kw">if </span>v_vec.len() &gt; <span class="number">1 </span>{
+                Tensor::cat(<span class="kw-2">&amp;</span>v_vec, <span class="number">0</span>).unwrap()
+            } <span class="kw">else </span>{
+                v_vec[<span class="number">0</span>].clone()
+            },
+        )));
+    }
+    <span class="kw-2">*</span>cache = new_cache;
+}
+
+<span class="kw">fn </span>clone_out_cache(
+    num_hidden_layers: usize,
+    cache: <span class="kw-2">&amp;mut </span>LayerCaches,
+    seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span><span class="kw">crate</span>::sequence::Sequence],
+    target: SeqCache,
+) {
+    <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..num_hidden_layers {
+        <span class="kw">let </span>cache = cache.get(layer).unwrap();
+        <span class="kw">let </span>k_cache = cache.as_ref().unwrap().<span class="number">0</span>.clone();
+        <span class="kw">let </span>v_cache = cache.as_ref().unwrap().<span class="number">1</span>.clone();
+
+        <span class="kw">let </span>k_caches = k_cache.chunk(seqs.len(), <span class="number">0</span>).unwrap();
+        <span class="macro">debug_assert_eq!</span>(k_caches.len(), seqs.len());
+        <span class="kw">let </span>v_caches = v_cache.chunk(seqs.len(), <span class="number">0</span>).unwrap();
+        <span class="macro">debug_assert_eq!</span>(v_caches.len(), seqs.len());
+
+        <span class="kw">for </span>(seq_i, seq) <span class="kw">in </span>seqs.iter_mut().enumerate() {
+            <span class="kw">let </span>output_cache = <span class="kw">match </span>target {
+                SeqCache::Normal =&gt; seq.cache(),
+                SeqCache::XLora =&gt; seq.xlora_cache(),
+                SeqCache::Draft =&gt; seq.draft_cache(),
+            };
+            <span class="kw">let </span>seq_cache = <span class="kw-2">&amp;mut </span>output_cache[layer];
+            <span class="kw">let </span>k = k_caches.get(seq_i).unwrap().clone();
+            <span class="kw">let </span>v = v_caches.get(seq_i).unwrap().clone();
+            <span class="kw-2">*</span>seq_cache = <span class="prelude-val">Some</span>((k, v));
+        }
+    }
+}
 
 <span class="kw">impl </span>CacheManager <span class="kw">for </span>DefaultCacheManager {
     <span class="kw">fn </span>clone_in_cache(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline,
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span><span class="kw">crate</span>::sequence::Sequence],
+        modify_draft_cache: bool,
     ) {
-        <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
-        <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..pipeline.get_metadata().num_hidden_layers {
-            <span class="kw">let </span><span class="kw-2">mut </span>k_vec = Vec::new();
-            <span class="kw">let </span><span class="kw-2">mut </span>v_vec = Vec::new();
-            <span class="kw">for </span>seq <span class="kw">in </span><span class="kw-2">&amp;mut *</span>seqs {
-                <span class="kw">let </span>seq_cache = <span class="kw-2">&amp;*</span>seq.cache();
-                <span class="kw">let </span>cache = seq_cache.get(layer).unwrap();
-                <span class="kw">let </span>cache = cache
-                    .as_ref()
-                    .expect(<span class="string">"Not handling completions in `clone_in_cache`."</span>);
-                k_vec.push(cache.<span class="number">0</span>.clone());
-                v_vec.push(cache.<span class="number">1</span>.clone());
-            }
-            new_cache.push(<span class="prelude-val">Some</span>((
-                <span class="kw">if </span>k_vec.len() &gt; <span class="number">1 </span>{
-                    Tensor::cat(<span class="kw-2">&amp;</span>k_vec, <span class="number">0</span>).unwrap()
-                } <span class="kw">else </span>{
-                    k_vec[<span class="number">0</span>].clone()
-                },
-                <span class="kw">if </span>v_vec.len() &gt; <span class="number">1 </span>{
-                    Tensor::cat(<span class="kw-2">&amp;</span>v_vec, <span class="number">0</span>).unwrap()
-                } <span class="kw">else </span>{
-                    v_vec[<span class="number">0</span>].clone()
-                },
-            )));
+        <span class="kw">if </span>modify_draft_cache {
+            clone_in_cache(
+                pipeline.get_metadata().num_hidden_layers,
+                <span class="kw-2">&amp;mut </span>pipeline.cache().lock(),
+                seqs,
+                SeqCache::Draft,
+            );
+            <span class="kw">return</span>;
         }
+        clone_in_cache(
+            pipeline.get_metadata().num_hidden_layers,
+            <span class="kw-2">&amp;mut </span>pipeline.cache().lock(),
+            seqs,
+            SeqCache::Normal,
+        );
         <span class="kw">if </span>pipeline.get_metadata().is_xlora &amp;&amp; !pipeline.get_metadata().has_no_kv_cache {
-            <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
-            <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..pipeline.get_metadata().num_hidden_layers {
-                <span class="kw">let </span><span class="kw-2">mut </span>k_vec = Vec::new();
-                <span class="kw">let </span><span class="kw-2">mut </span>v_vec = Vec::new();
-                <span class="kw">for </span>seq <span class="kw">in </span><span class="kw-2">&amp;mut *</span>seqs {
-                    <span class="kw">let </span>seq_cache = <span class="kw-2">&amp;*</span>seq.xlora_cache();
-                    <span class="kw">let </span>cache = seq_cache.get(layer).unwrap();
-                    <span class="kw">let </span>cache = cache
-                        .as_ref()
-                        .expect(<span class="string">"Not handling completions in `clone_in_cache`."</span>);
-                    k_vec.push(cache.<span class="number">0</span>.clone());
-                    v_vec.push(cache.<span class="number">1</span>.clone());
-                }
-                new_cache.push(<span class="prelude-val">Some</span>((
-                    <span class="kw">if </span>k_vec.len() &gt; <span class="number">1 </span>{
-                        Tensor::cat(<span class="kw-2">&amp;</span>k_vec, <span class="number">0</span>).unwrap()
-                    } <span class="kw">else </span>{
-                        k_vec[<span class="number">0</span>].clone()
-                    },
-                    <span class="kw">if </span>v_vec.len() &gt; <span class="number">1 </span>{
-                        Tensor::cat(<span class="kw-2">&amp;</span>v_vec, <span class="number">0</span>).unwrap()
-                    } <span class="kw">else </span>{
-                        v_vec[<span class="number">0</span>].clone()
-                    },
-                )));
-            }
-            <span class="kw-2">*</span>pipeline.cache().xlora_lock() = new_cache;
+            clone_in_cache(
+                pipeline.get_metadata().num_hidden_layers,
+                <span class="kw-2">&amp;mut </span>pipeline.cache().xlora_lock(),
+                seqs,
+                SeqCache::XLora,
+            );
         }
         <span class="kw">if </span>pipeline.get_metadata().is_xlora {
             pipeline
@@ -214,65 +290,53 @@
                 .get_scalings_cache()
                 .clone_from(seqs[<span class="number">0</span>].scaling_cache());
         }
-        <span class="kw-2">*</span>pipeline.cache().lock() = new_cache;
     }
 
     <span class="kw">fn </span>clone_out_cache(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline,
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span><span class="kw">crate</span>::sequence::Sequence],
+        modify_draft_cache: bool,
     ) {
-        <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..pipeline.get_metadata().num_hidden_layers {
-            <span class="kw">let </span>cache = pipeline.cache().lock();
-            <span class="kw">let </span>cache = cache.get(layer).unwrap();
-            <span class="kw">let </span>k_cache = cache.as_ref().unwrap().<span class="number">0</span>.clone();
-            <span class="kw">let </span>v_cache = cache.as_ref().unwrap().<span class="number">1</span>.clone();
-
-            <span class="kw">let </span>k_caches = k_cache.chunk(seqs.len(), <span class="number">0</span>).unwrap();
-            <span class="macro">debug_assert_eq!</span>(k_caches.len(), seqs.len());
-            <span class="kw">let </span>v_caches = v_cache.chunk(seqs.len(), <span class="number">0</span>).unwrap();
-            <span class="macro">debug_assert_eq!</span>(v_caches.len(), seqs.len());
-
-            <span class="kw">for </span>(seq_i, seq) <span class="kw">in </span>seqs.iter_mut().enumerate() {
-                <span class="kw">let </span>seq_cache = seq.cache();
-                <span class="kw">let </span>seq_cache = <span class="kw-2">&amp;mut </span>seq_cache[layer];
-                <span class="kw">let </span>k = k_caches.get(seq_i).unwrap().clone();
-                <span class="kw">let </span>v = v_caches.get(seq_i).unwrap().clone();
-                <span class="kw-2">*</span>seq_cache = <span class="prelude-val">Some</span>((k, v));
-            }
-            <span class="kw">if </span>pipeline.get_metadata().is_xlora &amp;&amp; !pipeline.get_metadata().has_no_kv_cache {
-                <span class="kw">let </span>cache = pipeline.cache().xlora_lock();
-                <span class="kw">let </span>cache = cache.get(layer).unwrap();
-                <span class="kw">let </span>k_cache = cache.as_ref().unwrap().<span class="number">0</span>.clone();
-                <span class="kw">let </span>v_cache = cache.as_ref().unwrap().<span class="number">1</span>.clone();
-
-                <span class="kw">let </span>k_caches = k_cache.chunk(seqs.len(), <span class="number">0</span>).unwrap();
-                <span class="macro">debug_assert_eq!</span>(k_caches.len(), seqs.len());
-                <span class="kw">let </span>v_caches = v_cache.chunk(seqs.len(), <span class="number">0</span>).unwrap();
-                <span class="macro">debug_assert_eq!</span>(v_caches.len(), seqs.len());
-
-                <span class="kw">for </span>(seq_i, seq) <span class="kw">in </span>seqs.iter_mut().enumerate() {
-                    <span class="kw">let </span>seq_cache = seq.xlora_cache();
-                    <span class="kw">let </span>seq_cache = <span class="kw-2">&amp;mut </span>seq_cache[layer];
-                    <span class="kw">let </span>k = k_caches.get(seq_i).unwrap().clone();
-                    <span class="kw">let </span>v = v_caches.get(seq_i).unwrap().clone();
-                    <span class="kw-2">*</span>seq_cache = <span class="prelude-val">Some</span>((k, v));
-                }
-            }
-            <span class="kw">if </span>pipeline.get_metadata().is_xlora {
-                seqs[<span class="number">0</span>]
-                    .scaling_cache()
-                    .clone_from(<span class="kw-2">&amp;</span>pipeline.cache().get_scalings_cache());
-            }
+        <span class="kw">if </span>modify_draft_cache {
+            clone_out_cache(
+                pipeline.get_metadata().num_hidden_layers,
+                <span class="kw-2">&amp;mut </span>pipeline.cache().lock(),
+                seqs,
+                SeqCache::Draft,
+            );
+            <span class="kw">return</span>;
+        }
+        clone_out_cache(
+            pipeline.get_metadata().num_hidden_layers,
+            <span class="kw-2">&amp;mut </span>pipeline.cache().lock(),
+            seqs,
+            SeqCache::Normal,
+        );
+        <span class="kw">if </span>pipeline.get_metadata().is_xlora &amp;&amp; !pipeline.get_metadata().has_no_kv_cache {
+            clone_out_cache(
+                pipeline.get_metadata().num_hidden_layers,
+                <span class="kw-2">&amp;mut </span>pipeline.cache().xlora_lock(),
+                seqs,
+                SeqCache::XLora,
+            );
+        }
+        <span class="kw">if </span>pipeline.get_metadata().is_xlora {
+            seqs[<span class="number">0</span>]
+                .scaling_cache()
+                .clone_from(<span class="kw-2">&amp;</span>pipeline.cache().get_scalings_cache());
         }
     }
 
-    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline) {
+    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline, modify_draft_cache: bool) {
         <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
         <span class="kw">for _ in </span><span class="number">0</span>..pipeline.get_metadata().num_hidden_layers {
             new_cache.push(<span class="prelude-val">None</span>);
         }
         pipeline.cache().lock().clone_from(<span class="kw-2">&amp;</span>new_cache);
+        <span class="kw">if </span>modify_draft_cache {
+            pipeline.cache().draft_lock().clone_from(<span class="kw-2">&amp;</span>new_cache);
+        }
         <span class="kw">if </span>pipeline.cache().is_xlora() {
             <span class="kw-2">*</span>pipeline.cache().xlora_lock() = new_cache;
         }

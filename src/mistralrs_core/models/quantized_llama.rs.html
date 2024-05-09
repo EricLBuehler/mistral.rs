@@ -429,52 +429,15 @@
 <a href="#427" id="427">427</a>
 <a href="#428" id="428">428</a>
 <a href="#429" id="429">429</a>
-<a href="#430" id="430">430</a>
-<a href="#431" id="431">431</a>
-<a href="#432" id="432">432</a>
-<a href="#433" id="433">433</a>
-<a href="#434" id="434">434</a>
-<a href="#435" id="435">435</a>
-<a href="#436" id="436">436</a>
-<a href="#437" id="437">437</a>
-<a href="#438" id="438">438</a>
-<a href="#439" id="439">439</a>
-<a href="#440" id="440">440</a>
-<a href="#441" id="441">441</a>
-<a href="#442" id="442">442</a>
-<a href="#443" id="443">443</a>
-<a href="#444" id="444">444</a>
-<a href="#445" id="445">445</a>
-<a href="#446" id="446">446</a>
-<a href="#447" id="447">447</a>
-<a href="#448" id="448">448</a>
-<a href="#449" id="449">449</a>
-<a href="#450" id="450">450</a>
-<a href="#451" id="451">451</a>
-<a href="#452" id="452">452</a>
-<a href="#453" id="453">453</a>
-<a href="#454" id="454">454</a>
-<a href="#455" id="455">455</a>
-<a href="#456" id="456">456</a>
-<a href="#457" id="457">457</a>
-<a href="#458" id="458">458</a>
-<a href="#459" id="459">459</a>
-<a href="#460" id="460">460</a>
-<a href="#461" id="461">461</a>
-<a href="#462" id="462">462</a>
-<a href="#463" id="463">463</a>
-<a href="#464" id="464">464</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-</span><span class="kw">use </span>std::collections::HashMap;
-
-<span class="kw">use </span>candle_core::quantized::QMatMul;
+</span><span class="kw">use </span>candle_core::quantized::QMatMul;
 <span class="kw">use </span>candle_core::quantized::{ggml_file, gguf_file};
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{Embedding, Module, RotaryEmbedding};
 
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
-<span class="kw">use </span><span class="kw">crate</span>::layers::QRmsNorm;
+<span class="kw">use </span><span class="kw">crate</span>::layers::{CausalMasker, QRmsNorm};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::extract_logits;
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
 
@@ -594,12 +557,6 @@
     neg_inf: Tensor,
 }
 
-<span class="kw">fn </span>masked_fill(on_false: <span class="kw-2">&amp;</span>Tensor, mask: <span class="kw-2">&amp;</span>Tensor, on_true: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-    <span class="kw">let </span>shape = mask.shape();
-    <span class="kw">let </span>m = mask.where_cond(<span class="kw-2">&amp;</span>on_true.broadcast_as(shape.dims())<span class="question-mark">?</span>, on_false)<span class="question-mark">?</span>;
-    <span class="prelude-val">Ok</span>(m)
-}
-
 <span class="kw">impl </span>LayerWeights {
     <span class="kw">fn </span>forward_attn(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
@@ -647,13 +604,7 @@
         <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
 
         <span class="kw">let </span>att = (q.contiguous()<span class="question-mark">?</span>.matmul(<span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>)<span class="question-mark">? </span>/ (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
-        <span class="kw">let </span>att = <span class="kw">match </span>mask {
-            <span class="prelude-val">None </span>=&gt; att,
-            <span class="prelude-val">Some</span>(mask) =&gt; {
-                <span class="kw">let </span>mask = mask.broadcast_as(att.shape())<span class="question-mark">?</span>;
-                masked_fill(<span class="kw-2">&amp;</span>att, <span class="kw-2">&amp;</span>mask, <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf)<span class="question-mark">?
-            </span>}
-        };
+        <span class="kw">let </span>att = CausalMasker.apply_mask(mask, att, <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf)<span class="question-mark">?</span>;
         <span class="kw">let </span>att = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>att)<span class="question-mark">?</span>;
         <span class="comment">// Convert to contiguous as matmul doesn't support strided vs for now.
         </span><span class="kw">let </span>y = att.matmul(<span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
@@ -669,7 +620,6 @@
     layers: Vec&lt;LayerWeights&gt;,
     norm: QRmsNorm,
     output: QMatMul,
-    masks: HashMap&lt;usize, Tensor&gt;,
     <span class="kw">pub </span>device: Device,
     <span class="kw">pub </span>cache: Cache,
     <span class="kw">pub </span>max_seq_len: usize,
@@ -732,7 +682,6 @@
             layers,
             norm,
             output: QMatMul::from_qtensor(output)<span class="question-mark">?</span>,
-            masks: HashMap::new(),
             device: ct.device.clone(),
             cache: Cache::new(ct.hparams.n_layer <span class="kw">as </span>usize, <span class="bool-val">false</span>),
             max_seq_len: MAX_SEQ_LEN <span class="kw">as </span>usize, <span class="comment">// Cannot determine from ggml.
@@ -864,25 +813,11 @@
             layers,
             norm,
             output: QMatMul::from_qtensor(output)<span class="question-mark">?</span>,
-            masks: HashMap::new(),
             device: device.clone(),
             cache: Cache::new(block_count, <span class="bool-val">false</span>),
             max_seq_len,
             mapper: <span class="prelude-val">Some</span>(mapper),
         })
-    }
-
-    <span class="kw">fn </span>mask(<span class="kw-2">&amp;mut </span><span class="self">self</span>, t: usize, device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(mask) = <span class="self">self</span>.masks.get(<span class="kw-2">&amp;</span>t) {
-            <span class="prelude-val">Ok</span>(mask.clone())
-        } <span class="kw">else </span>{
-            <span class="kw">let </span>mask: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..t)
-                .flat_map(|i| (<span class="number">0</span>..t).map(<span class="kw">move </span>|j| u8::from(j &gt; i)))
-                .collect();
-            <span class="kw">let </span>mask = Tensor::from_slice(<span class="kw-2">&amp;</span>mask, (t, t), device)<span class="question-mark">?</span>;
-            <span class="self">self</span>.masks.insert(t, mask.clone());
-            <span class="prelude-val">Ok</span>(mask)
-        }
     }
 
     <span class="kw">pub fn </span>forward(
@@ -892,12 +827,7 @@
         start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>(_b_sz, seq_len) = x.dims2()<span class="question-mark">?</span>;
-        <span class="kw">let </span>mask = <span class="kw">if </span>seq_len == <span class="number">1 </span>{
-            <span class="prelude-val">None
-        </span>} <span class="kw">else </span>{
-            <span class="prelude-val">Some</span>(<span class="self">self</span>.mask(seq_len, x.device())<span class="question-mark">?</span>)
-        };
+        <span class="kw">let </span>mask = CausalMasker.make_causal_mask(x, <span class="kw-2">&amp;</span><span class="self">self</span>.cache)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layer_in = <span class="self">self</span>.tok_embeddings.forward(x)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {

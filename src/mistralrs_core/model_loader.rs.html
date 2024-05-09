@@ -284,14 +284,18 @@
 <a href="#282" id="282">282</a>
 <a href="#283" id="283">283</a>
 <a href="#284" id="284">284</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::fs::File;
+<a href="#285" id="285">285</a>
+<a href="#286" id="286">286</a>
+<a href="#287" id="287">287</a>
+<a href="#288" id="288">288</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>std::fs::{<span class="self">self</span>, File};
 
 <span class="kw">use crate</span>::{
     pipeline::{
         GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
         NormalSpecificConfig,
     },
-    Loader, ModelSelected, NormalLoaderBuilder,
+    Loader, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector,
 };
 
 <span class="kw">pub struct </span>LoaderBuilder {
@@ -336,7 +340,8 @@
         | ModelSelected::GGUF { .. }
         | ModelSelected::LoraGGUF { .. }
         | ModelSelected::GGML { .. }
-        | ModelSelected::LoraGGML { .. } =&gt; <span class="prelude-val">None</span>,
+        | ModelSelected::LoraGGML { .. }
+        | ModelSelected::Toml { .. } =&gt; <span class="prelude-val">None</span>,
         ModelSelected::XLora {
             tgt_non_granular_index,
             ..
@@ -354,8 +359,19 @@
 
 <span class="kw">fn </span>loader_from_model_selected(args: LoaderBuilder) -&gt; anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>Loader&gt;&gt; {
     <span class="kw">let </span>use_flash_attn = args.use_flash_attn;
-    <span class="kw">let </span>tgt_non_granular_index = get_tgt_non_granular_index(<span class="kw-2">&amp;</span>args.model);
     <span class="kw">let </span>loader: Box&lt;<span class="kw">dyn </span>Loader&gt; = <span class="kw">match </span>args.model {
+        ModelSelected::Toml { file } =&gt; {
+            <span class="kw">let </span>selector: TomlSelector = toml::from_str(
+                <span class="kw-2">&amp;</span>fs::read_to_string(file.clone())
+                    .unwrap_or_else(|<span class="kw">_</span>| <span class="macro">panic!</span>(<span class="string">"Could not load toml selector file at {file}"</span>)),
+            )<span class="question-mark">?</span>;
+            <span class="kw">let </span>args = TomlLoaderArgs {
+                use_flash_attn,
+                chat_template: args.chat_template,
+                no_kv_cache: args.no_kv_cache,
+            };
+            (selector, args).try_into()<span class="question-mark">?
+        </span>}
         ModelSelected::Plain {
             model_id,
             repeat_last_n,
@@ -420,8 +436,6 @@
                 File::open(order.clone())
                     .unwrap_or_else(|<span class="kw">_</span>| <span class="macro">panic!</span>(<span class="string">"Could not load ordering file at {order}"</span>)),
             )<span class="question-mark">?</span>,
-            args.no_kv_cache,
-            tgt_non_granular_index,
         )
         .build(arch),
         ModelSelected::GGUF {
@@ -474,7 +488,6 @@
             repeat_last_n,
             adapters_model_id,
             order,
-            tgt_non_granular_index,
         } =&gt; GGUFLoaderBuilder::new(
             GGUFSpecificConfig { repeat_last_n },
             args.chat_template,
@@ -489,8 +502,6 @@
                 File::open(order.clone())
                     .unwrap_or_else(|<span class="kw">_</span>| <span class="macro">panic!</span>(<span class="string">"Could not load ordering file at {order}"</span>)),
             )<span class="question-mark">?</span>,
-            args.no_kv_cache,
-            tgt_non_granular_index,
         )
         .build(),
         ModelSelected::GGML {
@@ -545,7 +556,6 @@
             repeat_last_n,
             adapters_model_id,
             order,
-            tgt_non_granular_index,
             gqa,
         } =&gt; GGMLLoaderBuilder::new(
             GGMLSpecificConfig { repeat_last_n, gqa },
@@ -561,8 +571,6 @@
                 File::open(order.clone())
                     .unwrap_or_else(|<span class="kw">_</span>| <span class="macro">panic!</span>(<span class="string">"Could not load ordering file at {order}"</span>)),
             )<span class="question-mark">?</span>,
-            args.no_kv_cache,
-            tgt_non_granular_index,
         )
         .build(),
     };

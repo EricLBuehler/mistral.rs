@@ -227,6 +227,7 @@
 <a href="#225" id="225">225</a>
 <a href="#226" id="226">226</a>
 <a href="#227" id="227">227</a>
+<a href="#228" id="228">228</a>
 </pre></div><pre class="rust"><code><span class="attr">#[macro_export]
 </span><span class="macro">macro_rules! </span>finish_and_add_tokens_to_seq {
     (<span class="macro-nonterminal">$this</span>:expr, <span class="macro-nonterminal">$prefix_cacher</span>:expr, <span class="macro-nonterminal">$seq</span>:expr, <span class="macro-nonterminal">$logprobs</span>:expr, <span class="macro-nonterminal">$eos_tok</span>:expr, <span class="macro-nonterminal">$use_prefix_cacher</span>:expr) =&gt; {{
@@ -418,7 +419,7 @@
         <span class="kw">let </span>sampling_futures: Vec&lt;<span class="kw">_</span>&gt; = std::iter::zip(logits_seq, <span class="macro-nonterminal">$seqs</span>.iter_mut())
             .map(|(logits_per_seq, seq)| {
                 <span class="kw">let </span>return_logprobs = seq.return_logprobs();
-                <span class="macro-nonterminal">$crate::pipeline::sample_sequence</span>(
+                <span class="macro-nonterminal">$crate::pipeline::sampling::sample_sequence</span>(
                     logits_per_seq,
                     seq,
                     return_logprobs,
@@ -427,7 +428,8 @@
                     <span class="macro-nonterminal">$rng</span>.clone(),
                     use_async_pool,
                     <span class="bool-val">true</span>, <span class="comment">// Append result to trie
-                </span>)
+                    </span><span class="bool-val">false</span>,
+                )
             })
             .collect();
         <span class="kw">let </span>sampled_vec = futures::future::join_all(sampling_futures).<span class="kw">await</span>;

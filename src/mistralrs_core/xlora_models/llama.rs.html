@@ -764,41 +764,6 @@
 <a href="#762" id="762">762</a>
 <a href="#763" id="763">763</a>
 <a href="#764" id="764">764</a>
-<a href="#765" id="765">765</a>
-<a href="#766" id="766">766</a>
-<a href="#767" id="767">767</a>
-<a href="#768" id="768">768</a>
-<a href="#769" id="769">769</a>
-<a href="#770" id="770">770</a>
-<a href="#771" id="771">771</a>
-<a href="#772" id="772">772</a>
-<a href="#773" id="773">773</a>
-<a href="#774" id="774">774</a>
-<a href="#775" id="775">775</a>
-<a href="#776" id="776">776</a>
-<a href="#777" id="777">777</a>
-<a href="#778" id="778">778</a>
-<a href="#779" id="779">779</a>
-<a href="#780" id="780">780</a>
-<a href="#781" id="781">781</a>
-<a href="#782" id="782">782</a>
-<a href="#783" id="783">783</a>
-<a href="#784" id="784">784</a>
-<a href="#785" id="785">785</a>
-<a href="#786" id="786">786</a>
-<a href="#787" id="787">787</a>
-<a href="#788" id="788">788</a>
-<a href="#789" id="789">789</a>
-<a href="#790" id="790">790</a>
-<a href="#791" id="791">791</a>
-<a href="#792" id="792">792</a>
-<a href="#793" id="793">793</a>
-<a href="#794" id="794">794</a>
-<a href="#795" id="795">795</a>
-<a href="#796" id="796">796</a>
-<a href="#797" id="797">797</a>
-<a href="#798" id="798">798</a>
-<a href="#799" id="799">799</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -806,45 +771,19 @@
 <span class="kw">use </span>mistralrs_lora::{
     layer::QLinear, linear_no_bias <span class="kw">as </span>linear, LinearLayerLike, LoraConfig, Ordering,
 };
-<span class="kw">use </span>std::{collections::HashMap, sync::Arc};
+<span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>tqdm::Iter;
 <span class="kw">use </span>tracing::info;
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    layers::RmsNorm,
+    layers::{CausalMasker, RmsNorm},
     models::{<span class="self">self</span>, flash_attn, llama::Config, repeat_kv, LayerCaches},
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
 
 <span class="kw">use super</span>::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
-
-<span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">pub struct </span>Cache {
-    masks: HashMap&lt;usize, Tensor&gt;,
-}
-
-<span class="kw">impl </span>Cache {
-    <span class="kw">pub fn </span>new() -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-            masks: HashMap::new(),
-        })
-    }
-
-    <span class="kw">fn </span>mask(<span class="kw-2">&amp;mut </span><span class="self">self</span>, t: usize, device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(mask) = <span class="self">self</span>.masks.get(<span class="kw-2">&amp;</span>t) {
-            mask.to_device(device)
-        } <span class="kw">else </span>{
-            <span class="kw">let </span>mask: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..t)
-                .flat_map(|i| (<span class="number">0</span>..t).map(<span class="kw">move </span>|j| u8::from(j &gt; i)))
-                .collect();
-            <span class="kw">let </span>mask = Tensor::from_slice(<span class="kw-2">&amp;</span>mask, (t, t), device)<span class="question-mark">?</span>;
-            <span class="self">self</span>.masks.insert(t, mask.clone());
-            <span class="prelude-val">Ok</span>(mask)
-        }
-    }
-}
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">struct </span>CausalSelfAttention {
@@ -858,6 +797,7 @@
     use_flash_attn: bool,
     rotary_emb: Arc&lt;RotaryEmbedding&gt;,
     max_seq_len: usize,
+    neg_inf: Tensor,
 }
 
 <span class="kw">impl </span>CausalSelfAttention {
@@ -865,11 +805,11 @@
     </span><span class="kw">fn </span>forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         x: <span class="kw-2">&amp;</span>Tensor,
+        mask: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
         block_idx: usize,
         kv_cache: <span class="kw-2">&amp;mut </span>LayerCaches,
-        cache: <span class="kw-2">&amp;mut </span>Cache,
         scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
@@ -959,10 +899,7 @@
             <span class="kw">let </span>k = k.to_dtype(DType::F32)<span class="question-mark">?</span>;
             <span class="kw">let </span>v = v.to_dtype(DType::F32)<span class="question-mark">?</span>;
             <span class="kw">let </span>att = (q.matmul(<span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>)<span class="question-mark">? </span>/ (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
-            <span class="kw">let </span>mask = cache
-                .mask(seq_len, att.device())<span class="question-mark">?
-                </span>.broadcast_as(att.shape())<span class="question-mark">?</span>;
-            <span class="kw">let </span>att = masked_fill(<span class="kw-2">&amp;</span>att, <span class="kw-2">&amp;</span>mask, f32::NEG_INFINITY)<span class="question-mark">?</span>;
+            <span class="kw">let </span>att = CausalMasker.apply_mask(mask, att, <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf)<span class="question-mark">?</span>;
             <span class="kw">let </span>att = candle_nn::ops::softmax(<span class="kw-2">&amp;</span>att, D::Minus1)<span class="question-mark">?</span>;
             <span class="comment">// Convert to contiguous as matmul doesn't support strided vs for now.
             </span>att.matmul(<span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?</span>.to_dtype(in_dtype)<span class="question-mark">?
@@ -1045,15 +982,9 @@
             use_flash_attn: cfg.use_flash_attn,
             rotary_emb: rope,
             max_seq_len: cfg.max_position_embeddings,
+            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())<span class="question-mark">?</span>.to_dtype(vb.dtype())<span class="question-mark">?</span>,
         })
     }
-}
-
-<span class="kw">fn </span>masked_fill(on_false: <span class="kw-2">&amp;</span>Tensor, mask: <span class="kw-2">&amp;</span>Tensor, on_true: f32) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-    <span class="kw">let </span>shape = mask.shape();
-    <span class="kw">let </span>on_true = Tensor::new(on_true, on_false.device())<span class="question-mark">?</span>.broadcast_as(shape.dims())<span class="question-mark">?</span>;
-    <span class="kw">let </span>m = mask.where_cond(<span class="kw-2">&amp;</span>on_true, on_false)<span class="question-mark">?</span>;
-    <span class="prelude-val">Ok</span>(m)
 }
 
 <span class="attr">#[derive(Debug, Clone)]
@@ -1160,11 +1091,11 @@
     </span><span class="kw">fn </span>forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         x: <span class="kw-2">&amp;</span>Tensor,
+        mask: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
         block_idx: usize,
         kv_cache: <span class="kw-2">&amp;mut </span>LayerCaches,
-        cache: <span class="kw-2">&amp;mut </span>Cache,
         scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
@@ -1173,11 +1104,11 @@
         <span class="kw">let </span>x = <span class="self">self</span>.rms_1.forward(x)<span class="question-mark">?</span>;
         <span class="kw">let </span>x = (<span class="self">self</span>.attn.forward(
             <span class="kw-2">&amp;</span>x,
+            mask,
             seqlen_offsets,
             start_offsets_kernel,
             block_idx,
             kv_cache,
-            cache,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
@@ -1251,7 +1182,6 @@
     lm_head: QLinear,
     <span class="kw">pub </span>kv_cache: models::Cache,
     <span class="kw">pub </span>device: Device,
-    cache: Cache,
     xlora_classifier: <span class="prelude-ty">Option</span>&lt;XLoraClassifier&gt;,
     dtype: DType,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
@@ -1269,6 +1199,7 @@
         no_kv_cache: bool,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">let </span>mask = CausalMasker.make_causal_mask(x, <span class="kw-2">&amp;</span><span class="self">self</span>.kv_cache)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>x = <span class="self">self</span>.wte.forward(x)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="kw">if </span>is_full_pass {
             <span class="kw">if </span>no_kv_cache {
@@ -1287,11 +1218,11 @@
             x = <span class="self">self</span>.mapper.map(x, block_idx)<span class="question-mark">?</span>;
             x = block.forward(
                 <span class="kw-2">&amp;</span>x,
+                <span class="kw-2">&amp;</span>mask.clone().map(|m| m.to_device(x.device()).unwrap()),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 block_idx,
                 <span class="kw-2">&amp;mut </span>cache,
-                <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache,
                 scalings.clone(),
                 <span class="self">self</span>.xlora_classifier
                     .as_ref()
@@ -1475,7 +1406,6 @@
             blocks,
             ln_f,
             lm_head: QLinear::from_linear(lm_head),
-            cache: Cache::new()<span class="question-mark">?</span>,
             kv_cache: models::Cache::new(cfg.num_hidden_layers, <span class="bool-val">true</span>),
             device: real_device,
             xlora_classifier: xlora_config.map(|xlora_config| {

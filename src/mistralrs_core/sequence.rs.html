@@ -548,6 +548,17 @@
 <a href="#546" id="546">546</a>
 <a href="#547" id="547">547</a>
 <a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
+<a href="#551" id="551">551</a>
+<a href="#552" id="552">552</a>
+<a href="#553" id="553">553</a>
+<a href="#554" id="554">554</a>
+<a href="#555" id="555">555</a>
+<a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fmt::Display,
     sync::{Arc, RwLock},
@@ -629,16 +640,21 @@
     prefill_prompt_toks: <span class="prelude-ty">Option</span>&lt;Vec&lt;u32&gt;&gt;,
     suffix: <span class="prelude-ty">Option</span>&lt;String&gt;,
     prefix: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    is_tmp: bool,
 
     <span class="comment">// Cache
     </span>scaling_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
     cache: LayerCaches,
+    draft_cache: LayerCaches,
     xlora_cache: <span class="prelude-ty">Option</span>&lt;LayerCaches&gt;,
 
     <span class="comment">// Mutables
     </span>tokens: Vec&lt;u32&gt;,
     logprobs: Vec&lt;Logprobs&gt;,
     cumulative_logprob: f32,
+    last_logprob: f32,
+    last_completion_bytes_len: usize,
+    last_is_done: <span class="prelude-ty">Option</span>&lt;StopReason&gt;,
     completion_bytes: Vec&lt;u8&gt;,
     stream_idx: usize,
     <span class="kw">pub </span>recognizer: SequenceRecognizer,
@@ -680,6 +696,7 @@
             timestamp,
             state: RwLock::new(SequenceState::Waiting),
             cache: <span class="macro">vec!</span>[<span class="prelude-val">None</span>; layers],
+            draft_cache: <span class="macro">vec!</span>[<span class="prelude-val">None</span>; layers],
             xlora_cache: <span class="kw">if </span>is_xlora {
                 <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="prelude-val">None</span>; layers])
             } <span class="kw">else </span>{
@@ -704,6 +721,10 @@
             cumulative_logprob: <span class="number">0.</span>,
             completion_bytes: Vec::new(),
             stream_idx: <span class="number">0</span>,
+            last_completion_bytes_len: <span class="number">0</span>,
+            last_logprob: <span class="number">0.0</span>,
+            last_is_done: <span class="prelude-val">None</span>,
+            is_tmp: <span class="bool-val">false</span>,
         }
     }
 
@@ -722,6 +743,12 @@
 
     <span class="doccomment">/// This is the number of tokens. If the KV cache is Some, then it will use that.
     </span><span class="kw">pub fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(toks) = <span class="kw-2">&amp;</span><span class="self">self</span>.prefill_prompt_toks {
+            <span class="kw">return </span>toks.len();
+        }
+        <span class="kw">if </span><span class="self">self</span>.is_tmp {
+            <span class="kw">return </span><span class="self">self</span>.tokens.len();
+        }
         <span class="comment">// Use xlora cache first because of non granular
         </span><span class="kw">if </span><span class="self">self</span>.xlora_cache.as_ref().is_some_and(|c| c[<span class="number">0</span>].is_some()) {
             <span class="self">self</span>.xlora_cache.as_ref().unwrap()[<span class="number">0</span>]
@@ -733,9 +760,6 @@
         </span>} <span class="kw">else if let </span><span class="prelude-val">Some</span>((<span class="kw">_</span>, x)) = <span class="kw-2">&amp;</span><span class="self">self</span>.cache[<span class="number">0</span>] {
             x.dims()[<span class="number">2</span>] + <span class="number">1
         </span>} <span class="kw">else </span>{
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(toks) = <span class="kw-2">&amp;</span><span class="self">self</span>.prefill_prompt_toks {
-                <span class="kw">return </span>toks.len();
-            }
             <span class="self">self</span>.tokens.len()
         }
     }
@@ -778,6 +802,10 @@
         <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache
     }
 
+    <span class="kw">pub fn </span>draft_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt; {
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>.draft_cache
+    }
+
     <span class="kw">pub fn </span>xlora_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt; {
         <span class="self">self</span>.xlora_cache.as_mut().expect(<span class="string">"No X-LoRA cache."</span>)
     }
@@ -804,16 +832,6 @@
         <span class="self">self</span>.prefill_prompt_toks = <span class="prelude-val">None
     </span>}
 
-    <span class="doccomment">/// Internal api.
-    </span><span class="kw">pub fn </span>add_tmp_tok(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tok: u32) {
-        <span class="self">self</span>.tokens.push(tok);
-    }
-
-    <span class="doccomment">/// Internal api.
-    </span><span class="kw">pub fn </span>remove_tmp_tok(<span class="kw-2">&amp;mut </span><span class="self">self</span>, n: usize) {
-        <span class="self">self</span>.tokens.truncate(<span class="self">self</span>.tokens.len() - n);
-    }
-
     <span class="kw">pub fn </span>add_token(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         tok: Logprobs,
@@ -829,7 +847,11 @@
             // We don't need to add stop tokens to the completion bytes to check for stop strings.
             // And by not adding it here, we can avoid having to delete these tokens from the output.
             </span><span class="self">self</span>.completion_bytes.extend_from_slice(<span class="kw-2">&amp;</span>completion_bytes);
+            <span class="self">self</span>.last_completion_bytes_len = completion_bytes.len();
         }
+        <span class="self">self</span>.last_logprob = tok.logprob;
+        <span class="self">self</span>.last_is_done = <span class="kw-2">*</span>is_done;
+
         <span class="self">self</span>.cumulative_logprob += tok.logprob;
         <span class="self">self</span>.tokens.push(tok.token);
         <span class="self">self</span>.logprobs.push(tok);

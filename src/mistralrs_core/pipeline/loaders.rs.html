@@ -729,6 +729,13 @@
 <a href="#727" id="727">727</a>
 <a href="#728" id="728">728</a>
 <a href="#729" id="729">729</a>
+<a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a>
+<a href="#733" id="733">733</a>
+<a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, fmt::Debug, str::FromStr};
 
 <span class="kw">use </span>anyhow::Result;
@@ -747,16 +754,23 @@
 };
 
 <span class="attr">#[pyclass]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize)]
 </span><span class="doccomment">/// The architecture to load the normal model as.
 </span><span class="kw">pub enum </span>NormalLoaderType {
-    Mistral,
-    Gemma,
-    Mixtral,
-    Llama,
-    Phi2,
-    Phi3,
-    Qwen2,
+    <span class="attr">#[serde(rename = <span class="string">"mistral"</span>)]
+    </span>Mistral,
+    <span class="attr">#[serde(rename = <span class="string">"gemma"</span>)]
+    </span>Gemma,
+    <span class="attr">#[serde(rename = <span class="string">"mixtral"</span>)]
+    </span>Mixtral,
+    <span class="attr">#[serde(rename = <span class="string">"llama"</span>)]
+    </span>Llama,
+    <span class="attr">#[serde(rename = <span class="string">"phi2"</span>)]
+    </span>Phi2,
+    <span class="attr">#[serde(rename = <span class="string">"phi3"</span>)]
+    </span>Phi3,
+    <span class="attr">#[serde(rename = <span class="string">"qwen2"</span>)]
+    </span>Qwen2,
 }
 
 <span class="kw">impl </span>FromStr <span class="kw">for </span>NormalLoaderType {

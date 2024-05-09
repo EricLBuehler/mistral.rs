@@ -801,67 +801,10 @@
 <a href="#799" id="799">799</a>
 <a href="#800" id="800">800</a>
 <a href="#801" id="801">801</a>
-<a href="#802" id="802">802</a>
-<a href="#803" id="803">803</a>
-<a href="#804" id="804">804</a>
-<a href="#805" id="805">805</a>
-<a href="#806" id="806">806</a>
-<a href="#807" id="807">807</a>
-<a href="#808" id="808">808</a>
-<a href="#809" id="809">809</a>
-<a href="#810" id="810">810</a>
-<a href="#811" id="811">811</a>
-<a href="#812" id="812">812</a>
-<a href="#813" id="813">813</a>
-<a href="#814" id="814">814</a>
-<a href="#815" id="815">815</a>
-<a href="#816" id="816">816</a>
-<a href="#817" id="817">817</a>
-<a href="#818" id="818">818</a>
-<a href="#819" id="819">819</a>
-<a href="#820" id="820">820</a>
-<a href="#821" id="821">821</a>
-<a href="#822" id="822">822</a>
-<a href="#823" id="823">823</a>
-<a href="#824" id="824">824</a>
-<a href="#825" id="825">825</a>
-<a href="#826" id="826">826</a>
-<a href="#827" id="827">827</a>
-<a href="#828" id="828">828</a>
-<a href="#829" id="829">829</a>
-<a href="#830" id="830">830</a>
-<a href="#831" id="831">831</a>
-<a href="#832" id="832">832</a>
-<a href="#833" id="833">833</a>
-<a href="#834" id="834">834</a>
-<a href="#835" id="835">835</a>
-<a href="#836" id="836">836</a>
-<a href="#837" id="837">837</a>
-<a href="#838" id="838">838</a>
-<a href="#839" id="839">839</a>
-<a href="#840" id="840">840</a>
-<a href="#841" id="841">841</a>
-<a href="#842" id="842">842</a>
-<a href="#843" id="843">843</a>
-<a href="#844" id="844">844</a>
-<a href="#845" id="845">845</a>
-<a href="#846" id="846">846</a>
-<a href="#847" id="847">847</a>
-<a href="#848" id="848">848</a>
-<a href="#849" id="849">849</a>
-<a href="#850" id="850">850</a>
-<a href="#851" id="851">851</a>
-<a href="#852" id="852">852</a>
-<a href="#853" id="853">853</a>
-<a href="#854" id="854">854</a>
-<a href="#855" id="855">855</a>
-<a href="#856" id="856">856</a>
-<a href="#857" id="857">857</a>
-<a href="#858" id="858">858</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
-</span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
+</span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>mistralrs_lora::{layer::QLinear, linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 <span class="kw">use </span>std::sync::Arc;
@@ -870,7 +813,7 @@
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    layers::RmsNorm,
+    layers::{CausalMasker, RmsNorm},
     models::{flash_attn, mistral::Config, repeat_kv, Cache},
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
@@ -989,6 +932,7 @@
     rotary_emb: Arc&lt;RotaryEmbedding&gt;,
     use_flash_attn: bool,
     sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    neg_inf: Tensor,
 }
 
 <span class="kw">impl </span>Attention {
@@ -1057,6 +1001,7 @@
             rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
+            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())<span class="question-mark">?</span>.to_dtype(vb.dtype())<span class="question-mark">?</span>,
         })
     }
 
@@ -1175,10 +1120,7 @@
             <span class="kw">let </span>scale = <span class="number">1f64 </span>/ f64::sqrt(<span class="self">self</span>.head_dim <span class="kw">as </span>f64);
             <span class="kw">let </span>attn_weights = (q.matmul(<span class="kw-2">&amp;</span>k.transpose(<span class="number">2</span>, <span class="number">3</span>)<span class="question-mark">?</span>)<span class="question-mark">? </span>* scale)<span class="question-mark">?</span>;
 
-            <span class="kw">let </span>attn_weights = <span class="kw">match </span>attn_mask {
-                <span class="prelude-val">None </span>=&gt; attn_weights,
-                <span class="prelude-val">Some</span>(mask) =&gt; attn_weights.broadcast_add(<span class="kw-2">&amp;</span>mask)<span class="question-mark">?</span>,
-            };
+            <span class="kw">let </span>attn_weights = CausalMasker.apply_mask(<span class="kw-2">&amp;</span>attn_mask, attn_weights, <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf)<span class="question-mark">?</span>;
             <span class="kw">let </span>attn_weights = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>;
             attn_weights.matmul(<span class="kw-2">&amp;</span>v)<span class="question-mark">?
         </span>};
@@ -1409,54 +1351,6 @@
         })
     }
 
-    <span class="kw">fn </span>prepare_decoder_attention_mask(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        b_size: usize,
-        tgt_len: usize,
-        seqlen_offset: usize,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="comment">// Sliding window mask
-        </span><span class="kw">let </span>sliding_window = <span class="self">self</span>.sliding_window.unwrap_or(tgt_len + <span class="number">1</span>);
-        <span class="kw">let </span>mask: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..tgt_len)
-            .flat_map(|i| {
-                (<span class="number">0</span>..tgt_len).map(<span class="kw">move </span>|j| {
-                    <span class="kw">if </span>i &lt; j || j + sliding_window &lt; i {
-                        f32::NEG_INFINITY
-                    } <span class="kw">else </span>{
-                        <span class="number">0.
-                    </span>}
-                })
-            })
-            .collect();
-        <span class="kw">let </span>mask = Tensor::from_slice(<span class="kw-2">&amp;</span>mask, (tgt_len, tgt_len), <span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
-        <span class="kw">let </span>mask = <span class="kw">if </span>seqlen_offset &gt; <span class="number">0 </span>{
-            <span class="kw">let </span>mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, <span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
-            Tensor::cat(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>mask0, <span class="kw-2">&amp;</span>mask], D::Minus1)<span class="question-mark">?
-        </span>} <span class="kw">else </span>{
-            mask
-        };
-        mask.expand((b_size, <span class="number">1</span>, tgt_len, tgt_len + seqlen_offset))<span class="question-mark">?
-            </span>.to_dtype(<span class="self">self</span>.dtype)
-    }
-
-    <span class="kw">fn </span>calculate_past_kv_len(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        seq_len: usize,
-        kv_cache_1: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="kw">if </span>kv_cache_1.is_none() {
-            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="number">0</span>);
-        }
-        <span class="kw">let </span>k_cache_1 = <span class="kw-2">&amp;</span>kv_cache_1.as_ref().unwrap().<span class="number">0</span>;
-        <span class="kw">if </span>k_cache_1.dims()[<span class="number">0</span>] &lt;= seq_len {
-            <span class="prelude-val">Ok</span>(<span class="number">0</span>)
-        } <span class="kw">else </span>{
-            <span class="kw">let </span>indexed = k_cache_1.i(seq_len)<span class="question-mark">?</span>;
-            <span class="kw">let </span>dims = indexed.dims();
-            <span class="prelude-val">Ok</span>(dims[dims.len() - <span class="number">2</span>])
-        }
-    }
-
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>inner_forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -1468,11 +1362,6 @@
         no_kv_cache: bool,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>(b_size, seq_len) = input_ids.dims2()<span class="question-mark">?</span>;
-        <span class="kw">if </span>seqlen_offsets.len() &gt; b_size {
-            <span class="macro">candle_core::bail!</span>(<span class="string">"Expected seqlen offsets have length equal to batch size."</span>)
-        }
-
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="kw">if </span>is_full_pass {
             <span class="kw">if </span>no_kv_cache {
                 <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
@@ -1486,15 +1375,12 @@
         } <span class="kw">else </span>{
             <span class="self">self</span>.cache.lock()
         };
-        <span class="kw">let </span>past_key_values_length =
-            <span class="self">self</span>.calculate_past_kv_len(seq_len, cache.first().as_ref().unwrap())<span class="question-mark">?</span>;
-        <span class="kw">let </span>attention_mask = <span class="kw">if </span>seq_len &lt;= <span class="number">1 </span>{
-            <span class="prelude-val">None
-        </span>} <span class="kw">else </span>{
-            <span class="kw">let </span>mask =
-                <span class="self">self</span>.prepare_decoder_attention_mask(b_size, seq_len, past_key_values_length)<span class="question-mark">?</span>;
-            <span class="prelude-val">Some</span>(mask)
-        };
+        <span class="kw">let </span>attention_mask = CausalMasker.make_causal_mask_with_sliding_window(
+            input_ids,
+            <span class="kw-2">&amp;</span><span class="self">self</span>.cache,
+            <span class="self">self</span>.sliding_window,
+            <span class="self">self</span>.dtype,
+        )<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
             xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;

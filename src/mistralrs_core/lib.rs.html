@@ -250,6 +250,8 @@
 <a href="#248" id="248">248</a>
 <a href="#249" id="249">249</a>
 <a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -285,6 +287,7 @@
 <span class="kw">mod </span>sampler;
 <span class="kw">mod </span>scheduler;
 <span class="kw">mod </span>sequence;
+<span class="kw">mod </span>toml_selector;
 <span class="kw">mod </span>utils;
 <span class="kw">mod </span>xlora_models;
 
@@ -302,6 +305,7 @@
 <span class="kw">pub use </span>scheduler::SchedulerMethod;
 <span class="kw">use </span>serde::Serialize;
 <span class="kw">use </span>tokio::runtime::Runtime;
+<span class="kw">pub use </span>toml_selector::{TomlLoaderArgs, TomlSelector};
 
 <span class="doccomment">/// The MistralRs struct handles sending requests to the engine.
 /// It is the core multi-threaded component of mistral.rs, and uses `mspc`
