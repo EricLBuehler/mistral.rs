@@ -438,9 +438,6 @@
 <a href="#436" id="436">436</a>
 <a href="#437" id="437">437</a>
 <a href="#438" id="438">438</a>
-<a href="#439" id="439">439</a>
-<a href="#440" id="440">440</a>
-<a href="#441" id="441">441</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
@@ -718,7 +715,6 @@
     norm: RmsNorm,
     lm_head: QMatMul,
     sliding_window: usize,
-    dtype: DType,
     <span class="kw">pub </span>device: Device,
     <span class="kw">pub </span>cache: Cache,
     <span class="kw">pub </span>max_seq_len: usize,
@@ -780,7 +776,6 @@
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             sliding_window: cfg.sliding_window,
             device: real_device,
-            dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
@@ -798,7 +793,6 @@
             input_ids,
             <span class="kw-2">&amp;</span><span class="self">self</span>.cache,
             <span class="prelude-val">Some</span>(<span class="self">self</span>.sliding_window),
-            <span class="self">self</span>.dtype,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();

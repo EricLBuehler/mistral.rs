@@ -933,7 +933,6 @@
 <a href="#931" id="931">931</a>
 <a href="#932" id="932">932</a>
 <a href="#933" id="933">933</a>
-<a href="#934" id="934">934</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
@@ -1633,7 +1632,6 @@
             input_ids,
             <span class="kw-2">&amp;</span><span class="self">self</span>.cache,
             <span class="prelude-val">Some</span>(<span class="self">self</span>.sliding_window),
-            <span class="self">self</span>.dtype,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="kw">if </span>is_full_pass {
             <span class="kw">if </span>no_kv_cache {

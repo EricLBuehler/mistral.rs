@@ -459,9 +459,6 @@
 <a href="#457" id="457">457</a>
 <a href="#458" id="458">458</a>
 <a href="#459" id="459">459</a>
-<a href="#460" id="460">460</a>
-<a href="#461" id="461">461</a>
-<a href="#462" id="462">462</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
@@ -764,7 +761,6 @@
     layers: Vec&lt;DecoderLayer&gt;,
     norm: RmsNorm,
     lm_head: QMatMul,
-    dtype: DType,
     <span class="kw">pub </span>device: Device,
     <span class="kw">pub </span>cache: Cache,
     <span class="kw">pub </span>max_seq_len: usize,
@@ -822,7 +818,6 @@
             norm,
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             device: real_device,
-            dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
@@ -841,7 +836,6 @@
             input_ids,
             <span class="kw-2">&amp;</span><span class="self">self</span>.cache,
             <span class="self">self</span>.sliding_window,
-            <span class="self">self</span>.dtype,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>position_ids_old = position_ids;
         <span class="kw">let </span><span class="kw-2">mut </span>position_ids = Vec::new();

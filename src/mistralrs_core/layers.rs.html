@@ -350,10 +350,6 @@
 <a href="#348" id="348">348</a>
 <a href="#349" id="349">349</a>
 <a href="#350" id="350">350</a>
-<a href="#351" id="351">351</a>
-<a href="#352" id="352">352</a>
-<a href="#353" id="353">353</a>
-<a href="#354" id="354">354</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, ops::Mul, str::FromStr, sync::Mutex};
@@ -661,7 +657,6 @@
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         cache: <span class="kw-2">&amp;</span>Cache,
         sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-        dtype: DType,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
         <span class="kw">if </span>sliding_window.is_none() {
             <span class="kw">return </span><span class="self">self</span>.make_causal_mask(input_ids, cache);
@@ -686,7 +681,7 @@
                 .lock()
                 .unwrap()
                 .insert((tgt_len, past_kv_len), mask.clone());
-            <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(mask.to_dtype(dtype)<span class="question-mark">?</span>))
+            <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(mask.to_dtype(DType::U8)<span class="question-mark">?</span>))
         }
     }
 
@@ -699,9 +694,6 @@
         <span class="kw">match </span>mask {
             <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Ok</span>(att),
             <span class="prelude-val">Some</span>(mask) =&gt; {
-                <span class="kw">if </span>mask.dtype() != DType::U8 {
-                    <span class="kw">return </span>att.broadcast_add(mask);
-                }
                 <span class="kw">let </span>mask = mask.broadcast_as(att.shape())<span class="question-mark">?</span>;
                 mask.where_cond(<span class="kw-2">&amp;</span>neg_inf.broadcast_as(att.dims())<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>att)
             }
