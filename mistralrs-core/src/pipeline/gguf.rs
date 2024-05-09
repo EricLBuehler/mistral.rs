@@ -189,12 +189,7 @@ impl GGUFLoaderBuilder {
 
     pub fn with_lora(mut self, lora_model_id: String, lora_order: Ordering) -> Self {
         self.kind = ModelKind::LoraGGUF;
-        self.with_adapter(
-            xlora_model_id,
-            xlora_order,
-            no_kv_cache,
-            tgt_non_granular_index,
-        )
+        self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
     pub fn build(self) -> Box<dyn Loader> {
@@ -575,6 +570,7 @@ impl Pipeline for GGUFPipeline {
         match self.model {
             Model::Llama(_) => unreachable!(),
             Model::Phi2(_) => unreachable!(),
+            Model::Phi3(_) => unreachable!(),
             Model::XLoraLlama(ref mut model) => model
                 .activate_adapters(adapter_names)
                 .map_err(anyhow::Error::msg),

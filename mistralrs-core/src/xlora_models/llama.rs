@@ -5,7 +5,7 @@ use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{
     layer::QLinear, linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering,
 };
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
 use tracing::info;
 

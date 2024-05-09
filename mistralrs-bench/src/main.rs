@@ -225,7 +225,7 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
     let sender = mistralrs.get_sender();
     let (tx, mut rx) = channel(10_000);
 
-    let req = Request {
+    let req = Request::Normal(NormalRequest {
         id: mistralrs.next_request_id(),
         messages: RequestMessage::Completion {
             text: "Hello!".to_string(),
@@ -238,7 +238,7 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         is_streaming: false,
         constraint: Constraint::None,
         suffix: None,
-    };
+    });
 
     sender
         .blocking_send(req.clone())
