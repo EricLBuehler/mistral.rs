@@ -4,8 +4,7 @@ use serde::Deserialize;
 
 use crate::{
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
-    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
-    SpeculativeLoader,
+    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
 };
 
 fn default_repeat_last_n() -> usize {
@@ -188,15 +187,6 @@ enum TomlModelSelected {
 }
 
 #[derive(Deserialize)]
-pub struct SpeculativeTomlModelSelected {
-    /// Gamma value for the model
-    gamma: usize,
-
-    /// Base model
-    draft_model: TomlModelSelected,
-}
-
-#[derive(Deserialize)]
 pub struct TomlSelector {
     /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
     tokenizer_json: Option<String>,
@@ -207,9 +197,6 @@ pub struct TomlSelector {
 
     /// Selected model
     model: TomlModelSelected,
-
-    /// Speculative model selector
-    speculative: Option<SpeculativeTomlModelSelected>,
 }
 
 #[derive(Clone)]
@@ -443,19 +430,6 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
             tokenizer_json: selector.tokenizer_json,
             repeat_last_n: selector.repeat_last_n,
         };
-        let loader = loader_from_selected(args.clone(), selector.model)?;
-        let loader = if let Some(speculative) = selector.speculative {
-            let draft_loader = loader_from_selected(args, speculative.draft_model)?;
-            Box::new(SpeculativeLoader {
-                target: loader,
-                draft: draft_loader,
-                config: SpeculativeConfig {
-                    gamma: speculative.gamma,
-                },
-            })
-        } else {
-            loader
-        };
-        Ok(loader)
+        loader_from_selected(args.clone(), selector.model)
     }
 }
