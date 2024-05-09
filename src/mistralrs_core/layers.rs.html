@@ -350,6 +350,10 @@
 <a href="#348" id="348">348</a>
 <a href="#349" id="349">349</a>
 <a href="#350" id="350">350</a>
+<a href="#351" id="351">351</a>
+<a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a>
+<a href="#354" id="354">354</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, ops::Mul, str::FromStr, sync::Mutex};
@@ -642,7 +646,9 @@
         <span class="kw">if let </span><span class="prelude-val">Some</span>(mask) = res {
             <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(mask))
         } <span class="kw">else </span>{
-            <span class="kw">let </span>mask = <span class="self">self</span>.make_mask(tgt_len, past_kv_len, input_ids.device())<span class="question-mark">?</span>;
+            <span class="kw">let </span>mask = <span class="self">self
+                </span>.make_mask(tgt_len, past_kv_len, input_ids.device())<span class="question-mark">?
+                </span>.to_dtype(DType::U8)<span class="question-mark">?</span>;
 
             MASKS
                 .lock()
@@ -675,13 +681,15 @@
             <span class="kw">let </span>diagonal = past_kv_len <span class="kw">as </span>isize - sliding_window <span class="kw">as </span>isize - <span class="number">1</span>;
             <span class="kw">let </span>context_mask = apply_tril(<span class="kw-2">&amp;</span>mask.ones_like()<span class="question-mark">?</span>, diagonal)<span class="question-mark">?</span>;
             <span class="kw">let </span>mask = masked_fill(<span class="kw-2">&amp;</span>mask.to_dtype(DType::F32)<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>context_mask, f32::MIN)<span class="question-mark">?</span>;
-            <span class="kw">let </span>mask = mask.expand((b_sz, <span class="number">1</span>, tgt_len, tgt_len + past_kv_len))<span class="question-mark">?</span>;
+            <span class="kw">let </span>mask = mask
+                .expand((b_sz, <span class="number">1</span>, tgt_len, tgt_len + past_kv_len))<span class="question-mark">?
+                </span>.to_dtype(DType::U8)<span class="question-mark">?</span>;
 
             MASKS
                 .lock()
                 .unwrap()
                 .insert((tgt_len, past_kv_len), mask.clone());
-            <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(mask.to_dtype(DType::U8)<span class="question-mark">?</span>))
+            <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(mask))
         }
     }
 
