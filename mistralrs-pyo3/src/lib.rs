@@ -200,15 +200,13 @@ impl Runner {
                 tokenizer_json,
                 model_id,
             )
-            .with_xlora(
+            .with_lora(
                 adapters_model_id,
                 serde_json::from_reader(
                     File::open(order.clone())
                         .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
                 )
                 .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                no_kv_cache,
-                tgt_non_granular_index,
             )
             .build(arch.into()),
             Which::GGUF {
@@ -266,7 +264,6 @@ impl Runner {
                 repeat_last_n,
                 adapters_model_id,
                 order,
-                tgt_non_granular_index,
             } => GGUFLoaderBuilder::new(
                 GGUFSpecificConfig {
                     repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
@@ -284,8 +281,6 @@ impl Runner {
                         .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
                 )
                 .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                no_kv_cache,
-                tgt_non_granular_index,
             )
             .build(),
             Which::GGML {
@@ -347,7 +342,6 @@ impl Runner {
                 repeat_last_n,
                 adapters_model_id,
                 order,
-                tgt_non_granular_index,
                 gqa,
             } => GGMLLoaderBuilder::new(
                 GGMLSpecificConfig {
@@ -367,8 +361,6 @@ impl Runner {
                         .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
                 )
                 .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                no_kv_cache,
-                tgt_non_granular_index,
             )
             .build(),
         };

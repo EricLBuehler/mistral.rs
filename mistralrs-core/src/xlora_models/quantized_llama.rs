@@ -1,7 +1,5 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::collections::HashMap;
-
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
@@ -11,7 +9,7 @@ use tqdm::Iter;
 use tracing::info;
 
 use crate::device_map::DeviceMapper;
-use crate::layers::QRmsNorm;
+use crate::layers::{CausalMasker, QRmsNorm};
 use crate::models::{repeat_kv, verify_sanity_gguf, Cache};
 use crate::pipeline::extract_logits;
 use crate::DeviceMapMetadata;
@@ -175,11 +173,6 @@ struct LayerWeights {
     neg_inf: Tensor,
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Tensor> {
-    let shape = mask.shape();
-    let m = mask.where_cond(&on_true.broadcast_as(shape.dims())?, on_false)?;
-    Ok(m)
-}
 impl LayerWeights {
     #[allow(clippy::too_many_arguments)]
     fn forward_attn(
@@ -246,13 +239,7 @@ impl LayerWeights {
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?.contiguous()?;
 
         let att = (q.contiguous()?.matmul(&k.t()?.contiguous()?)? / (self.head_dim as f64).sqrt())?;
-        let att = match mask {
-            None => att,
-            Some(mask) => {
-                let mask = mask.broadcast_as(att.shape())?;
-                masked_fill(&att, &mask, &self.neg_inf)?
-            }
-        };
+        let att = CausalMasker.apply_mask(mask, att, &self.neg_inf)?;
         let att = candle_nn::ops::softmax_last_dim(&att)?;
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = att.matmul(&v.contiguous()?)?;
@@ -272,7 +259,6 @@ pub struct ModelWeights {
     layers: Vec<LayerWeights>,
     norm: QRmsNorm,
     output: QMatMul,
-    masks: HashMap<usize, Tensor>,
     pub device: Device,
     pub cache: Cache,
     xlora_classifier: Option<XLoraClassifier>,
@@ -407,7 +393,6 @@ impl ModelWeights {
             layers,
             norm,
             output: QMatMul::from_qtensor(output)?,
-            masks: HashMap::new(),
             device: ct.device.clone(),
             cache: Cache::new(ct.hparams.n_layer as usize, true),
             xlora_classifier: xlora_config.map(|xlora_config| {
@@ -669,7 +654,6 @@ impl ModelWeights {
             layers,
             norm,
             output: QMatMul::from_qtensor(output)?,
-            masks: HashMap::new(),
             device: device.clone(),
             cache: Cache::new(block_count, true),
             xlora_classifier: xlora_config.map(|xlora_config| {
@@ -679,19 +663,6 @@ impl ModelWeights {
             max_seq_len,
             mapper: Some(mapper),
         })
-    }
-
-    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
-        if let Some(mask) = self.masks.get(&t) {
-            Ok(mask.clone())
-        } else {
-            let mask: Vec<_> = (0..t)
-                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
-                .collect();
-            let mask = Tensor::from_slice(&mask, (t, t), device)?;
-            self.masks.insert(t, mask.clone());
-            Ok(mask)
-        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -705,12 +676,7 @@ impl ModelWeights {
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let (_b_sz, seq_len) = x.dims2()?;
-        let mask = if seq_len == 1 {
-            None
-        } else {
-            Some(self.mask(seq_len, x.device())?)
-        };
+        let mask = CausalMasker.make_causal_mask(x, &self.cache)?;
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = if is_full_pass {
             if no_kv_cache {

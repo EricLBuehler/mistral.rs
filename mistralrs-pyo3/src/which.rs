@@ -82,7 +82,6 @@ pub enum Which {
         repeat_last_n: Option<usize>,
         adapters_model_id: String,
         order: String,
-        tgt_non_granular_index: Option<usize>,
     },
 
     #[allow(clippy::upper_case_acronyms)]
@@ -115,7 +114,6 @@ pub enum Which {
         repeat_last_n: Option<usize>,
         adapters_model_id: String,
         order: String,
-        tgt_non_granular_index: Option<usize>,
         gqa: Option<usize>,
     },
 }

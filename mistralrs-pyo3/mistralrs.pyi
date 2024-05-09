@@ -86,7 +86,6 @@ class Which(Enum):
         arch: Architecture
         adapters_model_id: str
         order: str
-        tgt_non_granular_index: int | None = None
         model_id: str | None = None
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
@@ -114,7 +113,6 @@ class Which(Enum):
         quantized_filename: str
         adapters_model_id: str
         order: str
-        tgt_non_granular_index: int | None = None
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
     @dataclass
@@ -141,7 +139,6 @@ class Which(Enum):
         quantized_filename: str
         adapters_model_id: str
         order: str
-        tgt_non_granular_index: int | None = None
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
 

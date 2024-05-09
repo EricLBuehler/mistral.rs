@@ -79,16 +79,21 @@ pub struct Sequence {
     prefill_prompt_toks: Option<Vec<u32>>,
     suffix: Option<String>,
     prefix: Option<String>,
+    is_tmp: bool,
 
     // Cache
     scaling_cache: Option<Tensor>,
     cache: LayerCaches,
+    draft_cache: LayerCaches,
     xlora_cache: Option<LayerCaches>,
 
     // Mutables
     tokens: Vec<u32>,
     logprobs: Vec<Logprobs>,
     cumulative_logprob: f32,
+    last_logprob: f32,
+    last_completion_bytes_len: usize,
+    last_is_done: Option<StopReason>,
     completion_bytes: Vec<u8>,
     stream_idx: usize,
     pub recognizer: SequenceRecognizer,
@@ -130,6 +135,7 @@ impl Sequence {
             timestamp,
             state: RwLock::new(SequenceState::Waiting),
             cache: vec![None; layers],
+            draft_cache: vec![None; layers],
             xlora_cache: if is_xlora {
                 Some(vec![None; layers])
             } else {
@@ -154,6 +160,10 @@ impl Sequence {
             cumulative_logprob: 0.,
             completion_bytes: Vec::new(),
             stream_idx: 0,
+            last_completion_bytes_len: 0,
+            last_logprob: 0.0,
+            last_is_done: None,
+            is_tmp: false,
         }
     }
 
@@ -172,6 +182,12 @@ impl Sequence {
 
     /// This is the number of tokens. If the KV cache is Some, then it will use that.
     pub fn len(&self) -> usize {
+        if let Some(toks) = &self.prefill_prompt_toks {
+            return toks.len();
+        }
+        if self.is_tmp {
+            return self.tokens.len();
+        }
         // Use xlora cache first because of non granular
         if self.xlora_cache.as_ref().is_some_and(|c| c[0].is_some()) {
             self.xlora_cache.as_ref().unwrap()[0]
@@ -183,9 +199,6 @@ impl Sequence {
         } else if let Some((_, x)) = &self.cache[0] {
             x.dims()[2] + 1
         } else {
-            if let Some(toks) = &self.prefill_prompt_toks {
-                return toks.len();
-            }
             self.tokens.len()
         }
     }
@@ -228,6 +241,10 @@ impl Sequence {
         &mut self.cache
     }
 
+    pub fn draft_cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
+        &mut self.draft_cache
+    }
+
     pub fn xlora_cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
         self.xlora_cache.as_mut().expect("No X-LoRA cache.")
     }
@@ -254,16 +271,6 @@ impl Sequence {
         self.prefill_prompt_toks = None
     }
 
-    /// Internal api.
-    pub fn add_tmp_tok(&mut self, tok: u32) {
-        self.tokens.push(tok);
-    }
-
-    /// Internal api.
-    pub fn remove_tmp_tok(&mut self, n: usize) {
-        self.tokens.truncate(self.tokens.len() - n);
-    }
-
     pub fn add_token(
         &mut self,
         tok: Logprobs,
@@ -279,7 +286,11 @@ impl Sequence {
             // We don't need to add stop tokens to the completion bytes to check for stop strings.
             // And by not adding it here, we can avoid having to delete these tokens from the output.
             self.completion_bytes.extend_from_slice(&completion_bytes);
+            self.last_completion_bytes_len = completion_bytes.len();
         }
+        self.last_logprob = tok.logprob;
+        self.last_is_done = *is_done;
+
         self.cumulative_logprob += tok.logprob;
         self.tokens.push(tok.token);
         self.logprobs.push(tok);

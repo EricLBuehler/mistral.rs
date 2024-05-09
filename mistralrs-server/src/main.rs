@@ -71,7 +71,7 @@ struct Args {
     #[clap(long, short, action)]
     truncate_sequence: bool,
 
-    /// Model
+    /// Model selector
     #[clap(subcommand)]
     model: ModelSelected,
 

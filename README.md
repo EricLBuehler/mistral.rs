@@ -330,6 +330,14 @@ To start a server running Mistral from safetensors.
 ./mistralrs_server --port 1234 gguf -m mistralai/Mistral-7B-Instruct-v0.1
 ```
 
+### Structured selection with a `.toml` file
+
+We provide a method to select models with a `.toml` file. The keys are the same as the command line, with `no_kv_cache` and `tokenizer_json` being "global" keys.
+
+Example:
+```bash
+./mistralrs_server --port 1234 toml -f toml-selectors/gguf.toml
+```
 
 **Command line docs**
 
