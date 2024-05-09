@@ -31,6 +31,15 @@ impl RmsNorm {
             weight: w,
         })
     }
+
+    pub fn from_w(w: Tensor, eps: f64) -> Result<Self> {
+        let inner = candle_nn::RmsNorm::<RmsNormNonQuantized>::new(w.clone(), eps);
+        Ok(Self {
+            inner,
+            eps,
+            weight: w,
+        })
+    }
 }
 
 impl Module for RmsNorm {
