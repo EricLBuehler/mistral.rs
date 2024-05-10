@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{quantized::GgmlDType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{quantized::GgmlDType, Device, IndexOp, Result, Tensor};
 use rand::Rng;
 use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
@@ -139,8 +139,6 @@ impl Pipeline for SpeculativePipeline {
         pre_op: CacheInstruction,
         post_op: CacheInstruction,
     ) -> Result<()> {
-        let n_seqs = input_seqs.len();
-
         match pre_op {
             CacheInstruction::In => self.clone_in_cache(input_seqs, true),
             CacheInstruction::Nonthing => (),
@@ -266,32 +264,8 @@ impl Pipeline for SpeculativePipeline {
                         / draft_sample.sample.logprob)
                         .clamp(0.0, 1.0);
                     let is_accepted = get_mut_arcmutex!(rng).gen_bool(acceptance_prob as f64);
-                    if is_accepted {
-                        accepted_tokens.push(target_sample.sample);
-                    } else {
-                        // Do not accept. Resample with updated prob dist relu(p(x) − q(x))
-                        let corrected_distribution =
-                            (target_sample.distribution - draft_sample.distribution)?.relu()?;
-                        let corrected_distribution = corrected_distribution
-                            .broadcast_div(&corrected_distribution.sum_keepdim(D::Minus1)?)?;
-                        let t = get_mut_arcmutex!(self.target)
-                            .get_metadata()
-                            .tok_trie
-                            .clone();
-                        let r = rng.clone();
-                        let sampled = sample_sequence(
-                            corrected_distribution,
-                            seq,
-                            seq.return_logprobs(),
-                            repeat_last_n,
-                            t,
-                            r,
-                            n_seqs > 1,
-                            false, // Do not add to trie
-                            true,
-                        )
-                        .await?;
-                        accepted_tokens.push(sampled);
+                    accepted_tokens.push(target_sample.sample);
+                    if !is_accepted {
                         break;
                     }
                 }
