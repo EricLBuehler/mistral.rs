@@ -200,7 +200,7 @@ impl Pipeline for SpeculativePipeline {
         let mut draft_prefill_tokens = if is_prompt {
             seq.get_toks().to_vec()
         } else {
-            vec![]
+            vec![*seq.get_toks().last().unwrap()]
         };
         for (i, sample) in draft_samples.iter().enumerate() {
             if i == draft_samples.len() - 1 {
@@ -229,14 +229,7 @@ impl Pipeline for SpeculativePipeline {
             is_xlora,
             &device,
             has_no_kv_cache,
-            Some((
-                if is_prompt {
-                    self.gamma
-                } else {
-                    self.gamma - 1
-                },
-                initial_cache_len,
-            )), // Get the last gamma, see above
+            Some((self.gamma, initial_cache_len)), // Get the last gamma, see above
         )
         .unwrap();
 
@@ -247,11 +240,6 @@ impl Pipeline for SpeculativePipeline {
 
         // ======================= Rejection sampling. ============================
         // Map from each target sample to corresponding in draft sample
-        let logits = self
-            .latest_logit_cache
-            .as_ref()
-            .map(|c| Tensor::cat(&[c, &logits], 1).unwrap())
-            .unwrap_or(logits.clone());
         let samples = sample_target_sequence_speculative(
             logits.clone(),
             seq,
@@ -356,13 +344,6 @@ impl Pipeline for SpeculativePipeline {
                 *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
             }
         }
-        dbg!(&n_not_accepted);
-        self.latest_logit_cache = Some(
-            logits
-                .i((.., logits.dims()[1] - n_not_accepted - 1, ..))
-                .unwrap()
-                .unsqueeze(1)?,
-        );
 
         let eos_owned = get_mut_arcmutex!(self.target)
             .get_metadata()
