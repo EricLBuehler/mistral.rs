@@ -559,6 +559,26 @@
 <a href="#557" id="557">557</a>
 <a href="#558" id="558">558</a>
 <a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fmt::Display,
     sync::{Arc, RwLock},
@@ -658,8 +678,9 @@
     completion_bytes: Vec&lt;u8&gt;,
     stream_idx: usize,
     <span class="kw">pub </span>recognizer: SequenceRecognizer,
+    scheduling_urgency: usize, <span class="comment">// The number of passes since scheduling
 
-    <span class="comment">// GPU things
+    // GPU things
     </span><span class="kw">pub </span>prompt_tok_per_sec: f32,
     <span class="kw">pub </span>prompt_timestamp: <span class="prelude-ty">Option</span>&lt;u128&gt;,
     group: Arc&lt;Mutex&lt;SequenceGroup&gt;&gt;,
@@ -725,7 +746,26 @@
             last_logprob: <span class="number">0.0</span>,
             last_is_done: <span class="prelude-val">None</span>,
             is_tmp: <span class="bool-val">false</span>,
+            scheduling_urgency: <span class="number">0</span>,
         }
+    }
+
+    <span class="kw">pub fn </span>add_urgency(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.scheduling_urgency += <span class="number">1</span>;
+        <span class="self">self
+    </span>}
+
+    <span class="kw">pub fn </span>reset_urgency(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.scheduling_urgency = <span class="number">0</span>;
+        <span class="self">self
+    </span>}
+
+    <span class="doccomment">/// Simple metric: (scheduling urgency) + log2(length)
+    /// Takes into account: urgency (scales linear) and length (scales logarithmic)
+    /// Scaling urgency is the number of scheduling passes where we have not been scheduled.
+    </span><span class="kw">pub fn </span>compute_priority(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; f64 {
+        <span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+        </span>(<span class="self">self</span>.scheduling_urgency <span class="kw">as </span>f64) + (<span class="self">self</span>.len() <span class="kw">as </span>f64).log2()
     }
 
     <span class="kw">pub fn </span>prefill(
