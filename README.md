@@ -23,9 +23,13 @@ Mistral.rs is a fast LLM inference platform supporting inference on a variety of
 
 `cargo run --release --features ... -- -i plain -m meta-llama/Meta-Llama-3-8B-Instruct -a llama`
 
+`nix run github:EricLBuehler/mistral.rs -- -i plain -m meta-llama/Meta-Llama-3-8B-Instruct -a llama`
+
 **Running the new Phi 3 model with 128K context window**
 
 `cargo run --release --features ... -- -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3`
+
+`nix run github:EricLBuehler/mistral.rs -- -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3`
 
 ## Description
 **Fast**:
