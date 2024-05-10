@@ -1,4 +1,4 @@
-use std::collections::{vec_deque::Iter, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 use crate::sequence::{Sequence, SequenceState};
 use range_checked::UsizeBounded;
@@ -7,7 +7,7 @@ pub trait FcfsBacker: Default {
     fn new() -> Self;
     fn add(&mut self, item: Sequence);
     fn into_iter(self) -> impl Iterator<Item = Sequence>;
-    fn iter(&self) -> impl Iterator<Item = &Sequence>;
+    fn len(&self) -> usize;
     fn sort_ascending_ids(&mut self);
 }
 
@@ -18,15 +18,15 @@ impl FcfsBacker for VecDeque<Sequence> {
     fn add(&mut self, item: Sequence) {
         self.push_back(item)
     }
-    fn iter(&self) -> Iter<'_, Sequence> {
-        self.iter()
-    }
     fn into_iter(self) -> impl Iterator<Item = Sequence> {
         <Self as IntoIterator>::into_iter(self)
     }
     fn sort_ascending_ids(&mut self) {
         let slice = self.make_contiguous();
         slice.sort_by_key(|seq| *seq.id());
+    }
+    fn len(&self) -> usize {
+        VecDeque::len(self)
     }
 }
 
@@ -43,18 +43,109 @@ pub enum SchedulerMethod {
     Fixed(UsizeBounded<1, { usize::MAX }, false>),
 }
 
+pub struct BucketedSeqs<Backer: FcfsBacker> {
+    running: Vec<Sequence>,
+    waiting: Backer,
+}
+
+pub trait BucketingManager<Backer: FcfsBacker> {
+    /// Bucket and waitlist running input sequences, returning the newly running sequences.
+    fn bucket_and_waitlist_seqs_waiting(
+        &mut self,
+        running: Vec<Sequence>,
+        waiting: Backer,
+        discrete: bool,
+    ) -> BucketedSeqs<Backer>;
+}
+
+struct FixedBucketingManager;
+
+impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
+    /// Move the seuqences into buckets, and run the ones with the shortest lengths.
+    /// The others are moved to the waiting list (retaining high priority due to start time),
+    /// without a state modification.
+    fn bucket_and_waitlist_seqs_waiting(
+        &mut self,
+        running: Vec<Sequence>,
+        mut waiting: Backer,
+        discrete: bool,
+    ) -> BucketedSeqs<Backer> {
+        // Now, get the sequences with the smallest sequence lengths, and allow them to catch up.
+        let mut seq_buckets: HashMap<usize, Vec<Sequence>> = HashMap::new();
+        let mut seq_priorities: HashMap<usize, f64> = HashMap::new();
+        for seq in running {
+            let len = seq.len();
+            match seq_buckets.get_mut(&len) {
+                Some(bucket) => {
+                    if !discrete {
+                        *seq_priorities.get_mut(&len).unwrap() += seq.compute_priority();
+                    }
+                    bucket.push(seq);
+                }
+                None => {
+                    if !discrete {
+                        seq_priorities.insert(len, seq.compute_priority());
+                    }
+                    seq_buckets.insert(len, vec![seq]);
+                }
+            }
+        }
+        let running = if seq_buckets.len() <= 1 {
+            // Full steam ahead or have everything
+            seq_buckets
+                .into_iter()
+                .flat_map(|(_, x)| x)
+                .map(|s| s.reset_urgency())
+                .collect::<Vec<_>>()
+        } else {
+            // Set the min seqs to be the running ones, and the rest to be waiting (but their states are not changed!)
+            // Allow the min seqs to catch up.
+            let min = *seq_buckets.keys().min().expect("No sequence buckets.");
+            let len = if !discrete {
+                seq_priorities
+                    .iter()
+                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                    .map(|(a, b)| (*a, *b))
+                    .unwrap_or_else(|| (min, seq_priorities[&min]))
+                    .0
+            } else {
+                min
+            };
+            let highest_priority_seqs = seq_buckets
+                .remove(&len)
+                .unwrap()
+                .into_iter()
+                .map(|s| s.reset_urgency())
+                .collect();
+            for (_, seqs) in seq_buckets {
+                for seq in seqs {
+                    waiting.add(seq.add_urgency());
+                }
+            }
+            // Know min_seqs.len < running.len() <= max
+            highest_priority_seqs
+        };
+        BucketedSeqs { running, waiting }
+    }
+}
+
 pub struct Scheduler<Backer: FcfsBacker> {
     waiting: Backer,
     running: Vec<Sequence>,
     method: SchedulerMethod,
+    bucketing_manager: Box<dyn BucketingManager<Backer>>,
 }
 
 impl<Backer: FcfsBacker> Scheduler<Backer> {
     pub fn new(method: SchedulerMethod) -> Self {
+        let bucketing_manager: Box<dyn BucketingManager<_>> = match method {
+            SchedulerMethod::Fixed(_) => Box::new(FixedBucketingManager),
+        };
         Self {
             running: Vec::new(),
             waiting: Backer::new(),
             method,
+            bucketing_manager,
         }
     }
 
@@ -68,57 +159,18 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
     }
 
     pub fn waiting_len(&self) -> usize {
-        self.waiting.iter().count()
+        self.waiting.len()
     }
 
     /// Move the seuqences into buckets, and run the ones with the shortest lengths.
     /// The others are moved to the waiting list (retaining high priority due to start time),
     /// without a state modification.
     fn bucket_and_waitlist_seqs(&mut self, running: Vec<Sequence>) -> Vec<Sequence> {
-        let mut waiting = std::mem::take(&mut self.waiting);
-        let running = self.bucket_and_waitlist_seqs_waiting(running, &mut waiting);
+        let waiting = std::mem::take(&mut self.waiting);
+        let BucketedSeqs { running, waiting } = self
+            .bucketing_manager
+            .bucket_and_waitlist_seqs_waiting(running, waiting, true);
         self.waiting = waiting;
-        running
-    }
-
-    /// Move the seuqences into buckets, and run the ones with the shortest lengths.
-    /// The others are moved to the waiting list (retaining high priority due to start time),
-    /// without a state modification.
-    fn bucket_and_waitlist_seqs_waiting(
-        &mut self,
-        running: Vec<Sequence>,
-        waiting: &mut Backer,
-    ) -> Vec<Sequence> {
-        // Now, get the sequences with the smallest sequence lengths, and allow them to catch up.
-        let mut seq_buckets: HashMap<usize, Vec<Sequence>> = HashMap::new();
-        for seq in running {
-            let len = seq.len();
-            match seq_buckets.get_mut(&len) {
-                Some(bucket) => bucket.push(seq),
-                None => {
-                    seq_buckets.insert(len, vec![seq]);
-                }
-            }
-        }
-        let running = if seq_buckets.len() <= 1 {
-            // Full steam ahead or have everything
-            seq_buckets
-                .into_iter()
-                .flat_map(|(_, x)| x)
-                .collect::<Vec<_>>()
-        } else {
-            // Set the min seqs to be the running ones, and the rest to be waiting (but their states are not changed!)
-            // Allow the min seqs to catch up.
-            let min = *seq_buckets.keys().min().expect("No sequence buckets.");
-            let min_seqs = seq_buckets.remove(&min).unwrap();
-            for (_, seqs) in seq_buckets {
-                for seq in seqs {
-                    waiting.add(seq);
-                }
-            }
-            // Know min_seqs.len < running.len() <= max
-            min_seqs
-        };
         running
     }
 
@@ -132,7 +184,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             .filter(|seq| seq.is_running())
             .collect::<Vec<_>>();
 
-        match (waiting.iter().count(), running.len()) {
+        match (waiting.len(), running.len()) {
             (0, 0) => {
                 self.running = running;
                 return SchedulerOutput {
@@ -179,8 +231,14 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             }
         }
 
-        self.running = self.bucket_and_waitlist_seqs_waiting(running, &mut new_waiting);
+        let BucketedSeqs {
+            running,
+            waiting: new_waiting,
+        } = self
+            .bucketing_manager
+            .bucket_and_waitlist_seqs_waiting(running, new_waiting, false);
 
+        self.running = running;
         self.waiting = new_waiting;
 
         let mut completion = Vec::new();
