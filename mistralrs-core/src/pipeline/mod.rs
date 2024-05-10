@@ -39,7 +39,7 @@ use std::sync::Arc;
 use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, warn};
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -743,15 +743,15 @@ fn get_xlora_paths(
             .filter(|x| x.contains("xlora_classifier.safetensors"))
             .collect::<Vec<_>>();
         if xlora_classifier.len() != 1 {
-            info!("⚠️ WARNING: Detected multiple X-LoRA classifiers: {xlora_classifier:?}");
-            info!("⚠️ WARNING: Selected classifier: `{}`", &xlora_classifier[0]);
+            warn!("Detected multiple X-LoRA classifiers: {xlora_classifier:?}");
+            warn!("Selected classifier: `{}`", &xlora_classifier[0]);
         }
         let xlora_classifier = &xlora_classifier[0];
         let xlora_configs = &api_dir_list!(api, model_id)
             .filter(|x| x.contains("xlora_config.json"))
             .collect::<Vec<_>>();
         if xlora_configs.len() != 1 {
-            info!("⚠️ WARNING: Detected multiple X-LoRA configs: {xlora_configs:?}");
+            warn!("Detected multiple X-LoRA configs: {xlora_configs:?}");
         }
 
         let classifier_path = api_get_file!(api, xlora_classifier, Path::new(""));
@@ -760,7 +760,7 @@ fn get_xlora_paths(
         let mut last_err: Option<serde_json::Error> = None;
         for (i, config_path) in xlora_configs.iter().enumerate() {
             if xlora_configs.len() != 1 {
-                info!("⚠️ WARNING: Selecting config: `{}`", config_path);
+                warn!("Selecting config: `{}`", config_path);
             }
             let config_path = api_get_file!(api, config_path, Path::new(""));
             let conf = fs::read_to_string(config_path)?;
@@ -772,7 +772,7 @@ fn get_xlora_paths(
                 }
                 Err(e) => {
                     if i != xlora_configs.len() - 1 {
-                        info!("⚠️ WARNING: Config is broken with error `{e}`");
+                        warn!("Config is broken with error `{e}`");
                     }
                     last_err = Some(e);
                 }

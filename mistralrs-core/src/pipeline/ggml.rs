@@ -31,7 +31,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, warn};
 
 enum Model {
     Llama(QLlama),
@@ -237,7 +237,7 @@ impl Loader for GGMLLoader {
             );
         }
         if !mapper.is_dummy() {
-            info!("⚠️ WARNING: GGML models do not support device mapping. Device mapping will not work. Please consider using a GGUF model.");
+            warn!("GGML models do not support device mapping. Device mapping will not work. Please consider using a GGUF model.");
         }
 
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
