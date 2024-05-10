@@ -302,7 +302,7 @@
 
 <span class="kw">use </span>interactive_mode::interactive_mode;
 <span class="kw">use </span>tower_http::cors::{AllowOrigin, CorsLayer};
-<span class="kw">use </span>tracing::{info, level_filters::LevelFilter};
+<span class="kw">use </span>tracing::{info, level_filters::LevelFilter, warn};
 <span class="kw">use </span>utoipa::OpenApi;
 <span class="kw">use </span>utoipa_swagger_ui::SwaggerUi;
 
@@ -506,7 +506,7 @@
                 | ModelKind::XLoraGGUF
         )
     {
-        <span class="macro">info!</span>(<span class="string">"⚠️ WARNING: Using flash attention with a quantized model has no effect!"</span>)
+        <span class="macro">warn!</span>(<span class="string">"Using flash attention with a quantized model has no effect!"</span>)
     }
     <span class="macro">info!</span>(<span class="string">"Model kind is: {}"</span>, loader.get_kind().to_string());
     <span class="kw">let </span>pipeline = loader.load_model(

@@ -214,7 +214,7 @@
     StopTokens <span class="kw">as </span>InternalStopTokens,
 };
 <span class="kw">use </span>serde::Serialize;
-<span class="kw">use </span>tracing::info;
+<span class="kw">use </span>tracing::warn;
 
 <span class="attr">#[derive(Debug)]
 </span><span class="kw">struct </span>ModelErrorMessage(String);
@@ -299,11 +299,11 @@
     };
 
     <span class="kw">if </span>oairequest.logprobs.is_some() {
-        <span class="macro">info!</span>(<span class="string">"⚠️ WARNING: Completion requests do not support logprobs."</span>);
+        <span class="macro">warn!</span>(<span class="string">"Completion requests do not support logprobs."</span>);
     }
 
     <span class="kw">if </span>oairequest._stream.is_some_and(|x| x) {
-        <span class="macro">info!</span>(<span class="string">"⚠️ WARNING: Completion requests do not support streaming."</span>);
+        <span class="macro">warn!</span>(<span class="string">"Completion requests do not support streaming."</span>);
     }
 
     Request {

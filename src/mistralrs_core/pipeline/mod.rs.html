@@ -1013,7 +1013,7 @@
 <span class="kw">use </span>std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr};
 <span class="kw">use </span>tokenizers::Tokenizer;
 <span class="kw">use </span>tokio::sync::Mutex;
-<span class="kw">use </span>tracing::info;
+<span class="kw">use </span>tracing::{info, warn};
 
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
@@ -1717,15 +1717,15 @@
             .filter(|x| x.contains(<span class="string">"xlora_classifier.safetensors"</span>))
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
         <span class="kw">if </span>xlora_classifier.len() != <span class="number">1 </span>{
-            <span class="macro">info!</span>(<span class="string">"⚠️ WARNING: Detected multiple X-LoRA classifiers: {xlora_classifier:?}"</span>);
-            <span class="macro">info!</span>(<span class="string">"⚠️ WARNING: Selected classifier: `{}`"</span>, <span class="kw-2">&amp;</span>xlora_classifier[<span class="number">0</span>]);
+            <span class="macro">warn!</span>(<span class="string">"Detected multiple X-LoRA classifiers: {xlora_classifier:?}"</span>);
+            <span class="macro">warn!</span>(<span class="string">"Selected classifier: `{}`"</span>, <span class="kw-2">&amp;</span>xlora_classifier[<span class="number">0</span>]);
         }
         <span class="kw">let </span>xlora_classifier = <span class="kw-2">&amp;</span>xlora_classifier[<span class="number">0</span>];
         <span class="kw">let </span>xlora_configs = <span class="kw-2">&amp;</span><span class="macro">api_dir_list!</span>(api, model_id)
             .filter(|x| x.contains(<span class="string">"xlora_config.json"</span>))
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
         <span class="kw">if </span>xlora_configs.len() != <span class="number">1 </span>{
-            <span class="macro">info!</span>(<span class="string">"⚠️ WARNING: Detected multiple X-LoRA configs: {xlora_configs:?}"</span>);
+            <span class="macro">warn!</span>(<span class="string">"Detected multiple X-LoRA configs: {xlora_configs:?}"</span>);
         }
 
         <span class="kw">let </span>classifier_path = <span class="macro">api_get_file!</span>(api, xlora_classifier, Path::new(<span class="string">""</span>));
@@ -1734,7 +1734,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>last_err: <span class="prelude-ty">Option</span>&lt;serde_json::Error&gt; = <span class="prelude-val">None</span>;
         <span class="kw">for </span>(i, config_path) <span class="kw">in </span>xlora_configs.iter().enumerate() {
             <span class="kw">if </span>xlora_configs.len() != <span class="number">1 </span>{
-                <span class="macro">info!</span>(<span class="string">"⚠️ WARNING: Selecting config: `{}`"</span>, config_path);
+                <span class="macro">warn!</span>(<span class="string">"Selecting config: `{}`"</span>, config_path);
             }
             <span class="kw">let </span>config_path = <span class="macro">api_get_file!</span>(api, config_path, Path::new(<span class="string">""</span>));
             <span class="kw">let </span>conf = fs::read_to_string(config_path)<span class="question-mark">?</span>;
@@ -1746,7 +1746,7 @@
                 }
                 <span class="prelude-val">Err</span>(e) =&gt; {
                     <span class="kw">if </span>i != xlora_configs.len() - <span class="number">1 </span>{
-                        <span class="macro">info!</span>(<span class="string">"⚠️ WARNING: Config is broken with error `{e}`"</span>);
+                        <span class="macro">warn!</span>(<span class="string">"Config is broken with error `{e}`"</span>);
                     }
                     last_err = <span class="prelude-val">Some</span>(e);
                 }

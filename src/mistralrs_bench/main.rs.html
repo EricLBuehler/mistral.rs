@@ -404,8 +404,8 @@
 <span class="kw">use </span>std::fmt::Display;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>tokio::sync::mpsc::channel;
-<span class="kw">use </span>tracing::info;
 <span class="kw">use </span>tracing::level_filters::LevelFilter;
+<span class="kw">use </span>tracing::{info, warn};
 <span class="kw">use </span>tracing_subscriber::EnvFilter;
 
 <span class="kw">enum </span>TestName {
@@ -716,7 +716,7 @@
                 | ModelKind::XLoraGGUF
         )
     {
-        <span class="macro">info!</span>(<span class="string">"⚠️ WARNING: Using flash attention with a quantized model has no effect!"</span>)
+        <span class="macro">warn!</span>(<span class="string">"Using flash attention with a quantized model has no effect!"</span>)
     }
     <span class="macro">info!</span>(<span class="string">"Model kind is: {}"</span>, loader.get_kind().to_string());
     <span class="kw">let </span>pipeline = loader.load_model(

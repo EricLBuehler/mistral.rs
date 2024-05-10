@@ -530,7 +530,7 @@
 <span class="kw">use </span>candle_core::{quantized::GgmlDType, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>rand::SeedableRng;
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
-<span class="kw">use </span>tracing::info;
+<span class="kw">use </span>tracing::warn;
 
 <span class="kw">use crate</span>::{
     get_mut_arcmutex, handle_pipeline_forward_error, handle_seq_error,
@@ -606,7 +606,7 @@
             <span class="kw">let </span><span class="kw-2">mut </span>scheduled = <span class="self">self</span>.scheduler.schedule();
             <span class="kw">if let </span><span class="prelude-val">Ok</span>(dtype) = <span class="self">self</span>.isq_rx.try_recv() {
                 <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).re_isq_model(dtype) {
-                    <span class="macro">info!</span>(<span class="string">"⚠️ WARNING: ISQ requantization failed: {e:?}"</span>);
+                    <span class="macro">warn!</span>(<span class="string">"ISQ requantization failed: {e:?}"</span>);
                 }
             }
 
@@ -856,7 +856,7 @@
                     <span class="number">10
                 </span>};
                 prompt = prompt[(currently_over + sampling_max)..].to_vec();
-                <span class="macro">info!</span>(<span class="string">"⚠️ WARNING: Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation."</span>, request.id, currently_over, prompt_len - prompt.len());
+                <span class="macro">warn!</span>(<span class="string">"Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation."</span>, request.id, currently_over, prompt_len - prompt.len());
             }
         }
         <span class="kw">let </span>prefill_cache = <span class="macro">handle_seq_error!</span>(
