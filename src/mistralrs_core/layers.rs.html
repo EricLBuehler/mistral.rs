@@ -357,6 +357,9 @@
 <a href="#355" id="355">355</a>
 <a href="#356" id="356">356</a>
 <a href="#357" id="357">357</a>
+<a href="#358" id="358">358</a>
+<a href="#359" id="359">359</a>
+<a href="#360" id="360">360</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, ops::Mul, str::FromStr, sync::Mutex};
@@ -707,7 +710,10 @@
             <span class="prelude-val">Some</span>(mask) =&gt; {
                 <span class="kw">let </span>mask = mask.broadcast_as(att.shape())<span class="question-mark">?</span>;
                 mask.where_cond(
-                    <span class="kw-2">&amp;</span>neg_inf.to_device(att.device())<span class="question-mark">?</span>.broadcast_as(att.dims())<span class="question-mark">?</span>,
+                    <span class="kw-2">&amp;</span>neg_inf
+                        .to_device(att.device())<span class="question-mark">?
+                        </span>.to_dtype(att.dtype())<span class="question-mark">?
+                        </span>.broadcast_as(att.dims())<span class="question-mark">?</span>,
                     <span class="kw-2">&amp;</span>att,
                 )
             }
