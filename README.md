@@ -410,5 +410,13 @@ Consider enabling `RUST_LOG=debug` environment variable.
 
 If you want to add a new model, please see [our guide](docs/ADDING_MODELS.md).
 
+## CUDA FAQ
+
+- Setting the compiler path:
+    - Set the `NVCC_CCBIN` environment variable during build.
+- Error: `recompile with -fPIE`:
+    - Some Linux distributions require compiling with `-fPIE`.
+    - Set the `CUDA_NVCC_FLAGS` environment variable to `-fPIE` during build: `CUDA_NVCC_FLAGS=-fPIE`
+
 ## Credits
 This project would not be possible without the excellent work at [`candle`](https://github.com/huggingface/candle). Additionally, thank you to all contributors! Contributing can range from raising an issue or suggesting a feature to adding some new functionality.
