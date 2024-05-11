@@ -15,7 +15,7 @@ use crate::xlora_models::NonGranularState;
 use crate::{deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama, utils::tokens::get_token,
-    xlora_models::XLoraModelWeights as XLoraQLlama,
+    xlora_models::XLoraQLlama,
 };
 use anyhow::Result;
 use candle_core::quantized::{ggml_file, GgmlDType};
@@ -31,7 +31,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, warn};
 
 enum Model {
     Llama(QLlama),
@@ -237,7 +237,7 @@ impl Loader for GGMLLoader {
             );
         }
         if !mapper.is_dummy() {
-            info!("⚠️ WARNING: GGML models do not support device mapping. Device mapping will not work. Please consider using a GGUF model.");
+            warn!("GGML models do not support device mapping. Device mapping will not work. Please consider using a GGUF model.");
         }
 
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;

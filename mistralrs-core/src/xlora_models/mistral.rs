@@ -588,7 +588,7 @@ impl XLoraModel {
         };
         let attention_mask = CausalMasker.make_causal_mask_with_sliding_window(
             input_ids,
-            &self.cache,
+            &cache,
             self.sliding_window,
         )?;
         let mut xs = self.embed_tokens.forward(input_ids)?;

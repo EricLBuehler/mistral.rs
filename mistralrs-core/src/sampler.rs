@@ -417,7 +417,7 @@ mod tests {
             .build()
             .unwrap();
         let api = api.repo(Repo::with_revision(
-            "mistralai/Mistral-7B-Instruct-v0.1".to_string(),
+            "EricB/mistralrs_tests".to_string(),
             RepoType::Model,
             "main".to_string(),
         ));

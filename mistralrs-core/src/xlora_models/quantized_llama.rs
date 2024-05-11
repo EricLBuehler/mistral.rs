@@ -756,7 +756,6 @@ impl ModelWeights {
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let mask = CausalMasker.make_causal_mask(x, &self.cache)?;
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = if is_full_pass {
             if no_kv_cache {
@@ -771,6 +770,7 @@ impl ModelWeights {
         } else {
             self.cache.lock()
         };
+        let mask = CausalMasker.make_causal_mask(x, &cache)?;
         for (i, layer) in self.layers.iter_mut().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;

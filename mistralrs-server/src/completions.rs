@@ -12,7 +12,7 @@ use mistralrs_core::{
     SamplingParams, StopTokens as InternalStopTokens,
 };
 use serde::Serialize;
-use tracing::info;
+use tracing::warn;
 
 #[derive(Debug)]
 struct ModelErrorMessage(String);
@@ -97,11 +97,11 @@ fn parse_request(
     };
 
     if oairequest.logprobs.is_some() {
-        info!("⚠️ WARNING: Completion requests do not support logprobs.");
+        warn!("Completion requests do not support logprobs.");
     }
 
     if oairequest._stream.is_some_and(|x| x) {
-        info!("⚠️ WARNING: Completion requests do not support streaming.");
+        warn!("Completion requests do not support streaming.");
     }
 
     Request::Normal(NormalRequest {

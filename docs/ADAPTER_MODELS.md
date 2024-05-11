@@ -3,7 +3,10 @@ An adapter model is a model with X-LoRA or LoRA. X-LoRA support is provided by s
 
 When using an adapter model with a quantized base model, if the ordering file specifies unsupported layers you will receive an error.
 
-**Supported X-LoRA or LoRA quantized layers**
+## Supported X-LoRA or LoRA quantized layers**
+
+**Llama architecture:**
+
 - model.layers.{layer_idx}.self_attn.q_proj
 - model.layers.{layer_idx}.self_attn.k_proj
 - model.layers.{layer_idx}.self_attn.v_proj
@@ -11,6 +14,12 @@ When using an adapter model with a quantized base model, if the ordering file sp
 - model.layers.{layer_idx}.mlp.up_proj
 - model.layers.{layer_idx}.mlp.down_proj
 - model.layers.{layer_idx}.mlp.gate_proj
+
+**Phi 3 architecture:**
+- model.layers.{layer_idx}.self_attn.qkv_proj
+- model.layers.{layer_idx}.self_attn.o_proj
+- model.layers.{layer_idx}.mlp.gate_up_proj
+- model.layers.{layer_idx}.mlp.down_proj
 
 ## Adapter ordering file
 **Preparing the X-LoRA/LoRA Ordering File**

@@ -9,8 +9,8 @@ use mistralrs_core::{
 use std::fmt::Display;
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;
-use tracing::info;
 use tracing::level_filters::LevelFilter;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 enum TestName {
@@ -321,7 +321,7 @@ fn main() -> anyhow::Result<()> {
                 | ModelKind::XLoraGGUF
         )
     {
-        info!("⚠️ WARNING: Using flash attention with a quantized model has no effect!")
+        warn!("Using flash attention with a quantized model has no effect!")
     }
     info!("Model kind is: {}", loader.get_kind().to_string());
     let pipeline = loader.load_model(

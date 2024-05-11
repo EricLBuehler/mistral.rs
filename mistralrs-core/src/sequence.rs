@@ -97,6 +97,7 @@ pub struct Sequence {
     completion_bytes: Vec<u8>,
     stream_idx: usize,
     pub recognizer: SequenceRecognizer,
+    scheduling_urgency: usize, // The number of passes since scheduling
 
     // GPU things
     pub prompt_tok_per_sec: f32,
@@ -164,7 +165,26 @@ impl Sequence {
             last_logprob: 0.0,
             last_is_done: None,
             is_tmp: false,
+            scheduling_urgency: 0,
         }
+    }
+
+    pub fn add_urgency(mut self) -> Self {
+        self.scheduling_urgency += 1;
+        self
+    }
+
+    pub fn reset_urgency(mut self) -> Self {
+        self.scheduling_urgency = 0;
+        self
+    }
+
+    /// Simple metric: (scheduling urgency) + log2(length)
+    /// Takes into account: urgency (scales linear) and length (scales logarithmic)
+    /// Scaling urgency is the number of scheduling passes where we have not been scheduled.
+    pub fn compute_priority(&self) -> f64 {
+        #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+        (self.scheduling_urgency as f64) + (self.len() as f64).log2()
     }
 
     pub fn prefill(
@@ -269,6 +289,18 @@ impl Sequence {
     /// Remove the prefill tokens.
     pub fn reset_prefill_toks(&mut self) {
         self.prefill_prompt_toks = None
+    }
+
+    /// Internal api to add one raw token.
+    pub(crate) fn add_tmp_tok(&mut self, tok: u32) {
+        self.is_tmp = true;
+        self.tokens.push(tok);
+    }
+
+    /// Internal api to remove n raw tokens.
+    pub(crate) fn remove_tmp_tok(&mut self, n: usize) {
+        self.is_tmp = false;
+        self.tokens.truncate(self.tokens.len() - n);
     }
 
     pub fn add_token(

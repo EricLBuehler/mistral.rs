@@ -25,7 +25,7 @@ mod openai;
 
 use interactive_mode::interactive_mode;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tracing::{info, level_filters::LevelFilter};
+use tracing::{info, level_filters::LevelFilter, warn};
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -279,7 +279,7 @@ async fn main() -> Result<()> {
                 | ModelKind::XLoraGGUF
         )
     {
-        info!("⚠️ WARNING: Using flash attention with a quantized model has no effect!")
+        warn!("Using flash attention with a quantized model has no effect!")
     }
     info!("Model kind is: {}", loader.get_kind().to_string());
     let pipeline = loader.load_model(
