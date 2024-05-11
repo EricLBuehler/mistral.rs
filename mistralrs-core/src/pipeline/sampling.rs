@@ -84,3 +84,40 @@ pub async fn sample_sequence(
     }
     Ok(second_logprobs_response)
 }
+
+#[derive(Clone)]
+pub struct SpeculativeSample {
+    pub distribution: Tensor,
+    pub sample: Logprobs,
+}
+
+/// Async sample without modifying sequence.
+pub async fn sample_target_sequence_speculative(
+    logits: Tensor,
+    seq: &mut Sequence,
+    return_logprobs: bool,
+    repeat_last_n: usize,
+    tok_trie: Arc<TokTrie>,
+    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    n_toks: usize,
+) -> Result<Vec<SpeculativeSample>> {
+    let mut sampled = Vec::new();
+    for chunk in logits.chunk(n_toks, 1)? {
+        sampled.push(SpeculativeSample {
+            distribution: chunk.clone(),
+            sample: sample_sequence(
+                chunk,
+                seq,
+                return_logprobs,
+                repeat_last_n,
+                tok_trie.clone(),
+                rng.clone(),
+                true,  // TODO(EricLBuehler): does this hurt perf?
+                false, // Do not append to trie (yet)
+                true,
+            )
+            .await?,
+        });
+    }
+    Ok(sampled)
+}

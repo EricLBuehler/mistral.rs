@@ -42,7 +42,8 @@ pub use pipeline::{
     GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder,
     GGUFSpecificConfig, GemmaLoader, LlamaLoader, Loader, MistralLoader, MixtralLoader, ModelKind,
     NormalLoader, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader,
-    Phi3Loader, Qwen2Loader, TokenSource,
+    Phi3Loader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline,
+    TokenSource,
 };
 pub use request::{Constraint, Request, RequestMessage};
 pub use response::Response;

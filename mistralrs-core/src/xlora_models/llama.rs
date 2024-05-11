@@ -425,7 +425,7 @@ impl XLoraLlama {
     #[allow(clippy::too_many_arguments)]
     fn inner_forward(
         &mut self,
-        x: &Tensor,
+        input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         scalings: Option<Tensor>,
@@ -433,8 +433,7 @@ impl XLoraLlama {
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let mask = CausalMasker.make_causal_mask(x, &self.kv_cache)?;
-        let mut x = self.wte.forward(x)?;
+        let mut x = self.wte.forward(input_ids)?;
         let mut cache = if is_full_pass {
             if no_kv_cache {
                 let mut new_cache = Vec::new();
@@ -448,6 +447,7 @@ impl XLoraLlama {
         } else {
             self.kv_cache.lock()
         };
+        let mask = CausalMasker.make_causal_mask(input_ids, &cache)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
             x = block.forward(

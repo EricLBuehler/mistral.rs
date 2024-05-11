@@ -291,6 +291,18 @@ impl Sequence {
         self.prefill_prompt_toks = None
     }
 
+    /// Internal api to add one raw token.
+    pub(crate) fn add_tmp_tok(&mut self, tok: u32) {
+        self.is_tmp = true;
+        self.tokens.push(tok);
+    }
+
+    /// Internal api to remove n raw tokens.
+    pub(crate) fn remove_tmp_tok(&mut self, n: usize) {
+        self.is_tmp = false;
+        self.tokens.truncate(self.tokens.len() - n);
+    }
+
     pub fn add_token(
         &mut self,
         tok: Logprobs,

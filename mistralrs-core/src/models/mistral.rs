@@ -377,13 +377,13 @@ impl Model {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
-        let attention_mask = CausalMasker.make_causal_mask_with_sliding_window(
-            input_ids,
-            &self.cache,
-            self.sliding_window,
-        )?;
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let mut cache = self.cache.lock();
+        let attention_mask = CausalMasker.make_causal_mask_with_sliding_window(
+            input_ids,
+            &cache,
+            self.sliding_window,
+        )?;
         for (i, layer) in self.layers.iter_mut().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
