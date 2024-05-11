@@ -82,15 +82,18 @@ impl QLinear {
 
 impl Module for QLinear {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let xs = if self.is_quant() {
+            xs.to_dtype(DType::F32)?
+        } else {
+            xs.clone()
+        };
         if let Some(bias) = &self.bias {
             self.inner
-                .forward(&xs.to_dtype(DType::F32)?)?
+                .forward(&xs)?
                 .broadcast_add(bias)?
                 .to_dtype(self.dtype)
         } else {
-            self.inner
-                .forward(&xs.to_dtype(DType::F32)?)?
-                .to_dtype(self.dtype)
+            self.inner.forward(&xs)?.to_dtype(self.dtype)
         }
     }
 }
