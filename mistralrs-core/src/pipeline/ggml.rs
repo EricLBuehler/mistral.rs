@@ -15,7 +15,7 @@ use crate::xlora_models::NonGranularState;
 use crate::{deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama, utils::tokens::get_token,
-    xlora_models::XLoraModelWeights as XLoraQLlama,
+    xlora_models::XLoraQLlama,
 };
 use anyhow::Result;
 use candle_core::quantized::{ggml_file, GgmlDType};

@@ -7,6 +7,7 @@ mod mixtral;
 mod phi2;
 mod phi3;
 mod quantized_llama;
+mod quantized_phi3;
 
 use std::sync::Arc;
 
@@ -19,7 +20,8 @@ use mistralrs_lora::Ordering;
 pub use mixtral::XLoraModel as XLoraMixtral;
 pub use phi2::Model as XLoraPhi2;
 pub use phi3::Model as XLoraPhi3;
-pub use quantized_llama::ModelWeights as XLoraModelWeights;
+pub use quantized_llama::ModelWeights as XLoraQLlama;
+pub use quantized_phi3::ModelWeights as XLoraQPhi3;
 use tokio::sync::Mutex;
 
 use crate::{get_mut_arcmutex, models::Cache};
