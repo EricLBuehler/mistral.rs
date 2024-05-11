@@ -520,7 +520,7 @@ impl Model {
     #[allow(clippy::too_many_arguments)]
     fn inner_forward(
         &mut self,
-        xs: &Tensor,
+        input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         scalings: Option<Tensor>,
@@ -528,8 +528,7 @@ impl Model {
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let mask = CausalMasker.make_causal_mask(xs, &self.cache)?;
-        let mut xs = xs.apply(&self.embed_tokens)?;
+        let mut xs = input_ids.apply(&self.embed_tokens)?;
         let mut cache = if is_full_pass {
             if no_kv_cache {
                 let mut new_cache = Vec::new();
@@ -543,6 +542,7 @@ impl Model {
         } else {
             self.cache.lock()
         };
+        let mask = CausalMasker.make_causal_mask(input_ids, &cache)?;
         for (i, layer) in self.layers.iter_mut().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(

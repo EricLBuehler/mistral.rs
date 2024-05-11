@@ -281,14 +281,14 @@ pub struct Llama {
 impl Llama {
     pub fn forward(
         &mut self,
-        x: &Tensor,
+        input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
-        let mask = CausalMasker.make_causal_mask(x, &self.kv_cache)?;
-        let mut x = self.wte.forward(x)?;
+        let mut x = self.wte.forward(input_ids)?;
         let mut cache = self.kv_cache.lock();
+        let mask = CausalMasker.make_causal_mask(input_ids, &cache)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
             x = block.forward(

@@ -498,18 +498,6 @@ impl Model {
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let past_key_values_length = CausalMasker.calculate_past_kv_len(&self.cache)?;
-        let attention_mask = CausalMasker.make_causal_mask_with_sliding_window(
-            input_ids,
-            &self.cache,
-            self.sliding_window,
-        )?;
-        let position_ids_old = position_ids;
-        let mut position_ids = Vec::new();
-        for p in position_ids_old {
-            position_ids.push(*p + past_key_values_length);
-        }
-
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let mut cache = if is_full_pass {
             if no_kv_cache {
@@ -524,6 +512,16 @@ impl Model {
         } else {
             self.cache.lock()
         };
+        let attention_mask = CausalMasker.make_causal_mask_with_sliding_window(
+            input_ids,
+            &cache,
+            self.sliding_window,
+        )?;
+        let past_key_values_length = CausalMasker.calculate_past_kv_len(&cache)?;
+        let position_ids = position_ids
+            .iter()
+            .map(|p| *p + past_key_values_length)
+            .collect::<Vec<_>>();
         for (i, layer) in self.layers.iter_mut().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(

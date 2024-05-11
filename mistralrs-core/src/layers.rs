@@ -12,7 +12,7 @@ use once_cell::sync::Lazy;
 static MASKS: Lazy<Mutex<HashMap<(usize, usize), Tensor>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-use crate::models::{phi3, Cache};
+use crate::models::phi3;
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
@@ -270,9 +270,11 @@ impl CausalMasker {
         Tensor::from_slice(&mask, (tgt_len, offset), device)
     }
 
-    pub fn calculate_past_kv_len(&self, cache: &Cache) -> candle_core::Result<usize> {
-        let cache = cache.lock();
-        let kv_cache_1 = cache.first().unwrap();
+    pub fn calculate_past_kv_len(
+        &self,
+        cache: &[Option<(Tensor, Tensor)>],
+    ) -> candle_core::Result<usize> {
+        let kv_cache_1 = &cache[0];
         if kv_cache_1.is_none() {
             return Ok(0);
         }
@@ -280,9 +282,13 @@ impl CausalMasker {
         return Ok(k_cache_1.dims()[2]);
     }
 
-    pub fn make_causal_mask(&self, input_ids: &Tensor, cache: &Cache) -> Result<Option<Tensor>> {
+    pub fn make_causal_mask(
+        &self,
+        input_ids: &Tensor,
+        cache: &[Option<(Tensor, Tensor)>],
+    ) -> Result<Option<Tensor>> {
         let past_kv_len = self.calculate_past_kv_len(cache)?;
-        let (_b_sz, tgt_len) = input_ids.dims2()?;
+        let (b_sz, tgt_len) = input_ids.dims2()?;
         if tgt_len == 1 {
             return Ok(None);
         }
@@ -290,8 +296,9 @@ impl CausalMasker {
         if let Some(mask) = res {
             Ok(Some(mask))
         } else {
-            let mask = self
-                .make_mask(tgt_len, past_kv_len, input_ids.device())?
+            let mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
+            let mask = mask
+                .expand((b_sz, 1, tgt_len, tgt_len + past_kv_len))?
                 .to_dtype(DType::U8)?;
 
             MASKS
@@ -305,7 +312,7 @@ impl CausalMasker {
     pub fn make_causal_mask_with_sliding_window(
         &self,
         input_ids: &Tensor,
-        cache: &Cache,
+        cache: &[Option<(Tensor, Tensor)>],
         sliding_window: Option<usize>,
     ) -> Result<Option<Tensor>> {
         if sliding_window.is_none() {

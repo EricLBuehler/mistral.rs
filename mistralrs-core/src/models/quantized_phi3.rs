@@ -267,15 +267,15 @@ impl ModelWeights {
         })
     }
 
-    pub fn forward(&mut self, xs: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
-        let (_b_sz, seq_len) = xs.dims2()?;
+    pub fn forward(&mut self, input_ids: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
+        let (_b_sz, seq_len) = input_ids.dims2()?;
+        let mut xs = self.tok_embeddings.forward(input_ids)?;
+        let mut cache = self.cache.lock();
         let mask = CausalMasker.make_causal_mask_with_sliding_window(
-            xs,
-            &self.cache,
+            input_ids,
+            &cache,
             Some(self.max_seq_len),
         )?;
-        let mut xs = self.tok_embeddings.forward(xs)?;
-        let mut cache = self.cache.lock();
         for (i, layer) in self.layers.iter_mut().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 xs = mapper.map(xs, i)?;
