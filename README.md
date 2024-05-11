@@ -48,6 +48,7 @@ Mistral.rs is a fast LLM inference platform supporting inference on a variety of
 **Powerful**:
 - Fast LoRA support with weight merging.
 - First X-LoRA inference platform with first class support.
+- Speculative Decoding: Mix supported models as the draft model or the target model
 
 
 This is a demo of interactive mode with streaming running Mistral GGUF:
@@ -121,9 +122,7 @@ OpenAI API compatible API server
 
 **Llama Index integration**
 
-- [Source](integrations/llama_index_integration.py).
-- [Example](examples/llama_index/xlora_gguf.py)
-- [Cookbook](examples/llama_index/cookbook.ipynb)
+- Docs: https://docs.llamaindex.ai/en/stable/examples/llm/mistral_rs/
 
 ---
 
