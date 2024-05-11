@@ -972,6 +972,8 @@
 <a href="#970" id="970">970</a>
 <a href="#971" id="971">971</a>
 <a href="#972" id="972">972</a>
+<a href="#973" id="973">973</a>
+<a href="#974" id="974">974</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>cache_manager;
 <span class="kw">mod </span>chat_template;
 <span class="kw">mod </span>ggml;
@@ -980,6 +982,7 @@
 <span class="kw">mod </span>macros;
 <span class="kw">mod </span>normal;
 <span class="kw">mod </span>sampling;
+<span class="kw">mod </span>speculative;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
@@ -1006,6 +1009,7 @@
 <span class="kw">pub use </span>normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+<span class="kw">pub use </span>speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 <span class="kw">use </span>std::fmt::{Debug, Display};
 <span class="kw">use </span>std::path::Path;
 <span class="kw">use </span>std::sync::atomic::AtomicUsize;

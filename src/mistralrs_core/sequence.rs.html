@@ -579,6 +579,18 @@
 <a href="#577" id="577">577</a>
 <a href="#578" id="578">578</a>
 <a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a>
+<a href="#588" id="588">588</a>
+<a href="#589" id="589">589</a>
+<a href="#590" id="590">590</a>
+<a href="#591" id="591">591</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fmt::Display,
     sync::{Arc, RwLock},
@@ -871,6 +883,18 @@
     </span><span class="kw">pub fn </span>reset_prefill_toks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
         <span class="self">self</span>.prefill_prompt_toks = <span class="prelude-val">None
     </span>}
+
+    <span class="doccomment">/// Internal api to add one raw token.
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>add_tmp_tok(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tok: u32) {
+        <span class="self">self</span>.is_tmp = <span class="bool-val">true</span>;
+        <span class="self">self</span>.tokens.push(tok);
+    }
+
+    <span class="doccomment">/// Internal api to remove n raw tokens.
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>remove_tmp_tok(<span class="kw-2">&amp;mut </span><span class="self">self</span>, n: usize) {
+        <span class="self">self</span>.is_tmp = <span class="bool-val">false</span>;
+        <span class="self">self</span>.tokens.truncate(<span class="self">self</span>.tokens.len() - n);
+    }
 
     <span class="kw">pub fn </span>add_token(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,

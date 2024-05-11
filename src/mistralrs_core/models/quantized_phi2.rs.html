@@ -473,13 +473,13 @@
 
     <span class="kw">pub fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-        xs: <span class="kw-2">&amp;</span>Tensor,
+        input_ids: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         context_lens: Vec&lt;(usize, usize)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>mask = CausalMasker.make_causal_mask(xs, <span class="kw-2">&amp;</span><span class="self">self</span>.cache)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.tok_embeddings.forward(xs)<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.tok_embeddings.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
+        <span class="kw">let </span>mask = CausalMasker.make_causal_mask(input_ids, <span class="kw-2">&amp;</span>cache)<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
             xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
             <span class="kw">let </span>residual = <span class="kw-2">&amp;</span>xs;

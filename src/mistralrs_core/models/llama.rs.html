@@ -714,14 +714,14 @@
 <span class="kw">impl </span>Llama {
     <span class="kw">pub fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-        x: <span class="kw-2">&amp;</span>Tensor,
+        input_ids: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>mask = CausalMasker.make_causal_mask(x, <span class="kw-2">&amp;</span><span class="self">self</span>.kv_cache)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>x = <span class="self">self</span>.wte.forward(x)<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>x = <span class="self">self</span>.wte.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.kv_cache.lock();
+        <span class="kw">let </span>mask = CausalMasker.make_causal_mask(input_ids, <span class="kw-2">&amp;</span>cache)<span class="question-mark">?</span>;
         <span class="kw">for </span>(block_idx, block) <span class="kw">in </span><span class="self">self</span>.blocks.iter().enumerate() {
             x = <span class="self">self</span>.mapper.map(x, block_idx)<span class="question-mark">?</span>;
             x = block.forward(

@@ -1387,7 +1387,7 @@
         } <span class="kw">else </span>{
             <span class="self">self</span>.cache.lock()
         };
-        <span class="kw">let </span>attention_mask = CausalMasker.make_causal_mask(input_ids, <span class="kw-2">&amp;</span><span class="self">self</span>.cache)<span class="question-mark">?</span>;
+        <span class="kw">let </span>attention_mask = CausalMasker.make_causal_mask(input_ids, <span class="kw-2">&amp;</span>cache)<span class="question-mark">?</span>;
         <span class="kw">let </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>xs = (xs * (<span class="self">self</span>.hidden_size <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {

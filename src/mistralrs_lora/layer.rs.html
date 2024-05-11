@@ -96,6 +96,9 @@
 <a href="#94" id="94">94</a>
 <a href="#95" id="95">95</a>
 <a href="#96" id="96">96</a>
+<a href="#97" id="97">97</a>
+<a href="#98" id="98">98</a>
+<a href="#99" id="99">99</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::{
@@ -132,7 +135,7 @@
     <span class="kw">pub fn </span>from_linear(linear: Linear) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             inner: QMatMul::Tensor(linear.weight().clone()),
-            bias: <span class="prelude-val">Some</span>(linear.bias().unwrap().clone()),
+            bias: linear.bias().cloned(),
             dtype: <span class="kw">if </span>linear.weight().device().is_cuda() {
                 DType::BF16
             } <span class="kw">else </span>{
@@ -180,15 +183,18 @@
 
 <span class="kw">impl </span>Module <span class="kw">for </span>QLinear {
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">let </span>xs = <span class="kw">if </span><span class="self">self</span>.is_quant() {
+            xs.to_dtype(DType::F32)<span class="question-mark">?
+        </span>} <span class="kw">else </span>{
+            xs.clone()
+        };
         <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = <span class="kw-2">&amp;</span><span class="self">self</span>.bias {
             <span class="self">self</span>.inner
-                .forward(<span class="kw-2">&amp;</span>xs.to_dtype(DType::F32)<span class="question-mark">?</span>)<span class="question-mark">?
+                .forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?
                 </span>.broadcast_add(bias)<span class="question-mark">?
                 </span>.to_dtype(<span class="self">self</span>.dtype)
         } <span class="kw">else </span>{
-            <span class="self">self</span>.inner
-                .forward(<span class="kw-2">&amp;</span>xs.to_dtype(DType::F32)<span class="question-mark">?</span>)<span class="question-mark">?
-                </span>.to_dtype(<span class="self">self</span>.dtype)
+            <span class="self">self</span>.inner.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>.to_dtype(<span class="self">self</span>.dtype)
         }
     }
 }

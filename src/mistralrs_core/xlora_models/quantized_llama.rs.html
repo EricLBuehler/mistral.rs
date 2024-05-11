@@ -1524,7 +1524,6 @@
         no_kv_cache: bool,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>mask = CausalMasker.make_causal_mask(x, <span class="kw-2">&amp;</span><span class="self">self</span>.cache)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layer_in = <span class="self">self</span>.tok_embeddings.forward(x)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="kw">if </span>is_full_pass {
             <span class="kw">if </span>no_kv_cache {
@@ -1539,6 +1538,7 @@
         } <span class="kw">else </span>{
             <span class="self">self</span>.cache.lock()
         };
+        <span class="kw">let </span>mask = CausalMasker.make_causal_mask(x, <span class="kw-2">&amp;</span>cache)<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
             <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>mapper) = <span class="self">self</span>.mapper {
                 layer_in = mapper.map(layer_in, i)<span class="question-mark">?</span>;

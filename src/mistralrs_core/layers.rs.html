@@ -360,6 +360,13 @@
 <a href="#358" id="358">358</a>
 <a href="#359" id="359">359</a>
 <a href="#360" id="360">360</a>
+<a href="#361" id="361">361</a>
+<a href="#362" id="362">362</a>
+<a href="#363" id="363">363</a>
+<a href="#364" id="364">364</a>
+<a href="#365" id="365">365</a>
+<a href="#366" id="366">366</a>
+<a href="#367" id="367">367</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, ops::Mul, str::FromStr, sync::Mutex};
@@ -374,7 +381,7 @@
 <span class="kw">static </span>MASKS: Lazy&lt;Mutex&lt;HashMap&lt;(usize, usize), Tensor&gt;&gt;&gt; =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-<span class="kw">use </span><span class="kw">crate</span>::models::{phi3, Cache};
+<span class="kw">use </span><span class="kw">crate</span>::models::phi3;
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">pub struct </span>RmsNorm {
@@ -632,9 +639,11 @@
         Tensor::from_slice(<span class="kw-2">&amp;</span>mask, (tgt_len, offset), device)
     }
 
-    <span class="kw">pub fn </span>calculate_past_kv_len(<span class="kw-2">&amp;</span><span class="self">self</span>, cache: <span class="kw-2">&amp;</span>Cache) -&gt; candle_core::Result&lt;usize&gt; {
-        <span class="kw">let </span>cache = cache.lock();
-        <span class="kw">let </span>kv_cache_1 = cache.first().unwrap();
+    <span class="kw">pub fn </span>calculate_past_kv_len(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        cache: <span class="kw-2">&amp;</span>[<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;],
+    ) -&gt; candle_core::Result&lt;usize&gt; {
+        <span class="kw">let </span>kv_cache_1 = <span class="kw-2">&amp;</span>cache[<span class="number">0</span>];
         <span class="kw">if </span>kv_cache_1.is_none() {
             <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="number">0</span>);
         }
@@ -642,9 +651,13 @@
         <span class="kw">return </span><span class="prelude-val">Ok</span>(k_cache_1.dims()[<span class="number">2</span>]);
     }
 
-    <span class="kw">pub fn </span>make_causal_mask(<span class="kw-2">&amp;</span><span class="self">self</span>, input_ids: <span class="kw-2">&amp;</span>Tensor, cache: <span class="kw-2">&amp;</span>Cache) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
+    <span class="kw">pub fn </span>make_causal_mask(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        input_ids: <span class="kw-2">&amp;</span>Tensor,
+        cache: <span class="kw-2">&amp;</span>[<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;],
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
         <span class="kw">let </span>past_kv_len = <span class="self">self</span>.calculate_past_kv_len(cache)<span class="question-mark">?</span>;
-        <span class="kw">let </span>(_b_sz, tgt_len) = input_ids.dims2()<span class="question-mark">?</span>;
+        <span class="kw">let </span>(b_sz, tgt_len) = input_ids.dims2()<span class="question-mark">?</span>;
         <span class="kw">if </span>tgt_len == <span class="number">1 </span>{
             <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
         }
@@ -652,8 +665,9 @@
         <span class="kw">if let </span><span class="prelude-val">Some</span>(mask) = res {
             <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(mask))
         } <span class="kw">else </span>{
-            <span class="kw">let </span>mask = <span class="self">self
-                </span>.make_mask(tgt_len, past_kv_len, input_ids.device())<span class="question-mark">?
+            <span class="kw">let </span>mask = <span class="self">self</span>.make_mask(tgt_len, past_kv_len, input_ids.device())<span class="question-mark">?</span>;
+            <span class="kw">let </span>mask = mask
+                .expand((b_sz, <span class="number">1</span>, tgt_len, tgt_len + past_kv_len))<span class="question-mark">?
                 </span>.to_dtype(DType::U8)<span class="question-mark">?</span>;
 
             MASKS
@@ -667,7 +681,7 @@
     <span class="kw">pub fn </span>make_causal_mask_with_sliding_window(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
-        cache: <span class="kw-2">&amp;</span>Cache,
+        cache: <span class="kw-2">&amp;</span>[<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;],
         sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
         <span class="kw">if </span>sliding_window.is_none() {
