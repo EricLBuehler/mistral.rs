@@ -34,7 +34,7 @@ impl QLinear {
     pub fn from_linear(linear: Linear) -> Self {
         Self {
             inner: QMatMul::Tensor(linear.weight().clone()),
-            bias: Some(linear.bias().unwrap().clone()),
+            bias: linear.bias().cloned(),
             dtype: if linear.weight().device().is_cuda() {
                 DType::BF16
             } else {
