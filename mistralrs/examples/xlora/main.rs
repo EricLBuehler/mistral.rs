@@ -60,6 +60,7 @@ fn main() -> anyhow::Result<()> {
         id: 0,
         constraint: Constraint::None,
         suffix: None,
+        adapters: None,
     });
     mistralrs.get_sender().blocking_send(request)?;
 

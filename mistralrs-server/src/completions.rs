@@ -132,6 +132,7 @@ fn parse_request(
             Some(Grammar::Regex(regex)) => Constraint::Regex(regex),
             None => Constraint::None,
         },
+        adapters: oairequest.adapters,
     })
 }
 

@@ -35,6 +35,7 @@ pub struct NormalRequest {
     pub id: usize,
     pub constraint: Constraint,
     pub suffix: Option<String>,
+    pub adapters: Option<Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -58,10 +59,11 @@ impl Debug for Request {
                 id,
                 constraint: _,
                 suffix: _,
+                adapters,
             }) => {
                 write!(
                     f,
-                    "Request {id} {{ messages: `{messages:?}`, sampling_params: {sampling_params:?}, is_streaming: {is_streaming}}}",
+                    "Request {id} {{ messages: `{messages:?}`, sampling_params: {sampling_params:?}, is_streaming: {is_streaming}, adapters: {adapters:?}}}",
                 )
             }
             Request::ActivateAdapters(adapters) => {

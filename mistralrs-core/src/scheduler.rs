@@ -58,6 +58,8 @@ pub trait BucketingManager<Backer: FcfsBacker> {
     ) -> BucketedSeqs<Backer>;
 }
 
+type BucketKey = (Option<Vec<String>>, usize);
+
 struct FixedBucketingManager;
 
 impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
@@ -71,22 +73,23 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
         discrete: bool,
     ) -> BucketedSeqs<Backer> {
         // Now, get the sequences with the smallest sequence lengths, and allow them to catch up.
-        let mut seq_buckets: HashMap<usize, Vec<Sequence>> = HashMap::new();
-        let mut seq_priorities: HashMap<usize, f64> = HashMap::new();
+        let mut seq_buckets: HashMap<BucketKey, Vec<Sequence>> = HashMap::new();
+        let mut seq_priorities: HashMap<BucketKey, f64> = HashMap::new();
         for seq in running {
             let len = seq.len();
-            match seq_buckets.get_mut(&len) {
+            match seq_buckets.get_mut(&(seq.get_adapters(), len)) {
                 Some(bucket) => {
                     if !discrete {
-                        *seq_priorities.get_mut(&len).unwrap() += seq.compute_priority();
+                        *seq_priorities.get_mut(&(seq.get_adapters(), len)).unwrap() +=
+                            seq.compute_priority();
                     }
                     bucket.push(seq);
                 }
                 None => {
                     if !discrete {
-                        seq_priorities.insert(len, seq.compute_priority());
+                        seq_priorities.insert((seq.get_adapters(), len), seq.compute_priority());
                     }
-                    seq_buckets.insert(len, vec![seq]);
+                    seq_buckets.insert((seq.get_adapters(), len), vec![seq]);
                 }
             }
         }
@@ -100,19 +103,23 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
         } else {
             // Set the min seqs to be the running ones, and the rest to be waiting (but their states are not changed!)
             // Allow the min seqs to catch up.
-            let min = *seq_buckets.keys().min().expect("No sequence buckets.");
+            let min = seq_buckets
+                .keys()
+                .min_by_key(|(_, x)| *x)
+                .expect("No sequence buckets.")
+                .clone();
             let len = if !discrete {
                 seq_priorities
                     .iter()
                     .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-                    .map(|(a, b)| (*a, *b))
-                    .unwrap_or_else(|| (min, seq_priorities[&min]))
+                    .map(|(a, b)| (a, *b))
+                    .unwrap_or_else(|| (&min, seq_priorities[&min]))
                     .0
             } else {
-                min
+                &min
             };
             let highest_priority_seqs = seq_buckets
-                .remove(&len)
+                .remove(len)
                 .unwrap()
                 .into_iter()
                 .map(|s| s.reset_urgency())

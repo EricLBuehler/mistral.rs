@@ -11,7 +11,10 @@ use tokenizers::Tokenizer;
 use crate::{
     finish_and_add_tokens_to_seq, get_mut_arcmutex,
     models::Cache,
-    pipeline::sampling::{sample_sequence, sample_target_sequence_speculative},
+    pipeline::{
+        sampling::{sample_sequence, sample_target_sequence_speculative},
+        AdapterInstruction,
+    },
     prefix_cacher::PrefixCacheManager,
     sequence::{Sequence, SequenceRecognizer},
     DeviceMapMetadata, Loader, ModelKind, Pipeline, TokenSource,
@@ -140,12 +143,48 @@ impl Pipeline for SpeculativePipeline {
         post_op: CacheInstruction,
     ) -> Result<()> {
         match pre_op {
-            CacheInstruction::In => self.clone_in_cache(input_seqs, true),
-            CacheInstruction::Nonthing => (),
-            CacheInstruction::Reset { reset_non_granular } => {
-                self.set_none_cache(reset_non_granular, true)
+            CacheInstruction::In(adapter_inst) => {
+                match adapter_inst {
+                    AdapterInstruction::Activate(adapters) => {
+                        self.activate_adapters(adapters).map_err(|e| {
+                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                dyn std::error::Error,
+                            >>::as_ref(&e))
+                        })?
+                    }
+                    AdapterInstruction::None => 0,
+                };
+                self.clone_in_cache(input_seqs, false)
             }
-            _ => unreachable!("Unreachable pre cache op."),
+            CacheInstruction::Nothing(adapter_inst) => {
+                match adapter_inst {
+                    AdapterInstruction::Activate(adapters) => {
+                        self.activate_adapters(adapters).map_err(|e| {
+                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                dyn std::error::Error,
+                            >>::as_ref(&e))
+                        })?
+                    }
+                    AdapterInstruction::None => 0,
+                };
+            }
+            CacheInstruction::Reset {
+                reset_non_granular,
+                adapter_inst,
+            } => {
+                match adapter_inst {
+                    AdapterInstruction::Activate(adapters) => {
+                        self.activate_adapters(adapters).map_err(|e| {
+                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                dyn std::error::Error,
+                            >>::as_ref(&e))
+                        })?
+                    }
+                    AdapterInstruction::None => 0,
+                };
+                self.set_none_cache(reset_non_granular, false)
+            }
+            _ => unreachable!("Unreachable PRE cache op."),
         }
 
         assert_eq!(input_seqs.len(), 1);
@@ -373,10 +412,11 @@ impl Pipeline for SpeculativePipeline {
             CacheInstruction::Out => {
                 self.clone_out_cache(input_seqs, true);
             }
-            CacheInstruction::Nonthing => (),
-            CacheInstruction::Reset { reset_non_granular } => {
-                self.set_none_cache(reset_non_granular, true)
-            }
+            CacheInstruction::Nothing(_) => (),
+            CacheInstruction::Reset {
+                reset_non_granular,
+                adapter_inst: _,
+            } => self.set_none_cache(reset_non_granular, true),
             _ => unreachable!("Unreachable pre cache op."),
         }
 

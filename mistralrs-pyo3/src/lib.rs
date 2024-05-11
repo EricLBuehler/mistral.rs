@@ -511,6 +511,7 @@ impl Runner {
                 is_streaming: request.stream,
                 constraint,
                 suffix: None,
+                adapters: request.adapters.clone(),
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -599,6 +600,7 @@ impl Runner {
                 is_streaming: false,
                 constraint,
                 suffix: request.suffix.clone(),
+                adapters: request.adapters.clone(),
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -657,6 +659,7 @@ struct CompletionRequest {
     top_k: Option<usize>,
     grammar: Option<String>,
     grammar_type: Option<String>,
+    adapters: Option<Vec<String>>,
 }
 
 #[pymethods]
@@ -678,7 +681,8 @@ impl CompletionRequest {
         suffix=None,
         top_k=None,
         grammar = None,
-        grammar_type = None
+        grammar_type = None,
+        adapters = None
     ))]
     fn new(
         prompt: String,
@@ -697,6 +701,7 @@ impl CompletionRequest {
         top_k: Option<usize>,
         grammar: Option<String>,
         grammar_type: Option<String>,
+        adapters: Option<Vec<String>>,
     ) -> PyResult<Self> {
         Ok(Self {
             prompt,
@@ -715,6 +720,7 @@ impl CompletionRequest {
             top_k,
             grammar,
             grammar_type,
+            adapters,
         })
     }
 }
@@ -739,6 +745,7 @@ struct ChatCompletionRequest {
     top_k: Option<usize>,
     grammar: Option<String>,
     grammar_type: Option<String>,
+    adapters: Option<Vec<String>>,
 }
 
 #[pymethods]
@@ -760,7 +767,8 @@ impl ChatCompletionRequest {
         top_k = None,
         stream=false,
         grammar = None,
-        grammar_type = None
+        grammar_type = None,
+        adapters = None
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -779,6 +787,7 @@ impl ChatCompletionRequest {
         stream: Option<bool>,
         grammar: Option<String>,
         grammar_type: Option<String>,
+        adapters: Option<Vec<String>>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -813,6 +822,7 @@ impl ChatCompletionRequest {
             stream: stream.unwrap_or(false),
             grammar,
             grammar_type,
+            adapters,
         })
     }
 }

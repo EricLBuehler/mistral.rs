@@ -77,6 +77,7 @@ fn run_bench(
         is_streaming: false,
         constraint: Constraint::None,
         suffix: None,
+        adapters: None,
     });
 
     let mut usages = Vec::new();
@@ -238,6 +239,7 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         is_streaming: false,
         constraint: Constraint::None,
         suffix: None,
+        adapters: None,
     });
 
     sender

@@ -51,6 +51,7 @@ fn main() -> anyhow::Result<()> {
         id: 0,
         constraint: Constraint::Regex("(- [^\n]*\n)+(- [^\n]*)(\n\n)?".to_string()), // Bullet list regex
         suffix: None,
+        adapters: None,
     });
     mistralrs.get_sender().blocking_send(request)?;
 

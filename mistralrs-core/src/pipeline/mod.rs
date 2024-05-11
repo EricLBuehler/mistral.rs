@@ -254,11 +254,19 @@ pub struct GeneralMetadata {
     pub is_lora: bool,
 }
 
+pub enum AdapterInstruction {
+    Activate(Vec<String>),
+    None,
+}
+
 pub enum CacheInstruction {
-    In,
+    In(AdapterInstruction),
     Out,
-    Reset { reset_non_granular: bool },
-    Nonthing,
+    Reset {
+        reset_non_granular: bool,
+        adapter_inst: AdapterInstruction,
+    },
+    Nothing(AdapterInstruction),
 }
 
 #[async_trait::async_trait]
@@ -287,9 +295,45 @@ pub trait Pipeline: Send + Sync {
         .unwrap();
 
         match pre_op {
-            CacheInstruction::In => self.clone_in_cache(input_seqs, false),
-            CacheInstruction::Nonthing => (),
-            CacheInstruction::Reset { reset_non_granular } => {
+            CacheInstruction::In(adapter_inst) => {
+                match adapter_inst {
+                    AdapterInstruction::Activate(adapters) => {
+                        self.activate_adapters(adapters).map_err(|e| {
+                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                dyn std::error::Error,
+                            >>::as_ref(&e))
+                        })?
+                    }
+                    AdapterInstruction::None => 0,
+                };
+                self.clone_in_cache(input_seqs, false)
+            }
+            CacheInstruction::Nothing(adapter_inst) => {
+                match adapter_inst {
+                    AdapterInstruction::Activate(adapters) => {
+                        self.activate_adapters(adapters).map_err(|e| {
+                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                dyn std::error::Error,
+                            >>::as_ref(&e))
+                        })?
+                    }
+                    AdapterInstruction::None => 0,
+                };
+            }
+            CacheInstruction::Reset {
+                reset_non_granular,
+                adapter_inst,
+            } => {
+                match adapter_inst {
+                    AdapterInstruction::Activate(adapters) => {
+                        self.activate_adapters(adapters).map_err(|e| {
+                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                dyn std::error::Error,
+                            >>::as_ref(&e))
+                        })?
+                    }
+                    AdapterInstruction::None => 0,
+                };
                 self.set_none_cache(reset_non_granular, false)
             }
             _ => unreachable!("Unreachable PRE cache op."),
@@ -299,10 +343,11 @@ pub trait Pipeline: Send + Sync {
 
         match post_op {
             CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
-            CacheInstruction::Nonthing => (),
-            CacheInstruction::Reset { reset_non_granular } => {
-                self.set_none_cache(reset_non_granular, false)
-            }
+            CacheInstruction::Nothing(_) => (),
+            CacheInstruction::Reset {
+                reset_non_granular,
+                adapter_inst: _,
+            } => self.set_none_cache(reset_non_granular, false),
             _ => unreachable!("Unreachable POST cache op."),
         }
 

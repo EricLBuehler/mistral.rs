@@ -51,6 +51,7 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>) {
             is_streaming: true,
             constraint: Constraint::None,
             suffix: None,
+            adapters: None,
         });
         sender.send(req).await.unwrap();
 

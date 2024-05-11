@@ -7,7 +7,7 @@ use tokio::sync::{mpsc::Receiver, Mutex};
 
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
-    pipeline::CacheInstruction,
+    pipeline::{AdapterInstruction, CacheInstruction},
     request::NormalRequest,
     response::CompletionChoice,
     CompletionResponse, RequestMessage, Response,
@@ -94,15 +94,26 @@ impl Engine {
                     let mut pipeline = get_mut_arcmutex!(self.pipeline);
                     let pre_op =
                         if !self.no_kv_cache && last_completion_ids != current_completion_ids {
-                            CacheInstruction::In
+                            CacheInstruction::In(
+                                scheduled.completion[0]
+                                    .get_adapters()
+                                    .map(AdapterInstruction::Activate)
+                                    .unwrap_or(AdapterInstruction::None),
+                            )
                         } else {
-                            CacheInstruction::Nonthing
+                            CacheInstruction::Nothing(
+                                scheduled.completion[0]
+                                    .get_adapters()
+                                    .map(AdapterInstruction::Activate)
+                                    .unwrap_or(AdapterInstruction::None),
+                            )
                         };
                     let post_op = if !self.no_kv_cache {
                         CacheInstruction::Out
                     } else {
                         CacheInstruction::Reset {
                             reset_non_granular: false,
+                            adapter_inst: AdapterInstruction::None,
                         }
                     };
 
@@ -141,8 +152,13 @@ impl Engine {
                     } else {
                         CacheInstruction::Reset {
                             reset_non_granular: false,
+                            adapter_inst: AdapterInstruction::None,
                         }
                     };
+                    let adapter_inst = scheduled.prompt[0]
+                        .get_adapters()
+                        .map(AdapterInstruction::Activate)
+                        .unwrap_or(AdapterInstruction::None);
 
                     // Reset non granular state because the old sequence must be dead.
                     // Technically we don't need to do this but it is better to be safe.
@@ -155,6 +171,7 @@ impl Engine {
                             rng.clone(),
                             CacheInstruction::Reset {
                                 reset_non_granular: false,
+                                adapter_inst,
                             },
                             post_op,
                         )
@@ -507,6 +524,7 @@ impl Engine {
                 } else {
                     None
                 },
+                request.adapters.clone(),
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(
