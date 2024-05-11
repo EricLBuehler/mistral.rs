@@ -553,6 +553,44 @@
 <a href="#551" id="551">551</a>
 <a href="#552" id="552">552</a>
 <a href="#553" id="553">553</a>
+<a href="#554" id="554">554</a>
+<a href="#555" id="555">555</a>
+<a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a>
+<a href="#588" id="588">588</a>
+<a href="#589" id="589">589</a>
+<a href="#590" id="590">590</a>
+<a href="#591" id="591">591</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
@@ -569,9 +607,11 @@
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
 <span class="kw">use crate</span>::{deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata};
 <span class="kw">use crate</span>::{
-    models::quantized_llama::ModelWeights <span class="kw">as </span>QLlama, models::quantized_phi2::ModelWeights <span class="kw">as </span>QPhi,
-    models::quantized_phi3::ModelWeights <span class="kw">as </span>QPhi3, utils::tokens::get_token,
-    xlora_models::XLoraModelWeights <span class="kw">as </span>XLoraQLlama,
+    models::quantized_llama::ModelWeights <span class="kw">as </span>QLlama,
+    models::quantized_phi2::ModelWeights <span class="kw">as </span>QPhi,
+    models::quantized_phi3::ModelWeights <span class="kw">as </span>QPhi3,
+    utils::tokens::get_token,
+    xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 <span class="kw">use </span>anyhow::{bail, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>candle_core::quantized::{
@@ -596,6 +636,7 @@
     Llama(QLlama),
     Phi2(QPhi),
     XLoraLlama(XLoraQLlama),
+    XLoraPhi3(XLoraQPhi3),
     Phi3(QPhi3),
 }
 
@@ -911,6 +952,16 @@
                         <span class="prelude-val">Some</span>(paths.get_classifier_config().as_ref().unwrap().clone()),
                         mapper,
                     )<span class="question-mark">?</span>),
+                    GGUFArchitecture::Phi3 =&gt; Model::XLoraPhi3(XLoraQPhi3::from_gguf(
+                        model,
+                        <span class="kw-2">&amp;mut </span>file,
+                        device,
+                        paths.get_adapter_configs().as_ref().unwrap(),
+                        <span class="kw-2">&amp;</span>vb,
+                        paths.get_ordering().as_ref().unwrap(),
+                        <span class="prelude-val">Some</span>(paths.get_classifier_config().as_ref().unwrap().clone()),
+                        mapper,
+                    )<span class="question-mark">?</span>),
                     a =&gt; <span class="macro">bail!</span>(<span class="string">"Unsupported architecture for GGUF X-LoRA `{a:?}`"</span>),
                 }
             }
@@ -941,6 +992,16 @@
                         <span class="prelude-val">None</span>,
                         mapper,
                     )<span class="question-mark">?</span>),
+                    GGUFArchitecture::Phi3 =&gt; Model::XLoraPhi3(XLoraQPhi3::from_gguf(
+                        model,
+                        <span class="kw-2">&amp;mut </span>file,
+                        device,
+                        paths.get_adapter_configs().as_ref().unwrap(),
+                        <span class="kw-2">&amp;</span>vb,
+                        paths.get_ordering().as_ref().unwrap(),
+                        <span class="prelude-val">None</span>,
+                        mapper,
+                    )<span class="question-mark">?</span>),
                     a =&gt; <span class="macro">bail!</span>(<span class="string">"Unsupported architecture for GGUF X-LoRA `{a:?}`"</span>),
                 }
             }
@@ -957,17 +1018,19 @@
             Model::Phi2(<span class="kw-2">ref </span>p) =&gt; p.max_seq_len,
             Model::XLoraLlama(<span class="kw-2">ref </span>xl) =&gt; xl.max_seq_len,
             Model::Phi3(<span class="kw-2">ref </span>p) =&gt; p.max_seq_len,
+            Model::XLoraPhi3(<span class="kw-2">ref </span>p) =&gt; p.max_seq_len,
         };
         <span class="kw">let </span>tok_trie: Arc&lt;TokTrie&gt; = build_tok_trie(tokenizer.clone()).into();
         <span class="kw">let </span>is_xlora = <span class="kw">match </span><span class="kw-2">&amp;</span>model {
             Model::Llama(<span class="kw">_</span>) | Model::Phi2(<span class="kw">_</span>) | Model::Phi3(<span class="kw">_</span>) =&gt; <span class="bool-val">false</span>,
-            Model::XLoraLlama(<span class="kw">_</span>) =&gt; !is_lora,
+            Model::XLoraLlama(<span class="kw">_</span>) | Model::XLoraPhi3(<span class="kw">_</span>) =&gt; !is_lora,
         };
         <span class="kw">let </span>num_hidden_layers = <span class="kw">match </span>model {
             Model::Llama(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
             Model::Phi2(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
             Model::XLoraLlama(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
             Model::Phi3(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
+            Model::XLoraPhi3(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
         };
         <span class="kw">let </span>eos = calculate_eos_tokens(<span class="kw-2">&amp;</span>chat_template, gen_conf, <span class="kw-2">&amp;</span>tokenizer);
         <span class="prelude-val">Ok</span>(Arc::new(Mutex::new(GGUFPipeline {
@@ -1042,6 +1105,17 @@
                 context_lens,
             ),
             Model::Phi3(<span class="kw-2">ref mut </span>model) =&gt; model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets),
+            Model::XLoraPhi3(<span class="kw-2">ref mut </span>model) =&gt; model.forward(
+                <span class="kw-2">&amp;</span>input_ids,
+                input_ids_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>input_ids),
+                <span class="kw-2">&amp;</span>seqlen_offsets,
+                seqlen_offsets_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>seqlen_offsets),
+                seqlen_offsets_kernel.clone(),
+                seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
+                <span class="self">self</span>.no_kv_cache,
+                <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state,
+                context_lens,
+            ),
         }
     }
     <span class="kw">async fn </span>sample(
@@ -1060,6 +1134,7 @@
             Model::Phi2(<span class="kw-2">ref </span>model) =&gt; model.device.clone(),
             Model::XLoraLlama(<span class="kw-2">ref </span>model) =&gt; model.device.clone(),
             Model::Phi3(<span class="kw-2">ref </span>model) =&gt; model.device.clone(),
+            Model::XLoraPhi3(<span class="kw-2">ref </span>model) =&gt; model.device.clone(),
         }
     }
     <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;Tokenizer&gt; {
@@ -1103,6 +1178,7 @@
             Model::Phi2(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
             Model::XLoraLlama(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
             Model::Phi3(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
+            Model::XLoraPhi3(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
         }
     }
 }

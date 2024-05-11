@@ -138,6 +138,8 @@
 <a href="#136" id="136">136</a>
 <a href="#137" id="137">137</a>
 <a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>classifier;
 <span class="kw">mod </span>config;
 <span class="kw">mod </span>gemma;
@@ -147,6 +149,7 @@
 <span class="kw">mod </span>phi2;
 <span class="kw">mod </span>phi3;
 <span class="kw">mod </span>quantized_llama;
+<span class="kw">mod </span>quantized_phi3;
 
 <span class="kw">use </span>std::sync::Arc;
 
@@ -159,7 +162,8 @@
 <span class="kw">pub use </span>mixtral::XLoraModel <span class="kw">as </span>XLoraMixtral;
 <span class="kw">pub use </span>phi2::Model <span class="kw">as </span>XLoraPhi2;
 <span class="kw">pub use </span>phi3::Model <span class="kw">as </span>XLoraPhi3;
-<span class="kw">pub use </span>quantized_llama::ModelWeights <span class="kw">as </span>XLoraModelWeights;
+<span class="kw">pub use </span>quantized_llama::ModelWeights <span class="kw">as </span>XLoraQLlama;
+<span class="kw">pub use </span>quantized_phi3::ModelWeights <span class="kw">as </span>XLoraQPhi3;
 <span class="kw">use </span>tokio::sync::Mutex;
 
 <span class="kw">use crate</span>::{get_mut_arcmutex, models::Cache};
