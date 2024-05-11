@@ -130,7 +130,7 @@ impl LoraLinear {
 }
 
 impl AdapterSwapper for LoraLinear {
-    fn activate_adapters(&mut self, adapter_names: &[String]) -> Result<()> {
+    fn _activate_adapters(&mut self, adapter_names: &[String]) -> Result<()> {
         match (
             &mut self.a_adapters,
             &mut self.b_adapters,

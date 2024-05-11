@@ -135,13 +135,13 @@ pub trait Merge {
 pub trait AdapterSwapper {
     fn activate(&mut self, adapter_names: &[String]) -> Result<usize> {
         if self.can_load() {
-            self.activate_adapters(adapter_names)?;
+            self._activate_adapters(adapter_names)?;
             Ok(1)
         } else {
             Ok(0)
         }
     }
-    fn activate_adapters(&mut self, adapters: &[String]) -> Result<()>;
+    fn _activate_adapters(&mut self, adapters: &[String]) -> Result<()>;
     fn has_adapter(&self, adapter: String) -> bool;
     /// Pass the prefix for the layer (excluding .lora_?) as `module_prefix`
     fn load_new_adapter(
@@ -164,7 +164,7 @@ impl Merge for Linear {
 }
 
 impl AdapterSwapper for Linear {
-    fn activate_adapters(&mut self, _adapter: &[String]) -> Result<()> {
+    fn _activate_adapters(&mut self, _adapter: &[String]) -> Result<()> {
         unreachable!()
     }
     fn can_load(&self) -> bool {

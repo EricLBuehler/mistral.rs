@@ -15,7 +15,7 @@ use crate::{
 use candle_core::{Result, Tensor};
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     get_mut_arcmutex, handle_pipeline_forward_error, handle_seq_error,
@@ -255,13 +255,13 @@ impl Engine {
             Request::ActivateAdapters(adapters) => {
                 match get_mut_arcmutex!(self.pipeline).activate_adapters(adapters) {
                     Ok(n) => info!("Swapped adapters in {n} LoRA layers."),
-                    Err(e) => info!("⚠️ WARNING: Adapter activation failed: {e:?}"),
+                    Err(e) => warn!("Adapter activation failed: {e:?}"),
                 }
             }
             Request::Normal(request) => self.add_request(request).await,
             Request::ReIsq(level) => {
                 if let Err(e) = get_mut_arcmutex!(self.pipeline).re_isq_model(level) {
-                    info!("⚠️ WARNING: ISQ requantization failed: {e:?}");
+                    warn!("ISQ requantization failed: {e:?}");
                 }
             }
         }

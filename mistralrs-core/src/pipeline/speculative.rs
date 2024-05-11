@@ -459,4 +459,11 @@ impl Pipeline for SpeculativePipeline {
     fn cache(&self) -> &Cache {
         unreachable!()
     }
+    /// Returns the number of activated adapters.
+    fn activate_adapters(&mut self, adapters: Vec<String>) -> anyhow::Result<usize> {
+        let mut res = 0;
+        res += get_mut_arcmutex!(self.draft).activate_adapters(adapters.clone())?;
+        res += get_mut_arcmutex!(self.target).activate_adapters(adapters)?;
+        Ok(res)
+    }
 }

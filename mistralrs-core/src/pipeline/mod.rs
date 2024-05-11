@@ -379,7 +379,7 @@ pub trait Pipeline: Send + Sync {
     /// This may also reset the non granular state if applicable.
     fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool);
     fn cache(&self) -> &Cache;
-    /// Returns the number of requantized adapters.
+    /// Returns the number of activated adapters.
     fn activate_adapters(&mut self, adapters: Vec<String>) -> Result<usize>;
 }
 

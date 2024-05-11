@@ -374,6 +374,12 @@ impl Loader for GGUFLoader {
                         paths.get_ordering().as_ref().unwrap(),
                         Some(paths.get_classifier_config().as_ref().unwrap().clone()),
                         mapper,
+                        &load_preload_adapters(
+                            paths.get_lora_preload_adapter_info(),
+                            DType::F32,
+                            device,
+                            silent,
+                        )?,
                     )?),
                     a => bail!("Unsupported architecture for GGUF X-LoRA `{a:?}`"),
                 }
@@ -420,6 +426,12 @@ impl Loader for GGUFLoader {
                         paths.get_ordering().as_ref().unwrap(),
                         None,
                         mapper,
+                        &load_preload_adapters(
+                            paths.get_lora_preload_adapter_info(),
+                            DType::F32,
+                            device,
+                            silent,
+                        )?,
                     )?),
                     a => bail!("Unsupported architecture for GGUF X-LoRA `{a:?}`"),
                 }
@@ -610,6 +622,9 @@ impl Pipeline for GGUFPipeline {
             Model::Phi2(_) => unreachable!(),
             Model::Phi3(_) => unreachable!(),
             Model::XLoraLlama(ref mut model) => model
+                .activate_adapters(adapter_names)
+                .map_err(anyhow::Error::msg),
+            Model::XLoraPhi3(ref mut model) => model
                 .activate_adapters(adapter_names)
                 .map_err(anyhow::Error::msg),
         }
