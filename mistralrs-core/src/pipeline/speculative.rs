@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::{
     ops::Add,
     sync::{Arc, Mutex},
@@ -264,7 +266,7 @@ impl Pipeline for SpeculativePipeline {
         let has_rejected = num_rejected.gt(0.0)?;
         let num_rejected = num_rejected.to_dtype(DType::U8)?.to_vec1::<u8>()?;
 
-        let accepted = accepted.clamp(0 as u32, (self.gamma - 1) as u32)?;
+        let accepted = accepted.clamp(0u32, (self.gamma - 1) as u32)?;
         let adjusted_prob = logits
             .index_select(&accepted.to_dtype(DType::U8)?, 1)?
             .sub(&small_logits.index_select(&accepted.to_dtype(DType::U8)?, 1)?)?
@@ -282,7 +284,11 @@ impl Pipeline for SpeculativePipeline {
             Tensor::cat(
                 &[
                     &logits
-                        .i((.., ..logits.dim(1)? - num_rejected[0] as usize - 1, ..))
+                        .i((
+                            ..,
+                            ..(logits.dim(1)? - num_rejected[0] as usize).saturating_sub(1),
+                            ..,
+                        ))
                         .unwrap(),
                     &prob_next,
                 ],
