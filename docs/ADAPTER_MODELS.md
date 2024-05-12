@@ -68,7 +68,7 @@ We support dynamic adapter activation for LoRA models, allowing you to activate 
 
 - Rust: [example](../mistralrs/examples/lora/main.rs)
 - Python: [example](../examples/python/lora_zephyr.py)
-- HTTP: [example](../examples/http.md)
+- HTTP: [example](../examples/server/adapter_chat.py)
 
 To use this feature, you should add a `preload_adapters` key to your ordering file:
 ```diff
