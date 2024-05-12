@@ -733,7 +733,7 @@ impl NormalModel for Model {
     }
     fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
         let mut sum = 0;
-        for layer in self.layers.iter_mut().tqdm() {
+        for layer in self.layers.iter_mut() {
             sum += Arc::get_mut(&mut layer.self_attn.k_proj)
                 .unwrap()
                 .activate(&adapter_names)?;

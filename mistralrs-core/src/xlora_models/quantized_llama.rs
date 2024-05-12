@@ -718,7 +718,7 @@ impl ModelWeights {
 
     pub fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
         let mut sum = 0;
-        for layer in self.layers.iter_mut().tqdm() {
+        for layer in self.layers.iter_mut() {
             sum += layer.attention_wk.activate(&adapter_names)?;
             sum += layer.attention_wo.activate(&adapter_names)?;
             sum += layer.attention_wq.activate(&adapter_names)?;

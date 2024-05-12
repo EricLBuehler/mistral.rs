@@ -153,6 +153,34 @@ pub struct ChatCompletionRequest {
     // Default -1 to consider all
     pub top_k: Option<i64>,
     pub stream: bool,
+    pub adapters: Option<Vec<String>>,
+}
+```
+
+### `CompletionRequest`
+```rust
+pub struct CompletionRequest {
+    pub model: String,
+    pub prompt: String,
+    pub best_of: usize,
+    pub echo_prompt: bool,
+    pub presence_penalty: Option<f32>,
+    pub frequency_penalty: Option<f32>,
+    pub logit_bias: Option<HashMap<u32, f32>>,
+    // Default false
+    pub logprobs: Option<usize>,
+    pub max_tokens: Option<usize>,
+    // Default 1
+    pub n: usize,
+    pub stop_seqs: Option<StopTokens>,
+    pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
+    pub suffix: Option<String>,
+
+    // mistral.rs additional
+    pub top_k: Option<usize>,
+    pub grammar: Option<Grammar>,
+    pub adapters: Option<Vec<String>>,
 }
 ```
 

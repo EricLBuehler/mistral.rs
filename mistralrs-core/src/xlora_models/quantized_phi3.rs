@@ -365,7 +365,7 @@ impl ModelWeights {
 
     pub fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
         let mut sum = 0;
-        for layer in self.layers.iter_mut().tqdm() {
+        for layer in self.layers.iter_mut() {
             sum += layer.attn_qkv.activate(&adapter_names)?;
             sum += layer.attn_output.activate(&adapter_names)?;
             sum += layer.mlp.ffn_down.activate(&adapter_names)?;

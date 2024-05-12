@@ -744,7 +744,7 @@ impl NormalModel for XLoraLlama {
     }
     fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
         let mut sum = 0;
-        for layer in self.blocks.iter_mut().tqdm() {
+        for layer in self.blocks.iter_mut() {
             sum += Arc::get_mut(&mut layer.attn.k_proj)
                 .unwrap()
                 .activate(&adapter_names)?;
