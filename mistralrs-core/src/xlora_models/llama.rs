@@ -5,7 +5,7 @@ use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
 use mistralrs_lora::{
     layer::QLinear, linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering,
 };
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
 use tracing::info;
 
@@ -158,13 +158,14 @@ impl CausalSelfAttention {
     fn load(
         vb: VarBuilder,
         cfg: &Config,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
         rope: Arc<RotaryEmbedding>,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
@@ -177,6 +178,7 @@ impl CausalSelfAttention {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         let k_proj = linear(
             size_in,
@@ -186,6 +188,7 @@ impl CausalSelfAttention {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         let v_proj = linear(
             size_in,
@@ -195,6 +198,7 @@ impl CausalSelfAttention {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         let o_proj = linear(
             size_q,
@@ -204,6 +208,7 @@ impl CausalSelfAttention {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         Ok(Self {
             q_proj,
@@ -268,12 +273,13 @@ impl Mlp {
     fn load(
         vb: VarBuilder,
         cfg: &Config,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let h_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
@@ -285,6 +291,7 @@ impl Mlp {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         let c_fc2 = linear(
             h_size,
@@ -294,6 +301,7 @@ impl Mlp {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         let c_proj = linear(
             i_size,
@@ -303,6 +311,7 @@ impl Mlp {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         Ok(Self {
             c_fc1,
@@ -361,13 +370,14 @@ impl Block {
     fn load(
         vb: VarBuilder,
         cfg: &Config,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
         rope: Arc<RotaryEmbedding>,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let attn = CausalSelfAttention::load(
             vb.pp("self_attn"),
@@ -379,6 +389,7 @@ impl Block {
             layer_idx,
             loading_isq,
             rope,
+            preload_adapters,
         )?;
         let mlp = Mlp::load(
             vb.pp("mlp"),
@@ -389,6 +400,7 @@ impl Block {
             mapper,
             layer_idx,
             loading_isq,
+            preload_adapters,
         )?;
         let rms_1 = RmsNorm::new(
             cfg.hidden_size,
@@ -552,13 +564,14 @@ impl XLoraLlama {
     pub fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         is_gptx: bool,
         mapper: DeviceMapMetadata,
         loading_isq: bool,
         real_device: Device,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let dtype = vb.dtype();
         let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
@@ -602,11 +615,12 @@ impl XLoraLlama {
                     i,
                     loading_isq,
                     rotary_emb,
+                    preload_adapters,
                 )
                 .expect("Failed to load block.")
             })
             .collect();
-        if xlora_config.is_none() {
+        if xlora_config.is_none() && preload_adapters.is_none() {
             // We are now a LoRA model so we must merge the weights
             info!("Merging LoRA adapters.");
             for layer in blocks.iter_mut().tqdm() {
@@ -727,6 +741,34 @@ impl NormalModel for XLoraLlama {
             ));
         }
         (tensors, &*self.mapper)
+    }
+    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
+        let mut sum = 0;
+        for layer in self.blocks.iter_mut() {
+            sum += Arc::get_mut(&mut layer.attn.k_proj)
+                .unwrap()
+                .activate(&adapter_names)?;
+            sum += Arc::get_mut(&mut layer.attn.o_proj)
+                .unwrap()
+                .activate(&adapter_names)?;
+            sum += Arc::get_mut(&mut layer.attn.q_proj)
+                .unwrap()
+                .activate(&adapter_names)?;
+            sum += Arc::get_mut(&mut layer.attn.v_proj)
+                .unwrap()
+                .activate(&adapter_names)?;
+
+            sum += Arc::get_mut(&mut layer.mlp.c_fc1)
+                .unwrap()
+                .activate(&adapter_names)?;
+            sum += Arc::get_mut(&mut layer.mlp.c_fc2)
+                .unwrap()
+                .activate(&adapter_names)?;
+            sum += Arc::get_mut(&mut layer.mlp.c_proj)
+                .unwrap()
+                .activate(&adapter_names)?;
+        }
+        Ok(sum)
     }
 }
 

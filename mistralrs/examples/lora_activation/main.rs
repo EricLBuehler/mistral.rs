@@ -1,24 +1,32 @@
-use std::sync::Arc;
+use std::{fs::File, sync::Arc};
 use tokio::sync::mpsc::channel;
 
 use candle_core::Device;
 use mistralrs::{
-    Constraint, DeviceMapMetadata, GGUFLoaderBuilder, GGUFSpecificConfig, MistralRs,
-    MistralRsBuilder, NormalRequest, Request, RequestMessage, Response, SamplingParams,
-    SchedulerMethod, TokenSource,
+    Constraint, DeviceMapMetadata, MistralRs, MistralRsBuilder, NormalLoaderBuilder,
+    NormalLoaderType, NormalRequest, NormalSpecificConfig, Request, RequestMessage, Response,
+    SamplingParams, SchedulerMethod, TokenSource,
 };
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {
     // Select a Mistral model
-    let loader = GGUFLoaderBuilder::new(
-        GGUFSpecificConfig { repeat_last_n: 64 },
-        None,
-        None,
-        Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
-        "TheBloke/Mistral-7B-Instruct-v0.1-GGUF".to_string(),
-        "mistral-7b-instruct-v0.1.Q4_K_M.gguf".to_string(),
-    )
-    .build();
+    let loader =
+        NormalLoaderBuilder::new(
+            NormalSpecificConfig {
+                use_flash_attn: false,
+                repeat_last_n: 64,
+            },
+            None,
+            None,
+            None, // Will detect from ordering file
+        )
+        .with_lora(
+            "lamm-mit/x-lora".to_string(),
+            serde_json::from_reader(File::open("my-ordering-file.json").unwrap_or_else(|_| {
+                panic!("Could not load ordering file at my-ordering-file.json")
+            }))?,
+        )
+        .build(NormalLoaderType::Mistral);
     // Load, into a Pipeline
     let pipeline = loader.load_model(
         None,
@@ -50,8 +58,9 @@ fn main() -> anyhow::Result<()> {
         id: 0,
         constraint: Constraint::None,
         suffix: None,
-        adapters: None,
+        adapters: Some(vec!["adapter_2".to_string()]),
     });
+
     mistralrs.get_sender().blocking_send(request)?;
 
     let response = rx.blocking_recv().unwrap();

@@ -53,6 +53,7 @@ macro_rules! api_get_file {
             if !path.exists() {
                 panic!("File \"{}\" not found at model id {:?}", $file, $model_id)
             }
+            info!("Loading `{:?}` locally at `{path:?}`", &$file);
             path
         })
     };
@@ -167,6 +168,7 @@ macro_rules! get_paths {
             classifier_path,
             xlora_order,
             xlora_config,
+            lora_preload_adapter_info,
         } = get_xlora_paths(
             $this.model_id.clone(),
             &$this.xlora_model_id,
@@ -201,6 +203,7 @@ macro_rules! get_paths {
             xlora_ordering: xlora_order,
             template_filename,
             gen_conf,
+            lora_preload_adapter_info,
         }))
     }};
 }
@@ -259,6 +262,12 @@ macro_rules! xlora_model_loader {
             $mapper,
             $loading_isq,
             $real_device,
+            &$crate::utils::varbuilder_utils::load_preload_adapters(
+                $paths.get_lora_preload_adapter_info(),
+                $dtype.unwrap_or($default_dtype),
+                $device,
+                $silent,
+            )?,
         )?
     }};
 }
@@ -295,6 +304,12 @@ macro_rules! lora_model_loader {
             $mapper,
             $loading_isq,
             $real_device,
+            &$crate::utils::varbuilder_utils::load_preload_adapters(
+                $paths.get_lora_preload_adapter_info(),
+                $dtype.unwrap_or($default_dtype),
+                $device,
+                $silent,
+            )?,
         )?
     }};
 }

@@ -8,8 +8,8 @@ use axum::{
     response::IntoResponse,
 };
 use mistralrs_core::{
-    CompletionResponse, Constraint, MistralRs, Request, RequestMessage, Response, SamplingParams,
-    StopTokens as InternalStopTokens,
+    CompletionResponse, Constraint, MistralRs, NormalRequest, Request, RequestMessage, Response,
+    SamplingParams, StopTokens as InternalStopTokens,
 };
 use serde::Serialize;
 use tracing::warn;
@@ -104,7 +104,7 @@ fn parse_request(
         warn!("Completion requests do not support streaming.");
     }
 
-    Request {
+    Request::Normal(NormalRequest {
         id: state.next_request_id(),
         messages: RequestMessage::Completion {
             text: oairequest.prompt,
@@ -132,7 +132,8 @@ fn parse_request(
             Some(Grammar::Regex(regex)) => Constraint::Regex(regex),
             None => Constraint::None,
         },
-    }
+        adapters: oairequest.adapters,
+    })
 }
 
 #[utoipa::path(
@@ -147,21 +148,19 @@ pub async fn completions(
     Json(oairequest): Json<CompletionRequest>,
 ) -> CompletionResponder {
     let (tx, mut rx) = channel(10_000);
-    let request = parse_request(oairequest, state.clone(), tx);
-    let is_streaming = request.is_streaming;
-    let sender = state.get_sender();
-
-    if request.return_logprobs {
+    if oairequest.logprobs.is_some() {
         return CompletionResponder::ValidationError(
             "Completion requests do not support logprobs.".into(),
         );
     }
 
-    if is_streaming {
+    if oairequest._stream.is_some_and(|s| s) {
         return CompletionResponder::ValidationError(
             "Completion requests do not support streaming.".into(),
         );
     }
+    let request = parse_request(oairequest, state.clone(), tx);
+    let sender = state.get_sender();
 
     if let Err(e) = sender.send(request).await {
         let e = anyhow::Error::msg(e.to_string());

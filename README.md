@@ -49,6 +49,7 @@ Mistral.rs is a fast LLM inference platform supporting inference on a variety of
 - Fast LoRA support with weight merging.
 - First X-LoRA inference platform with first class support.
 - Speculative Decoding: Mix supported models as the draft model or the target model
+- Dynamic LoRA adapter swapping at runtime with adapter preloading: [examples and docs](docs/ADAPTER_MODELS.md#adapter-model-dynamic-adapter-activation)
 
 
 This is a demo of interactive mode with streaming running Mistral GGUF:
@@ -219,8 +220,7 @@ To install mistral.rs, one should ensure they have Rust installed by following [
 
     You can install Python support by following the guide [here](/mistralrs-pyo3/README.md).
 
-### Getting models
-**Loading from HF Hub:**
+### Getting models from HF Hub
 
 Mistral.rs can automatically download models from HF Hub. To access gated models, you should provide a token source. They may be one of:
 - `literal:<value>`: Load from a specified literal
@@ -240,11 +240,16 @@ This is passed in the following ways:
 
 If token cannot be loaded, no token will be used (i.e. effectively using `none`).
 
-**Loading from local files:**
+## Loading models from local files:**
 
 You can also instruct mistral.rs to load models locally by modifying the `*_model_id` arguments or options:
 ```bash
 ./mistralrs_server --port 1234 plain -m . -a mistral
+```
+or
+
+```bash
+./mistralrs-server gguf -m . -t . -f Phi-3-mini-128k-instruct-q4_K_M.gguf
 ```
 
 The following files must be present in the paths for the options below:

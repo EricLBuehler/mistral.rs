@@ -4,8 +4,8 @@ use tokio::sync::mpsc::channel;
 use candle_core::{quantized::GgmlDType, Device};
 use mistralrs::{
     Constraint, DeviceMapMetadata, MistralRs, MistralRsBuilder, NormalLoaderBuilder,
-    NormalLoaderType, NormalSpecificConfig, Request, RequestMessage, Response, SamplingParams,
-    SchedulerMethod, TokenSource,
+    NormalLoaderType, NormalRequest, NormalSpecificConfig, Request, RequestMessage, Response,
+    SamplingParams, SchedulerMethod, TokenSource,
 };
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {
@@ -38,7 +38,7 @@ fn main() -> anyhow::Result<()> {
     let mistralrs = setup()?;
 
     let (tx, mut rx) = channel(10_000);
-    let request = Request {
+    let request = Request::Normal(NormalRequest {
         messages: RequestMessage::Completion {
             text: "Hello! My name is ".to_string(),
             echo_prompt: false,
@@ -51,7 +51,8 @@ fn main() -> anyhow::Result<()> {
         id: 0,
         constraint: Constraint::None,
         suffix: None,
-    };
+        adapters: None,
+    });
     mistralrs.get_sender().blocking_send(request)?;
 
     let response = rx.blocking_recv().unwrap();

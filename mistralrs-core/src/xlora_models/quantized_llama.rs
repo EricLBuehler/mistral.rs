@@ -1,10 +1,14 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use std::collections::HashMap;
+
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
-use mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear};
+use mistralrs_lora::{
+    get_lora_cfg, AdapterSwapper, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear,
+};
 use tqdm::Iter;
 use tracing::info;
 
@@ -270,10 +274,11 @@ impl ModelWeights {
     pub fn from_ggml(
         mut ct: ggml_file::Content,
         gqa: usize,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
         let rotary = RotaryEmbedding::new_partial(
@@ -314,6 +319,7 @@ impl ModelWeights {
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.gate_proj"),
                         &mut count,
+                        preload_adapters,
                     )?,
                     feed_forward_w2: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w2)?,
@@ -323,6 +329,7 @@ impl ModelWeights {
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.down_proj"),
                         &mut count,
+                        preload_adapters,
                     )?,
                     feed_forward_w3: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w3)?,
@@ -332,6 +339,7 @@ impl ModelWeights {
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.up_proj"),
                         &mut count,
+                        preload_adapters,
                     )?,
                 })
             };
@@ -350,6 +358,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.q_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_wk: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wk)?,
@@ -359,6 +368,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.k_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_wv: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wv)?,
@@ -368,6 +378,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.v_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_wo: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wo)?,
@@ -377,6 +388,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.o_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_norm: QRmsNorm::new(attention_norm, 1e-5)?,
                 mlp_or_moe,
@@ -387,6 +399,34 @@ impl ModelWeights {
                 rotary: rotary.clone(),
                 neg_inf: neg_inf.clone(),
             })
+        }
+        if xlora_config.is_none() && preload_adapters.is_none() {
+            // We are now a LoRA model so we must merge the weights
+            info!("Merging LoRA adapters.");
+            for layer in layers.iter_mut().tqdm() {
+                layer.attention_wk.merge_weights()?;
+                layer.attention_wo.merge_weights()?;
+                layer.attention_wq.merge_weights()?;
+                layer.attention_wv.merge_weights()?;
+                match &mut layer.mlp_or_moe {
+                    MlpOrMoe::Mlp(ref mut m) => {
+                        m.feed_forward_w1.merge_weights()?;
+                        m.feed_forward_w2.merge_weights()?;
+                        m.feed_forward_w3.merge_weights()?;
+                    }
+                    MlpOrMoe::MoE {
+                        n_expert_used: _,
+                        feed_forward_gate_inp: _,
+                        experts,
+                    } => {
+                        for expert in experts {
+                            expert.feed_forward_w1.merge_weights()?;
+                            expert.feed_forward_w2.merge_weights()?;
+                            expert.feed_forward_w3.merge_weights()?;
+                        }
+                    }
+                }
+            }
         }
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, ct.hparams.n_embd as usize),
@@ -409,11 +449,12 @@ impl ModelWeights {
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
         mapper: DeviceMapMetadata,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle_core::bail!("cannot find {s} in metadata"),
@@ -497,6 +538,7 @@ impl ModelWeights {
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.gate_proj"),
                         &mut count,
+                        preload_adapters,
                     )?,
                     feed_forward_w2: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w2)?,
@@ -506,6 +548,7 @@ impl ModelWeights {
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.down_proj"),
                         &mut count,
+                        preload_adapters,
                     )?,
                     feed_forward_w3: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w3)?,
@@ -515,6 +558,7 @@ impl ModelWeights {
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.up_proj"),
                         &mut count,
+                        preload_adapters,
                     )?,
                 })
             } else {
@@ -540,6 +584,7 @@ impl ModelWeights {
                             ordering,
                             format!("model.layers.{layer_idx}.mlp.gate_proj.{i}"),
                             &mut count,
+                            preload_adapters,
                         )?,
                         feed_forward_w2: QLoraLinear::new(
                             QMatMul::from_qtensor(feed_forward_w2)?,
@@ -549,6 +594,7 @@ impl ModelWeights {
                             ordering,
                             format!("model.layers.{layer_idx}.mlp.down_proj.{i}"),
                             &mut count,
+                            preload_adapters,
                         )?,
                         feed_forward_w3: QLoraLinear::new(
                             QMatMul::from_qtensor(feed_forward_w3)?,
@@ -558,6 +604,7 @@ impl ModelWeights {
                             ordering,
                             format!("model.layers.{layer_idx}.mlp.up_proj.{i}"),
                             &mut count,
+                            preload_adapters,
                         )?,
                     })
                 }
@@ -583,6 +630,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.q_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_wk: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wk)?,
@@ -592,6 +640,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.k_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_wv: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wv)?,
@@ -601,6 +650,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.v_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_wo: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wo)?,
@@ -610,6 +660,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.o_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_norm: QRmsNorm::new(attention_norm, rms_norm_eps)?,
                 mlp_or_moe,
@@ -621,7 +672,7 @@ impl ModelWeights {
                 neg_inf,
             })
         }
-        if xlora_config.is_none() {
+        if xlora_config.is_none() && preload_adapters.is_none() {
             // We are now a LoRA model so we must merge the weights
             info!("Merging LoRA adapters.");
             for layer in layers.iter_mut().tqdm() {
@@ -663,6 +714,35 @@ impl ModelWeights {
             max_seq_len,
             mapper: Some(mapper),
         })
+    }
+
+    pub fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
+        let mut sum = 0;
+        for layer in self.layers.iter_mut() {
+            sum += layer.attention_wk.activate(&adapter_names)?;
+            sum += layer.attention_wo.activate(&adapter_names)?;
+            sum += layer.attention_wq.activate(&adapter_names)?;
+            sum += layer.attention_wv.activate(&adapter_names)?;
+            match &mut layer.mlp_or_moe {
+                MlpOrMoe::Mlp(ref mut m) => {
+                    sum += m.feed_forward_w1.activate(&adapter_names)?;
+                    sum += m.feed_forward_w2.activate(&adapter_names)?;
+                    sum += m.feed_forward_w3.activate(&adapter_names)?;
+                }
+                MlpOrMoe::MoE {
+                    n_expert_used: _,
+                    feed_forward_gate_inp: _,
+                    experts,
+                } => {
+                    for expert in experts {
+                        sum += expert.feed_forward_w1.activate(&adapter_names)?;
+                        sum += expert.feed_forward_w2.activate(&adapter_names)?;
+                        sum += expert.feed_forward_w3.activate(&adapter_names)?;
+                    }
+                }
+            }
+        }
+        Ok(sum)
     }
 
     #[allow(clippy::too_many_arguments)]
