@@ -34,7 +34,7 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 futures = "0.3"
 clap = { version = "4.5.1", features = ["derive"] }
 pyo3 = { version = "0.21.0", features = ["full", "extension-module"] }
-tokio = { version = "1.36.0", features = ["rt-multi-thread"] }
+tokio = { version = "1.36.0", features = ["full", "rt-multi-thread"] }
 
 [profile.profiling]
 inherits = "release"
