@@ -15,7 +15,7 @@ with open(filename, "r") as f:
     split = [x.strip() for x in split]
     res = []
     for s in split:
-        res.append({"name":s, "adapter_model_id":preload_adapters_model_id})
+        res.append({"name": s, "adapter_model_id": preload_adapters_model_id})
     data["preload_adapters"] = res
     outname = input("Enter output ordering file: ")
     with open(outname, "w") as f:

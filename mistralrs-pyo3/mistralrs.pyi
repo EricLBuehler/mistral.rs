@@ -25,6 +25,7 @@ class ChatCompletionRequest:
     top_k: int | None = None
     grammar: str | None = None
     grammar_type: str | None = None
+    adapters: list[str] | None = None
 
 @dataclass
 class CompletionRequest:
@@ -49,6 +50,7 @@ class CompletionRequest:
     suffix: str | None = None
     grammar: str | None = None
     grammar_type: str | None = None
+    adapters: list[str] | None = None
 
 @dataclass
 class Architecture(Enum):

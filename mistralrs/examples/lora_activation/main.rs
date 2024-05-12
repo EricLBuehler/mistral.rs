@@ -58,13 +58,9 @@ fn main() -> anyhow::Result<()> {
         id: 0,
         constraint: Constraint::None,
         suffix: None,
-        adapters: None,
+        adapters: Some(vec!["adapter_2".to_string()]),
     });
 
-    // Example: Make adapter_3 the active adapter
-    mistralrs
-        .get_sender()
-        .blocking_send(Request::ActivateAdapters(vec!["adapter_3".to_string()]))?;
     mistralrs.get_sender().blocking_send(request)?;
 
     let response = rx.blocking_recv().unwrap();
