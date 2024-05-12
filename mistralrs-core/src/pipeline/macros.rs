@@ -53,6 +53,7 @@ macro_rules! api_get_file {
             if !path.exists() {
                 panic!("File \"{}\" not found at model id {:?}", $file, $model_id)
             }
+            info!("Loading `{:?}` locally at `{path:?}`", &$file);
             path
         })
     };
