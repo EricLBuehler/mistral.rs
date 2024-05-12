@@ -514,6 +514,34 @@
 <a href="#512" id="512">512</a>
 <a href="#513" id="513">513</a>
 <a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
+<a href="#519" id="519">519</a>
+<a href="#520" id="520">520</a>
+<a href="#521" id="521">521</a>
+<a href="#522" id="522">522</a>
+<a href="#523" id="523">523</a>
+<a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::{HashMap, VecDeque},
     sync::Arc,
@@ -523,14 +551,15 @@
 
 <span class="kw">use crate</span>::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
-    pipeline::CacheInstruction,
+    pipeline::{AdapterInstruction, CacheInstruction},
+    request::NormalRequest,
     response::CompletionChoice,
     CompletionResponse, RequestMessage, Response,
 };
-<span class="kw">use </span>candle_core::{quantized::GgmlDType, <span class="prelude-ty">Result</span>, Tensor};
+<span class="kw">use </span>candle_core::{<span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>rand::SeedableRng;
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
-<span class="kw">use </span>tracing::warn;
+<span class="kw">use </span>tracing::{info, warn};
 
 <span class="kw">use crate</span>::{
     get_mut_arcmutex, handle_pipeline_forward_error, handle_seq_error,
@@ -548,7 +577,6 @@
 
 <span class="kw">pub struct </span>Engine {
     rx: Receiver&lt;Request&gt;,
-    isq_rx: Receiver&lt;GgmlDType&gt;,
     pipeline: Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
     scheduler: Scheduler&lt;VecDeque&lt;Sequence&gt;&gt;,
     id: usize,
@@ -563,7 +591,6 @@
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>new(
         rx: Receiver&lt;Request&gt;,
-        isq_rx: Receiver&lt;GgmlDType&gt;,
         pipeline: Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
         method: SchedulerMethod,
         truncate_sequence: bool,
@@ -576,7 +603,6 @@
         <span class="kw">let </span>is_xlora = <span class="macro">get_mut_arcmutex!</span>(pipeline).get_metadata().is_xlora;
         <span class="self">Self </span>{
             rx,
-            isq_rx,
             pipeline,
             scheduler: Scheduler::new(method),
             id: <span class="number">0</span>,
@@ -600,15 +626,10 @@
         <span class="kw">let </span><span class="kw-2">mut </span>last_completion_ids: Vec&lt;usize&gt; = <span class="macro">vec!</span>[];
         <span class="lifetime">'lp</span>: <span class="kw">loop </span>{
             <span class="kw">while let </span><span class="prelude-val">Ok</span>(request) = <span class="self">self</span>.rx.try_recv() {
-                <span class="self">self</span>.add_request(request).<span class="kw">await</span>;
+                <span class="self">self</span>.handle_request(request).<span class="kw">await</span>;
             }
             <span class="kw">let </span>run_start = Instant::now();
             <span class="kw">let </span><span class="kw-2">mut </span>scheduled = <span class="self">self</span>.scheduler.schedule();
-            <span class="kw">if let </span><span class="prelude-val">Ok</span>(dtype) = <span class="self">self</span>.isq_rx.try_recv() {
-                <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).re_isq_model(dtype) {
-                    <span class="macro">warn!</span>(<span class="string">"ISQ requantization failed: {e:?}"</span>);
-                }
-            }
 
             <span class="kw">if </span>scheduled.completion.len() &gt; <span class="number">0 </span>{
                 <span class="kw">let </span>current_completion_ids: Vec&lt;usize&gt; =
@@ -617,15 +638,26 @@
                     <span class="kw">let </span><span class="kw-2">mut </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
                     <span class="kw">let </span>pre_op =
                         <span class="kw">if </span>!<span class="self">self</span>.no_kv_cache &amp;&amp; last_completion_ids != current_completion_ids {
-                            CacheInstruction::In
+                            CacheInstruction::In(
+                                scheduled.completion[<span class="number">0</span>]
+                                    .get_adapters()
+                                    .map(AdapterInstruction::Activate)
+                                    .unwrap_or(AdapterInstruction::None),
+                            )
                         } <span class="kw">else </span>{
-                            CacheInstruction::Nonthing
+                            CacheInstruction::Nothing(
+                                scheduled.completion[<span class="number">0</span>]
+                                    .get_adapters()
+                                    .map(AdapterInstruction::Activate)
+                                    .unwrap_or(AdapterInstruction::None),
+                            )
                         };
                     <span class="kw">let </span>post_op = <span class="kw">if </span>!<span class="self">self</span>.no_kv_cache {
                         CacheInstruction::Out
                     } <span class="kw">else </span>{
                         CacheInstruction::Reset {
                             reset_non_granular: <span class="bool-val">false</span>,
+                            adapter_inst: AdapterInstruction::None,
                         }
                     };
 
@@ -664,8 +696,13 @@
                     } <span class="kw">else </span>{
                         CacheInstruction::Reset {
                             reset_non_granular: <span class="bool-val">false</span>,
+                            adapter_inst: AdapterInstruction::None,
                         }
                     };
+                    <span class="kw">let </span>adapter_inst = scheduled.prompt[<span class="number">0</span>]
+                        .get_adapters()
+                        .map(AdapterInstruction::Activate)
+                        .unwrap_or(AdapterInstruction::None);
 
                     <span class="comment">// Reset non granular state because the old sequence must be dead.
                     // Technically we don't need to do this but it is better to be safe.
@@ -678,6 +715,7 @@
                             rng.clone(),
                             CacheInstruction::Reset {
                                 reset_non_granular: <span class="bool-val">false</span>,
+                                adapter_inst,
                             },
                             post_op,
                         )
@@ -739,7 +777,7 @@
             </span>{
                 <span class="comment">// If there is nothing to do, sleep until a request comes in
                 </span><span class="kw">if let </span><span class="prelude-val">Some</span>(request) = <span class="self">self</span>.rx.recv().<span class="kw">await </span>{
-                    <span class="self">self</span>.add_request(request).<span class="kw">await</span>;
+                    <span class="self">self</span>.handle_request(request).<span class="kw">await</span>;
                 }
             }
         }
@@ -773,7 +811,24 @@
         }
     }
 
-    <span class="kw">async fn </span>add_request(<span class="kw-2">&amp;mut </span><span class="self">self</span>, request: Request) {
+    <span class="kw">async fn </span>handle_request(<span class="kw-2">&amp;mut </span><span class="self">self</span>, request: Request) {
+        <span class="kw">match </span>request {
+            Request::ActivateAdapters(adapters) =&gt; {
+                <span class="kw">match </span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).activate_adapters(adapters) {
+                    <span class="prelude-val">Ok</span>(n) =&gt; <span class="macro">info!</span>(<span class="string">"Swapped adapters in {n} LoRA layers."</span>),
+                    <span class="prelude-val">Err</span>(e) =&gt; <span class="macro">warn!</span>(<span class="string">"Adapter activation failed: {e:?}"</span>),
+                }
+            }
+            Request::Normal(request) =&gt; <span class="self">self</span>.add_request(request).<span class="kw">await</span>,
+            Request::ReIsq(level) =&gt; {
+                <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).re_isq_model(level) {
+                    <span class="macro">warn!</span>(<span class="string">"ISQ requantization failed: {e:?}"</span>);
+                }
+            }
+        }
+    }
+
+    <span class="kw">async fn </span>add_request(<span class="kw-2">&amp;mut </span><span class="self">self</span>, request: NormalRequest) {
         <span class="kw">let </span>is_chat = <span class="macro">matches!</span>(request.messages, RequestMessage::Chat(<span class="kw">_</span>));
         <span class="kw">let </span>echo_prompt = <span class="macro">matches!</span>(
             request.messages,
@@ -1013,6 +1068,7 @@
                 } <span class="kw">else </span>{
                     <span class="prelude-val">None
                 </span>},
+                request.adapters.clone(),
             );
             <span class="kw">let </span>seq = <span class="kw">if let </span><span class="prelude-val">Some</span>(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(

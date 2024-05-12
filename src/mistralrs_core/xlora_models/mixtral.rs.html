@@ -933,6 +933,56 @@
 <a href="#931" id="931">931</a>
 <a href="#932" id="932">932</a>
 <a href="#933" id="933">933</a>
+<a href="#934" id="934">934</a>
+<a href="#935" id="935">935</a>
+<a href="#936" id="936">936</a>
+<a href="#937" id="937">937</a>
+<a href="#938" id="938">938</a>
+<a href="#939" id="939">939</a>
+<a href="#940" id="940">940</a>
+<a href="#941" id="941">941</a>
+<a href="#942" id="942">942</a>
+<a href="#943" id="943">943</a>
+<a href="#944" id="944">944</a>
+<a href="#945" id="945">945</a>
+<a href="#946" id="946">946</a>
+<a href="#947" id="947">947</a>
+<a href="#948" id="948">948</a>
+<a href="#949" id="949">949</a>
+<a href="#950" id="950">950</a>
+<a href="#951" id="951">951</a>
+<a href="#952" id="952">952</a>
+<a href="#953" id="953">953</a>
+<a href="#954" id="954">954</a>
+<a href="#955" id="955">955</a>
+<a href="#956" id="956">956</a>
+<a href="#957" id="957">957</a>
+<a href="#958" id="958">958</a>
+<a href="#959" id="959">959</a>
+<a href="#960" id="960">960</a>
+<a href="#961" id="961">961</a>
+<a href="#962" id="962">962</a>
+<a href="#963" id="963">963</a>
+<a href="#964" id="964">964</a>
+<a href="#965" id="965">965</a>
+<a href="#966" id="966">966</a>
+<a href="#967" id="967">967</a>
+<a href="#968" id="968">968</a>
+<a href="#969" id="969">969</a>
+<a href="#970" id="970">970</a>
+<a href="#971" id="971">971</a>
+<a href="#972" id="972">972</a>
+<a href="#973" id="973">973</a>
+<a href="#974" id="974">974</a>
+<a href="#975" id="975">975</a>
+<a href="#976" id="976">976</a>
+<a href="#977" id="977">977</a>
+<a href="#978" id="978">978</a>
+<a href="#979" id="979">979</a>
+<a href="#980" id="980">980</a>
+<a href="#981" id="981">981</a>
+<a href="#982" id="982">982</a>
+<a href="#983" id="983">983</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
@@ -941,7 +991,7 @@
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
-<span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 <span class="kw">use </span>tqdm::Iter;
 <span class="kw">use </span>tracing::info;
 
@@ -977,12 +1027,13 @@
         rotary_emb: Arc&lt;RotaryEmbedding&gt;,
         cfg: <span class="kw-2">&amp;</span>Config,
         vb: VarBuilder,
-        lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
+        lora_config: <span class="kw-2">&amp;</span>[((String, String), LoraConfig)],
         count: <span class="kw-2">&amp;mut </span>usize,
         ord: <span class="kw-2">&amp;</span>Ordering,
         mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>hidden_sz = cfg.hidden_size;
         <span class="kw">let </span>num_heads = cfg.num_attention_heads;
@@ -997,6 +1048,7 @@
             lora_config,
             count,
             ord,
+            preload_adapters,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>k_proj = linear_no_bias(
             hidden_sz,
@@ -1006,6 +1058,7 @@
             lora_config,
             count,
             ord,
+            preload_adapters,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>v_proj = linear_no_bias(
             hidden_sz,
@@ -1015,6 +1068,7 @@
             lora_config,
             count,
             ord,
+            preload_adapters,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>o_proj = linear_no_bias(
             num_heads * head_dim,
@@ -1024,6 +1078,7 @@
             lora_config,
             count,
             ord,
+            preload_adapters,
         )<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             q_proj,
@@ -1189,12 +1244,13 @@
     </span><span class="kw">fn </span>new(
         cfg: <span class="kw-2">&amp;</span>Config,
         vb: VarBuilder,
-        lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
+        lora_config: <span class="kw-2">&amp;</span>[((String, String), LoraConfig)],
         count: <span class="kw-2">&amp;mut </span>usize,
         ord: <span class="kw-2">&amp;</span>Ordering,
         mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>hidden_sz = cfg.hidden_size;
         <span class="kw">let </span>intermediate_sz = cfg.intermediate_size;
@@ -1206,6 +1262,7 @@
             lora_config,
             count,
             ord,
+            preload_adapters,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>w2 = linear_no_bias(
             intermediate_sz,
@@ -1215,6 +1272,7 @@
             lora_config,
             count,
             ord,
+            preload_adapters,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>w3 = linear_no_bias(
             hidden_sz,
@@ -1224,6 +1282,7 @@
             lora_config,
             count,
             ord,
+            preload_adapters,
         )<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             w1,
@@ -1285,12 +1344,13 @@
     </span><span class="kw">fn </span>new(
         cfg: <span class="kw-2">&amp;</span>Config,
         vb: VarBuilder,
-        lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
+        lora_config: <span class="kw-2">&amp;</span>[((String, String), LoraConfig)],
         count: <span class="kw-2">&amp;mut </span>usize,
         ord: <span class="kw-2">&amp;</span>Ordering,
         mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>gate = linear_no_bias(
             cfg.hidden_size,
@@ -1300,6 +1360,7 @@
             lora_config,
             count,
             ord,
+            preload_adapters,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>experts = Vec::with_capacity(cfg.num_local_experts);
         <span class="kw">let </span>vb = vb.pp(<span class="string">"experts"</span>);
@@ -1313,6 +1374,7 @@
                 mapper,
                 layer_idx,
                 loading_isq,
+                preload_adapters,
             )<span class="question-mark">?</span>;
             experts.push(expert)
         }
@@ -1421,12 +1483,13 @@
         rotary_emb: Arc&lt;RotaryEmbedding&gt;,
         cfg: <span class="kw-2">&amp;</span>Config,
         vb: VarBuilder,
-        lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
+        lora_config: <span class="kw-2">&amp;</span>[((String, String), LoraConfig)],
         count: <span class="kw-2">&amp;mut </span>usize,
         ord: <span class="kw-2">&amp;</span>Ordering,
         mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>self_attn = Attention::new(
             rotary_emb,
@@ -1438,6 +1501,7 @@
             mapper,
             layer_idx,
             loading_isq,
+            preload_adapters,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>block_sparse_moe = SparseMoeBlock::new(
             cfg,
@@ -1448,6 +1512,7 @@
             mapper,
             layer_idx,
             loading_isq,
+            preload_adapters,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>input_layernorm = RmsNorm::new(
             cfg.hidden_size,
@@ -1522,13 +1587,14 @@
     </span><span class="kw">pub fn </span>new(
         cfg: <span class="kw-2">&amp;</span>Config,
         vb: VarBuilder,
-        lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
+        lora_config: <span class="kw-2">&amp;</span>[((String, String), LoraConfig)],
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         xlora_ordering: Ordering,
         is_gptx: bool,
         mapper: DeviceMapMetadata,
         loading_isq: bool,
         real_device: Device,
+        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
         <span class="kw">let </span>mapper = mapper.into_mapper(cfg.num_hidden_layers, <span class="kw-2">&amp;</span>real_device)<span class="question-mark">?</span>;
@@ -1560,10 +1626,11 @@
                 <span class="kw-2">&amp;*</span>mapper,
                 layer_idx,
                 loading_isq,
+                preload_adapters,
             )<span class="question-mark">?</span>;
             layers.push(layer)
         }
-        <span class="kw">if </span>xlora_config.is_none() {
+        <span class="kw">if </span>xlora_config.is_none() &amp;&amp; preload_adapters.is_none() {
             <span class="comment">// We are now a LoRA model so we must merge the weights
             </span><span class="macro">info!</span>(<span class="string">"Merging LoRA adapters."</span>);
             <span class="kw">for </span>layer <span class="kw">in </span>layers.iter_mut().tqdm() {
@@ -1831,6 +1898,39 @@
             }
         }
         (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+    }
+    <span class="kw">fn </span>activate_adapters(<span class="kw-2">&amp;mut </span><span class="self">self</span>, adapter_names: Vec&lt;String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>sum = <span class="number">0</span>;
+        <span class="kw">for </span>layer <span class="kw">in </span><span class="self">self</span>.layers.iter_mut() {
+            sum += Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.k_proj)
+                .unwrap()
+                .activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
+            sum += Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.o_proj)
+                .unwrap()
+                .activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
+            sum += Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.q_proj)
+                .unwrap()
+                .activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
+            sum += Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.v_proj)
+                .unwrap()
+                .activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
+
+            sum += Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.block_sparse_moe.gate)
+                .unwrap()
+                .activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
+            <span class="kw">for </span>expert <span class="kw">in </span><span class="kw-2">&amp;mut </span>layer.block_sparse_moe.experts {
+                sum += Arc::get_mut(<span class="kw-2">&amp;mut </span>expert.w1)
+                    .unwrap()
+                    .activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
+                sum += Arc::get_mut(<span class="kw-2">&amp;mut </span>expert.w2)
+                    .unwrap()
+                    .activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
+                sum += Arc::get_mut(<span class="kw-2">&amp;mut </span>expert.w3)
+                    .unwrap()
+                    .activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
+            }
+        }
+        <span class="prelude-val">Ok</span>(sum)
     }
 }
 

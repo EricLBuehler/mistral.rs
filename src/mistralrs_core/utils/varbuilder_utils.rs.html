@@ -125,6 +125,60 @@
 <a href="#123" id="123">123</a>
 <a href="#124" id="124">124</a>
 <a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a>
+<a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
+<a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
+<a href="#168" id="168">168</a>
+<a href="#169" id="169">169</a>
+<a href="#170" id="170">170</a>
+<a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
+<a href="#175" id="175">175</a>
+<a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a>
+<a href="#178" id="178">178</a>
+<a href="#179" id="179">179</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! Utilities for creating a VarBuilder from a VarMap loaded from tensor storage formats.
 
 </span><span class="kw">use </span>std::{collections::HashMap, path::PathBuf, thread};
@@ -135,6 +189,7 @@
     VarBuilder,
 };
 
+<span class="kw">use </span>mistralrs_lora::LoraConfig;
 <span class="kw">use </span>tqdm::Iter;
 
 <span class="doccomment">/// Load tensors into a VarBuilder backed by a VarMap using MmapedSafetensors.
@@ -249,5 +304,58 @@
         ws.extend(h.join().unwrap()<span class="question-mark">?</span>);
     }
     <span class="prelude-val">Ok</span>(VarBuilder::from_tensors(ws, dtype, device))
+}
+
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>load_preload_adapters&lt;<span class="lifetime">'a</span>&gt;(
+    paths: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (PathBuf, LoraConfig)&gt;&gt;,
+    dtype: DType,
+    device: <span class="kw-2">&amp;</span>Device,
+    silent: bool,
+) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder&lt;<span class="lifetime">'a</span>&gt;, LoraConfig)&gt;&gt;&gt; {
+    <span class="kw">if let </span><span class="prelude-val">Some</span>(paths) = paths {
+        <span class="kw">let </span><span class="kw-2">mut </span>map = HashMap::new();
+        <span class="kw">for </span>(name, (path, config)) <span class="kw">in </span>paths {
+            <span class="kw">let </span>tensors = <span class="kw">unsafe </span>{ candle_core::safetensors::MmapedSafetensors::new(path)<span class="question-mark">? </span>};
+            <span class="kw">let </span><span class="kw-2">mut </span>accum = HashMap::new();
+
+            <span class="kw">if </span>silent {
+                <span class="kw">for </span>(name, <span class="kw">_</span>) <span class="kw">in </span>tensors.tensors() {
+                    <span class="kw">let </span>new_name = <span class="kw">if </span>name.contains(<span class="string">"base_model.model.model"</span>) {
+                        name.replace(<span class="string">"base_model.model.model"</span>, <span class="string">"model"</span>)
+                    } <span class="kw">else </span>{
+                        name.clone()
+                    };
+                    <span class="kw">let </span>tensor = tensors
+                        .load(<span class="kw-2">&amp;</span>name, device)<span class="question-mark">?
+                        </span>.to_device(device)<span class="question-mark">?
+                        </span>.to_dtype(dtype)<span class="question-mark">?</span>;
+                    accum.insert(new_name, tensor);
+                }
+            } <span class="kw">else </span>{
+                <span class="kw">for </span>(name, <span class="kw">_</span>) <span class="kw">in </span>tensors.tensors().into_iter().tqdm() {
+                    <span class="kw">let </span>new_name = <span class="kw">if </span>name.contains(<span class="string">"base_model.model.model"</span>) {
+                        name.replace(<span class="string">"base_model.model.model"</span>, <span class="string">"model"</span>)
+                    } <span class="kw">else </span>{
+                        name.clone()
+                    };
+                    <span class="kw">let </span>tensor = tensors
+                        .load(<span class="kw-2">&amp;</span>name, device)<span class="question-mark">?
+                        </span>.to_device(device)<span class="question-mark">?
+                        </span>.to_dtype(dtype)<span class="question-mark">?</span>;
+                    accum.insert(new_name, tensor);
+                }
+            }
+            map.insert(
+                name.clone(),
+                (
+                    VarBuilder::from_tensors(accum, dtype, device),
+                    config.clone(),
+                ),
+            );
+        }
+        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(map))
+    } <span class="kw">else </span>{
+        <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>)
+    }
 }
 </code></pre></div></section></main></body></html>

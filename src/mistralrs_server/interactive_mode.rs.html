@@ -94,8 +94,13 @@
 <a href="#92" id="92">92</a>
 <a href="#93" id="93">93</a>
 <a href="#94" id="94">94</a>
+<a href="#95" id="95">95</a>
+<a href="#96" id="96">96</a>
+<a href="#97" id="97">97</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>indexmap::IndexMap;
-<span class="kw">use </span>mistralrs_core::{Constraint, MistralRs, Request, RequestMessage, Response, SamplingParams};
+<span class="kw">use </span>mistralrs_core::{
+    Constraint, MistralRs, NormalRequest, Request, RequestMessage, Response, SamplingParams,
+};
 <span class="kw">use </span>std::{
     io::{<span class="self">self</span>, Write},
     sync::Arc,
@@ -136,7 +141,7 @@
         messages.push(user_message);
 
         <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">10_000</span>);
-        <span class="kw">let </span>req = Request {
+        <span class="kw">let </span>req = Request::Normal(NormalRequest {
             id: mistralrs.next_request_id(),
             messages: RequestMessage::Chat(messages.clone()),
             sampling_params: sampling_params.clone(),
@@ -145,7 +150,8 @@
             is_streaming: <span class="bool-val">true</span>,
             constraint: Constraint::None,
             suffix: <span class="prelude-val">None</span>,
-        };
+            adapters: <span class="prelude-val">None</span>,
+        });
         sender.send(req).<span class="kw">await</span>.unwrap();
 
         <span class="kw">let </span><span class="kw-2">mut </span>assistant_output = String::new();

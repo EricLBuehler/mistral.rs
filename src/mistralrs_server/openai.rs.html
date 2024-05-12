@@ -140,6 +140,8 @@
 <a href="#138" id="138">138</a>
 <a href="#139" id="139">139</a>
 <a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>std::collections::HashMap;
@@ -213,9 +215,10 @@
     <span class="comment">// mistral.rs additional
     </span><span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;usize&gt;))]
     </span><span class="kw">pub </span>top_k: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-
     <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;Grammar&gt;))]
     </span><span class="kw">pub </span>grammar: <span class="prelude-ty">Option</span>&lt;Grammar&gt;,
+    <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;Vec&lt;String&gt;&gt;))]
+    </span><span class="kw">pub </span>adapters: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
 }
 
 <span class="attr">#[derive(Debug, Serialize, ToSchema)]
@@ -276,8 +279,9 @@
     <span class="comment">// mistral.rs additional
     </span><span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;usize&gt;))]
     </span><span class="kw">pub </span>top_k: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-
     <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;Grammar&gt;))]
     </span><span class="kw">pub </span>grammar: <span class="prelude-ty">Option</span>&lt;Grammar&gt;,
+    <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;Vec&lt;String&gt;&gt;))]
+    </span><span class="kw">pub </span>adapters: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
 }
 </code></pre></div></section></main></body></html>

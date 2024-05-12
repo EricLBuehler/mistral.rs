@@ -526,9 +526,30 @@
 <a href="#524" id="524">524</a>
 <a href="#525" id="525">525</a>
 <a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-</span><span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
+</span><span class="kw">use </span>std::collections::HashMap;
+
+<span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::layers::CausalMasker;
 <span class="kw">use </span><span class="kw">crate</span>::layers::RmsNorm;
 <span class="kw">use </span><span class="kw">crate</span>::models::repeat_kv;
@@ -542,6 +563,7 @@
 <span class="kw">use </span>candle_nn::Embedding;
 <span class="kw">use </span>candle_nn::VarBuilder;
 <span class="kw">use </span>mistralrs_lora::get_lora_cfg;
+<span class="kw">use </span>mistralrs_lora::AdapterSwapper;
 <span class="kw">use </span>mistralrs_lora::LinearLayerLike;
 <span class="kw">use </span>mistralrs_lora::LoraConfig;
 <span class="kw">use </span>mistralrs_lora::Merge;
@@ -754,11 +776,12 @@
         ct: gguf_file::Content,
         reader: <span class="kw-2">&amp;mut </span>R,
         device: <span class="kw-2">&amp;</span>Device,
-        lora_config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
+        lora_config: <span class="kw-2">&amp;</span>[((String, String), LoraConfig)],
         vb: <span class="kw-2">&amp;</span>VarBuilder,
         ordering: <span class="kw-2">&amp;</span>Ordering,
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         mapper: DeviceMapMetadata,
+        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>md_get = |s: <span class="kw-2">&amp;</span>str| <span class="kw">match </span>ct.metadata.get(s) {
             <span class="prelude-val">None </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"cannot find {s} in metadata"</span>),
@@ -802,6 +825,7 @@
                     ordering,
                     <span class="macro">format!</span>(<span class="string">"{prefix}.mlp.gate_up_proj"</span>),
                     <span class="kw-2">&amp;mut </span>count,
+                    preload_adapters,
                 )<span class="question-mark">?</span>,
                 ffn_down: QLoraLinear::new(
                     QMatMul::from_qtensor(ffn_down)<span class="question-mark">?</span>,
@@ -811,6 +835,7 @@
                     ordering,
                     <span class="macro">format!</span>(<span class="string">"{prefix}.mlp.down_proj"</span>),
                     <span class="kw-2">&amp;mut </span>count,
+                    preload_adapters,
                 )<span class="question-mark">?</span>,
                 i_size,
             };
@@ -835,6 +860,7 @@
                     ordering,
                     <span class="macro">format!</span>(<span class="string">"{prefix}.self_attn.qkv_proj"</span>),
                     <span class="kw-2">&amp;mut </span>count,
+                    preload_adapters,
                 )<span class="question-mark">?</span>,
                 attn_output: QLoraLinear::new(
                     QMatMul::from_qtensor(output)<span class="question-mark">?</span>,
@@ -844,6 +870,7 @@
                     ordering,
                     <span class="macro">format!</span>(<span class="string">"{prefix}.self_attn.o_proj"</span>),
                     <span class="kw-2">&amp;mut </span>count,
+                    preload_adapters,
                 )<span class="question-mark">?</span>,
                 attn_norm,
                 ffn_norm,
@@ -881,6 +908,17 @@
                     .unwrap()
             }),
         })
+    }
+
+    <span class="kw">pub fn </span>activate_adapters(<span class="kw-2">&amp;mut </span><span class="self">self</span>, adapter_names: Vec&lt;String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>sum = <span class="number">0</span>;
+        <span class="kw">for </span>layer <span class="kw">in </span><span class="self">self</span>.layers.iter_mut() {
+            sum += layer.attn_qkv.activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
+            sum += layer.attn_output.activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
+            sum += layer.mlp.ffn_down.activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
+            sum += layer.mlp.ffn_up.activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
+        }
+        <span class="prelude-val">Ok</span>(sum)
     }
 
     <span class="kw">pub fn </span>inner_forward(

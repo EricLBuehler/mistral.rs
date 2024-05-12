@@ -393,13 +393,15 @@
 <a href="#391" id="391">391</a>
 <a href="#392" id="392">392</a>
 <a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
+<a href="#395" id="395">395</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 <span class="kw">use </span>mistralrs_core::{
     Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelKind,
-    ModelSelected, Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
-    Usage,
+    ModelSelected, NormalRequest, Request, RequestMessage, Response, SamplingParams,
+    SchedulerMethod, TokenSource, Usage,
 };
 <span class="kw">use </span>std::fmt::Display;
 <span class="kw">use </span>std::sync::Arc;
@@ -463,7 +465,7 @@
     <span class="kw">let </span>sender = mistralrs.get_sender();
     <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">10_000</span>);
 
-    <span class="kw">let </span>req = Request {
+    <span class="kw">let </span>req = Request::Normal(NormalRequest {
         id: mistralrs.next_request_id(),
         messages: prompt,
         sampling_params: sampling_params.clone(),
@@ -472,7 +474,8 @@
         is_streaming: <span class="bool-val">false</span>,
         constraint: Constraint::None,
         suffix: <span class="prelude-val">None</span>,
-    };
+        adapters: <span class="prelude-val">None</span>,
+    });
 
     <span class="kw">let </span><span class="kw-2">mut </span>usages = Vec::new();
 
@@ -620,7 +623,7 @@
     <span class="kw">let </span>sender = mistralrs.get_sender();
     <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">10_000</span>);
 
-    <span class="kw">let </span>req = Request {
+    <span class="kw">let </span>req = Request::Normal(NormalRequest {
         id: mistralrs.next_request_id(),
         messages: RequestMessage::Completion {
             text: <span class="string">"Hello!"</span>.to_string(),
@@ -633,7 +636,8 @@
         is_streaming: <span class="bool-val">false</span>,
         constraint: Constraint::None,
         suffix: <span class="prelude-val">None</span>,
-    };
+        adapters: <span class="prelude-val">None</span>,
+    });
 
     sender
         .blocking_send(req.clone())

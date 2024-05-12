@@ -288,18 +288,72 @@
 <a href="#286" id="286">286</a>
 <a href="#287" id="287">287</a>
 <a href="#288" id="288">288</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::{iter::zip, ops::Mul};
+<a href="#289" id="289">289</a>
+<a href="#290" id="290">290</a>
+<a href="#291" id="291">291</a>
+<a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
+<a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, iter::zip, ops::Mul};
 
 <span class="kw">use </span>candle_core::{
+    bail,
     quantized::{QMatMul, QTensor},
-    DType, Module, <span class="prelude-ty">Result</span>, Tensor,
+    Module, <span class="prelude-ty">Result</span>, Tensor,
 };
-<span class="kw">use </span>candle_nn::{init, Dropout, Linear, VarBuilder};
+<span class="kw">use </span>candle_nn::{Linear, VarBuilder};
 <span class="kw">use </span>either::Either;
 
 <span class="kw">use crate</span>::{
-    apply_scalings_to_x, get_maybe_topk_scalings, LinearLayerLike, LoraConfig, LoraLinearConfig,
-    Merge, Ordering,
+    apply_scalings_to_x, get_maybe_topk_scalings, make_adapter, Adapter, AdapterSwapper,
+    LinearLayerLike, LoraConfig, LoraLinearConfig, Merge, Ordering,
 };
 
 <span class="attr">#[derive(Debug)]
@@ -308,21 +362,24 @@
     a_adapters: Either&lt;Vec&lt;Linear&gt;, (Tensor, Vec&lt;Linear&gt;)&gt;,
     b_adapters: Either&lt;Vec&lt;Linear&gt;, (Tensor, Vec&lt;Linear&gt;)&gt;,
     scale_adapters: Vec&lt;f64&gt;,
-    dropout_adapters: Vec&lt;<span class="prelude-ty">Option</span>&lt;Dropout&gt;&gt;,
     layer_n: usize,
     merged: bool,
+    adapters: HashMap&lt;String, Adapter&gt;,
+    linear_config: <span class="prelude-ty">Option</span>&lt;LoraLinearConfig&gt;,
 }
 
 <span class="doccomment">/// Specialized QLoRA for no bias
 </span><span class="kw">impl </span>QLoraLinear {
-    <span class="kw">pub fn </span>new(
+    <span class="attr">#[allow(clippy::too_many_arguments)]
+    </span><span class="kw">pub fn </span>new(
         old: QMatMul,
         linear_config: <span class="kw-2">&amp;</span>LoraLinearConfig,
-        config: <span class="kw-2">&amp;</span>[(String, LoraConfig)],
+        config: <span class="kw-2">&amp;</span>[((String, String), LoraConfig)],
         vb: <span class="kw-2">&amp;</span>VarBuilder,
         ordering: <span class="kw-2">&amp;</span>Ordering,
         prefix: String,
         count: <span class="kw-2">&amp;mut </span>usize,
+        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>target_modules = <span class="kw-2">&amp;</span>config[<span class="number">0</span>].<span class="number">1</span>.target_modules;
         <span class="kw">for </span>(<span class="kw">_</span>, cfg) <span class="kw">in </span>config {
@@ -338,9 +395,10 @@
                 a_adapters: Either::Left(<span class="macro">vec!</span>[]),
                 b_adapters: Either::Left(<span class="macro">vec!</span>[]),
                 scale_adapters: <span class="macro">vec!</span>[],
-                dropout_adapters: <span class="macro">vec!</span>[],
                 layer_n: usize::MAX,
                 merged: <span class="bool-val">false</span>,
+                adapters: HashMap::default(),
+                linear_config: <span class="prelude-val">None</span>,
             });
         }
 
@@ -349,35 +407,19 @@
         <span class="kw">let </span><span class="kw-2">mut </span>a_adapters = Vec::with_capacity(config.len());
         <span class="kw">let </span><span class="kw-2">mut </span>b_adapters = Vec::with_capacity(config.len());
         <span class="kw">let </span><span class="kw-2">mut </span>scale_adapters = Vec::with_capacity(config.len());
-        <span class="kw">let </span><span class="kw-2">mut </span>dropout_adapters = Vec::with_capacity(config.len());
         <span class="kw">let </span>vb = vb.pp(prefix.clone());
         <span class="kw">let </span>a_vb = vb.pp(<span class="string">"lora_A"</span>.to_string());
         <span class="kw">let </span>b_vb = vb.pp(<span class="string">"lora_B"</span>.to_string());
         <span class="kw">let </span><span class="kw-2">mut </span>state = <span class="prelude-val">None</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>all_same = <span class="bool-val">true</span>;
-        <span class="kw">for </span>(name, cfg) <span class="kw">in </span>config.iter() {
-            <span class="kw">let </span>a_pp = a_vb.pp(name);
-            <span class="macro">assert!</span>(a_pp.contains_tensor(<span class="string">"weight"</span>));
-            <span class="kw">let </span>a = a_pp
-                .get_with_hints(
-                    (cfg.rank, linear_config.in_features),
-                    <span class="string">"weight"</span>,
-                    init::DEFAULT_KAIMING_NORMAL,
-                )<span class="question-mark">?
-                </span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
-            <span class="kw">let </span>b_pp = b_vb.pp(name);
-            <span class="macro">assert!</span>(b_pp.contains_tensor(<span class="string">"weight"</span>));
-            <span class="kw">let </span>b = b_pp
-                .get_with_hints((linear_config.out_features, cfg.rank), <span class="string">"weight"</span>, init::ZERO)<span class="question-mark">?
-                </span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
-            a_adapters.push(Linear::new(a, <span class="prelude-val">None</span>));
-            b_adapters.push(Linear::new(b, <span class="prelude-val">None</span>));
-            scale_adapters.push(<span class="kw">if </span>cfg.rank &gt; <span class="number">0 </span>{
-                cfg.alpha / cfg.rank <span class="kw">as </span>f64
-            } <span class="kw">else </span>{
-                <span class="number">1.0
-            </span>});
-            dropout_adapters.push(cfg.dropout.map(Dropout::new));
+        <span class="kw">let </span><span class="kw-2">mut </span>adapters = HashMap::new();
+        <span class="kw">for </span>((name_id, adapter_name), cfg) <span class="kw">in </span>config.iter() {
+            <span class="kw">let </span>a_pp = a_vb.pp(name_id);
+            <span class="kw">let </span>b_pp = b_vb.pp(name_id);
+            <span class="kw">let </span>adapter = make_adapter(a_pp, b_pp, cfg, linear_config)<span class="question-mark">?</span>;
+            a_adapters.push(adapter.a.clone());
+            b_adapters.push(adapter.b.clone());
+            scale_adapters.push(adapter.scale);
             <span class="kw">if </span>state.is_some_and(|x| {
                 x == (
                     cfg.rank,
@@ -398,7 +440,19 @@
             } <span class="kw">else </span>{
                 all_same = <span class="bool-val">false</span>;
             }
+            adapters.insert(adapter_name.clone(), adapter);
         }
+
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(preload_adapters) = preload_adapters {
+            all_same = <span class="bool-val">false</span>;
+            <span class="kw">for </span>(name, (vb, cfg)) <span class="kw">in </span>preload_adapters {
+                <span class="kw">let </span>a_vb = vb.set_prefix(a_vb.prefix());
+                <span class="kw">let </span>b_vb = vb.set_prefix(b_vb.prefix());
+                <span class="kw">let </span>adapter = make_adapter(a_vb, b_vb, cfg, linear_config)<span class="question-mark">?</span>;
+                adapters.insert(name.clone(), adapter);
+            }
+        }
+
         <span class="kw">let </span>layer = <span class="kw-2">*</span>ordering.layers.get(<span class="kw-2">&amp;</span>prefix).unwrap();
 
         <span class="kw">if </span>all_same {
@@ -428,9 +482,10 @@
                 a_adapters: Either::Right((a_adapters_stack.clone(), a_adapters)),
                 b_adapters: Either::Right((b_adapters_stack.clone(), b_adapters)),
                 scale_adapters,
-                dropout_adapters,
                 layer_n: layer,
                 merged: <span class="bool-val">false</span>,
+                adapters,
+                linear_config: <span class="prelude-val">Some</span>(linear_config.clone()),
             })
         } <span class="kw">else </span>{
             <span class="prelude-val">Ok</span>(QLoraLinear {
@@ -438,11 +493,66 @@
                 a_adapters: Either::Left(a_adapters),
                 b_adapters: Either::Left(b_adapters),
                 scale_adapters,
-                dropout_adapters,
                 layer_n: layer,
                 merged: <span class="bool-val">false</span>,
+                adapters,
+                linear_config: <span class="prelude-val">Some</span>(linear_config.clone()),
             })
         }
+    }
+}
+
+<span class="kw">impl </span>AdapterSwapper <span class="kw">for </span>QLoraLinear {
+    <span class="kw">fn </span>_activate_adapters(<span class="kw-2">&amp;mut </span><span class="self">self</span>, adapter_names: <span class="kw-2">&amp;</span>[String]) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">match </span>(
+            <span class="kw-2">&amp;mut </span><span class="self">self</span>.a_adapters,
+            <span class="kw-2">&amp;mut </span><span class="self">self</span>.b_adapters,
+            <span class="kw-2">&amp;mut </span><span class="self">self</span>.scale_adapters,
+        ) {
+            (Either::Left(a), Either::Left(b), s) =&gt; {
+                a.clear();
+                b.clear();
+                s.clear();
+                <span class="kw">for </span>adapter_name <span class="kw">in </span>adapter_names {
+                    <span class="kw">let </span>Adapter {
+                        a: a_w,
+                        b: b_w,
+                        scale,
+                    } = <span class="kw">match </span><span class="self">self</span>.adapters.get(adapter_name) {
+                        <span class="prelude-val">Some</span>(a) =&gt; a,
+                        <span class="prelude-val">None </span>=&gt; <span class="macro">bail!</span>(<span class="string">"Cannot load adapter `{adapter_name}`."</span>),
+                    };
+                    a.push(a_w.clone());
+                    b.push(b_w.clone());
+                    s.push(<span class="kw-2">*</span>scale);
+                }
+            }
+            <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(<span class="string">"Adapters should not be stacked if new ones are being activated."</span>),
+        }
+        <span class="prelude-val">Ok</span>(())
+    }
+    <span class="kw">fn </span>has_adapter(<span class="kw-2">&amp;</span><span class="self">self</span>, adapter: String) -&gt; bool {
+        <span class="self">self</span>.adapters.contains_key(<span class="kw-2">&amp;</span>adapter)
+    }
+    <span class="kw">fn </span>load_new_adapter(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        name: String,
+        vb: VarBuilder,
+        cfg: <span class="kw-2">&amp;</span>LoraConfig,
+        module_prefix: String,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>linear_config) = <span class="self">self</span>.linear_config {
+            <span class="kw">let </span>a_vb = vb.set_prefix(<span class="kw-2">&amp;</span>module_prefix).pp(<span class="string">"lora_A"</span>.to_string());
+            <span class="kw">let </span>b_vb = vb.set_prefix(<span class="kw-2">&amp;</span>module_prefix).pp(<span class="string">"lora_B"</span>.to_string());
+            <span class="kw">let </span>adapter = make_adapter(a_vb, b_vb, cfg, linear_config)<span class="question-mark">?</span>;
+            <span class="self">self</span>.adapters.insert(name.clone(), adapter);
+            <span class="prelude-val">Ok</span>(())
+        } <span class="kw">else </span>{
+            <span class="macro">bail!</span>(<span class="string">"Linear config not found. This means that the layer cannot have new adapters loaded."</span>)
+        }
+    }
+    <span class="kw">fn </span>can_load(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="self">self</span>.linear_config.is_some()
     }
 }
 
@@ -499,7 +609,6 @@
         <span class="kw">if </span><span class="self">self</span>.merged {
             <span class="kw">return </span><span class="prelude-val">Ok</span>(result);
         }
-        <span class="kw">let </span>scalings = scalings.unwrap();
 
         <span class="kw">if </span><span class="self">self
             </span>.a_adapters
@@ -510,8 +619,14 @@
         {
             <span class="kw">return </span><span class="prelude-val">Ok</span>(result);
         }
-        <span class="kw">let </span>scalings = get_maybe_topk_scalings(scalings, <span class="self">self</span>.layer_n)<span class="question-mark">?</span>;
-        <span class="kw">if </span><span class="self">self</span>.a_adapters.is_left() || scalings.dims3()<span class="question-mark">?</span>.<span class="number">1 </span>!= <span class="number">1 </span>{
+
+        <span class="kw">let </span>scalings =
+            scalings.map(|scalings| get_maybe_topk_scalings(scalings, <span class="self">self</span>.layer_n).unwrap());
+        <span class="kw">if </span><span class="self">self</span>.a_adapters.is_left()
+            || scalings
+                .as_ref()
+                .is_some_and(|scalings| scalings.dims3().unwrap().<span class="number">1 </span>!= <span class="number">1</span>)
+        {
             <span class="kw">let </span>a_adapters = <span class="kw">if </span><span class="self">self</span>.a_adapters.is_right() {
                 <span class="self">self</span>.a_adapters.as_ref().unwrap_right().<span class="number">1</span>.clone()
             } <span class="kw">else </span>{
@@ -522,22 +637,15 @@
             } <span class="kw">else </span>{
                 <span class="self">self</span>.b_adapters.as_ref().unwrap_left().clone()
             };
-            <span class="kw">for </span>(i, (adapter_a, (adapter_b, (adapter_scale, adapter_dropout)))) <span class="kw">in </span>zip(
-                a_adapters,
-                zip(
-                    b_adapters,
-                    zip(<span class="kw-2">&amp;</span><span class="self">self</span>.scale_adapters, <span class="self">self</span>.dropout_adapters.iter()),
-                ),
-            )
-            .enumerate()
+            <span class="kw">for </span>(i, (adapter_a, (adapter_b, adapter_scale))) <span class="kw">in
+                </span>zip(a_adapters, zip(b_adapters, <span class="kw-2">&amp;</span><span class="self">self</span>.scale_adapters)).enumerate()
             {
-                <span class="kw">let </span><span class="kw-2">mut </span>input_new = apply_scalings_to_x(input.clone(), <span class="kw-2">&amp;</span>scalings, i)<span class="question-mark">?</span>;
-
-                input_new = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>dropout) = adapter_dropout {
-                    dropout.forward(<span class="kw-2">&amp;</span>input_new, <span class="bool-val">true</span>)<span class="question-mark">?
+                <span class="kw">let </span>input_new = <span class="kw">if let </span><span class="prelude-val">Some</span>(scalings) = <span class="kw-2">&amp;</span>scalings {
+                    apply_scalings_to_x(input.clone(), scalings, i)<span class="question-mark">?
                 </span>} <span class="kw">else </span>{
-                    input_new.clone()
+                    input.clone()
                 };
+
                 <span class="kw">let </span>res = adapter_b
                     .forward(<span class="kw-2">&amp;</span>adapter_a.forward(<span class="kw-2">&amp;</span>input_new)<span class="question-mark">?</span>)<span class="question-mark">?
                     </span>.mul(<span class="kw-2">*</span>adapter_scale)<span class="question-mark">?
@@ -550,21 +658,19 @@
             <span class="kw">let </span>adapter_b = <span class="kw-2">&amp;</span><span class="self">self</span>.b_adapters.as_ref().unwrap_right().<span class="number">0</span>;
             <span class="kw">let </span>adapter_scales = <span class="kw-2">&amp;</span><span class="self">self</span>.scale_adapters;
             <span class="kw">let </span>n_adapters = adapter_scales.len();
-            <span class="kw">let </span>dropout = <span class="kw-2">&amp;</span><span class="self">self</span>.dropout_adapters[<span class="number">0</span>];
-            <span class="kw">let </span>scalings = scalings
-                .squeeze(<span class="number">0</span>)<span class="question-mark">?
-                </span>.squeeze(<span class="number">0</span>)<span class="question-mark">?
-                </span>.unsqueeze(<span class="number">1</span>)<span class="question-mark">?
-                </span>.unsqueeze(<span class="number">1</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>adapter_a = adapter_a
-                .broadcast_mul(<span class="kw-2">&amp;</span>scalings)<span class="question-mark">?
-                </span>.mul(global_scaling_weight)<span class="question-mark">?</span>;
-
-            <span class="kw">let </span>input = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>d) = dropout {
-                d.forward(input, <span class="bool-val">true</span>)<span class="question-mark">?
+            <span class="kw">let </span>adapter_a = <span class="kw">if let </span><span class="prelude-val">Some</span>(scalings) = scalings.as_ref() {
+                <span class="kw">let </span>scalings = scalings
+                    .squeeze(<span class="number">0</span>)<span class="question-mark">?
+                    </span>.squeeze(<span class="number">0</span>)<span class="question-mark">?
+                    </span>.unsqueeze(<span class="number">1</span>)<span class="question-mark">?
+                    </span>.unsqueeze(<span class="number">1</span>)<span class="question-mark">?</span>;
+                adapter_a
+                    .broadcast_mul(<span class="kw-2">&amp;</span>scalings)<span class="question-mark">?
+                    </span>.mul(global_scaling_weight)<span class="question-mark">?
             </span>} <span class="kw">else </span>{
-                input.clone()
-            };
+                adapter_a.clone().mul(global_scaling_weight)<span class="question-mark">?
+            </span>};
+
             <span class="kw">let </span>(b, s, h) = input.dims3()<span class="question-mark">?</span>;
             <span class="kw">let </span>input = input.reshape((b * s, h))<span class="question-mark">?</span>;
             <span class="kw">let </span>out = adapter_a.broadcast_matmul(<span class="kw-2">&amp;</span>input.t()<span class="question-mark">?</span>)<span class="question-mark">?</span>;

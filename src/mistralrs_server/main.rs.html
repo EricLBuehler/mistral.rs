@@ -276,6 +276,57 @@
 <a href="#274" id="274">274</a>
 <a href="#275" id="275">275</a>
 <a href="#276" id="276">276</a>
+<a href="#277" id="277">277</a>
+<a href="#278" id="278">278</a>
+<a href="#279" id="279">279</a>
+<a href="#280" id="280">280</a>
+<a href="#281" id="281">281</a>
+<a href="#282" id="282">282</a>
+<a href="#283" id="283">283</a>
+<a href="#284" id="284">284</a>
+<a href="#285" id="285">285</a>
+<a href="#286" id="286">286</a>
+<a href="#287" id="287">287</a>
+<a href="#288" id="288">288</a>
+<a href="#289" id="289">289</a>
+<a href="#290" id="290">290</a>
+<a href="#291" id="291">291</a>
+<a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
+<a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{Json, State},
@@ -287,9 +338,10 @@
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>mistralrs_core::{
     get_tgt_non_granular_index, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs,
-    MistralRsBuilder, ModelKind, ModelSelected, SchedulerMethod, TokenSource,
+    MistralRsBuilder, ModelKind, ModelSelected, Request, SchedulerMethod, TokenSource,
 };
 <span class="kw">use </span>openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
+<span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>tracing_subscriber::EnvFilter;
 <span class="kw">mod </span>chat_completion;
@@ -303,7 +355,7 @@
 <span class="kw">use </span>interactive_mode::interactive_mode;
 <span class="kw">use </span>tower_http::cors::{AllowOrigin, CorsLayer};
 <span class="kw">use </span>tracing::{info, level_filters::LevelFilter, warn};
-<span class="kw">use </span>utoipa::OpenApi;
+<span class="kw">use </span>utoipa::{OpenApi, ToSchema};
 <span class="kw">use </span>utoipa_swagger_ui::SwaggerUi;
 
 <span class="kw">fn </span>parse_token_source(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;TokenSource, String&gt; {
@@ -417,6 +469,54 @@
     <span class="string">"OK"
 </span>}
 
+<span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+</span><span class="kw">struct </span>AdapterActivationRequest {
+    <span class="attr">#[schema(example = <span class="macro">json!</span>(<span class="macro">vec!</span>[<span class="string">"adapter_1"</span>,<span class="string">"adapter_2"</span>]</span>))]
+    adapter_names: Vec&lt;String&gt;,
+}
+
+<span class="attr">#[utoipa::path(
+    post,
+    tag = <span class="string">"Mistral.rs"</span>,
+    path = <span class="string">"/activate_adapters"</span>,
+    request_body = AdapterActivationRequest,
+    responses((status = <span class="number">200</span>, description = <span class="string">"Activate a set of pre-loaded LoRA adapters"</span>))
+)]
+</span><span class="kw">async fn </span>activate_adapters(
+    State(state): State&lt;Arc&lt;MistralRs&gt;&gt;,
+    Json(request): Json&lt;AdapterActivationRequest&gt;,
+) -&gt; String {
+    <span class="kw">let </span>repr = <span class="macro">format!</span>(<span class="string">"Adapter activation: {:?}"</span>, request.adapter_names);
+    MistralRs::maybe_log_request(state.clone(), repr.clone());
+    <span class="kw">let </span>request = Request::ActivateAdapters(request.adapter_names);
+    state.get_sender().send(request).<span class="kw">await</span>.unwrap();
+    repr
+}
+
+<span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+</span><span class="kw">struct </span>ReIsqRequest {
+    <span class="attr">#[schema(example = <span class="string">"Q4K"</span>)]
+    </span>ggml_type: String,
+}
+
+<span class="attr">#[utoipa::path(
+    post,
+    tag = <span class="string">"Mistral.rs"</span>,
+    path = <span class="string">"/re_isq"</span>,
+    request_body = ReIsqRequest,
+    responses((status = <span class="number">200</span>, description = <span class="string">"Reapply ISQ to a non GGUF or GGML model."</span>))
+)]
+</span><span class="kw">async fn </span>re_isq(
+    State(state): State&lt;Arc&lt;MistralRs&gt;&gt;,
+    Json(request): Json&lt;ReIsqRequest&gt;,
+) -&gt; <span class="prelude-ty">Result</span>&lt;String, String&gt; {
+    <span class="kw">let </span>repr = <span class="macro">format!</span>(<span class="string">"Re ISQ: {:?}"</span>, request.ggml_type);
+    MistralRs::maybe_log_request(state.clone(), repr.clone());
+    <span class="kw">let </span>request = Request::ReIsq(parse_isq(<span class="kw-2">&amp;</span>request.ggml_type)<span class="question-mark">?</span>);
+    state.get_sender().send(request).<span class="kw">await</span>.unwrap();
+    <span class="prelude-val">Ok</span>(repr)
+}
+
 <span class="kw">fn </span>get_router(state: Arc&lt;MistralRs&gt;) -&gt; Router {
     <span class="attr">#[derive(OpenApi)]
     #[openapi(
@@ -451,6 +551,8 @@
         .route(<span class="string">"/v1/models"</span>, get(models))
         .route(<span class="string">"/health"</span>, get(health))
         .route(<span class="string">"/"</span>, get(health))
+        .route(<span class="string">"/activate_adapters"</span>, post(activate_adapters))
+        .route(<span class="string">"/re_isq"</span>, post(re_isq))
         .with_state(state)
 }
 
