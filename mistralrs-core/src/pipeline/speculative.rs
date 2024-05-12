@@ -1,10 +1,9 @@
 use std::{
-    iter::zip,
+    ops::Add,
     sync::{Arc, Mutex},
 };
 
-use candle_core::{quantized::GgmlDType, Device, IndexOp, Result, Tensor};
-use rand::Rng;
+use candle_core::{quantized::GgmlDType, DType, Device, IndexOp, Result, Tensor, D};
 use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
 
@@ -127,6 +126,10 @@ impl SpeculativePipeline {
     }
 }
 
+fn find_first_true(x: &Tensor) -> Result<Tensor> {
+    (x.to_dtype(DType::F32)?.cumsum(D::Minus1)?.eq(0.0)?).sum(D::Minus1)
+}
+
 #[async_trait::async_trait]
 impl Pipeline for SpeculativePipeline {
     async fn step(
@@ -140,12 +143,12 @@ impl Pipeline for SpeculativePipeline {
         post_op: CacheInstruction,
     ) -> Result<()> {
         match pre_op {
-            CacheInstruction::In => self.clone_in_cache(input_seqs, true),
+            CacheInstruction::In => self.clone_in_cache(input_seqs, false),
             CacheInstruction::Nonthing => (),
             CacheInstruction::Reset { reset_non_granular } => {
-                self.set_none_cache(reset_non_granular, true)
+                self.set_none_cache(reset_non_granular, false)
             }
-            _ => unreachable!("Unreachable pre cache op."),
+            _ => unreachable!("Unreachable PRE cache op."),
         }
 
         assert_eq!(input_seqs.len(), 1);
@@ -155,6 +158,8 @@ impl Pipeline for SpeculativePipeline {
         // ======================= Run draft model gamma times producing tokens ============================
         // ======================= Sample the `gamma` logits. ============================
         let mut draft_samples = Vec::new();
+        let mut q_sampled_out = Vec::new();
+        let mut small_logits = Vec::new();
         let repeat_last_n = get_mut_arcmutex!(self.draft).get_metadata().repeat_last_n;
         for i in 0..self.gamma {
             let is_xlora = get_mut_arcmutex!(self.draft).get_metadata().is_xlora;
@@ -169,7 +174,9 @@ impl Pipeline for SpeculativePipeline {
                 None,
             )
             .unwrap();
-            let logits = get_mut_arcmutex!(self.draft).forward_inputs(inputs)?;
+            let logits = get_mut_arcmutex!(self.draft)
+                .forward_inputs(inputs)?
+                .to_dtype(candle_core::DType::F32)?;
 
             let sample = sample_sequence(
                 logits.clone(),
@@ -187,11 +194,15 @@ impl Pipeline for SpeculativePipeline {
             )
             .await?;
             seq.add_tmp_tok(sample.token);
+            q_sampled_out.push(Tensor::new(vec![sample.token], logits.device())?);
+            small_logits.push(logits.narrow(1, logits.dim(1)? - 1, 1)?);
             draft_samples.push(SpeculativeSample {
                 sample,
                 distribution: logits.clone(),
             });
         }
+        let q_sampled_out = Tensor::cat(&q_sampled_out, 0)?;
+        let small_logits = Tensor::cat(&small_logits, D::Minus2)?;
         seq.remove_tmp_tok(self.gamma);
 
         // ======================= Add all draft tokens but the last one. Add the last from the seq. ============================
@@ -200,10 +211,7 @@ impl Pipeline for SpeculativePipeline {
         } else {
             vec![*seq.get_toks().last().unwrap()]
         };
-        for (i, sample) in draft_samples.iter().enumerate() {
-            if i == draft_samples.len() - 1 {
-                continue;
-            }
+        for sample in draft_samples {
             draft_prefill_tokens.push(sample.sample.token);
         }
         seq.set_prefill_toks(draft_prefill_tokens);
@@ -227,19 +235,59 @@ impl Pipeline for SpeculativePipeline {
             is_xlora,
             &device,
             has_no_kv_cache,
-            Some((self.gamma, initial_cache_len)), // Get the last gamma, see above
+            Some((self.gamma + 1, initial_cache_len)), // Get the last gamma, see above
         )
         .unwrap();
 
-        let logits = get_mut_arcmutex!(self.target).forward_inputs(inputs)?;
+        let logits = get_mut_arcmutex!(self.target)
+            .forward_inputs(inputs)?
+            .to_dtype(candle_core::DType::F32)?;
+
+        let logits = logits.i((.., ..logits.dim(1)? - 1, ..))?;
+        let prob_next = logits.i((.., logits.dim(1)? - 1, ..))?.unsqueeze(1)?;
 
         // Reset the prefill tokens
         seq.reset_prefill_toks();
 
+        let p = logits
+            .gather(&q_sampled_out.unsqueeze(1)?.unsqueeze(0)?, D::Minus1)?
+            .to_dtype(candle_core::DType::F32)?;
+        let q = small_logits.gather(&q_sampled_out.unsqueeze(1)?.unsqueeze(0)?, D::Minus1)?;
+
+        let rand_uniform = q.rand_like(0.0, 1.0)?;
+        let accepted = find_first_true(&rand_uniform.gt(&p.div(&q)?)?.squeeze(2)?)?;
+
+        let num_rejected = accepted
+            .to_dtype(DType::F32)?
+            .neg()?
+            .add(self.gamma as f64)?;
+        let has_rejected = num_rejected.gt(0.0)?;
+        let num_rejected = num_rejected.to_dtype(DType::U8)?.to_vec1::<u8>()?;
+
+        let accepted = accepted.clamp(0 as u32, (self.gamma - 1) as u32)?;
+        let adjusted_prob = logits
+            .index_select(&accepted.to_dtype(DType::U8)?, 1)?
+            .sub(&small_logits.index_select(&accepted.to_dtype(DType::U8)?, 1)?)?
+            .relu()?;
+        let adjusted_prob = adjusted_prob.broadcast_div(&adjusted_prob.sum_keepdim(D::Minus1)?)?;
+
+        let prob_next = Tensor::where_cond(
+            &has_rejected.unsqueeze(1)?.broadcast_as(prob_next.shape())?,
+            &adjusted_prob,
+            &prob_next,
+        )?;
         // ======================= Rejection sampling. ============================
         // Map from each target sample to corresponding in draft sample
         let samples = sample_target_sequence_speculative(
-            logits.clone(),
+            Tensor::cat(
+                &[
+                    &logits
+                        .i((.., ..logits.dim(1)? - num_rejected[0] as usize - 1, ..))
+                        .unwrap(),
+                    &prob_next,
+                ],
+                1,
+            )?,
             seq,
             seq.return_logprobs(),
             repeat_last_n,
@@ -248,36 +296,17 @@ impl Pipeline for SpeculativePipeline {
                 .tok_trie
                 .clone(),
             rng.clone(),
-            self.gamma,
+            self.gamma + 1 - num_rejected[0] as usize,
         )
         .await?;
 
         let mut accepted_tokens = Vec::new();
-        for (target_sample, draft_sample) in zip(samples, draft_samples) {
-            if draft_sample.sample.token == target_sample.sample.token {
-                if draft_sample.sample.logprob <= target_sample.sample.logprob {
-                    // Target model agrees.
-                    accepted_tokens.push(target_sample.sample);
-                } else {
-                    // Target model disagrees.
-                    let acceptance_prob = (target_sample.sample.logprob
-                        / draft_sample.sample.logprob)
-                        .clamp(0.0, 1.0);
-                    let is_accepted = get_mut_arcmutex!(rng).gen_bool(acceptance_prob as f64);
-                    accepted_tokens.push(target_sample.sample);
-                    if !is_accepted {
-                        break;
-                    }
-                }
-            } else {
-                // Did not agree. Use the target model's choice. Return it.
-                accepted_tokens.push(target_sample.sample);
-                break;
-            }
+        for target_sample in samples {
+            accepted_tokens.push(target_sample.sample);
         }
 
         // ======================= Narrow caches to account for rejections ============================
-        let n_not_accepted = self.gamma - accepted_tokens.len();
+        let n_not_accepted = num_rejected[0] as usize + 1;
         for (k, v) in get_mut_arcmutex!(self.draft)
             .cache()
             .lock()
@@ -388,7 +417,6 @@ impl Pipeline for SpeculativePipeline {
         // - Execute speculative decoding algorithm on the resulting distributions
         // - Added the accepted tokens to buffer and trie
         // - Maybe fixed up cache of base model based on accepted tokens.
-
         Ok(())
     }
     fn forward_inputs(&mut self, _: ModelInputs) -> anyhow::Result<Tensor, candle_core::Error> {
