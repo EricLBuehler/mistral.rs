@@ -4,7 +4,6 @@ use std::{
 };
 
 use candle_core::{quantized::GgmlDType, Device, IndexOp, Result, Tensor};
-use rand::Rng;
 use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
 
@@ -293,24 +292,9 @@ impl Pipeline for SpeculativePipeline {
 
         let mut accepted_tokens = Vec::new();
         for (target_sample, draft_sample) in zip(samples, draft_samples) {
-            if draft_sample.sample.token == target_sample.sample.token {
-                if draft_sample.sample.logprob <= target_sample.sample.logprob {
-                    // Target model agrees.
-                    accepted_tokens.push(target_sample.sample);
-                } else {
-                    // Target model disagrees.
-                    let acceptance_prob = (target_sample.sample.logprob
-                        / draft_sample.sample.logprob)
-                        .clamp(0.0, 1.0);
-                    let is_accepted = get_mut_arcmutex!(rng).gen_bool(acceptance_prob as f64);
-                    accepted_tokens.push(target_sample.sample);
-                    if !is_accepted {
-                        break;
-                    }
-                }
-            } else {
-                // Did not agree. Use the target model's choice. Return it.
-                accepted_tokens.push(target_sample.sample);
+            let tok = target_sample.sample.token;
+            accepted_tokens.push(target_sample.sample);
+            if draft_sample.sample.token != tok {
                 break;
             }
         }
