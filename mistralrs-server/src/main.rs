@@ -9,9 +9,10 @@ use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
 use mistralrs_core::{
     get_tgt_non_granular_index, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs,
-    MistralRsBuilder, ModelKind, ModelSelected, SchedulerMethod, TokenSource,
+    MistralRsBuilder, ModelKind, ModelSelected, Request, SchedulerMethod, TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 mod chat_completion;
@@ -25,7 +26,7 @@ mod openai;
 use interactive_mode::interactive_mode;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{info, level_filters::LevelFilter, warn};
-use utoipa::OpenApi;
+use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
@@ -139,6 +140,54 @@ async fn health() -> &'static str {
     "OK"
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+struct AdapterActivationRequest {
+    #[schema(example = json!(vec!["adapter_1","adapter_2"]))]
+    adapter_names: Vec<String>,
+}
+
+#[utoipa::path(
+    post,
+    tag = "Mistral.rs",
+    path = "/activate_adapters",
+    request_body = AdapterActivationRequest,
+    responses((status = 200, description = "Activate a set of pre-loaded LoRA adapters"))
+)]
+async fn activate_adapters(
+    State(state): State<Arc<MistralRs>>,
+    Json(request): Json<AdapterActivationRequest>,
+) -> String {
+    let repr = format!("Adapter activation: {:?}", request.adapter_names);
+    MistralRs::maybe_log_request(state.clone(), repr.clone());
+    let request = Request::ActivateAdapters(request.adapter_names);
+    state.get_sender().send(request).await.unwrap();
+    repr
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+struct ReIsqRequest {
+    #[schema(example = "Q4K")]
+    ggml_type: String,
+}
+
+#[utoipa::path(
+    post,
+    tag = "Mistral.rs",
+    path = "/re_isq",
+    request_body = ReIsqRequest,
+    responses((status = 200, description = "Reapply ISQ to a non GGUF or GGML model."))
+)]
+async fn re_isq(
+    State(state): State<Arc<MistralRs>>,
+    Json(request): Json<ReIsqRequest>,
+) -> Result<String, String> {
+    let repr = format!("Re ISQ: {:?}", request.ggml_type);
+    MistralRs::maybe_log_request(state.clone(), repr.clone());
+    let request = Request::ReIsq(parse_isq(&request.ggml_type)?);
+    state.get_sender().send(request).await.unwrap();
+    Ok(repr)
+}
+
 fn get_router(state: Arc<MistralRs>) -> Router {
     #[derive(OpenApi)]
     #[openapi(
@@ -173,6 +222,8 @@ fn get_router(state: Arc<MistralRs>) -> Router {
         .route("/v1/models", get(models))
         .route("/health", get(health))
         .route("/", get(health))
+        .route("/activate_adapters", post(activate_adapters))
+        .route("/re_isq", post(re_isq))
         .with_state(state)
 }
 

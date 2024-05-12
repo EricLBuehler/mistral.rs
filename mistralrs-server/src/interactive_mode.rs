@@ -1,5 +1,7 @@
 use indexmap::IndexMap;
-use mistralrs_core::{Constraint, MistralRs, Request, RequestMessage, Response, SamplingParams};
+use mistralrs_core::{
+    Constraint, MistralRs, NormalRequest, Request, RequestMessage, Response, SamplingParams,
+};
 use std::{
     io::{self, Write},
     sync::Arc,
@@ -40,7 +42,7 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>) {
         messages.push(user_message);
 
         let (tx, mut rx) = channel(10_000);
-        let req = Request {
+        let req = Request::Normal(NormalRequest {
             id: mistralrs.next_request_id(),
             messages: RequestMessage::Chat(messages.clone()),
             sampling_params: sampling_params.clone(),
@@ -49,7 +51,8 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>) {
             is_streaming: true,
             constraint: Constraint::None,
             suffix: None,
-        };
+            adapters: None,
+        });
         sender.send(req).await.unwrap();
 
         let mut assistant_output = String::new();

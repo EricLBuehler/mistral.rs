@@ -110,6 +110,23 @@ curl http://localhost:8080/v1/completions \
 }'
 ```
 
+## `POST`: `/activate_adapters`
+Make the specified adapters the active adapters. Pass the names as a JSON object with the key `adapter_names` to an array of strings (the adapter names).
+
+Example with `curl`:
+```bash
+curl http://localhost:<port>/activate_adapters -H "Content-Type: application/json" -H "Authorization: Bearer EMPTY" -d '{"adapter_names":["adapter_2"]}'
+```
+
+## `POST`: `/re_isq`
+Reapply ISQ to the model if possible. Pass the names as a JSON object with the key `ggml_type` to a string (the quantization level).
+
+Example with `curl`:
+```bash
+curl http://localhost:<port>/re_isq -H "Content-Type: application/json" -H "Authorization: Bearer EMPTY" -d '{"ggml_type":"Q4K"}'
+```
+
+
 Streaming requests are not supported.
 
 ## Request
@@ -136,6 +153,34 @@ pub struct ChatCompletionRequest {
     // Default -1 to consider all
     pub top_k: Option<i64>,
     pub stream: bool,
+    pub adapters: Option<Vec<String>>,
+}
+```
+
+### `CompletionRequest`
+```rust
+pub struct CompletionRequest {
+    pub model: String,
+    pub prompt: String,
+    pub best_of: usize,
+    pub echo_prompt: bool,
+    pub presence_penalty: Option<f32>,
+    pub frequency_penalty: Option<f32>,
+    pub logit_bias: Option<HashMap<u32, f32>>,
+    // Default false
+    pub logprobs: Option<usize>,
+    pub max_tokens: Option<usize>,
+    // Default 1
+    pub n: usize,
+    pub stop_seqs: Option<StopTokens>,
+    pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
+    pub suffix: Option<String>,
+
+    // mistral.rs additional
+    pub top_k: Option<usize>,
+    pub grammar: Option<Grammar>,
+    pub adapters: Option<Vec<String>>,
 }
 ```
 

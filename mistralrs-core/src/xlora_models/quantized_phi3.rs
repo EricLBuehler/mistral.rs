@@ -1,5 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use std::collections::HashMap;
+
 use crate::device_map::DeviceMapper;
 use crate::layers::CausalMasker;
 use crate::layers::RmsNorm;
@@ -14,6 +16,7 @@ use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Embedding;
 use candle_nn::VarBuilder;
 use mistralrs_lora::get_lora_cfg;
+use mistralrs_lora::AdapterSwapper;
 use mistralrs_lora::LinearLayerLike;
 use mistralrs_lora::LoraConfig;
 use mistralrs_lora::Merge;
@@ -226,11 +229,12 @@ impl ModelWeights {
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
         mapper: DeviceMapMetadata,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle_core::bail!("cannot find {s} in metadata"),
@@ -274,6 +278,7 @@ impl ModelWeights {
                     ordering,
                     format!("{prefix}.mlp.gate_up_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 ffn_down: QLoraLinear::new(
                     QMatMul::from_qtensor(ffn_down)?,
@@ -283,6 +288,7 @@ impl ModelWeights {
                     ordering,
                     format!("{prefix}.mlp.down_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 i_size,
             };
@@ -307,6 +313,7 @@ impl ModelWeights {
                     ordering,
                     format!("{prefix}.self_attn.qkv_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attn_output: QLoraLinear::new(
                     QMatMul::from_qtensor(output)?,
@@ -316,6 +323,7 @@ impl ModelWeights {
                     ordering,
                     format!("{prefix}.self_attn.o_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attn_norm,
                 ffn_norm,
@@ -353,6 +361,17 @@ impl ModelWeights {
                     .unwrap()
             }),
         })
+    }
+
+    pub fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
+        let mut sum = 0;
+        for layer in self.layers.iter_mut() {
+            sum += layer.attn_qkv.activate(&adapter_names)?;
+            sum += layer.attn_output.activate(&adapter_names)?;
+            sum += layer.mlp.ffn_down.activate(&adapter_names)?;
+            sum += layer.mlp.ffn_up.activate(&adapter_names)?;
+        }
+        Ok(sum)
     }
 
     pub fn inner_forward(

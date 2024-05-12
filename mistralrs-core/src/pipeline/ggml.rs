@@ -10,7 +10,7 @@ use crate::pipeline::chat_template::calculate_eos_tokens;
 use crate::pipeline::{ChatTemplate, SimpleModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
-use crate::utils::varbuilder_utils::from_mmaped_safetensors;
+use crate::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 use crate::xlora_models::NonGranularState;
 use crate::{deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata};
 use crate::{
@@ -146,9 +146,9 @@ impl GGMLLoaderBuilder {
         )
     }
 
-    pub fn with_lora(mut self, xlora_model_id: String, xlora_order: Ordering) -> Self {
+    pub fn with_lora(mut self, lora_model_id: String, lora_order: Ordering) -> Self {
         self.kind = ModelKind::LoraGGML;
-        self.with_adapter(xlora_model_id, xlora_order, false, None)
+        self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
     pub fn build(self) -> Box<dyn Loader> {
@@ -271,6 +271,12 @@ impl Loader for GGMLLoader {
                     &vb,
                     paths.get_ordering().as_ref().unwrap(),
                     Some(paths.get_classifier_config().as_ref().unwrap().clone()),
+                    &load_preload_adapters(
+                        paths.get_lora_preload_adapter_info(),
+                        DType::F32,
+                        device,
+                        silent,
+                    )?,
                 )?)
             }
             ModelKind::LoraGGML => {
@@ -296,6 +302,12 @@ impl Loader for GGMLLoader {
                     &vb,
                     paths.get_ordering().as_ref().unwrap(),
                     None,
+                    &load_preload_adapters(
+                        paths.get_lora_preload_adapter_info(),
+                        DType::F32,
+                        device,
+                        silent,
+                    )?,
                 )?)
             }
             _ => unreachable!(),
@@ -341,6 +353,7 @@ impl Loader for GGMLLoader {
                 is_xlora,
                 num_hidden_layers,
                 eos_tok: eos,
+                is_lora,
             },
         })))
     }
@@ -447,6 +460,17 @@ impl Pipeline for GGMLPipeline {
         match self.model {
             Model::Llama(ref model) => &model.cache,
             Model::XLoraLlama(ref model) => &model.cache,
+        }
+    }
+    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
+        if !self.metadata.is_lora {
+            anyhow::bail!("Cannot activate adapters non-LoRA models.")
+        }
+        match self.model {
+            Model::Llama(_) => unreachable!(),
+            Model::XLoraLlama(ref mut model) => model
+                .activate_adapters(adapter_names)
+                .map_err(anyhow::Error::msg),
         }
     }
 }

@@ -80,6 +80,7 @@ pub struct Sequence {
     suffix: Option<String>,
     prefix: Option<String>,
     is_tmp: bool,
+    adapters: Option<Vec<String>>,
 
     // Cache
     scaling_cache: Option<Tensor>,
@@ -126,6 +127,7 @@ impl Sequence {
         recognizer: SequenceRecognizer,
         suffix: Option<String>,
         prefix: Option<String>,
+        adapters: Option<Vec<String>>,
     ) -> Self {
         let prompt_len = tokens.len();
         Self {
@@ -166,6 +168,7 @@ impl Sequence {
             last_is_done: None,
             is_tmp: false,
             scheduling_urgency: 0,
+            adapters,
         }
     }
 
@@ -471,6 +474,10 @@ impl Sequence {
 
     pub fn add_streaming_chunk_choice_to_group(&self, chunk: ChunkChoice) {
         get_mut_group!(self).streaming_chunks.push(chunk);
+    }
+
+    pub fn get_adapters(&self) -> Option<Vec<String>> {
+        self.adapters.clone()
     }
 }
 

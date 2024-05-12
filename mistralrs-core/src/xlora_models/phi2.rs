@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 /// Phi model.
 /// https://huggingface.co/microsoft/phi-2
@@ -38,12 +38,13 @@ impl MLP {
     fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let fc1 = linear(
             cfg.hidden_size,
@@ -53,6 +54,7 @@ impl MLP {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         let fc2 = linear(
             cfg.intermediate_size,
@@ -62,6 +64,7 @@ impl MLP {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         Ok(Self {
             fc1,
@@ -127,13 +130,14 @@ impl Attention {
     fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
         rope: RotaryEmbedding,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads();
@@ -146,6 +150,7 @@ impl Attention {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         let k_proj = linear(
             cfg.hidden_size,
@@ -155,6 +160,7 @@ impl Attention {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         let v_proj = linear(
             cfg.hidden_size,
@@ -164,6 +170,7 @@ impl Attention {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         let dense = linear(
             num_heads * head_dim,
@@ -173,6 +180,7 @@ impl Attention {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         let (q_layernorm, k_layernorm) = if cfg.qk_layernorm {
             let q_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp("q_layernorm"))?;
@@ -338,13 +346,14 @@ impl DecoderLayer {
     fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
         rope: RotaryEmbedding,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             cfg,
@@ -356,6 +365,7 @@ impl DecoderLayer {
             layer_idx,
             loading_isq,
             rope,
+            preload_adapters,
         )?;
         let mlp = MLP::new(
             cfg,
@@ -366,6 +376,7 @@ impl DecoderLayer {
             mapper,
             layer_idx,
             loading_isq,
+            preload_adapters,
         )?;
         let input_layernorm = layer_norm(
             cfg.hidden_size,
@@ -428,13 +439,14 @@ impl Model {
     pub fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         is_gptx: bool,
         mapper: DeviceMapMetadata,
         loading_isq: bool,
         real_device: Device,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
@@ -472,10 +484,11 @@ impl Model {
                 layer_idx,
                 loading_isq,
                 rotary_emb,
+                preload_adapters,
             )?;
             layers.push(layer)
         }
-        if xlora_config.is_none() {
+        if xlora_config.is_none() && preload_adapters.is_none() {
             // We are now a LoRA model so we must merge the weights
             info!("Merging LoRA adapters.");
             for layer in layers.iter_mut().tqdm() {
@@ -717,6 +730,31 @@ impl NormalModel for Model {
             tensors.push((Arc::get_mut(&mut layer.mlp.fc2).unwrap().inner(), Some(i)));
         }
         (tensors, &*self.mapper)
+    }
+    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
+        let mut sum = 0;
+        for layer in self.layers.iter_mut() {
+            sum += Arc::get_mut(&mut layer.self_attn.k_proj)
+                .unwrap()
+                .activate(&adapter_names)?;
+            sum += Arc::get_mut(&mut layer.self_attn.dense)
+                .unwrap()
+                .activate(&adapter_names)?;
+            sum += Arc::get_mut(&mut layer.self_attn.q_proj)
+                .unwrap()
+                .activate(&adapter_names)?;
+            sum += Arc::get_mut(&mut layer.self_attn.v_proj)
+                .unwrap()
+                .activate(&adapter_names)?;
+
+            sum += Arc::get_mut(&mut layer.mlp.fc1)
+                .unwrap()
+                .activate(&adapter_names)?;
+            sum += Arc::get_mut(&mut layer.mlp.fc2)
+                .unwrap()
+                .activate(&adapter_names)?;
+        }
+        Ok(sum)
     }
 }
 

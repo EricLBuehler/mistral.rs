@@ -1,3 +1,4 @@
+use candle_core::quantized::GgmlDType;
 use indexmap::IndexMap;
 
 use crate::{response::Response, sampler::SamplingParams};
@@ -25,9 +26,7 @@ pub enum RequestMessage {
 }
 
 #[derive(Clone)]
-/// A request to the Engine, encapsulating the various parameters as well as
-/// the `mspc` response `Sender` used to return the [`Response`].
-pub struct Request {
+pub struct NormalRequest {
     pub messages: RequestMessage,
     pub sampling_params: SamplingParams,
     pub response: Sender<Response>,
@@ -36,14 +35,43 @@ pub struct Request {
     pub id: usize,
     pub constraint: Constraint,
     pub suffix: Option<String>,
+    pub adapters: Option<Vec<String>>,
+}
+
+#[derive(Clone)]
+/// A request to the Engine, encapsulating the various parameters as well as
+/// the `mspc` response `Sender` used to return the [`Response`].
+pub enum Request {
+    Normal(NormalRequest),
+    ReIsq(GgmlDType),
+    ActivateAdapters(Vec<String>),
 }
 
 impl Debug for Request {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Request {} {{ messages: `{:?}`, sampling_params: {:?}}}",
-            self.id, self.messages, self.sampling_params
-        )
+        match self {
+            Request::Normal(NormalRequest {
+                messages,
+                sampling_params,
+                response: _,
+                return_logprobs: _,
+                is_streaming,
+                id,
+                constraint: _,
+                suffix: _,
+                adapters,
+            }) => {
+                write!(
+                    f,
+                    "Request {id} {{ messages: `{messages:?}`, sampling_params: {sampling_params:?}, is_streaming: {is_streaming}, adapters: {adapters:?}}}",
+                )
+            }
+            Request::ActivateAdapters(adapters) => {
+                write!(f, "Activate Adapters Request {adapters:?}",)
+            }
+            Request::ReIsq(tp) => {
+                write!(f, "Re ISQ Request {tp:?}",)
+            }
+        }
     }
 }

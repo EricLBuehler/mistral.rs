@@ -138,9 +138,9 @@ impl NormalLoaderBuilder {
         )
     }
 
-    pub fn with_lora(mut self, xlora_model_id: String, xlora_order: Ordering) -> Self {
+    pub fn with_lora(mut self, lora_model_id: String, lora_order: Ordering) -> Self {
         self.kind = ModelKind::LoraNormal;
-        self.with_adapter(xlora_model_id, xlora_order, false, None)
+        self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
     pub fn build(self, loader: NormalLoaderType) -> Box<dyn Loader> {
@@ -303,6 +303,7 @@ impl Loader for NormalLoader {
                 is_xlora,
                 num_hidden_layers,
                 eos_tok: eos,
+                is_lora,
             },
         })))
     }
@@ -407,5 +408,10 @@ impl Pipeline for NormalPipeline {
     }
     fn cache(&self) -> &Cache {
         self.model.cache()
+    }
+    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
+        self.model
+            .activate_adapters(adapter_names)
+            .map_err(anyhow::Error::msg)
     }
 }

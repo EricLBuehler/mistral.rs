@@ -49,6 +49,7 @@ Mistral.rs is a fast LLM inference platform supporting inference on a variety of
 - Fast LoRA support with weight merging.
 - First X-LoRA inference platform with first class support.
 - Speculative Decoding: Mix supported models as the draft model or the target model
+- Dynamic LoRA adapter swapping at runtime with adapter preloading: [examples and docs](docs/ADAPTER_MODELS.md#adapter-model-dynamic-adapter-activation)
 
 
 This is a demo of interactive mode with streaming running Mistral GGUF:

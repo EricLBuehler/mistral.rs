@@ -18,8 +18,9 @@ use candle_core::Device;
 use mistralrs_core::{
     ChatCompletionResponse, CompletionResponse, Constraint, DeviceMapMetadata, GGMLLoaderBuilder,
     GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder,
-    NormalLoaderBuilder, NormalSpecificConfig, Request as _Request, RequestMessage, Response,
-    SamplingParams, SchedulerMethod, SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource,
+    NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, Request as _Request, RequestMessage,
+    Response, SamplingParams, SchedulerMethod, SpeculativeConfig, SpeculativeLoader, StopTokens,
+    TokenSource,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
@@ -458,7 +459,7 @@ impl Runner {
             } else {
                 Constraint::None
             };
-            let model_request = _Request {
+            let model_request = _Request::Normal(NormalRequest {
                 id: {
                     let l = NEXT_REQUEST_ID.lock().unwrap();
                     let last = &mut *l.borrow_mut();
@@ -510,7 +511,8 @@ impl Runner {
                 is_streaming: request.stream,
                 constraint,
                 suffix: None,
-            };
+                adapters: request.adapters.clone(),
+            });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
             let sender = self.runner.get_sender();
@@ -568,7 +570,7 @@ impl Runner {
             } else {
                 Constraint::None
             };
-            let model_request = _Request {
+            let model_request = _Request::Normal(NormalRequest {
                 id: {
                     let l = NEXT_REQUEST_ID.lock().unwrap();
                     let last = &mut *l.borrow_mut();
@@ -598,7 +600,8 @@ impl Runner {
                 is_streaming: false,
                 constraint,
                 suffix: request.suffix.clone(),
-            };
+                adapters: request.adapters.clone(),
+            });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
             let sender = self.runner.get_sender();
@@ -623,9 +626,16 @@ impl Runner {
     /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
     /// then nothing will happen.
     fn send_re_isq(&self, dtype: String) -> PyResult<()> {
-        self.runner
-            .send_re_isq(parse_isq(&dtype).map_err(|e| PyValueError::new_err(e.to_string()))?);
+        let request =
+            _Request::ReIsq(parse_isq(&dtype).map_err(|e| PyValueError::new_err(e.to_string()))?);
+        self.runner.get_sender().blocking_send(request).unwrap();
         Ok(())
+    }
+
+    /// Send a request to make the specified adapters the active adapters for the model.
+    fn activate_adapters(&self, adapter_names: Vec<String>) {
+        let request = _Request::ActivateAdapters(adapter_names);
+        self.runner.get_sender().blocking_send(request).unwrap();
     }
 }
 
@@ -649,6 +659,7 @@ struct CompletionRequest {
     top_k: Option<usize>,
     grammar: Option<String>,
     grammar_type: Option<String>,
+    adapters: Option<Vec<String>>,
 }
 
 #[pymethods]
@@ -670,7 +681,8 @@ impl CompletionRequest {
         suffix=None,
         top_k=None,
         grammar = None,
-        grammar_type = None
+        grammar_type = None,
+        adapters = None
     ))]
     fn new(
         prompt: String,
@@ -689,6 +701,7 @@ impl CompletionRequest {
         top_k: Option<usize>,
         grammar: Option<String>,
         grammar_type: Option<String>,
+        adapters: Option<Vec<String>>,
     ) -> PyResult<Self> {
         Ok(Self {
             prompt,
@@ -707,6 +720,7 @@ impl CompletionRequest {
             top_k,
             grammar,
             grammar_type,
+            adapters,
         })
     }
 }
@@ -731,6 +745,7 @@ struct ChatCompletionRequest {
     top_k: Option<usize>,
     grammar: Option<String>,
     grammar_type: Option<String>,
+    adapters: Option<Vec<String>>,
 }
 
 #[pymethods]
@@ -752,7 +767,8 @@ impl ChatCompletionRequest {
         top_k = None,
         stream=false,
         grammar = None,
-        grammar_type = None
+        grammar_type = None,
+        adapters = None
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -771,6 +787,7 @@ impl ChatCompletionRequest {
         stream: Option<bool>,
         grammar: Option<String>,
         grammar_type: Option<String>,
+        adapters: Option<Vec<String>>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -805,6 +822,7 @@ impl ChatCompletionRequest {
             stream: stream.unwrap_or(false),
             grammar,
             grammar_type,
+            adapters,
         })
     }
 }

@@ -59,11 +59,12 @@ pub trait ModelPaths {
     fn get_tokenizer_filename(&self) -> &PathBuf;
     fn get_template_filename(&self) -> &PathBuf;
     fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>>;
-    fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>>;
+    fn get_adapter_configs(&self) -> &Option<Vec<((String, String), LoraConfig)>>; // (id name, name)
     fn get_classifier_path(&self) -> &Option<PathBuf>;
     fn get_classifier_config(&self) -> &Option<XLoraConfig>;
     fn get_ordering(&self) -> &Option<Ordering>;
     fn get_gen_conf_filename(&self) -> Option<&PathBuf>;
+    fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>>;
 }
 
 pub struct SimpleModelPaths<P> {
@@ -72,11 +73,12 @@ pub struct SimpleModelPaths<P> {
     template_filename: P,
     filenames: Vec<P>,
     xlora_adapter_filenames: Option<Vec<(String, P)>>,
-    xlora_adapter_configs: Option<Vec<(String, LoraConfig)>>,
+    xlora_adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
     classifier_path: Option<P>,
     classifier_config: Option<XLoraConfig>,
     xlora_ordering: Option<Ordering>,
     gen_conf: Option<P>,
+    lora_preload_adapter_info: Option<HashMap<String, (P, LoraConfig)>>,
 }
 
 impl ModelPaths for SimpleModelPaths<PathBuf> {
@@ -92,7 +94,7 @@ impl ModelPaths for SimpleModelPaths<PathBuf> {
     fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>> {
         &self.xlora_adapter_filenames
     }
-    fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>> {
+    fn get_adapter_configs(&self) -> &Option<Vec<((String, String), LoraConfig)>> {
         &self.xlora_adapter_configs
     }
     fn get_classifier_config(&self) -> &Option<XLoraConfig> {
@@ -109,6 +111,9 @@ impl ModelPaths for SimpleModelPaths<PathBuf> {
     }
     fn get_gen_conf_filename(&self) -> Option<&PathBuf> {
         self.gen_conf.as_ref()
+    }
+    fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>> {
+        &self.lora_preload_adapter_info
     }
 }
 
@@ -246,13 +251,22 @@ pub struct GeneralMetadata {
     pub is_xlora: bool,
     pub num_hidden_layers: usize,
     pub eos_tok: Vec<u32>,
+    pub is_lora: bool,
+}
+
+pub enum AdapterInstruction {
+    Activate(Vec<String>),
+    None,
 }
 
 pub enum CacheInstruction {
-    In,
+    In(AdapterInstruction),
     Out,
-    Reset { reset_non_granular: bool },
-    Nonthing,
+    Reset {
+        reset_non_granular: bool,
+        adapter_inst: AdapterInstruction,
+    },
+    Nothing(AdapterInstruction),
 }
 
 #[async_trait::async_trait]
@@ -281,9 +295,45 @@ pub trait Pipeline: Send + Sync {
         .unwrap();
 
         match pre_op {
-            CacheInstruction::In => self.clone_in_cache(input_seqs, false),
-            CacheInstruction::Nonthing => (),
-            CacheInstruction::Reset { reset_non_granular } => {
+            CacheInstruction::In(adapter_inst) => {
+                match adapter_inst {
+                    AdapterInstruction::Activate(adapters) => {
+                        self.activate_adapters(adapters).map_err(|e| {
+                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                dyn std::error::Error,
+                            >>::as_ref(&e))
+                        })?
+                    }
+                    AdapterInstruction::None => 0,
+                };
+                self.clone_in_cache(input_seqs, false)
+            }
+            CacheInstruction::Nothing(adapter_inst) => {
+                match adapter_inst {
+                    AdapterInstruction::Activate(adapters) => {
+                        self.activate_adapters(adapters).map_err(|e| {
+                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                dyn std::error::Error,
+                            >>::as_ref(&e))
+                        })?
+                    }
+                    AdapterInstruction::None => 0,
+                };
+            }
+            CacheInstruction::Reset {
+                reset_non_granular,
+                adapter_inst,
+            } => {
+                match adapter_inst {
+                    AdapterInstruction::Activate(adapters) => {
+                        self.activate_adapters(adapters).map_err(|e| {
+                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                dyn std::error::Error,
+                            >>::as_ref(&e))
+                        })?
+                    }
+                    AdapterInstruction::None => 0,
+                };
                 self.set_none_cache(reset_non_granular, false)
             }
             _ => unreachable!("Unreachable PRE cache op."),
@@ -293,10 +343,11 @@ pub trait Pipeline: Send + Sync {
 
         match post_op {
             CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
-            CacheInstruction::Nonthing => (),
-            CacheInstruction::Reset { reset_non_granular } => {
-                self.set_none_cache(reset_non_granular, false)
-            }
+            CacheInstruction::Nothing(_) => (),
+            CacheInstruction::Reset {
+                reset_non_granular,
+                adapter_inst: _,
+            } => self.set_none_cache(reset_non_granular, false),
             _ => unreachable!("Unreachable POST cache op."),
         }
 
@@ -373,6 +424,8 @@ pub trait Pipeline: Send + Sync {
     /// This may also reset the non granular state if applicable.
     fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool);
     fn cache(&self) -> &Cache;
+    /// Returns the number of activated adapters.
+    fn activate_adapters(&mut self, adapters: Vec<String>) -> Result<usize>;
 }
 
 pub trait CacheManager {
@@ -407,12 +460,13 @@ pub trait NormalModelLoader {
         config: &str,
         use_flash_attn: bool,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         mapper: DeviceMapMetadata,
         loading_isq: bool,
         device: Device,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn is_gptx(&self) -> bool;
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
@@ -539,6 +593,9 @@ pub trait NormalModel {
             });
         info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors.");
         Ok(())
+    }
+    fn activate_adapters(&mut self, _: Vec<String>) -> candle_core::Result<usize> {
+        candle_core::bail!("Unable to activate adapters for model without adapters");
     }
 }
 
@@ -769,11 +826,12 @@ pub(crate) fn extract_logits(
 }
 
 struct XLoraPaths {
-    adapter_configs: Option<Vec<(String, LoraConfig)>>,
+    adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
     adapter_safetensors: Option<Vec<(String, PathBuf)>>,
     classifier_path: Option<PathBuf>,
     xlora_order: Option<Ordering>,
     xlora_config: Option<XLoraConfig>,
+    lora_preload_adapter_info: Option<HashMap<String, (PathBuf, LoraConfig)>>,
 }
 
 fn get_xlora_paths(
@@ -882,7 +940,7 @@ fn get_xlora_paths(
                 } else {
                     let conf = fs::read_to_string(path)?;
                     let lora_config: LoraConfig = serde_json::from_str(&conf)?;
-                    adapters_configs.push(((i + 1).to_string(), lora_config));
+                    adapters_configs.push((((i + 1).to_string(), name.clone()), lora_config));
                 }
             }
         }
@@ -900,12 +958,66 @@ fn get_xlora_paths(
             );
         }
 
+        let lora_preload_adapter_info = if let Some(xlora_order) = xlora_order {
+            if let Some(preload_adapters) = &xlora_order.preload_adapters {
+                let mut output = HashMap::new();
+                for adapter in preload_adapters {
+                    let adapter_files = api_dir_list!(api, &adapter.adapter_model_id)
+                        .filter_map(|f| {
+                            if f.contains(&adapter.name) {
+                                Some((f, adapter.name.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    if adapter_files.is_empty() {
+                        anyhow::bail!("Adapter files are empty. Perhaps the ordering file adapters does not match the actual adapters?")
+                    }
+                    let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
+                    for (file, name) in adapter_files {
+                        if let Some(paths) = adapters_paths.get_mut(&name) {
+                            paths.push(api_get_file!(api, &file, Path::new("")));
+                        } else {
+                            adapters_paths
+                                .insert(name, vec![api_get_file!(api, &file, Path::new(""))]);
+                        }
+                    }
+
+                    let mut config = None;
+                    let mut safetensor = None;
+
+                    let paths = adapters_paths
+                        .get(&adapter.name)
+                        .unwrap_or_else(|| panic!("Adapter {} not found.", adapter.name));
+                    for path in paths {
+                        if path.extension().unwrap() == "safetensors" {
+                            safetensor = Some(path.to_owned());
+                        } else {
+                            let conf = fs::read_to_string(path)?;
+                            let lora_config: LoraConfig = serde_json::from_str(&conf)?;
+                            config = Some(lora_config);
+                        }
+                    }
+
+                    let (config, safetensor) = (config.unwrap(), safetensor.unwrap());
+                    output.insert(adapter.name.clone(), (safetensor, config));
+                }
+                Some(output)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         XLoraPaths {
             adapter_configs: Some(adapters_configs),
             adapter_safetensors: Some(adapters_safetensors),
             classifier_path: Some(classifier_path),
             xlora_order: xlora_order.clone(),
             xlora_config: Some(xlora_config),
+            lora_preload_adapter_info,
         }
     } else {
         XLoraPaths {
@@ -914,6 +1026,7 @@ fn get_xlora_paths(
             classifier_path: None,
             xlora_order: None,
             xlora_config: None,
+            lora_preload_adapter_info: None,
         }
     })
 }

@@ -153,7 +153,7 @@ fn new(
     rotary_emb: Arc<RotaryEmbedding>,
     cfg: &Config,
     vb: VarBuilder,
-+   lora_config: &[(String, LoraConfig)],
++   lora_config: &[((String, String), LoraConfig)],
 +   count: &mut usize,
 +   ord: &Ordering,
 ) -> Result<Self> {
