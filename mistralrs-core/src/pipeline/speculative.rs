@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{quantized::GgmlDType, Device, IndexOp, Result, Tensor};
+use candle_core::{quantized::GgmlDType, DType, Device, IndexOp, Result, Tensor, D};
 use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
 
