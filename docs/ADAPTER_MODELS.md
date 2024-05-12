@@ -67,7 +67,7 @@ Please see [this page](NON_GRANULAR.md) for more details and examples.
 We support dynamic adapter activation for LoRA models, allowing you to activate a set of adapters at runtime. There is a Python, Rust and HTTP API:
 
 - Rust: [example](../mistralrs/examples/lora/main.rs)
-- Python: [example](../examples/python/lora_zephy.py)
+- Python: [example](../examples/python/lora_zephyr.py)
 - HTTP: [example](../examples/http.md)
 
 To use this feature, you should add a `preload_adapters` key to your ordering file:
@@ -80,6 +80,6 @@ To use this feature, you should add a `preload_adapters` key to your ordering fi
 }
 ```
 
-This allows mistral.rs to preload the adapter and allow runtime activation.
+This allows mistral.rs to preload the adapter and enable runtime activation.
 
-We also provide a script to add this key to your existing order file: [`sety_names.py`](../scripts/lora_add_preload_adapters.py).
+We also provide a script to add this key to your existing order file: [`load_add_preload_adapters.py`](../scripts/lora_add_preload_adapters.py).
