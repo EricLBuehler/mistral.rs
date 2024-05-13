@@ -1,6 +1,12 @@
-use std::collections::{HashMap, VecDeque};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::atomic::Ordering,
+};
 
-use crate::sequence::{Sequence, SequenceState};
+use crate::{
+    engine::TERMINATE_ALL_NEXT_STEP,
+    sequence::{Sequence, SequenceState, StopReason},
+};
 use range_checked::UsizeBounded;
 
 pub trait FcfsBacker: Default {
@@ -214,6 +220,12 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             }
             (0, _) => {
                 self.running = self.bucket_and_waitlist_seqs(running);
+                if TERMINATE_ALL_NEXT_STEP.load(Ordering::SeqCst) {
+                    let _ = self
+                        .running
+                        .iter_mut()
+                        .map(|seq| seq.set_state(SequenceState::Done(StopReason::Canceled)));
+                }
                 return SchedulerOutput {
                     prompt: vec![].into(),
                     completion: self.running.iter_mut().collect::<Vec<_>>().into(),
