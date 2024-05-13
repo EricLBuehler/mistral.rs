@@ -29,7 +29,7 @@ FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 as base
 ENV HUGGINGFACE_HUB_CACHE=/data \
     PORT=80 \
     RAYON_NUM_THREADS=8 \ 
-    LD_LIBRARY_PATH=/usr/local/cuda/targets/x86_64-linux/lib:$LD_LIBRARY_PATH
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     libomp-dev \
@@ -38,6 +38,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     curl \
     pkg-config \
     libpython3.10-dev \
+    && ln -s /usr/local/cuda/lib64/libcublas.so.12 /usr/local/cuda/lib64/libcublas.so \
     && rm -rf /var/lib/apt/lists/*
 
 FROM base
