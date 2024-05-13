@@ -221,8 +221,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             (0, _) => {
                 self.running = self.bucket_and_waitlist_seqs(running);
                 if TERMINATE_ALL_NEXT_STEP.load(Ordering::SeqCst) {
-                    self
-                        .running
+                    self.running
                         .iter_mut()
                         .for_each(|seq| seq.set_state(SequenceState::Done(StopReason::Canceled)));
                     TERMINATE_ALL_NEXT_STEP.store(false, Ordering::SeqCst);
