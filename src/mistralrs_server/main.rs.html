@@ -327,6 +327,7 @@
 <a href="#325" id="325">325</a>
 <a href="#326" id="326">326</a>
 <a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{Json, State},
@@ -631,13 +632,14 @@
     .with_opt_log(args.log)
     .with_truncate_sequence(args.truncate_sequence)
     .with_no_kv_cache(args.no_kv_cache)
-    .with_prefix_cache_n(args.prefix_cache_n)
-    .build();
+    .with_prefix_cache_n(args.prefix_cache_n);
 
     <span class="kw">if </span>args.interactive_mode {
-        interactive_mode(mistralrs).<span class="kw">await</span>;
+        interactive_mode(mistralrs.with_interactive().build()).<span class="kw">await</span>;
         <span class="kw">return </span><span class="prelude-val">Ok</span>(());
     }
+
+    <span class="kw">let </span>mistralrs = mistralrs.build();
 
     <span class="kw">let </span>port = args.port.expect(<span class="string">"Expected port to be specified."</span>);
 

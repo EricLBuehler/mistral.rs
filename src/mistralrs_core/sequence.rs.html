@@ -598,6 +598,11 @@
 <a href="#596" id="596">596</a>
 <a href="#597" id="597">597</a>
 <a href="#598" id="598">598</a>
+<a href="#599" id="599">599</a>
+<a href="#600" id="600">600</a>
+<a href="#601" id="601">601</a>
+<a href="#602" id="602">602</a>
+<a href="#603" id="603">603</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fmt::Display,
     sync::{Arc, RwLock},
@@ -959,6 +964,11 @@
         };
         <span class="kw">if </span>is_eos {
             <span class="prelude-val">Some</span>(StopReason::Eos)
+        } <span class="kw">else if </span><span class="macro">matches!</span>(
+            <span class="kw-2">&amp;*</span><span class="self">self</span>.state.read().unwrap(),
+            SequenceState::Done(StopReason::Canceled)
+        ) {
+            <span class="prelude-val">Some</span>(StopReason::Canceled)
         } <span class="kw">else if </span><span class="self">self</span>.stop_tokens.contains(<span class="kw-2">&amp;</span>tok) {
             <span class="prelude-val">Some</span>(StopReason::StopTok(tok))
         } <span class="kw">else if </span><span class="self">self</span>.max_len.is_some()

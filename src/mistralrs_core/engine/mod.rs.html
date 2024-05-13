@@ -542,9 +542,23 @@
 <a href="#540" id="540">540</a>
 <a href="#541" id="541">541</a>
 <a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
+<a href="#551" id="551">551</a>
+<a href="#552" id="552">552</a>
+<a href="#553" id="553">553</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::{HashMap, VecDeque},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 <span class="kw">use </span>tokio::sync::{mpsc::Receiver, Mutex};
@@ -574,6 +588,7 @@
 };
 
 <span class="kw">const </span>SEED: u64 = <span class="number">0</span>;
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">static </span>TERMINATE_ALL_NEXT_STEP: AtomicBool = AtomicBool::new(<span class="bool-val">false</span>);
 
 <span class="kw">pub struct </span>Engine {
     rx: Receiver&lt;Request&gt;,
@@ -598,9 +613,16 @@
         no_prefix_cache: bool,
         prefix_cache_n: usize,
         disable_eos_stop: bool,
+        interactive: bool,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>device = <span class="macro">get_mut_arcmutex!</span>(pipeline).device().clone();
         <span class="kw">let </span>is_xlora = <span class="macro">get_mut_arcmutex!</span>(pipeline).get_metadata().is_xlora;
+        <span class="kw">if </span>interactive {
+            ctrlc::set_handler(<span class="kw">move </span>|| {
+                TERMINATE_ALL_NEXT_STEP.store(<span class="bool-val">true</span>, Ordering::SeqCst);
+            })
+            .expect(<span class="string">"Failed to set CTRL-C handler for interactive mode"</span>);
+        }
         <span class="self">Self </span>{
             rx,
             pipeline,

@@ -240,6 +240,15 @@
 <a href="#238" id="238">238</a>
 <a href="#239" id="239">239</a>
 <a href="#240" id="240">240</a>
+<a href="#241" id="241">241</a>
+<a href="#242" id="242">242</a>
+<a href="#243" id="243">243</a>
+<a href="#244" id="244">244</a>
+<a href="#245" id="245">245</a>
+<a href="#246" id="246">246</a>
+<a href="#247" id="247">247</a>
+<a href="#248" id="248">248</a>
+<a href="#249" id="249">249</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -319,6 +328,7 @@
     no_prefix_cache: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     prefix_cache_n: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     disable_eos_stop: <span class="prelude-ty">Option</span>&lt;bool&gt;,
+    interactive: <span class="prelude-ty">Option</span>&lt;bool&gt;,
 }
 
 <span class="kw">impl </span>MistralRsBuilder {
@@ -332,6 +342,7 @@
             no_prefix_cache: <span class="prelude-val">None</span>,
             prefix_cache_n: <span class="prelude-val">None</span>,
             disable_eos_stop: <span class="prelude-val">None</span>,
+            interactive: <span class="prelude-val">None</span>,
         }
     }
 
@@ -363,6 +374,10 @@
         <span class="self">self</span>.disable_eos_stop = <span class="prelude-val">Some</span>(disable_eos_stop);
         <span class="self">self
     </span>}
+    <span class="kw">pub fn </span>with_interactive(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.interactive = <span class="prelude-val">Some</span>(<span class="bool-val">true</span>);
+        <span class="self">self
+    </span>}
 
     <span class="kw">pub fn </span>build(<span class="self">self</span>) -&gt; Arc&lt;MistralRs&gt; {
         MistralRs::new(<span class="self">self</span>)
@@ -380,6 +395,7 @@
             no_prefix_cache,
             prefix_cache_n,
             disable_eos_stop,
+            interactive,
         } = config;
 
         <span class="kw">let </span>truncate_sequence = truncate_sequence.unwrap_or(<span class="bool-val">false</span>);
@@ -387,6 +403,7 @@
         <span class="kw">let </span>no_prefix_cache = no_prefix_cache.unwrap_or(<span class="bool-val">false</span>);
         <span class="kw">let </span>prefix_cache_n = prefix_cache_n.unwrap_or(<span class="number">16</span>);
         <span class="kw">let </span>disable_eos_stop = disable_eos_stop.unwrap_or(<span class="bool-val">false</span>);
+        <span class="kw">let </span>interactive = interactive.unwrap_or(<span class="bool-val">false</span>);
 
         <span class="kw">let </span>(tx, rx) = channel(<span class="number">10_000</span>);
 
@@ -412,6 +429,7 @@
                     no_prefix_cache,
                     prefix_cache_n,
                     disable_eos_stop,
+                    interactive,
                 );
                 engine.run().<span class="kw">await</span>;
             });
