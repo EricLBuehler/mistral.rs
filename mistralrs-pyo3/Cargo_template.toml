@@ -26,4 +26,8 @@ accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
 either.workspace = true
 futures.workspace = true
+tokio.workspace = true
 tracing-subscriber.workspace = true
+
+[build-dependencies]
+pyo3-build-config = "0.21"
