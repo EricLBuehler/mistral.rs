@@ -94,17 +94,14 @@ impl CausalSelfAttention {
         if let Some((cache_k, cache_v)) = &kv_cache[block_idx] {
             k = candle_nn::ops::kvconcat(cache_k, &k, 2)?.contiguous()?;
             v = candle_nn::ops::kvconcat(cache_v, &v, 2)?.contiguous()?;
-            let k_seq_len = k.dims()[1];
-            if k_seq_len > self.max_seq_len {
+            let kv_seq_len = k.dims()[2];
+            if kv_seq_len > self.max_seq_len {
                 k = k
-                    .narrow(D::Minus1, k_seq_len - self.max_seq_len, self.max_seq_len)?
-                    .contiguous()?
-            }
-            let v_seq_len = v.dims()[1];
-            if v_seq_len > 2 * self.max_seq_len {
+                    .narrow(2, kv_seq_len - self.max_seq_len, self.max_seq_len)?
+                    .contiguous()?;
                 v = v
-                    .narrow(D::Minus1, v_seq_len - self.max_seq_len, self.max_seq_len)?
-                    .contiguous()?
+                    .narrow(2, kv_seq_len - self.max_seq_len, self.max_seq_len)?
+                    .contiguous()?;
             }
         }
         kv_cache[block_idx] = Some((k.clone(), v.clone()));
