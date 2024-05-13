@@ -746,7 +746,7 @@
             }
 
             <span class="kw">if </span><span class="self">self</span>.is_debug {
-                <span class="kw">let </span>ms_from_last_run = run_start.elapsed().as_millis();
+                <span class="kw">let </span>ms_from_last_run = run_start.elapsed().as_secs_f64();
                 <span class="kw">let </span>total_len = scheduled.prompt.len() + scheduled.completion.len();
                 <span class="kw">if </span>total_len &gt; <span class="number">0 </span>{
                     <span class="kw">let </span>prompt_lengths = scheduled
@@ -767,7 +767,7 @@
                         <span class="string">"Prompt[{}] Completion[{}] - {}ms"</span>,
                         prompt_lengths,
                         completion_lengths,
-                        ms_from_last_run
+                        ms_from_last_run * <span class="number">1000.</span>,
                     );
                 }
             }
