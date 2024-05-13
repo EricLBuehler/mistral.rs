@@ -77,6 +77,7 @@ pub struct MistralRsBuilder {
     no_prefix_cache: Option<bool>,
     prefix_cache_n: Option<usize>,
     disable_eos_stop: Option<bool>,
+    interactive: Option<bool>,
 }
 
 impl MistralRsBuilder {
@@ -90,6 +91,7 @@ impl MistralRsBuilder {
             no_prefix_cache: None,
             prefix_cache_n: None,
             disable_eos_stop: None,
+            interactive: None,
         }
     }
 
@@ -121,6 +123,10 @@ impl MistralRsBuilder {
         self.disable_eos_stop = Some(disable_eos_stop);
         self
     }
+    pub fn with_interactive(mut self) -> Self {
+        self.interactive = Some(true);
+        self
+    }
 
     pub fn build(self) -> Arc<MistralRs> {
         MistralRs::new(self)
@@ -138,6 +144,7 @@ impl MistralRs {
             no_prefix_cache,
             prefix_cache_n,
             disable_eos_stop,
+            interactive,
         } = config;
 
         let truncate_sequence = truncate_sequence.unwrap_or(false);
@@ -145,6 +152,7 @@ impl MistralRs {
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);
         let prefix_cache_n = prefix_cache_n.unwrap_or(16);
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
+        let interactive = interactive.unwrap_or(false);
 
         let (tx, rx) = channel(10_000);
 
@@ -170,6 +178,7 @@ impl MistralRs {
                     no_prefix_cache,
                     prefix_cache_n,
                     disable_eos_stop,
+                    interactive,
                 );
                 engine.run().await;
             });
