@@ -202,7 +202,7 @@ impl Engine {
             }
 
             if self.is_debug {
-                let ms_from_last_run = run_start.elapsed().as_millis();
+                let ms_from_last_run = run_start.elapsed().as_secs_f64();
                 let total_len = scheduled.prompt.len() + scheduled.completion.len();
                 if total_len > 0 {
                     let prompt_lengths = scheduled
@@ -223,7 +223,7 @@ impl Engine {
                         "Prompt[{}] Completion[{}] - {}ms",
                         prompt_lengths,
                         completion_lengths,
-                        ms_from_last_run
+                        ms_from_last_run * 1000.,
                     );
                 }
             }
