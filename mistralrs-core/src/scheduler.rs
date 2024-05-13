@@ -225,6 +225,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
                         .running
                         .iter_mut()
                         .map(|seq| seq.set_state(SequenceState::Done(StopReason::Canceled)));
+                    TERMINATE_ALL_NEXT_STEP.store(false, Ordering::SeqCst);
                 }
                 return SchedulerOutput {
                     prompt: vec![].into(),
