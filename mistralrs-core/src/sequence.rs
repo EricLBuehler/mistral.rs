@@ -359,6 +359,11 @@ impl Sequence {
         };
         if is_eos {
             Some(StopReason::Eos)
+        } else if matches!(
+            &*self.state.read().unwrap(),
+            SequenceState::Done(StopReason::Canceled)
+        ) {
+            Some(StopReason::Canceled)
         } else if self.stop_tokens.contains(&tok) {
             Some(StopReason::StopTok(tok))
         } else if self.max_len.is_some()
