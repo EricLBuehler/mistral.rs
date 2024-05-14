@@ -192,7 +192,6 @@ impl LayerWeights {
             (q.contiguous()?.matmul(&k.t()?.contiguous()?)? / (self.head_dim as f64).sqrt())?
         };
 
-        let att = (q.contiguous()?.matmul(&k.t()?.contiguous()?)? / (self.head_dim as f64).sqrt())?;
         let att = CausalMasker.apply_mask(mask, att, &self.neg_inf)?;
         let att = candle_nn::ops::softmax_last_dim(&att)?;
         // Convert to contiguous as matmul doesn't support strided vs for now.
@@ -422,8 +421,10 @@ impl ModelWeights {
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
-        is_prompt: bool,
     ) -> Result<Tensor> {
+        let (bz, seq_len, _) = x.dims3()?;
+        let via_f16 = bz * seq_len > 256;
+
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();
         let mask = CausalMasker.make_causal_mask(x, &cache)?;

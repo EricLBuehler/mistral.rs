@@ -523,7 +523,6 @@ impl Pipeline for GGUFPipeline {
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
-                is_prompt,
             ),
             Model::Phi2(ref mut model) => model.forward(&input_ids, &seqlen_offsets, context_lens),
             Model::XLoraLlama(ref mut model) => model.forward(

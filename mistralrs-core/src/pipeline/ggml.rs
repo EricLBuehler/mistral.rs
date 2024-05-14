@@ -391,7 +391,6 @@ impl Pipeline for GGMLPipeline {
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
-                is_prompt,
             ),
             Model::XLoraLlama(ref mut model) => model.forward(
                 &input_ids,
