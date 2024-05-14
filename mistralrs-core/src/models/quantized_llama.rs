@@ -423,7 +423,7 @@ impl ModelWeights {
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
         let (bz, seq_len, _) = x.dims3()?;
-        let via_f16 = bz * seq_len > 256;
+        let via_f16 = seq_len > 32;
 
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();
