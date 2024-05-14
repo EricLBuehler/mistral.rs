@@ -1999,7 +1999,7 @@
         <span class="kw">let </span>xlora_classifier = <span class="kw-2">&amp;</span><span class="macro">api_dir_list!</span>(api, model_id)
             .filter(|x| x.contains(<span class="string">"xlora_classifier.safetensors"</span>))
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-        <span class="kw">if </span>xlora_classifier.len() != <span class="number">1 </span>{
+        <span class="kw">if </span>xlora_classifier.len() &gt; <span class="number">1 </span>{
             <span class="macro">warn!</span>(<span class="string">"Detected multiple X-LoRA classifiers: {xlora_classifier:?}"</span>);
             <span class="macro">warn!</span>(<span class="string">"Selected classifier: `{}`"</span>, <span class="kw-2">&amp;</span>xlora_classifier[<span class="number">0</span>]);
         }
@@ -2007,7 +2007,7 @@
         <span class="kw">let </span>xlora_configs = <span class="kw-2">&amp;</span><span class="macro">api_dir_list!</span>(api, model_id)
             .filter(|x| x.contains(<span class="string">"xlora_config.json"</span>))
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-        <span class="kw">if </span>xlora_configs.len() != <span class="number">1 </span>{
+        <span class="kw">if </span>xlora_configs.len() &gt; <span class="number">1 </span>{
             <span class="macro">warn!</span>(<span class="string">"Detected multiple X-LoRA configs: {xlora_configs:?}"</span>);
         }
 
