@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["CausalMasker","PhiRotaryEmbedding","QRmsNorm","RmsNorm"]};
+window.SIDEBAR_ITEMS = {"fn":["flash_attn","repeat_kv","verify_sanity_gguf"],"struct":["CausalMasker","PhiRotaryEmbedding","QRmsNorm","RmsNorm"]};

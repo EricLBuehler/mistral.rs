@@ -839,14 +839,6 @@
 <a href="#837" id="837">837</a>
 <a href="#838" id="838">838</a>
 <a href="#839" id="839">839</a>
-<a href="#840" id="840">840</a>
-<a href="#841" id="841">841</a>
-<a href="#842" id="842">842</a>
-<a href="#843" id="843">843</a>
-<a href="#844" id="844">844</a>
-<a href="#845" id="845">845</a>
-<a href="#846" id="846">846</a>
-<a href="#847" id="847">847</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -859,9 +851,9 @@
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    layers::CausalMasker,
-    models::{flash_attn, gemma::Config, repeat_kv, Cache},
-    pipeline::{extract_logits, NormalModel},
+    layers::{flash_attn, repeat_kv, CausalMasker},
+    models::gemma::Config,
+    pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };
 
@@ -1163,15 +1155,7 @@
                 </span>.contiguous()<span class="question-mark">?</span>;
         }
 
-        <span class="kw">let </span>(k, v) = <span class="kw">match </span><span class="kw-2">&amp;*</span>kv_cache {
-            <span class="prelude-val">None </span>=&gt; (k, v),
-            <span class="prelude-val">Some</span>((prev_k, prev_v)) =&gt; {
-                <span class="kw">let </span>k = candle_nn::ops::kvconcat(prev_k, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>;
-                <span class="kw">let </span>v = candle_nn::ops::kvconcat(prev_v, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>;
-                (k, v)
-            }
-        };
-        <span class="kw-2">*</span>kv_cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
+        <span class="kw">let </span>(k, v) = Cache::update_kv_cache(kv_cache, k, v)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;

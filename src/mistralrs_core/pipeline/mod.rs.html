@@ -1125,22 +1125,6 @@
 <a href="#1123" id="1123">1123</a>
 <a href="#1124" id="1124">1124</a>
 <a href="#1125" id="1125">1125</a>
-<a href="#1126" id="1126">1126</a>
-<a href="#1127" id="1127">1127</a>
-<a href="#1128" id="1128">1128</a>
-<a href="#1129" id="1129">1129</a>
-<a href="#1130" id="1130">1130</a>
-<a href="#1131" id="1131">1131</a>
-<a href="#1132" id="1132">1132</a>
-<a href="#1133" id="1133">1133</a>
-<a href="#1134" id="1134">1134</a>
-<a href="#1135" id="1135">1135</a>
-<a href="#1136" id="1136">1136</a>
-<a href="#1137" id="1137">1137</a>
-<a href="#1138" id="1138">1138</a>
-<a href="#1139" id="1139">1139</a>
-<a href="#1140" id="1140">1140</a>
-<a href="#1141" id="1141">1141</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>cache_manager;
 <span class="kw">mod </span>chat_template;
 <span class="kw">mod </span>ggml;
@@ -1190,11 +1174,12 @@
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
 
 <span class="kw">use crate</span>::{
-    models::Cache,
     sequence::Sequence,
     utils::tokens::get_token,
     xlora_models::{NonGranularState, XLoraConfig},
 };
+
+<span class="kw">pub use </span><span class="self">self</span>::cache_manager::{Cache, CacheManager, LayerCaches};
 
 <span class="kw">pub trait </span>ModelPaths {
     <span class="kw">fn </span>get_weight_filenames(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[PathBuf];
@@ -1570,23 +1555,6 @@
     <span class="doccomment">/// Returns the number of activated adapters.
     </span><span class="kw">fn </span>activate_adapters(<span class="kw-2">&amp;mut </span><span class="self">self</span>, adapters: Vec&lt;String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
 }
-
-<span class="kw">pub trait </span>CacheManager {
-    <span class="kw">fn </span>clone_in_cache(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline,
-        seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
-        modify_draft_cache: bool,
-    );
-    <span class="kw">fn </span>clone_out_cache(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline,
-        seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
-        modify_draft_cache: bool,
-    );
-    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, pipeline: <span class="kw-2">&amp;mut </span><span class="kw">dyn </span>Pipeline, modify_draft_cache: bool);
-}
-
 <span class="kw">pub trait </span>NormalModelLoader {
     <span class="kw">fn </span>load(
         <span class="kw-2">&amp;</span><span class="self">self</span>,

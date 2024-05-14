@@ -784,14 +784,6 @@
 <a href="#782" id="782">782</a>
 <a href="#783" id="783">783</a>
 <a href="#784" id="784">784</a>
-<a href="#785" id="785">785</a>
-<a href="#786" id="786">786</a>
-<a href="#787" id="787">787</a>
-<a href="#788" id="788">788</a>
-<a href="#789" id="789">789</a>
-<a href="#790" id="790">790</a>
-<a href="#791" id="791">791</a>
-<a href="#792" id="792">792</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -811,8 +803,8 @@
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    layers::CausalMasker,
-    models::{flash_attn, phi2::Config, repeat_kv},
+    layers::{flash_attn, repeat_kv, CausalMasker},
+    models::phi2::Config,
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
@@ -1077,15 +1069,7 @@
                 </span>.contiguous()<span class="question-mark">?</span>;
         }
 
-        <span class="kw">let </span>(k, v) = <span class="kw">match </span><span class="kw-2">&amp;*</span>kv_cache {
-            <span class="prelude-val">None </span>=&gt; (k, v),
-            <span class="prelude-val">Some</span>((prev_k, prev_v)) =&gt; {
-                <span class="kw">let </span>k = candle_nn::ops::kvconcat(prev_k, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>;
-                <span class="kw">let </span>v = candle_nn::ops::kvconcat(prev_v, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>;
-                (k, v)
-            }
-        };
-        <span class="kw-2">*</span>kv_cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
+        <span class="kw">let </span>(k, v) = Cache::update_kv_cache(kv_cache, k, v)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_heads / <span class="self">self</span>.num_kv_heads)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_heads / <span class="self">self</span>.num_kv_heads)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;

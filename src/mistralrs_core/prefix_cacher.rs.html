@@ -201,7 +201,7 @@
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>radix_trie::{Trie, TrieCommon, TrieKey};
 
-<span class="kw">use crate</span>::{get_mut_arcmutex, models::LayerCaches, sequence::Sequence};
+<span class="kw">use crate</span>::{get_mut_arcmutex, pipeline::LayerCaches, sequence::Sequence};
 
 <span class="attr">#[derive(PartialEq, Eq)]
 </span><span class="kw">struct </span>Tokens(Vec&lt;u32&gt;);

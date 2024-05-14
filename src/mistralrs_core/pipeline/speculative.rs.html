@@ -492,7 +492,6 @@
 <a href="#490" id="490">490</a>
 <a href="#491" id="491">491</a>
 <a href="#492" id="492">492</a>
-<a href="#493" id="493">493</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     iter::zip,
     sync::{Arc, Mutex},
@@ -504,10 +503,9 @@
 
 <span class="kw">use crate</span>::{
     finish_and_add_tokens_to_seq, get_mut_arcmutex,
-    models::Cache,
     pipeline::{
         sampling::{sample_sequence, sample_target_sequence_speculative},
-        AdapterInstruction,
+        AdapterInstruction, Cache,
     },
     prefix_cacher::PrefixCacheManager,
     sequence::{Sequence, SequenceRecognizer},

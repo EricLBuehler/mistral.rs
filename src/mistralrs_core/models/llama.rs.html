@@ -413,21 +413,6 @@
 <a href="#411" id="411">411</a>
 <a href="#412" id="412">412</a>
 <a href="#413" id="413">413</a>
-<a href="#414" id="414">414</a>
-<a href="#415" id="415">415</a>
-<a href="#416" id="416">416</a>
-<a href="#417" id="417">417</a>
-<a href="#418" id="418">418</a>
-<a href="#419" id="419">419</a>
-<a href="#420" id="420">420</a>
-<a href="#421" id="421">421</a>
-<a href="#422" id="422">422</a>
-<a href="#423" id="423">423</a>
-<a href="#424" id="424">424</a>
-<a href="#425" id="425">425</a>
-<a href="#426" id="426">426</a>
-<a href="#427" id="427">427</a>
-<a href="#428" id="428">428</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -439,12 +424,10 @@
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    layers::{CausalMasker, RmsNorm},
+    layers::{flash_attn, repeat_kv, CausalMasker, RmsNorm},
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
-
-<span class="kw">use super</span>::{flash_attn, repeat_kv};
 
 <span class="attr">#[derive(Debug, Clone, Deserialize)]
 </span><span class="kw">pub struct </span>Config {
@@ -483,7 +466,7 @@
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
         block_idx: usize,
-        kv_cache: <span class="kw-2">&amp;mut </span><span class="kw">super</span>::LayerCaches,
+        kv_cache: <span class="kw-2">&amp;mut </span><span class="kw">crate</span>::pipeline::LayerCaches,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, seq_len, hidden_size) = x.dims3()<span class="question-mark">?</span>;
 
@@ -503,7 +486,7 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz * seq_len, <span class="self">self</span>.num_attention_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz * seq_len, <span class="self">self</span>.num_key_value_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>v = v
+        <span class="kw">let </span>v = v
             .reshape((b_sz, seq_len, <span class="self">self</span>.num_key_value_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 
@@ -521,20 +504,7 @@
                 </span>.contiguous()<span class="question-mark">?</span>;
         }
 
-        <span class="kw">if let </span><span class="prelude-val">Some</span>((cache_k, cache_v)) = <span class="kw-2">&amp;</span>kv_cache[block_idx] {
-            k = candle_nn::ops::kvconcat(cache_k, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-            v = candle_nn::ops::kvconcat(cache_v, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-            <span class="kw">let </span>kv_seq_len = k.dims()[<span class="number">2</span>];
-            <span class="kw">if </span>kv_seq_len &gt; <span class="self">self</span>.max_seq_len {
-                k = k
-                    .narrow(<span class="number">2</span>, kv_seq_len - <span class="self">self</span>.max_seq_len, <span class="self">self</span>.max_seq_len)<span class="question-mark">?
-                    </span>.contiguous()<span class="question-mark">?</span>;
-                v = v
-                    .narrow(<span class="number">2</span>, kv_seq_len - <span class="self">self</span>.max_seq_len, <span class="self">self</span>.max_seq_len)<span class="question-mark">?
-                    </span>.contiguous()<span class="question-mark">?</span>;
-            }
-        }
-        kv_cache[block_idx] = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
+        <span class="kw">let </span>(k, v) = <span class="kw">crate</span>::pipeline::Cache::update_kv_cache(<span class="kw-2">&amp;mut </span>kv_cache[block_idx], k, v)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_attention_heads / <span class="self">self</span>.num_key_value_heads)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_attention_heads / <span class="self">self</span>.num_key_value_heads)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
@@ -644,7 +614,7 @@
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
         block_idx: usize,
-        kv_cache: <span class="kw-2">&amp;mut </span><span class="kw">super</span>::LayerCaches,
+        kv_cache: <span class="kw-2">&amp;mut </span><span class="kw">crate</span>::pipeline::LayerCaches,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>residual = x;
         <span class="kw">let </span>x = <span class="self">self</span>.rms_1.forward(x)<span class="question-mark">?</span>;
@@ -700,7 +670,7 @@
     blocks: Vec&lt;Block&gt;,
     ln_f: RmsNorm,
     lm_head: QMatMul,
-    <span class="kw">pub </span>kv_cache: <span class="kw">super</span>::Cache,
+    <span class="kw">pub </span>kv_cache: <span class="kw">crate</span>::pipeline::Cache,
     <span class="kw">pub </span>device: Device,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
 }
@@ -791,7 +761,7 @@
             blocks,
             ln_f,
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
-            kv_cache: <span class="kw">super</span>::Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
+            kv_cache: <span class="kw">crate</span>::pipeline::Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
             device: real_device,
             mapper,
         })
@@ -829,7 +799,7 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="macro">unimplemented!</span>()
     }
-    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="kw">super</span>::Cache {
+    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="kw">crate</span>::pipeline::Cache {
         <span class="kw-2">&amp;</span><span class="self">self</span>.kv_cache
     }
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {

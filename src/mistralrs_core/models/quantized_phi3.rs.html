@@ -274,50 +274,17 @@
 <a href="#272" id="272">272</a>
 <a href="#273" id="273">273</a>
 <a href="#274" id="274">274</a>
-<a href="#275" id="275">275</a>
-<a href="#276" id="276">276</a>
-<a href="#277" id="277">277</a>
-<a href="#278" id="278">278</a>
-<a href="#279" id="279">279</a>
-<a href="#280" id="280">280</a>
-<a href="#281" id="281">281</a>
-<a href="#282" id="282">282</a>
-<a href="#283" id="283">283</a>
-<a href="#284" id="284">284</a>
-<a href="#285" id="285">285</a>
-<a href="#286" id="286">286</a>
-<a href="#287" id="287">287</a>
-<a href="#288" id="288">288</a>
-<a href="#289" id="289">289</a>
-<a href="#290" id="290">290</a>
-<a href="#291" id="291">291</a>
-<a href="#292" id="292">292</a>
-<a href="#293" id="293">293</a>
-<a href="#294" id="294">294</a>
-<a href="#295" id="295">295</a>
-<a href="#296" id="296">296</a>
-<a href="#297" id="297">297</a>
-<a href="#298" id="298">298</a>
-<a href="#299" id="299">299</a>
-<a href="#300" id="300">300</a>
-<a href="#301" id="301">301</a>
-<a href="#302" id="302">302</a>
-<a href="#303" id="303">303</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
-<span class="kw">use </span><span class="kw">crate</span>::layers::CausalMasker;
-<span class="kw">use </span><span class="kw">crate</span>::layers::RmsNorm;
+<span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, RmsNorm};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::Cache;
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
 <span class="kw">use </span>candle_core::quantized::gguf_file;
 <span class="kw">use </span>candle_core::quantized::QMatMul;
 <span class="kw">use </span>candle_core::quantized::QTensor;
 <span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::Embedding;
-
-<span class="kw">use </span><span class="kw">super</span>::repeat_kv;
-<span class="kw">use </span><span class="kw">super</span>::verify_sanity_gguf;
-<span class="kw">use </span><span class="kw">super</span>::Cache;
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">struct </span>Mlp {
@@ -406,33 +373,8 @@
         <span class="kw">let </span>q = <span class="self">self</span>.apply_rotary_emb(<span class="kw-2">&amp;</span>q, seqlen_offsets)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
         <span class="kw">let </span>k = <span class="self">self</span>.apply_rotary_emb(<span class="kw-2">&amp;</span>k, seqlen_offsets)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>(k, v, attn_mask) = <span class="kw">match </span>kv_cache.clone() {
-            <span class="prelude-val">None </span>=&gt; (k, v, mask.cloned()),
-            <span class="prelude-val">Some</span>((<span class="kw-2">mut </span>prev_k, <span class="kw-2">mut </span>prev_v)) =&gt; {
-                <span class="kw">let </span><span class="kw-2">mut </span>mask = mask.cloned();
-                <span class="kw">let </span>kv_seq_len = prev_k.dim(<span class="number">2</span>)<span class="question-mark">?</span>;
-                <span class="kw">let </span>sliding_window = <span class="self">self</span>.sliding_window;
-                <span class="kw">if </span>kv_seq_len &gt; sliding_window {
-                    prev_k =
-                        prev_k.narrow(<span class="number">2</span>, kv_seq_len - (sliding_window - <span class="number">1</span>), sliding_window - <span class="number">1</span>)<span class="question-mark">?</span>;
-                    prev_v =
-                        prev_v.narrow(<span class="number">2</span>, kv_seq_len - (sliding_window - <span class="number">1</span>), sliding_window - <span class="number">1</span>)<span class="question-mark">?</span>;
-                    <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>mask) = mask {
-                        <span class="kw">let </span>mask_len = mask.dim(<span class="number">1</span>)<span class="question-mark">?</span>;
-                        <span class="kw-2">*</span>mask =
-                            mask.narrow(<span class="number">1</span>, mask_len - (sliding_window - <span class="number">1</span>), sliding_window - <span class="number">1</span>)<span class="question-mark">?</span>;
-                        <span class="kw-2">*</span>mask = Tensor::cat(
-                            <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;*</span>mask, <span class="kw-2">&amp;</span>mask.narrow(<span class="number">1</span>, mask_len - <span class="number">1</span>, <span class="number">1</span>)<span class="question-mark">?</span>.ones_like()<span class="question-mark">?</span>],
-                            D::Minus1,
-                        )<span class="question-mark">?</span>;
-                    }
-                }
-                <span class="kw">let </span>k = Tensor::cat(<span class="kw-2">&amp;</span>[prev_k, k], <span class="number">2</span>)<span class="question-mark">?</span>;
-                <span class="kw">let </span>v = Tensor::cat(<span class="kw-2">&amp;</span>[prev_v, v], <span class="number">2</span>)<span class="question-mark">?</span>;
-                (k, v, mask)
-            }
-        };
-        <span class="kw-2">*</span>kv_cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
+        <span class="kw">let </span>(k, v, attn_mask) =
+            Cache::update_kv_cache_sliding_window(kv_cache, k, v, mask, <span class="prelude-val">Some</span>(<span class="self">self</span>.sliding_window))<span class="question-mark">?</span>;
 
         <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;

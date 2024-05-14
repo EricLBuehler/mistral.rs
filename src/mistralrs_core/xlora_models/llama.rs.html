@@ -790,19 +790,6 @@
 <a href="#788" id="788">788</a>
 <a href="#789" id="789">789</a>
 <a href="#790" id="790">790</a>
-<a href="#791" id="791">791</a>
-<a href="#792" id="792">792</a>
-<a href="#793" id="793">793</a>
-<a href="#794" id="794">794</a>
-<a href="#795" id="795">795</a>
-<a href="#796" id="796">796</a>
-<a href="#797" id="797">797</a>
-<a href="#798" id="798">798</a>
-<a href="#799" id="799">799</a>
-<a href="#800" id="800">800</a>
-<a href="#801" id="801">801</a>
-<a href="#802" id="802">802</a>
-<a href="#803" id="803">803</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -816,9 +803,9 @@
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    layers::{CausalMasker, RmsNorm},
-    models::{<span class="self">self</span>, flash_attn, llama::Config, repeat_kv, LayerCaches},
-    pipeline::{extract_logits, NormalModel},
+    layers::{flash_attn, repeat_kv, CausalMasker, RmsNorm},
+    models::llama::Config,
+    pipeline::{<span class="self">self</span>, extract_logits, LayerCaches, NormalModel},
     DeviceMapMetadata,
 };
 
@@ -886,7 +873,7 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz * seq_len, <span class="self">self</span>.num_attention_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz * seq_len, <span class="self">self</span>.num_key_value_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>v = v
+        <span class="kw">let </span>v = v
             .reshape((b_sz, seq_len, <span class="self">self</span>.num_key_value_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 
@@ -904,20 +891,7 @@
                 </span>.contiguous()<span class="question-mark">?</span>;
         }
 
-        <span class="kw">if let </span><span class="prelude-val">Some</span>((cache_k, cache_v)) = <span class="kw-2">&amp;</span>kv_cache[block_idx] {
-            k = candle_nn::ops::kvconcat(cache_k, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-            v = candle_nn::ops::kvconcat(cache_v, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-            <span class="kw">let </span>kv_seq_len = k.dims()[<span class="number">2</span>];
-            <span class="kw">if </span>kv_seq_len &gt; <span class="self">self</span>.max_seq_len {
-                k = k
-                    .narrow(<span class="number">2</span>, kv_seq_len - <span class="self">self</span>.max_seq_len, <span class="self">self</span>.max_seq_len)<span class="question-mark">?
-                    </span>.contiguous()<span class="question-mark">?</span>;
-                v = v
-                    .narrow(<span class="number">2</span>, kv_seq_len - <span class="self">self</span>.max_seq_len, <span class="self">self</span>.max_seq_len)<span class="question-mark">?
-                    </span>.contiguous()<span class="question-mark">?</span>;
-            }
-        }
-        kv_cache[block_idx] = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
+        <span class="kw">let </span>(k, v) = <span class="kw">crate</span>::pipeline::Cache::update_kv_cache(<span class="kw-2">&amp;mut </span>kv_cache[block_idx], k, v)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_attention_heads / <span class="self">self</span>.num_key_value_heads)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_attention_heads / <span class="self">self</span>.num_key_value_heads)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
@@ -1228,7 +1202,7 @@
     blocks: Vec&lt;Block&gt;,
     ln_f: RmsNorm,
     lm_head: QLinear,
-    <span class="kw">pub </span>kv_cache: models::Cache,
+    <span class="kw">pub </span>kv_cache: pipeline::Cache,
     <span class="kw">pub </span>device: Device,
     xlora_classifier: <span class="prelude-ty">Option</span>&lt;XLoraClassifier&gt;,
     dtype: DType,
@@ -1456,7 +1430,7 @@
             blocks,
             ln_f,
             lm_head: QLinear::from_linear(lm_head),
-            kv_cache: models::Cache::new(cfg.num_hidden_layers, <span class="bool-val">true</span>),
+            kv_cache: pipeline::Cache::new(cfg.num_hidden_layers, <span class="bool-val">true</span>),
             device: real_device,
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, <span class="bool-val">false</span>).unwrap()
@@ -1578,7 +1552,7 @@
     <span class="kw">fn </span>dtype(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; DType {
         <span class="self">self</span>.dtype
     }
-    <span class="kw">fn </span>get_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>models::Cache {
+    <span class="kw">fn </span>get_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>pipeline::Cache {
         <span class="kw-2">&amp;</span><span class="self">self</span>.kv_cache
     }
     <span class="kw">fn </span>get_classifier(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>XLoraClassifier {

@@ -953,42 +953,12 @@
 <a href="#951" id="951">951</a>
 <a href="#952" id="952">952</a>
 <a href="#953" id="953">953</a>
-<a href="#954" id="954">954</a>
-<a href="#955" id="955">955</a>
-<a href="#956" id="956">956</a>
-<a href="#957" id="957">957</a>
-<a href="#958" id="958">958</a>
-<a href="#959" id="959">959</a>
-<a href="#960" id="960">960</a>
-<a href="#961" id="961">961</a>
-<a href="#962" id="962">962</a>
-<a href="#963" id="963">963</a>
-<a href="#964" id="964">964</a>
-<a href="#965" id="965">965</a>
-<a href="#966" id="966">966</a>
-<a href="#967" id="967">967</a>
-<a href="#968" id="968">968</a>
-<a href="#969" id="969">969</a>
-<a href="#970" id="970">970</a>
-<a href="#971" id="971">971</a>
-<a href="#972" id="972">972</a>
-<a href="#973" id="973">973</a>
-<a href="#974" id="974">974</a>
-<a href="#975" id="975">975</a>
-<a href="#976" id="976">976</a>
-<a href="#977" id="977">977</a>
-<a href="#978" id="978">978</a>
-<a href="#979" id="979">979</a>
-<a href="#980" id="980">980</a>
-<a href="#981" id="981">981</a>
-<a href="#982" id="982">982</a>
-<a href="#983" id="983">983</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
-</span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor, D};
+</span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 <span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -997,9 +967,9 @@
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    layers::{CausalMasker, RmsNorm},
-    models::{flash_attn, mixtral::Config, repeat_kv, Cache},
-    pipeline::{extract_logits, NormalModel},
+    layers::{flash_attn, repeat_kv, CausalMasker, RmsNorm},
+    models::mixtral::Config,
+    pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };
 
@@ -1159,43 +1129,13 @@
                 </span>.contiguous()<span class="question-mark">?</span>;
         }
 
-        <span class="kw">let </span>(k, v, attn_mask) = <span class="kw">match </span>kv_cache.clone() {
-            <span class="prelude-val">None </span>=&gt; (k, v, attention_mask.cloned()),
-            <span class="prelude-val">Some</span>((<span class="kw-2">mut </span>prev_k, <span class="kw-2">mut </span>prev_v)) =&gt; {
-                <span class="kw">let </span><span class="kw-2">mut </span>mask = attention_mask.cloned();
-                <span class="kw">if let </span><span class="prelude-val">Some</span>(sliding_window) = <span class="self">self</span>.sliding_window {
-                    <span class="kw">let </span>kv_seq_len = prev_k.dim(<span class="number">2</span>)<span class="question-mark">?</span>;
-                    <span class="kw">if </span>kv_seq_len &gt; sliding_window {
-                        prev_k = prev_k.narrow(
-                            <span class="number">2</span>,
-                            kv_seq_len - (sliding_window - <span class="number">1</span>),
-                            sliding_window - <span class="number">1</span>,
-                        )<span class="question-mark">?</span>;
-                        prev_v = prev_v.narrow(
-                            <span class="number">2</span>,
-                            kv_seq_len - (sliding_window - <span class="number">1</span>),
-                            sliding_window - <span class="number">1</span>,
-                        )<span class="question-mark">?</span>;
-                        <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>mask) = mask {
-                            <span class="kw">let </span>mask_len = mask.dim(<span class="number">1</span>)<span class="question-mark">?</span>;
-                            <span class="kw-2">*</span>mask = mask.narrow(
-                                <span class="number">1</span>,
-                                mask_len - (sliding_window - <span class="number">1</span>),
-                                sliding_window - <span class="number">1</span>,
-                            )<span class="question-mark">?</span>;
-                            <span class="kw-2">*</span>mask = Tensor::cat(
-                                <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;*</span>mask, <span class="kw-2">&amp;</span>mask.narrow(<span class="number">1</span>, mask_len - <span class="number">1</span>, <span class="number">1</span>)<span class="question-mark">?</span>.ones_like()<span class="question-mark">?</span>],
-                                D::Minus1,
-                            )<span class="question-mark">?</span>;
-                        }
-                    }
-                }
-                <span class="kw">let </span>k = candle_nn::ops::kvconcat(<span class="kw-2">&amp;</span>prev_k, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>;
-                <span class="kw">let </span>v = candle_nn::ops::kvconcat(<span class="kw-2">&amp;</span>prev_v, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>;
-                (k, v, mask)
-            }
-        };
-        <span class="kw-2">*</span>kv_cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
+        <span class="kw">let </span>(k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
+            kv_cache,
+            k,
+            v,
+            attention_mask,
+            <span class="self">self</span>.sliding_window,
+        )<span class="question-mark">?</span>;
 
         <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
