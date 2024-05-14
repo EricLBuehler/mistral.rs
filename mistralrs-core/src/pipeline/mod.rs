@@ -82,6 +82,36 @@ pub struct SimpleModelPaths<P> {
     lora_preload_adapter_info: Option<HashMap<String, (P, LoraConfig)>>,
 }
 
+impl<P> SimpleModelPaths<P> {
+    pub fn new(
+        tokenizer_filename: P,
+        config_filename: P,
+        template_filename: P,
+        filenames: Vec<P>,
+        xlora_adapter_filenames: Option<Vec<(String, P)>>,
+        xlora_adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
+        classifier_path: Option<P>,
+        classifier_config: Option<XLoraConfig>,
+        xlora_ordering: Option<Ordering>,
+        gen_conf: Option<P>,
+        lora_preload_adapter_info: Option<HashMap<String, (P, LoraConfig)>>,
+    ) -> Self {
+        Self {
+            tokenizer_filename,
+            config_filename,
+            template_filename,
+            filenames,
+            xlora_adapter_filenames,
+            xlora_adapter_configs,
+            classifier_path,
+            classifier_config,
+            xlora_ordering,
+            gen_conf,
+            lora_preload_adapter_info,
+        }
+    }
+}
+
 
 impl ModelPaths for SimpleModelPaths<PathBuf> {
     fn get_config_filename(&self) -> &PathBuf {
