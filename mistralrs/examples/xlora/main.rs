@@ -30,7 +30,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         )
         .build(NormalLoaderType::Mistral);
     // Load, into a Pipeline
-    let pipeline = loader.load_model(
+    let pipeline = loader.load_model_from_hf(
         None,
         TokenSource::CacheToken,
         None,

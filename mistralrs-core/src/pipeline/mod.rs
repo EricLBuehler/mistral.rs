@@ -53,7 +53,7 @@ use crate::{
     xlora_models::{NonGranularState, XLoraConfig},
 };
 
-pub trait ModelPaths {
+pub trait ModelPaths  {
     fn get_weight_filenames(&self) -> &[PathBuf];
     fn get_config_filename(&self) -> &PathBuf;
     fn get_tokenizer_filename(&self) -> &PathBuf;
@@ -67,6 +67,7 @@ pub trait ModelPaths {
     fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>>;
 }
 
+#[derive(Clone)]
 pub struct SimpleModelPaths<P> {
     tokenizer_filename: P,
     config_filename: P,
@@ -80,6 +81,7 @@ pub struct SimpleModelPaths<P> {
     gen_conf: Option<P>,
     lora_preload_adapter_info: Option<HashMap<String, (P, LoraConfig)>>,
 }
+
 
 impl ModelPaths for SimpleModelPaths<PathBuf> {
     fn get_config_filename(&self) -> &PathBuf {
@@ -213,7 +215,7 @@ impl Display for ModelKind {
 /// use candle_core::Device;
 ///
 /// let loader: Box<dyn Loader> = todo!();
-/// let pipeline = loader.load_model(
+/// let pipeline = loader.load_model_from_hf(
 ///     None,
 ///     TokenSource::CacheToken,
 ///     None,
@@ -241,15 +243,12 @@ pub trait Loader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: Box<dyn ModelPaths>,
-        revision: Option<String>,
-        token_source: TokenSource,
+        paths: &Box<dyn ModelPaths>,
         _dtype: Option<DType>,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
 
     fn get_id(&self) -> String;

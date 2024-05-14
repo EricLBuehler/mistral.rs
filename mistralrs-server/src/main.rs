@@ -282,7 +282,7 @@ async fn main() -> Result<()> {
         warn!("Using flash attention with a quantized model has no effect!")
     }
     info!("Model kind is: {}", loader.get_kind().to_string());
-    let pipeline = loader.load_model(
+    let pipeline = loader.load_model_from_hf(
         None,
         args.token_source,
         None,

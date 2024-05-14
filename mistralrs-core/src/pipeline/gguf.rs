@@ -295,15 +295,13 @@ impl Loader for GGUFLoader {
             self.quantized_filename,
             silent
         );
-        self.load_model_from_path(paths?, revision, token_source, _dtype, device, silent, mapper, in_situ_quant)
+        self.load_model_from_path(&paths?, _dtype, device, silent, mapper, in_situ_quant)
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: Box<dyn ModelPaths>,
-        revision: Option<String>,
-        token_source: TokenSource,
+        paths: &Box<dyn ModelPaths>,
         _dtype: Option<DType>,
         device: &Device,
         silent: bool,
