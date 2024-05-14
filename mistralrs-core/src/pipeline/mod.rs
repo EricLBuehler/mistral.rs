@@ -227,7 +227,7 @@ pub trait Loader {
     /// If `revision` is None, then it defaults to `main`.
     /// If `dtype` is None, then it defaults to the model default (usually BF16).
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    fn load_model(
+    fn load_model_from_hf(
         &self,
         revision: Option<String>,
         token_source: TokenSource,
@@ -236,6 +236,20 @@ pub trait Loader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
+
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    fn load_model_from_path(
+        &self,
+        paths: Box<dyn ModelPaths>,
+        revision: Option<String>,
+        token_source: TokenSource,
+        _dtype: Option<DType>,
+        device: &Device,
+        silent: bool,
+        mapper: DeviceMapMetadata,
+        in_situ_quant: Option<GgmlDType>,
+
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
 
     fn get_id(&self) -> String;
