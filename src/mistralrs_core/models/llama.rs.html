@@ -428,9 +428,6 @@
 <a href="#426" id="426">426</a>
 <a href="#427" id="427">427</a>
 <a href="#428" id="428">428</a>
-<a href="#429" id="429">429</a>
-<a href="#430" id="430">430</a>
-<a href="#431" id="431">431</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -527,18 +524,15 @@
         <span class="kw">if let </span><span class="prelude-val">Some</span>((cache_k, cache_v)) = <span class="kw-2">&amp;</span>kv_cache[block_idx] {
             k = candle_nn::ops::kvconcat(cache_k, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
             v = candle_nn::ops::kvconcat(cache_v, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-            <span class="kw">let </span>k_seq_len = k.dims()[<span class="number">1</span>];
-            <span class="kw">if </span>k_seq_len &gt; <span class="self">self</span>.max_seq_len {
+            <span class="kw">let </span>kv_seq_len = k.dims()[<span class="number">2</span>];
+            <span class="kw">if </span>kv_seq_len &gt; <span class="self">self</span>.max_seq_len {
                 k = k
-                    .narrow(D::Minus1, k_seq_len - <span class="self">self</span>.max_seq_len, <span class="self">self</span>.max_seq_len)<span class="question-mark">?
-                    </span>.contiguous()<span class="question-mark">?
-            </span>}
-            <span class="kw">let </span>v_seq_len = v.dims()[<span class="number">1</span>];
-            <span class="kw">if </span>v_seq_len &gt; <span class="number">2 </span>* <span class="self">self</span>.max_seq_len {
+                    .narrow(<span class="number">2</span>, kv_seq_len - <span class="self">self</span>.max_seq_len, <span class="self">self</span>.max_seq_len)<span class="question-mark">?
+                    </span>.contiguous()<span class="question-mark">?</span>;
                 v = v
-                    .narrow(D::Minus1, v_seq_len - <span class="self">self</span>.max_seq_len, <span class="self">self</span>.max_seq_len)<span class="question-mark">?
-                    </span>.contiguous()<span class="question-mark">?
-            </span>}
+                    .narrow(<span class="number">2</span>, kv_seq_len - <span class="self">self</span>.max_seq_len, <span class="self">self</span>.max_seq_len)<span class="question-mark">?
+                    </span>.contiguous()<span class="question-mark">?</span>;
+            }
         }
         kv_cache[block_idx] = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
 
