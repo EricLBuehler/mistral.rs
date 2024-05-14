@@ -110,7 +110,11 @@ impl QLoraLinear {
             }
         }
 
-        let layer = *ordering.layers.get(&prefix).unwrap();
+        let layer = if let Some(ref layers) = ordering.layers {
+            *layers.get(&prefix).unwrap()
+        } else {
+            0
+        };
 
         if all_same {
             let a_adapters_stack = Tensor::cat(

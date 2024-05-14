@@ -25,7 +25,7 @@ pub struct PreloadAdapter {
 pub struct Ordering {
     #[serde(rename = "order")]
     pub adapters: Option<Vec<String>>,
-    pub layers: HashMap<String, usize>,
+    pub layers: Option<HashMap<String, usize>>,
     pub base_model_id: String,
     pub preload_adapters: Option<Vec<PreloadAdapter>>,
 }
@@ -236,14 +236,18 @@ pub fn linear(
         return Ok(Arc::new(inner));
     }
     let name = prefix.split("lora_A").last().unwrap();
-    let layer = ord.layers.get(name).unwrap();
+    let layer = if let Some(ref layers) = ord.layers {
+        *layers.get(name).unwrap()
+    } else {
+        0
+    };
 
     let lorainner = LoraLinear::new(
         &inner,
         &linear_config,
         lora_config,
         &vb,
-        *layer,
+        layer,
         preload_adapters,
     )?;
     *count += 1;
@@ -278,14 +282,18 @@ pub fn linear_no_bias(
         return Ok(Arc::new(inner));
     }
     let name = prefix.split("lora_A").last().unwrap();
-    let layer = ord.layers.get(name).unwrap();
+    let layer = if let Some(ref layers) = ord.layers {
+        *layers.get(name).unwrap()
+    } else {
+        0
+    };
 
     let lorainner = LoraLinear::new(
         &inner,
         &linear_config,
         lora_config,
         &vb,
-        *layer,
+        layer,
         preload_adapters,
     )?;
     *count += 1;

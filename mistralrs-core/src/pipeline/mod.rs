@@ -885,9 +885,11 @@ fn get_xlora_paths(
 
         let adapter_files = api_dir_list!(api, model_id)
             .filter_map(|name| {
-                for adapter_name in xlora_order.as_ref().unwrap().adapters.as_ref().unwrap() {
-                    if name.contains(adapter_name) {
-                        return Some((name, adapter_name.clone()));
+                if let Some(ref adapters) = xlora_order.as_ref().unwrap().adapters {
+                    for adapter_name in adapters {
+                        if name.contains(adapter_name) {
+                            return Some((name, adapter_name.clone()));
+                        }
                     }
                 }
                 None
