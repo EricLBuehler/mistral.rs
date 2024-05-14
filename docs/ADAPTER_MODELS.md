@@ -25,7 +25,14 @@ When using an adapter model with a quantized base model, if the ordering file sp
 **Preparing the X-LoRA/LoRA Ordering File**
 The X-LoRA/LoRA ordering file is necessary to prepare before inference with an X-LoRA model. However, it is easy with a provided [`script`](../scripts/create_ordering.py)!
 
-The X-LoRA/LoRA ordering JSON file contains 2 parts. The first is the order of the adapters and the second, the layer ordering. The layer ordering has been automatically generated and should not be manipulated as it controls the application of scalings. However the order of adapter should be an array of strings which are the adapter names corresponding to the order the adapters were specified during training. For example, if the adapters were specified as a dictionary:
+### X-LoRA case
+An ordering JSON file for X-LoRA contains 2 major parts. 
+
+1) The adapter names
+    - The order matters!
+    - Should be an array of strings which are the adapter names corresponding to the order the adapters were specified during training. For example, if the adapters were specified as a dictionary:
+2) The layer ordering
+    - Automatically generated and should not be manipulated as it controls the application of scalings. 
 
 ```python
 adapters = {
@@ -37,9 +44,20 @@ adapters = {
 
 The specified order would be `["math", "reasoning", "biology"]`.
 
-For LoRA models, the order of the adapters does not matter. You can reorder them or remove some to control which adapters will be used. However, for an X-LoRA model, the order of the adapters in the ordering file is important.
+We provide an [ordering file](../orderings/xlora-paper-ordering.json) which contains the ordering for the X-LoRA model associated with [the paper](https://arxiv.org/abs/2402.07148) and the Huggingface repository: https://huggingface.co/lamm-mit/x-lora.
 
-There are 2 scripts to prepare the ordering file. The ordering file is specific to each architecture and set of target modules. Therefore, if either are changed, it is necessary to create a new ordering file using the first option. If only the adapter order or adapters changed, then it the second option should be used.
+### LoRA case
+An ordering JSON file for LoRA contains 2 major parts:
+1) The adapter names (optional)
+    - The order does not matter
+    - Come controls which adapters will be initially activated
+    - If this key is not specified or if the value is `[]`, then no adapters will be activated initially
+2) Preload adapter section (optional): [see this section](#adapter-model-dynamic-adapter-activation)
+    - Order does not matter
+    - Specifies the adapter name and the model ID to find them, which may be a local path.
+
+### Preparing the ordering file (LoRA or X-LoRA cases)
+There are 2 scripts to prepare the ordering file and which work for both X-LoRA and LoRA. The ordering file is specific to each architecture and set of target modules. Therefore, if either are changed, it is necessary to create a new ordering file using the first option. If only the adapter order or adapters changed, then it the second option should be used.
 
 1) From scratch: No ordering file for the architecture and target modules
 
@@ -49,11 +67,11 @@ There are 2 scripts to prepare the ordering file. The ordering file is specific 
 
     A script [`set_names.py`](../scripts/set_names.py) is provided which prompts the user for the adapter names and the old ordering file. The user is prompted for an output file location, relative to the working directory.
 
-We provide an [ordering file](../orderings/xlora-paper-ordering.json) which contains the ordering for the X-LoRA model associated with [the paper](https://arxiv.org/abs/2402.07148) and the Huggingface repository: https://huggingface.co/lamm-mit/x-lora.
+### Quantized X-LoRA or LoRA models
 
-**Quantized X-LoRA or LoRA models**
+Mistral.rs supports running quantized models with X-LoRA or LoRA. The X-LoRA or LoRA adapter layers will not be quantized, only the base model. P
 
-Mistral.rs supports running quantized models with X-LoRA or LoRA. The X-LoRA or LoRA adapter layers will not be quantized, only the base model. Please note that using a high quantization level (eg., 4-bit) can distort the signal and prevent the classifier from acting properly. Therefore, it is better to use slightly lower levels such as 8-bit.
+In the X-LoRA case, please note that using a high quantization level (eg., 4-bit) can distort the signal and prevent the classifier from acting properly. Therefore, it is better to use slightly lower levels such as 8-bit.
 
 
 ## Avoiding the scaling pass with non-granular scalings

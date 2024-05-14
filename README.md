@@ -252,17 +252,19 @@ or
 ./mistralrs-server gguf -m . -t . -f Phi-3-mini-128k-instruct-q4_K_M.gguf
 ```
 
-The following files must be present in the paths for the options below:
-- `--model-id` (server) or `model_id` (python) or `--tok-model-id` (server) or `tok_model_id` (python): 
+Throughout mistral.rs, any model ID argument or option may be a local path and should contain the following files for each model ID option:
+- `--model-id` (server) or `model_id` (python/rust) or `--tok-model-id` (server) or `tok_model_id` (python/rust): 
   - `config.json`
   - `tokenizer_config.json`
   - `tokenizer.json` (if not specified separately)
   - `.safetensors` files.
-- `--quantized-model-id` (server) or `quantized_model_id` (python):
+- `--quantized-model-id` (server) or `quantized_model_id` (python/rust):
   - Specified `.gguf` or `.ggml` file.
-- `--x-lora-model-id` (server) or `xlora_model_id` (python):
+- `--x-lora-model-id` (server) or `xlora_model_id` (python/rust):
   - `xlora_classifier.safetensors`
   - `xlora_config.json`
+  - Adapters `.safetensors` and `adapter_config.json` files in their respective directories
+- `--adapters-model-id` (server) or `adapters_model_id` (python/rust):
   - Adapters `.safetensors` and `adapter_config.json` files in their respective directories
 
 ### Run
