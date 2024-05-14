@@ -5,7 +5,7 @@ use std::{collections::HashMap, ops::Mul, str::FromStr, sync::Mutex};
 use candle_core::{quantized::QTensor, DType, Device, IndexOp, Result, Tensor, WithDType};
 use candle_nn::{
     layer_norm::{RmsNormNonQuantized, RmsNormQuantized},
-    Module, VarBuilder,
+    Conv2dConfig, Module, VarBuilder,
 };
 use once_cell::sync::Lazy;
 
