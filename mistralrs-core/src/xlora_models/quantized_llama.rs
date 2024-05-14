@@ -6,12 +6,14 @@ use candle_core::quantized::QMatMul;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
-use mistralrs_lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear};
+use mistralrs_lora::{
+    get_lora_cfg, AdapterSwapper, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear,
+};
 use tqdm::Iter;
 use tracing::info;
 
 use crate::device_map::DeviceMapper;
-use crate::layers::QRmsNorm;
+use crate::layers::{CausalMasker, QRmsNorm};
 use crate::models::{repeat_kv, verify_sanity_gguf, Cache};
 use crate::pipeline::extract_logits;
 use crate::DeviceMapMetadata;
@@ -175,11 +177,6 @@ struct LayerWeights {
     neg_inf: Tensor,
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Tensor> {
-    let shape = mask.shape();
-    let m = mask.where_cond(&on_true.broadcast_as(shape.dims())?, on_false)?;
-    Ok(m)
-}
 impl LayerWeights {
     #[allow(clippy::too_many_arguments)]
     fn forward_attn(
@@ -246,13 +243,7 @@ impl LayerWeights {
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?.contiguous()?;
 
         let att = (q.contiguous()?.matmul(&k.t()?.contiguous()?)? / (self.head_dim as f64).sqrt())?;
-        let att = match mask {
-            None => att,
-            Some(mask) => {
-                let mask = mask.broadcast_as(att.shape())?;
-                masked_fill(&att, &mask, &self.neg_inf)?
-            }
-        };
+        let att = CausalMasker.apply_mask(mask, att, &self.neg_inf)?;
         let att = candle_nn::ops::softmax_last_dim(&att)?;
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = att.matmul(&v.contiguous()?)?;
@@ -272,7 +263,6 @@ pub struct ModelWeights {
     layers: Vec<LayerWeights>,
     norm: QRmsNorm,
     output: QMatMul,
-    masks: HashMap<usize, Tensor>,
     pub device: Device,
     pub cache: Cache,
     xlora_classifier: Option<XLoraClassifier>,
@@ -284,10 +274,11 @@ impl ModelWeights {
     pub fn from_ggml(
         mut ct: ggml_file::Content,
         gqa: usize,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
         let rotary = RotaryEmbedding::new_partial(
@@ -328,6 +319,7 @@ impl ModelWeights {
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.gate_proj"),
                         &mut count,
+                        preload_adapters,
                     )?,
                     feed_forward_w2: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w2)?,
@@ -337,6 +329,7 @@ impl ModelWeights {
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.down_proj"),
                         &mut count,
+                        preload_adapters,
                     )?,
                     feed_forward_w3: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w3)?,
@@ -346,6 +339,7 @@ impl ModelWeights {
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.up_proj"),
                         &mut count,
+                        preload_adapters,
                     )?,
                 })
             };
@@ -364,6 +358,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.q_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_wk: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wk)?,
@@ -373,6 +368,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.k_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_wv: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wv)?,
@@ -382,6 +378,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.v_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_wo: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wo)?,
@@ -391,6 +388,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.o_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_norm: QRmsNorm::new(attention_norm, 1e-5)?,
                 mlp_or_moe,
@@ -402,12 +400,39 @@ impl ModelWeights {
                 neg_inf: neg_inf.clone(),
             })
         }
+        if xlora_config.is_none() && preload_adapters.is_none() {
+            // We are now a LoRA model so we must merge the weights
+            info!("Merging LoRA adapters.");
+            for layer in layers.iter_mut().tqdm() {
+                layer.attention_wk.merge_weights()?;
+                layer.attention_wo.merge_weights()?;
+                layer.attention_wq.merge_weights()?;
+                layer.attention_wv.merge_weights()?;
+                match &mut layer.mlp_or_moe {
+                    MlpOrMoe::Mlp(ref mut m) => {
+                        m.feed_forward_w1.merge_weights()?;
+                        m.feed_forward_w2.merge_weights()?;
+                        m.feed_forward_w3.merge_weights()?;
+                    }
+                    MlpOrMoe::MoE {
+                        n_expert_used: _,
+                        feed_forward_gate_inp: _,
+                        experts,
+                    } => {
+                        for expert in experts {
+                            expert.feed_forward_w1.merge_weights()?;
+                            expert.feed_forward_w2.merge_weights()?;
+                            expert.feed_forward_w3.merge_weights()?;
+                        }
+                    }
+                }
+            }
+        }
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, ct.hparams.n_embd as usize),
             layers,
             norm,
             output: QMatMul::from_qtensor(output)?,
-            masks: HashMap::new(),
             device: ct.device.clone(),
             cache: Cache::new(ct.hparams.n_layer as usize, true),
             xlora_classifier: xlora_config.map(|xlora_config| {
@@ -424,11 +449,12 @@ impl ModelWeights {
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
         mapper: DeviceMapMetadata,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle_core::bail!("cannot find {s} in metadata"),
@@ -512,6 +538,7 @@ impl ModelWeights {
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.gate_proj"),
                         &mut count,
+                        preload_adapters,
                     )?,
                     feed_forward_w2: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w2)?,
@@ -521,6 +548,7 @@ impl ModelWeights {
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.down_proj"),
                         &mut count,
+                        preload_adapters,
                     )?,
                     feed_forward_w3: QLoraLinear::new(
                         QMatMul::from_qtensor(feed_forward_w3)?,
@@ -530,6 +558,7 @@ impl ModelWeights {
                         ordering,
                         format!("model.layers.{layer_idx}.mlp.up_proj"),
                         &mut count,
+                        preload_adapters,
                     )?,
                 })
             } else {
@@ -555,6 +584,7 @@ impl ModelWeights {
                             ordering,
                             format!("model.layers.{layer_idx}.mlp.gate_proj.{i}"),
                             &mut count,
+                            preload_adapters,
                         )?,
                         feed_forward_w2: QLoraLinear::new(
                             QMatMul::from_qtensor(feed_forward_w2)?,
@@ -564,6 +594,7 @@ impl ModelWeights {
                             ordering,
                             format!("model.layers.{layer_idx}.mlp.down_proj.{i}"),
                             &mut count,
+                            preload_adapters,
                         )?,
                         feed_forward_w3: QLoraLinear::new(
                             QMatMul::from_qtensor(feed_forward_w3)?,
@@ -573,6 +604,7 @@ impl ModelWeights {
                             ordering,
                             format!("model.layers.{layer_idx}.mlp.up_proj.{i}"),
                             &mut count,
+                            preload_adapters,
                         )?,
                     })
                 }
@@ -598,6 +630,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.q_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_wk: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wk)?,
@@ -607,6 +640,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.k_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_wv: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wv)?,
@@ -616,6 +650,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.v_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_wo: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wo)?,
@@ -625,6 +660,7 @@ impl ModelWeights {
                     ordering,
                     format!("model.layers.{layer_idx}.self_attn.o_proj"),
                     &mut count,
+                    preload_adapters,
                 )?,
                 attention_norm: QRmsNorm::new(attention_norm, rms_norm_eps)?,
                 mlp_or_moe,
@@ -636,7 +672,7 @@ impl ModelWeights {
                 neg_inf,
             })
         }
-        if xlora_config.is_none() {
+        if xlora_config.is_none() && preload_adapters.is_none() {
             // We are now a LoRA model so we must merge the weights
             info!("Merging LoRA adapters.");
             for layer in layers.iter_mut().tqdm() {
@@ -669,7 +705,6 @@ impl ModelWeights {
             layers,
             norm,
             output: QMatMul::from_qtensor(output)?,
-            masks: HashMap::new(),
             device: device.clone(),
             cache: Cache::new(block_count, true),
             xlora_classifier: xlora_config.map(|xlora_config| {
@@ -681,17 +716,33 @@ impl ModelWeights {
         })
     }
 
-    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
-        if let Some(mask) = self.masks.get(&t) {
-            Ok(mask.clone())
-        } else {
-            let mask: Vec<_> = (0..t)
-                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
-                .collect();
-            let mask = Tensor::from_slice(&mask, (t, t), device)?;
-            self.masks.insert(t, mask.clone());
-            Ok(mask)
+    pub fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
+        let mut sum = 0;
+        for layer in self.layers.iter_mut() {
+            sum += layer.attention_wk.activate(&adapter_names)?;
+            sum += layer.attention_wo.activate(&adapter_names)?;
+            sum += layer.attention_wq.activate(&adapter_names)?;
+            sum += layer.attention_wv.activate(&adapter_names)?;
+            match &mut layer.mlp_or_moe {
+                MlpOrMoe::Mlp(ref mut m) => {
+                    sum += m.feed_forward_w1.activate(&adapter_names)?;
+                    sum += m.feed_forward_w2.activate(&adapter_names)?;
+                    sum += m.feed_forward_w3.activate(&adapter_names)?;
+                }
+                MlpOrMoe::MoE {
+                    n_expert_used: _,
+                    feed_forward_gate_inp: _,
+                    experts,
+                } => {
+                    for expert in experts {
+                        sum += expert.feed_forward_w1.activate(&adapter_names)?;
+                        sum += expert.feed_forward_w2.activate(&adapter_names)?;
+                        sum += expert.feed_forward_w3.activate(&adapter_names)?;
+                    }
+                }
+            }
         }
+        Ok(sum)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -705,12 +756,6 @@ impl ModelWeights {
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let (_b_sz, seq_len) = x.dims2()?;
-        let mask = if seq_len == 1 {
-            None
-        } else {
-            Some(self.mask(seq_len, x.device())?)
-        };
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = if is_full_pass {
             if no_kv_cache {
@@ -719,12 +764,13 @@ impl ModelWeights {
                     new_cache.push(None);
                 }
 
-                *self.cache.xlora_lock() = new_cache.clone();
+                self.cache.xlora_lock().clone_from(&new_cache);
             }
             self.cache.xlora_lock()
         } else {
             self.cache.lock()
         };
+        let mask = CausalMasker.make_causal_mask(x, &cache)?;
         for (i, layer) in self.layers.iter_mut().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;
@@ -777,7 +823,7 @@ impl ModelWeights {
         start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
-        context_lens: Vec<usize>,
+        context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
         if self.xlora_classifier.is_some() {
             let scalings = self.get_scalings(
@@ -789,6 +835,7 @@ impl ModelWeights {
                 &start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
+                &vec![usize::MAX; context_lens.len()],
             )?;
 
             if no_kv_cache {
@@ -864,6 +911,7 @@ impl ScalingsMaker for ModelWeights {
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
+        _context_lens: &[usize],
     ) -> Result<Tensor> {
         self.inner_forward(
             input_ids,

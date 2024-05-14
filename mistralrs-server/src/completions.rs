@@ -1,10 +1,5 @@
-use std::{
-    error::Error,
-    sync::{
-        mpsc::{channel, Sender},
-        Arc,
-    },
-};
+use std::{error::Error, sync::Arc};
+use tokio::sync::mpsc::{channel, Sender};
 
 use crate::openai::{CompletionRequest, Grammar, StopTokens};
 use axum::{
@@ -13,11 +8,11 @@ use axum::{
     response::IntoResponse,
 };
 use mistralrs_core::{
-    CompletionResponse, Constraint, MistralRs, Request, RequestMessage, Response, SamplingParams,
-    StopTokens as InternalStopTokens,
+    CompletionResponse, Constraint, MistralRs, NormalRequest, Request, RequestMessage, Response,
+    SamplingParams, StopTokens as InternalStopTokens,
 };
 use serde::Serialize;
-use tracing::info;
+use tracing::warn;
 
 #[derive(Debug)]
 struct ModelErrorMessage(String);
@@ -102,14 +97,14 @@ fn parse_request(
     };
 
     if oairequest.logprobs.is_some() {
-        info!("⚠️ WARNING: Completion requests do not support logprobs.");
+        warn!("Completion requests do not support logprobs.");
     }
 
     if oairequest._stream.is_some_and(|x| x) {
-        info!("⚠️ WARNING: Completion requests do not support streaming.");
+        warn!("Completion requests do not support streaming.");
     }
 
-    Request {
+    Request::Normal(NormalRequest {
         id: state.next_request_id(),
         messages: RequestMessage::Completion {
             text: oairequest.prompt,
@@ -137,7 +132,8 @@ fn parse_request(
             Some(Grammar::Regex(regex)) => Constraint::Regex(regex),
             None => Constraint::None,
         },
-    }
+        adapters: oairequest.adapters,
+    })
 }
 
 #[utoipa::path(
@@ -151,26 +147,35 @@ pub async fn completions(
     State(state): State<Arc<MistralRs>>,
     Json(oairequest): Json<CompletionRequest>,
 ) -> CompletionResponder {
-    let (tx, rx) = channel();
-    let request = parse_request(oairequest, state.clone(), tx);
-    let is_streaming = request.is_streaming;
-    let sender = state.get_sender();
-
-    if request.return_logprobs {
+    let (tx, mut rx) = channel(10_000);
+    if oairequest.logprobs.is_some() {
         return CompletionResponder::ValidationError(
             "Completion requests do not support logprobs.".into(),
         );
     }
 
-    if is_streaming {
+    if oairequest._stream.is_some_and(|s| s) {
         return CompletionResponder::ValidationError(
             "Completion requests do not support streaming.".into(),
         );
     }
+    let request = parse_request(oairequest, state.clone(), tx);
+    let sender = state.get_sender();
 
-    sender.send(request).unwrap();
+    if let Err(e) = sender.send(request).await {
+        let e = anyhow::Error::msg(e.to_string());
+        MistralRs::maybe_log_error(state, &*e);
+        return CompletionResponder::InternalError(e.into());
+    }
 
-    let response = rx.recv().unwrap();
+    let response = match rx.recv().await {
+        Some(response) => response,
+        None => {
+            let e = anyhow::Error::msg("No response received from the model.");
+            MistralRs::maybe_log_error(state, &*e);
+            return CompletionResponder::InternalError(e.into());
+        }
+    };
 
     match response {
         Response::InternalError(e) => {

@@ -5,15 +5,12 @@ use std::{
     error::Error,
     fs::OpenOptions,
     io::Write,
-    sync::{
-        mpsc::{channel, Sender},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::mpsc::{channel, Sender};
 
-use candle_core::quantized::GgmlDType;
 use engine::Engine;
 pub use mistralrs_lora::Ordering;
 pub use pipeline::Pipeline;
@@ -35,6 +32,7 @@ mod response;
 mod sampler;
 mod scheduler;
 mod sequence;
+mod toml_selector;
 mod utils;
 mod xlora_models;
 
@@ -43,15 +41,17 @@ pub use pipeline::{
     GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder,
     GGUFSpecificConfig, GemmaLoader, LlamaLoader, Loader, MistralLoader, MixtralLoader, ModelKind,
     NormalLoader, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader,
-    Phi3Loader, Qwen2Loader, TokenSource,
+    Phi3Loader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline,
+    TokenSource,
 };
-pub use request::{Constraint, Request, RequestMessage};
+pub use request::{Constraint, NormalRequest, Request, RequestMessage};
 pub use response::Response;
 pub use response::*;
 pub use sampler::{SamplingParams, StopTokens, TopLogprob};
 pub use scheduler::SchedulerMethod;
 use serde::Serialize;
 use tokio::runtime::Runtime;
+pub use toml_selector::{TomlLoaderArgs, TomlSelector};
 
 /// The MistralRs struct handles sending requests to the engine.
 /// It is the core multi-threaded component of mistral.rs, and uses `mspc`
@@ -59,7 +59,6 @@ use tokio::runtime::Runtime;
 /// engine.
 pub struct MistralRs {
     sender: Sender<Request>,
-    sender_isq: Sender<GgmlDType>,
     log: Option<String>,
     id: String,
     creation_time: u64,
@@ -70,7 +69,7 @@ pub struct MistralRs {
 /// an Engine and a MistralRs instance. The Engine runs on a separate thread, and the MistralRs
 /// instance stays on the calling thread.
 pub struct MistralRsBuilder {
-    pipeline: Arc<Mutex<dyn Pipeline>>,
+    pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     method: SchedulerMethod,
     log: Option<String>,
     truncate_sequence: Option<bool>,
@@ -79,10 +78,11 @@ pub struct MistralRsBuilder {
     prefix_cache_n: Option<usize>,
     disable_eos_stop: Option<bool>,
     gemm_full_precision_f16: Option<bool>,
+    interactive: Option<bool>,
 }
 
 impl MistralRsBuilder {
-    pub fn new(pipeline: Arc<Mutex<dyn Pipeline>>, method: SchedulerMethod) -> Self {
+    pub fn new(pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>, method: SchedulerMethod) -> Self {
         Self {
             pipeline,
             method,
@@ -93,9 +93,9 @@ impl MistralRsBuilder {
             prefix_cache_n: None,
             disable_eos_stop: None,
             gemm_full_precision_f16: None,
+            interactive: None,
         }
     }
-
     pub fn with_log(mut self, log: String) -> Self {
         self.log = Some(log);
         self
@@ -128,6 +128,10 @@ impl MistralRsBuilder {
         self.gemm_full_precision_f16 = Some(gemm_full_precision);
         self
     }
+    pub fn with_interactive(mut self) -> Self {
+        self.interactive = Some(true);
+        self
+    }
 
     pub fn build(self) -> Arc<MistralRs> {
         MistralRs::new(self)
@@ -155,6 +159,7 @@ impl MistralRs {
             prefix_cache_n,
             disable_eos_stop,
             gemm_full_precision_f16,
+            interactive,
         } = config;
 
         if !gemm_full_precision_f16.unwrap_or(false) {
@@ -166,15 +171,14 @@ impl MistralRs {
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);
         let prefix_cache_n = prefix_cache_n.unwrap_or(16);
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
+        let interactive = interactive.unwrap_or(false);
 
-        let (tx, rx) = channel();
-        let (isq_tx, isq_rx) = channel();
+        let (tx, rx) = channel(10_000);
 
         let this = Arc::new(Self {
             sender: tx,
-            sender_isq: isq_tx,
             log,
-            id: pipeline.lock().unwrap().name(),
+            id: pipeline.try_lock().unwrap().name(),
             creation_time: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("Time travel has occurred!")
@@ -186,7 +190,6 @@ impl MistralRs {
             rt.block_on(async move {
                 let mut engine = Engine::new(
                     rx,
-                    isq_rx,
                     pipeline,
                     method,
                     truncate_sequence,
@@ -194,6 +197,7 @@ impl MistralRs {
                     no_prefix_cache,
                     prefix_cache_n,
                     disable_eos_stop,
+                    interactive,
                 );
                 engine.run().await;
             });
@@ -204,12 +208,6 @@ impl MistralRs {
 
     pub fn get_sender(&self) -> Sender<Request> {
         self.sender.clone()
-    }
-
-    /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
-    /// then nothing will happen.
-    pub fn send_re_isq(&self, dtype: GgmlDType) {
-        self.sender_isq.send(dtype).expect("Engine is not present.")
     }
 
     pub fn get_id(&self) -> String {

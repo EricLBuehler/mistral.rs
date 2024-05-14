@@ -12,6 +12,7 @@ pub(crate) mod phi2;
 pub(crate) mod phi3;
 pub(crate) mod quantized_llama;
 pub(crate) mod quantized_phi2;
+pub(crate) mod quantized_phi3;
 pub(crate) mod qwen2;
 
 pub type LayerCaches = Vec<Option<(Tensor, Tensor)>>;
@@ -20,6 +21,7 @@ pub type LayerCaches = Vec<Option<(Tensor, Tensor)>>;
 pub struct Cache {
     cache: Arc<Mutex<LayerCaches>>,
     xlora_cache: Option<Arc<Mutex<LayerCaches>>>,
+    draft_cache: Arc<Mutex<LayerCaches>>,
     scalings_cache: Option<Arc<Mutex<Option<Tensor>>>>,
 }
 
@@ -32,6 +34,7 @@ impl Cache {
             } else {
                 None
             },
+            draft_cache: Arc::new(Mutex::new(vec![None; len])),
             scalings_cache: if is_xlora {
                 Some(Arc::new(Mutex::new(None)))
             } else {
@@ -42,6 +45,10 @@ impl Cache {
 
     pub(crate) fn lock(&self) -> MutexGuard<'_, LayerCaches> {
         get_mut_arcmutex!(self.cache)
+    }
+
+    pub(crate) fn draft_lock(&self) -> MutexGuard<'_, LayerCaches> {
+        get_mut_arcmutex!(self.draft_cache)
     }
 
     /// # Panics

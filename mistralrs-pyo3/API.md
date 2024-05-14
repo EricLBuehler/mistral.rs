@@ -39,7 +39,6 @@ class Which(Enum):
         arch: Architecture
         adapters_model_id: str
         order: str
-        tgt_non_granular_index: int | None = None
         model_id: str | None = None
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
@@ -64,7 +63,6 @@ class Which(Enum):
         quantized_filename: str
         adapters_model_id: str
         order: str
-        tgt_non_granular_index: int | None = None
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
     class GGML:
@@ -88,7 +86,6 @@ class Which(Enum):
         quantized_filename: str
         adapters_model_id: str
         order: str
-        tgt_non_granular_index: int | None = None
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
 ```
@@ -96,7 +93,7 @@ class Which(Enum):
 
 ## Example
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest, Message, Role
+from mistralrs import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
     which=Which.GGUF(
@@ -111,7 +108,7 @@ runner = Runner(
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
         model="mistral",
-        messages=[Message(Role.User, "Tell me a story about the Rust type system.")],
+        messages=[{"role":"user", "content":"Tell me a story about the Rust type system."}],
         max_tokens=256,
         presence_penalty=1.0,
         top_p=0.1,

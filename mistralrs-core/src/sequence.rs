@@ -1,9 +1,11 @@
 use std::{
-    cell::{Cell, RefCell, RefMut},
-    rc::Rc,
-    sync::mpsc::{SendError, Sender},
-    sync::Arc,
+    fmt::Display,
+    sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
+};
+use tokio::sync::{
+    mpsc::{error::SendError, Sender},
+    Mutex, MutexGuard,
 };
 
 use crate::{
@@ -34,13 +36,13 @@ pub enum StopReason {
     Canceled,
 }
 
-impl ToString for StopReason {
-    fn to_string(&self) -> String {
+impl Display for StopReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StopReason::Eos => "stop".to_string(),
-            StopReason::Length(_) | StopReason::ModelLength(_) => "length".to_string(),
-            StopReason::StopTok(_) | StopReason::StopString { .. } => "stop".to_string(),
-            StopReason::Canceled => "canceled".to_string(),
+            StopReason::Eos => write!(f, "stop"),
+            StopReason::Length(_) | StopReason::ModelLength(_) => write!(f, "length"),
+            StopReason::StopTok(_) | StopReason::StopString { .. } => write!(f, "stop"),
+            StopReason::Canceled => write!(f, "canceled"),
         }
     }
 }
@@ -55,12 +57,12 @@ pub enum SequenceState {
     RunningPrefillPrompt,
 }
 
-#[derive(Clone)]
 pub enum SequenceRecognizer {
     Regex(Box<StackRecognizer<StateID, RecRx>>),
     Cfg(Box<CfgParser>),
     None,
 }
+
 pub struct Sequence {
     // Metadata, const
     id: usize,
@@ -77,26 +79,34 @@ pub struct Sequence {
     prefill_prompt_toks: Option<Vec<u32>>,
     suffix: Option<String>,
     prefix: Option<String>,
+    is_tmp: bool,
+    adapters: Option<Vec<String>>,
 
     // Cache
     scaling_cache: Option<Tensor>,
     cache: LayerCaches,
+    draft_cache: LayerCaches,
     xlora_cache: Option<LayerCaches>,
 
     // Mutables
     tokens: Vec<u32>,
     logprobs: Vec<Logprobs>,
     cumulative_logprob: f32,
+    last_logprob: f32,
+    last_completion_bytes_len: usize,
+    last_is_done: Option<StopReason>,
     completion_bytes: Vec<u8>,
     stream_idx: usize,
     pub recognizer: SequenceRecognizer,
+    scheduling_urgency: usize, // The number of passes since scheduling
 
     // GPU things
     pub prompt_tok_per_sec: f32,
     pub prompt_timestamp: Option<u128>,
-    group: Rc<RefCell<SequenceGroup>>,
-    state: Cell<SequenceState>,
+    group: Arc<Mutex<SequenceGroup>>,
+    state: RwLock<SequenceState>,
 }
+
 impl Sequence {
     #[allow(clippy::too_many_arguments)]
     pub fn new_waiting(
@@ -111,12 +121,13 @@ impl Sequence {
         max_len: Option<usize>,
         return_logprobs: bool,
         is_xlora: bool,
-        group: Rc<RefCell<SequenceGroup>>,
+        group: Arc<Mutex<SequenceGroup>>,
         response_index: usize,
         creation_time: u64,
         recognizer: SequenceRecognizer,
         suffix: Option<String>,
         prefix: Option<String>,
+        adapters: Option<Vec<String>>,
     ) -> Self {
         let prompt_len = tokens.len();
         Self {
@@ -125,8 +136,9 @@ impl Sequence {
             prompt_len,
             id,
             timestamp,
-            state: Cell::new(SequenceState::Waiting),
+            state: RwLock::new(SequenceState::Waiting),
             cache: vec![None; layers],
+            draft_cache: vec![None; layers],
             xlora_cache: if is_xlora {
                 Some(vec![None; layers])
             } else {
@@ -151,7 +163,31 @@ impl Sequence {
             cumulative_logprob: 0.,
             completion_bytes: Vec::new(),
             stream_idx: 0,
+            last_completion_bytes_len: 0,
+            last_logprob: 0.0,
+            last_is_done: None,
+            is_tmp: false,
+            scheduling_urgency: 0,
+            adapters,
         }
+    }
+
+    pub fn add_urgency(mut self) -> Self {
+        self.scheduling_urgency += 1;
+        self
+    }
+
+    pub fn reset_urgency(mut self) -> Self {
+        self.scheduling_urgency = 0;
+        self
+    }
+
+    /// Simple metric: (scheduling urgency) + log2(length)
+    /// Takes into account: urgency (scales linear) and length (scales logarithmic)
+    /// Scaling urgency is the number of scheduling passes where we have not been scheduled.
+    pub fn compute_priority(&self) -> f64 {
+        #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+        (self.scheduling_urgency as f64) + (self.len() as f64).log2()
     }
 
     pub fn prefill(
@@ -169,6 +205,12 @@ impl Sequence {
 
     /// This is the number of tokens. If the KV cache is Some, then it will use that.
     pub fn len(&self) -> usize {
+        if let Some(toks) = &self.prefill_prompt_toks {
+            return toks.len();
+        }
+        if self.is_tmp {
+            return self.tokens.len();
+        }
         // Use xlora cache first because of non granular
         if self.xlora_cache.as_ref().is_some_and(|c| c[0].is_some()) {
             self.xlora_cache.as_ref().unwrap()[0]
@@ -180,9 +222,6 @@ impl Sequence {
         } else if let Some((_, x)) = &self.cache[0] {
             x.dims()[2] + 1
         } else {
-            if let Some(toks) = &self.prefill_prompt_toks {
-                return toks.len();
-            }
             self.tokens.len()
         }
     }
@@ -192,22 +231,22 @@ impl Sequence {
     }
 
     pub fn is_running(&self) -> bool {
-        self.state.get() == SequenceState::RunningCompletion
-            || self.state.get() == SequenceState::RunningPrompt
-            || self.state.get() == SequenceState::RunningPrefillPrompt
+        *self.state.read().unwrap() == SequenceState::RunningCompletion
+            || *self.state.read().unwrap() == SequenceState::RunningPrompt
+            || *self.state.read().unwrap() == SequenceState::RunningPrefillPrompt
     }
 
     pub fn is_completion(&self) -> bool {
-        self.state.get() == SequenceState::RunningCompletion
+        *self.state.read().unwrap() == SequenceState::RunningCompletion
     }
 
     pub fn is_prompt(&self) -> bool {
-        self.state.get() == SequenceState::RunningPrompt
-            || self.state.get() == SequenceState::RunningPrefillPrompt
+        *self.state.read().unwrap() == SequenceState::RunningPrompt
+            || *self.state.read().unwrap() == SequenceState::RunningPrefillPrompt
     }
 
     pub fn is_waiting(&self) -> bool {
-        self.state.get() == SequenceState::Waiting
+        *self.state.read().unwrap() == SequenceState::Waiting
     }
 
     pub fn get_toks(&self) -> &[u32] {
@@ -223,6 +262,10 @@ impl Sequence {
 
     pub fn cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
         &mut self.cache
+    }
+
+    pub fn draft_cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
+        &mut self.draft_cache
     }
 
     pub fn xlora_cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
@@ -241,6 +284,28 @@ impl Sequence {
         self.sampler.clone()
     }
 
+    /// Add a some prefill tokens. Only meant for internal speculative decoding usage.
+    pub fn set_prefill_toks(&mut self, toks: Vec<u32>) {
+        self.prefill_prompt_toks = Some(toks)
+    }
+
+    /// Remove the prefill tokens.
+    pub fn reset_prefill_toks(&mut self) {
+        self.prefill_prompt_toks = None
+    }
+
+    /// Internal api to add one raw token.
+    pub(crate) fn add_tmp_tok(&mut self, tok: u32) {
+        self.is_tmp = true;
+        self.tokens.push(tok);
+    }
+
+    /// Internal api to remove n raw tokens.
+    pub(crate) fn remove_tmp_tok(&mut self, n: usize) {
+        self.is_tmp = false;
+        self.tokens.truncate(self.tokens.len() - n);
+    }
+
     pub fn add_token(
         &mut self,
         tok: Logprobs,
@@ -256,7 +321,11 @@ impl Sequence {
             // We don't need to add stop tokens to the completion bytes to check for stop strings.
             // And by not adding it here, we can avoid having to delete these tokens from the output.
             self.completion_bytes.extend_from_slice(&completion_bytes);
+            self.last_completion_bytes_len = completion_bytes.len();
         }
+        self.last_logprob = tok.logprob;
+        self.last_is_done = *is_done;
+
         self.cumulative_logprob += tok.logprob;
         self.tokens.push(tok.token);
         self.logprobs.push(tok);
@@ -275,7 +344,7 @@ impl Sequence {
         if matches!(state, SequenceState::Error) {
             get_mut_group!(self).n_choices -= 1;
         }
-        self.state.set(state);
+        *self.state.write().unwrap() = state;
     }
 
     pub fn is_done(
@@ -290,6 +359,11 @@ impl Sequence {
         };
         if is_eos {
             Some(StopReason::Eos)
+        } else if matches!(
+            &*self.state.read().unwrap(),
+            SequenceState::Done(StopReason::Canceled)
+        ) {
+            Some(StopReason::Canceled)
         } else if self.stop_tokens.contains(&tok) {
             Some(StopReason::StopTok(tok))
         } else if self.max_len.is_some()
@@ -399,12 +473,16 @@ impl Sequence {
         self.response_index
     }
 
-    pub fn get_mut_group(&self) -> RefMut<'_, SequenceGroup> {
+    pub fn get_mut_group(&self) -> MutexGuard<'_, SequenceGroup> {
         get_mut_group!(self)
     }
 
     pub fn add_streaming_chunk_choice_to_group(&self, chunk: ChunkChoice) {
         get_mut_group!(self).streaming_chunks.push(chunk);
+    }
+
+    pub fn get_adapters(&self) -> Option<Vec<String>> {
+        self.adapters.clone()
     }
 }
 
@@ -476,19 +554,19 @@ impl SequenceGroup {
         }
     }
 
-    pub fn maybe_send_done_response(
+    pub async fn maybe_send_done_response(
         &self,
         response: ChatCompletionResponse,
         sender: Sender<Response>,
-    ) {
+    ) -> Result<(), SendError<Response>> {
         if self.choices.len() == self.n_choices {
-            sender
-                .send(Response::Done(response))
-                .expect("Expected receiver.");
+            sender.send(Response::Done(response)).await?;
         }
+
+        Ok(())
     }
 
-    pub fn maybe_send_streaming_response(
+    pub async fn maybe_send_streaming_response(
         &mut self,
         seq: &Sequence,
         model: String,
@@ -506,20 +584,20 @@ impl SequenceGroup {
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "chat.completion.chunk".to_string(),
-                }))?;
+                }))
+                .await?;
         }
         Ok(())
     }
 
-    pub fn maybe_send_completion_done_response(
+    pub async fn maybe_send_completion_done_response(
         &self,
         response: CompletionResponse,
         sender: Sender<Response>,
-    ) {
+    ) -> Result<(), Box<SendError<Response>>> {
         if self.completion_choices.len() == self.n_choices {
-            sender
-                .send(Response::CompletionDone(response))
-                .expect("Expected receiver.");
+            sender.send(Response::CompletionDone(response)).await?;
         }
+        Ok(())
     }
 }

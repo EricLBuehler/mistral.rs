@@ -71,9 +71,10 @@ pub struct ChatCompletionRequest {
     // mistral.rs additional
     #[schema(example = json!(Option::None::<usize>))]
     pub top_k: Option<usize>,
-
     #[schema(example = json!(Option::None::<Grammar>))]
     pub grammar: Option<Grammar>,
+    #[schema(example = json!(Option::None::<Vec<String>>))]
+    pub adapters: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -134,7 +135,8 @@ pub struct CompletionRequest {
     // mistral.rs additional
     #[schema(example = json!(Option::None::<usize>))]
     pub top_k: Option<usize>,
-
     #[schema(example = json!(Option::None::<Grammar>))]
     pub grammar: Option<Grammar>,
+    #[schema(example = json!(Option::None::<Vec<String>>))]
+    pub adapters: Option<Vec<String>>,
 }

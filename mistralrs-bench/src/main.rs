@@ -3,13 +3,14 @@ use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
     Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelKind,
-    ModelSelected, Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
-    Usage,
+    ModelSelected, NormalRequest, Request, RequestMessage, Response, SamplingParams,
+    SchedulerMethod, TokenSource, Usage,
 };
+use std::fmt::Display;
 use std::sync::Arc;
-use std::{fmt::Display, sync::mpsc::channel};
-use tracing::info;
+use tokio::sync::mpsc::channel;
 use tracing::level_filters::LevelFilter;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 enum TestName {
@@ -65,9 +66,9 @@ fn run_bench(
         n_choices: 1,
     };
     let sender = mistralrs.get_sender();
-    let (tx, rx) = channel();
+    let (tx, mut rx) = channel(10_000);
 
-    let req = Request {
+    let req = Request::Normal(NormalRequest {
         id: mistralrs.next_request_id(),
         messages: prompt,
         sampling_params: sampling_params.clone(),
@@ -76,17 +77,20 @@ fn run_bench(
         is_streaming: false,
         constraint: Constraint::None,
         suffix: None,
-    };
+        adapters: None,
+    });
 
     let mut usages = Vec::new();
 
     for _ in 0..repetitions {
         for _ in 0..concurrency {
-            sender.send(req.clone()).expect("Expected receiver.");
+            sender
+                .blocking_send(req.clone())
+                .expect("Expected receiver.");
         }
         for _ in 0..concurrency {
-            match rx.recv() {
-                Ok(r) => match r {
+            match rx.blocking_recv() {
+                Some(r) => match r {
                     Response::InternalError(e) => {
                         unreachable!("Got an internal error: {e:?}");
                     }
@@ -105,7 +109,7 @@ fn run_bench(
                         usages.push(res.usage);
                     }
                 },
-                Err(e) => unreachable!("Expected a Done response, got: {:?}", e),
+                None => unreachable!("Expected a Done response, got None",),
             }
         }
     }
@@ -206,6 +210,45 @@ fn print_usage(model: &str, device: &Device, results: Vec<BenchResult>) {
     print_stdout(table).expect("print table");
 }
 
+fn warmup_run(mistralrs: Arc<MistralRs>) {
+    let sampling_params = SamplingParams {
+        temperature: Some(0.1),
+        top_k: Some(32),
+        top_p: Some(0.1),
+        top_n_logprobs: 0,
+        frequency_penalty: Some(0.1),
+        presence_penalty: Some(0.1),
+        max_len: Some(5),
+        stop_toks: None,
+        logits_bias: None,
+        n_choices: 1,
+    };
+    let sender = mistralrs.get_sender();
+    let (tx, mut rx) = channel(10_000);
+
+    let req = Request::Normal(NormalRequest {
+        id: mistralrs.next_request_id(),
+        messages: RequestMessage::Completion {
+            text: "Hello!".to_string(),
+            echo_prompt: false,
+            best_of: 1,
+        },
+        sampling_params: sampling_params.clone(),
+        response: tx,
+        return_logprobs: false,
+        is_streaming: false,
+        constraint: Constraint::None,
+        suffix: None,
+        adapters: None,
+    });
+
+    sender
+        .blocking_send(req.clone())
+        .expect("Expected receiver.");
+
+    let _ = rx.blocking_recv();
+}
+
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -280,9 +323,9 @@ fn main() -> anyhow::Result<()> {
                 | ModelKind::XLoraGGUF
         )
     {
-        info!("⚠️ WARNING: Using flash attention with a quantized model has no effect!")
+        warn!("Using flash attention with a quantized model has no effect!")
     }
-    info!("Model kind is: {}", loader.get_kind().as_ref());
+    info!("Model kind is: {}", loader.get_kind().to_string());
     let pipeline = loader.load_model(
         None,
         token_source,
@@ -307,6 +350,11 @@ fn main() -> anyhow::Result<()> {
     .with_no_prefix_cache(true)
     .with_disable_eos_stop(true)
     .build();
+
+    info!("Starting warmup run.");
+    warmup_run(mistralrs.clone());
+    info!("Finished warmup run.");
+    info!("Starting benchmarks.");
 
     for concurrency in args.concurrency.as_ref().unwrap() {
         let mut results = vec![];
@@ -340,7 +388,7 @@ fn main() -> anyhow::Result<()> {
             results.push(r);
         }
 
-        print_usage(model_name, &device, results);
+        print_usage(&model_name, &device, results);
     }
 
     Ok(())

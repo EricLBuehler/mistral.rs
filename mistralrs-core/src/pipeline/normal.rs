@@ -1,51 +1,50 @@
+use super::cache_manager::DefaultCacheManager;
 use super::loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
     Phi3Loader, Qwen2Loader,
 };
 use super::{
-    calculate_inputs, get_model_paths, get_xlora_paths, Loader, ModelInputs, ModelKind, ModelPaths,
-    NormalModel, NormalModelLoader, Pipeline, TokenSource, XLoraPaths,
+    get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
+    ModelKind, ModelPaths, NormalModel, NormalModelLoader, Pipeline, TokenSource, XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::models::Cache;
 use crate::pipeline::chat_template::calculate_eos_tokens;
 use crate::pipeline::{ChatTemplate, SimpleModelPaths};
+use crate::prefix_cacher::PrefixCacheManager;
+use crate::sequence::Sequence;
+use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
 use crate::{
-    deserialize_chat_template, get_paths, lora_model_loader, normal_model_loader,
-    xlora_model_loader, DeviceMapMetadata,
-};
-use crate::{
-    sequence::Sequence,
-    utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors},
+    deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, lora_model_loader,
+    normal_model_loader, xlora_model_loader, DeviceMapMetadata,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_lora::Ordering;
+use rand_isaac::Isaac64Rng;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::Mutex;
 use tokenizers::Tokenizer;
+use tokio::sync::Mutex;
 use tracing::info;
 
 pub struct NormalPipeline {
     model: Box<dyn NormalModel + Send + Sync>,
     tokenizer: Arc<Tokenizer>,
     tok_trie: Arc<TokTrie>,
-    config: NormalSpecificConfig,
     no_kv_cache: bool,
-    chat_template: ChatTemplate,
+    chat_template: Arc<ChatTemplate>,
     non_granular_state: Option<NonGranularState>,
     model_id: String,
-    is_lora: bool,
-    eos_tok: Vec<u32>,
+    metadata: GeneralMetadata,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -139,20 +138,9 @@ impl NormalLoaderBuilder {
         )
     }
 
-    pub fn with_lora(
-        mut self,
-        xlora_model_id: String,
-        xlora_order: Ordering,
-        no_kv_cache: bool,
-        tgt_non_granular_index: Option<usize>,
-    ) -> Self {
+    pub fn with_lora(mut self, lora_model_id: String, lora_order: Ordering) -> Self {
         self.kind = ModelKind::LoraNormal;
-        self.with_adapter(
-            xlora_model_id,
-            xlora_order,
-            no_kv_cache,
-            tgt_non_granular_index,
-        )
+        self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
     pub fn build(self, loader: NormalLoaderType) -> Box<dyn Loader> {
@@ -181,13 +169,18 @@ impl NormalLoaderBuilder {
 }
 
 impl Loader for NormalLoader {
-    fn download_model(
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    fn load_model(
         &self,
         revision: Option<String>,
         token_source: TokenSource,
+        dtype: Option<DType>,
+        device: &Device,
         silent: bool,
-    ) -> Result<Box<dyn ModelPaths>> {
-        get_paths!(
+        mapper: DeviceMapMetadata,
+        in_situ_quant: Option<GgmlDType>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             SimpleModelPaths,
             &token_source,
             revision,
@@ -195,18 +188,9 @@ impl Loader for NormalLoader {
             None,
             None,
             silent
-        )
-    }
+        );
+        let paths = paths?;
 
-    fn _setup_model(
-        &self,
-        paths: &dyn ModelPaths,
-        dtype: Option<DType>,
-        device: &Device,
-        silent: bool,
-        mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         let default_dtype = if device.is_cuda() && mapper.is_dummy() {
             DType::BF16
@@ -216,7 +200,11 @@ impl Loader for NormalLoader {
             DType::F32
         };
 
-        info!("Model config: {config}");
+        info!(
+            "Model config: {:?}",
+            self.inner
+                .get_config_repr(&config, self.config.use_flash_attn)?
+        );
 
         let load_device = if in_situ_quant.is_none() {
             device.clone()
@@ -274,6 +262,10 @@ impl Loader for NormalLoader {
             ModelKind::XLoraGGML => unreachable!(),
             ModelKind::LoraGGUF => unreachable!(),
             ModelKind::LoraGGML => unreachable!(),
+            ModelKind::Speculative {
+                target: _,
+                draft: _,
+            } => unreachable!(),
         };
 
         let tokenizer =
@@ -285,14 +277,17 @@ impl Loader for NormalLoader {
             model.quantize(in_situ_quant, device.clone())?;
         }
 
+        let max_seq_len = model.max_seq_len();
+        let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
+        let is_xlora = model.is_xlora() && !is_lora;
+        let num_hidden_layers = model.cache().lock().len();
+        let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
-            eos_tok: calculate_eos_tokens(&chat_template, gen_conf, &tokenizer),
-            tok_trie: build_tok_trie(tokenizer.clone()).into(),
+            tok_trie: tok_trie.clone(),
             tokenizer: tokenizer.into(),
-            config: self.config,
             no_kv_cache: self.no_kv_cache,
-            chat_template,
+            chat_template: Arc::new(chat_template),
             non_granular_state: self.tgt_non_granular_index.map(|tgt_non_granular_index| {
                 NonGranularState {
                     non_granular_index: Arc::new(Mutex::new(0)),
@@ -300,26 +295,36 @@ impl Loader for NormalLoader {
                 }
             }),
             model_id: self.model_id.clone(),
-            is_lora,
+            metadata: GeneralMetadata {
+                max_seq_len,
+                repeat_last_n: self.config.repeat_last_n,
+                tok_trie,
+                has_no_kv_cache: self.no_kv_cache,
+                is_xlora,
+                num_hidden_layers,
+                eos_tok: eos,
+                is_lora,
+            },
         })))
     }
 
-    fn get_id(&self) -> &str {
-        self.xlora_model_id.as_deref().unwrap_or(&self.model_id)
+    fn get_id(&self) -> String {
+        self.xlora_model_id
+            .as_deref()
+            .unwrap_or(&self.model_id)
+            .to_string()
     }
 
     fn get_kind(&self) -> ModelKind {
-        self.kind
+        self.kind.clone()
     }
 }
 
+#[async_trait::async_trait]
 impl Pipeline for NormalPipeline {
-    fn forward(
+    fn forward_inputs(
         &mut self,
-        input_toks: &[&mut Sequence],
-        is_prompt: bool,
-    ) -> Result<Tensor, candle_core::Error> {
-        let ModelInputs {
+        ModelInputs {
             input_ids,
             input_ids_full,
             seqlen_offsets,
@@ -327,20 +332,16 @@ impl Pipeline for NormalPipeline {
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full,
             context_lens,
-        } = calculate_inputs(
-            input_toks,
-            is_prompt,
-            self.is_xlora(),
-            self.device(),
-            self.no_kv_cache,
-        )
-        .unwrap();
+            position_ids,
+        }: ModelInputs,
+    ) -> Result<Tensor, candle_core::Error> {
         match self.model.is_xlora() {
             false => self.model.forward(
                 &input_ids,
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
+                position_ids,
             ),
             true => self.model.xlora_forward(
                 &input_ids,
@@ -352,52 +353,65 @@ impl Pipeline for NormalPipeline {
                 self.no_kv_cache,
                 &self.non_granular_state,
                 context_lens,
+                position_ids,
             ),
         }
     }
-    fn device(&self) -> &Device {
-        self.model.device()
+    async fn sample(
+        &self,
+        seqs: &mut [&mut Sequence],
+        logits: Tensor,
+        prefix_cacher: &mut PrefixCacheManager,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    ) -> Result<(), candle_core::Error> {
+        do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
     }
-    fn num_hidden_layers(&self) -> usize {
-        self.cache().lock().len()
-    }
-    fn cache(&self) -> &Cache {
-        self.model.cache()
-    }
-    fn get_repeat_last_n(&self) -> usize {
-        self.config.repeat_last_n
+    fn device(&self) -> Device {
+        self.model.device().clone()
     }
     fn tokenizer(&self) -> Arc<Tokenizer> {
         self.tokenizer.clone()
     }
-    fn eos_tok(&self) -> &[u32] {
-        &self.eos_tok
-    }
     fn name(&self) -> String {
         self.model_id.clone()
     }
-    fn get_max_seq_len(&self) -> usize {
-        self.model.max_seq_len()
+    fn get_chat_template(&self) -> Arc<ChatTemplate> {
+        self.chat_template.clone()
     }
-    fn is_xlora(&self) -> bool {
-        self.model.is_xlora() && !self.is_lora
-    }
-    fn has_no_kv_cache(&self) -> bool {
-        self.no_kv_cache
-    }
-    fn get_chat_template(&self) -> &ChatTemplate {
-        &self.chat_template
-    }
-    fn get_non_granular_state(&self) -> &Option<NonGranularState> {
-        &self.non_granular_state
-    }
-    fn tok_trie(&self) -> Arc<TokTrie> {
-        self.tok_trie.clone()
+    fn reset_non_granular_state(&self) {
+        if let Some(s) = self.non_granular_state.as_ref() {
+            *self.cache().get_scalings_cache() = None;
+            *get_mut_arcmutex!(s.non_granular_index) = 0;
+        }
     }
     fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()> {
         let device = self.device().clone();
         self.model
             .quantize(dtype, device)
+            .map_err(anyhow::Error::msg)
+    }
+    fn get_metadata(&self) -> &GeneralMetadata {
+        &self.metadata
+    }
+    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+    }
+    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+    }
+    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
+        DefaultCacheManager.set_none_cache(self, modify_draft_cache);
+        if reset_non_granular {
+            self.reset_non_granular_state()
+        }
+    }
+    fn cache(&self) -> &Cache {
+        self.model.cache()
+    }
+    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
+        self.model
+            .activate_adapters(adapter_names)
             .map_err(anyhow::Error::msg)
     }
 }

@@ -3,23 +3,24 @@
 use candle_core::{quantized::GgmlDType, Result};
 use either::Either;
 use indexmap::IndexMap;
-use message::{Message, Role};
 use std::{
     cell::RefCell,
     collections::HashMap,
     fmt::Debug,
     str::FromStr,
-    sync::{mpsc::channel, Arc, Mutex},
+    sync::{Arc, Mutex},
 };
 use stream::ChatCompletionStreamer;
+use tokio::sync::mpsc::channel;
 use tracing_subscriber::{filter::LevelFilter, EnvFilter};
 
 use candle_core::Device;
 use mistralrs_core::{
     ChatCompletionResponse, CompletionResponse, Constraint, DeviceMapMetadata, GGMLLoaderBuilder,
     GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder,
-    NormalLoaderBuilder, NormalSpecificConfig, Request as _Request, RequestMessage, Response,
-    SamplingParams, SchedulerMethod, StopTokens, TokenSource,
+    NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, Request as _Request, RequestMessage,
+    Response, SamplingParams, SchedulerMethod, SpeculativeConfig, SpeculativeLoader, StopTokens,
+    TokenSource,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
@@ -30,7 +31,6 @@ use std::fs::File;
 mod stream;
 mod which;
 use which::{Architecture, Which};
-mod message;
 
 #[cfg(not(feature = "metal"))]
 static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
@@ -64,8 +64,8 @@ fn parse_isq(s: &str) -> std::result::Result<GgmlDType, String> {
         "Q4_1" => Ok(GgmlDType::Q4_1),
         "Q5_0" => Ok(GgmlDType::Q5_0),
         "Q5_1" => Ok(GgmlDType::Q5_1),
-        "Q8_0" => Ok(GgmlDType::Q8_1),
-        "Q8_1" => Ok(GgmlDType::Q4_0),
+        "Q8_0" => Ok(GgmlDType::Q8_0),
+        "Q8_1" => Ok(GgmlDType::Q8_1),
         "Q2K" => Ok(GgmlDType::Q2K),
         "Q3K" => Ok(GgmlDType::Q3K),
         "Q4K" => Ok(GgmlDType::Q4K),
@@ -84,6 +84,245 @@ struct Runner {
 
 static NEXT_REQUEST_ID: Mutex<RefCell<usize>> = Mutex::new(RefCell::new(0));
 
+fn parse_which(
+    which: Which,
+    no_kv_cache: bool,
+    chat_template: Option<String>,
+) -> PyResult<Box<dyn Loader>> {
+    const REPEAT_LAST_N_DEFAULT: usize = 64;
+    const GQA_DEFAULT: usize = 1;
+
+    #[cfg(not(feature = "flash-attn"))]
+    let use_flash_attn = false;
+    #[cfg(feature = "flash-attn")]
+    let use_flash_attn = true;
+
+    Ok(match which {
+        Which::Plain {
+            model_id,
+            repeat_last_n,
+            tokenizer_json,
+            arch,
+        } => NormalLoaderBuilder::new(
+            NormalSpecificConfig {
+                use_flash_attn,
+                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+            },
+            chat_template,
+            tokenizer_json,
+            Some(model_id),
+        )
+        .build(arch.into()),
+        Which::XLora {
+            model_id,
+            xlora_model_id,
+            repeat_last_n,
+            order,
+            tokenizer_json,
+            tgt_non_granular_index,
+            arch,
+        } => NormalLoaderBuilder::new(
+            NormalSpecificConfig {
+                use_flash_attn,
+                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+            },
+            chat_template,
+            tokenizer_json,
+            model_id,
+        )
+        .with_xlora(
+            xlora_model_id,
+            serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )
+            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+            no_kv_cache,
+            tgt_non_granular_index,
+        )
+        .build(arch.into()),
+        Which::Lora {
+            model_id,
+            tokenizer_json,
+            adapters_model_id,
+            repeat_last_n,
+            order,
+            arch,
+        } => NormalLoaderBuilder::new(
+            NormalSpecificConfig {
+                use_flash_attn,
+                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+            },
+            chat_template,
+            tokenizer_json,
+            model_id,
+        )
+        .with_lora(
+            adapters_model_id,
+            serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )
+            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+        )
+        .build(arch.into()),
+        Which::GGUF {
+            tok_model_id,
+            tokenizer_json,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+        } => GGUFLoaderBuilder::new(
+            GGUFSpecificConfig {
+                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+            },
+            chat_template,
+            tokenizer_json,
+            Some(tok_model_id),
+            quantized_model_id,
+            quantized_filename,
+        )
+        .build(),
+        Which::XLoraGGUF {
+            tok_model_id,
+            tokenizer_json,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+            xlora_model_id,
+            order,
+            tgt_non_granular_index,
+        } => GGUFLoaderBuilder::new(
+            GGUFSpecificConfig {
+                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+            },
+            chat_template,
+            tokenizer_json,
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+        )
+        .with_xlora(
+            xlora_model_id,
+            serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )
+            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+            no_kv_cache,
+            tgt_non_granular_index,
+        )
+        .build(),
+        Which::LoraGGUF {
+            tok_model_id,
+            tokenizer_json,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+            adapters_model_id,
+            order,
+        } => GGUFLoaderBuilder::new(
+            GGUFSpecificConfig {
+                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+            },
+            chat_template,
+            tokenizer_json,
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+        )
+        .with_lora(
+            adapters_model_id,
+            serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )
+            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+        )
+        .build(),
+        Which::GGML {
+            tok_model_id,
+            tokenizer_json,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+            gqa,
+        } => GGMLLoaderBuilder::new(
+            GGMLSpecificConfig {
+                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                gqa: gqa.unwrap_or(GQA_DEFAULT),
+            },
+            chat_template,
+            tokenizer_json,
+            Some(tok_model_id),
+            quantized_model_id,
+            quantized_filename,
+        )
+        .build(),
+        Which::XLoraGGML {
+            tok_model_id,
+            tokenizer_json,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+            xlora_model_id,
+            order,
+            tgt_non_granular_index,
+            gqa,
+        } => GGMLLoaderBuilder::new(
+            GGMLSpecificConfig {
+                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                gqa: gqa.unwrap_or(GQA_DEFAULT),
+            },
+            chat_template,
+            tokenizer_json,
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+        )
+        .with_xlora(
+            xlora_model_id,
+            serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )
+            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+            no_kv_cache,
+            tgt_non_granular_index,
+        )
+        .build(),
+        Which::LoraGGML {
+            tok_model_id,
+            tokenizer_json,
+            quantized_model_id,
+            quantized_filename,
+            repeat_last_n,
+            adapters_model_id,
+            order,
+            gqa,
+        } => GGMLLoaderBuilder::new(
+            GGMLSpecificConfig {
+                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                gqa: gqa.unwrap_or(GQA_DEFAULT),
+            },
+            chat_template,
+            tokenizer_json,
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+        )
+        .with_lora(
+            adapters_model_id,
+            serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )
+            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+        )
+        .build(),
+    })
+}
+
 #[pymethods]
 impl Runner {
     #[new]
@@ -93,6 +332,8 @@ impl Runner {
         no_kv_cache = false,
         prefix_cache_n = 16,
         token_source = "cache",
+        speculative_gamma = 32,
+        which_draft = None,
         chat_template = None,
         num_device_layers = None,
         in_situ_quant = None
@@ -103,18 +344,12 @@ impl Runner {
         no_kv_cache: bool,
         prefix_cache_n: usize,
         token_source: &str,
+        speculative_gamma: usize,
+        which_draft: Option<Which>,
         chat_template: Option<String>,
         num_device_layers: Option<usize>,
         in_situ_quant: Option<String>,
     ) -> PyResult<Self> {
-        const REPEAT_LAST_N_DEFAULT: usize = 64;
-        const GQA_DEFAULT: usize = 1;
-
-        #[cfg(not(feature = "flash-attn"))]
-        let use_flash_attn = false;
-        #[cfg(feature = "flash-attn")]
-        let use_flash_attn = true;
-
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
             | Which::Lora { .. }
@@ -141,237 +376,18 @@ impl Runner {
             max_seqs
         };
 
-        let loader: Box<dyn Loader> = match which {
-            Which::Plain {
-                model_id,
-                repeat_last_n,
-                tokenizer_json,
-                arch,
-            } => NormalLoaderBuilder::new(
-                NormalSpecificConfig {
-                    use_flash_attn,
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+        let loader = parse_which(which, no_kv_cache, chat_template.clone())?;
+        let loader = if let Some(draft_which) = which_draft {
+            let draft = parse_which(draft_which, no_kv_cache, chat_template)?;
+            Box::new(SpeculativeLoader {
+                target: loader,
+                draft,
+                config: SpeculativeConfig {
+                    gamma: speculative_gamma,
                 },
-                chat_template,
-                tokenizer_json,
-                Some(model_id),
-            )
-            .build(arch.into()),
-            Which::XLora {
-                model_id,
-                xlora_model_id,
-                repeat_last_n,
-                order,
-                tokenizer_json,
-                tgt_non_granular_index,
-                arch,
-            } => NormalLoaderBuilder::new(
-                NormalSpecificConfig {
-                    use_flash_attn,
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                },
-                chat_template,
-                tokenizer_json,
-                model_id,
-            )
-            .with_xlora(
-                xlora_model_id,
-                serde_json::from_reader(
-                    File::open(order.clone())
-                        .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-                )
-                .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                no_kv_cache,
-                tgt_non_granular_index,
-            )
-            .build(arch.into()),
-            Which::Lora {
-                model_id,
-                tokenizer_json,
-                adapters_model_id,
-                repeat_last_n,
-                order,
-                arch,
-            } => NormalLoaderBuilder::new(
-                NormalSpecificConfig {
-                    use_flash_attn,
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                },
-                chat_template,
-                tokenizer_json,
-                model_id,
-            )
-            .with_xlora(
-                adapters_model_id,
-                serde_json::from_reader(
-                    File::open(order.clone())
-                        .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-                )
-                .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                no_kv_cache,
-                tgt_non_granular_index,
-            )
-            .build(arch.into()),
-            Which::GGUF {
-                tok_model_id,
-                tokenizer_json,
-                quantized_model_id,
-                quantized_filename,
-                repeat_last_n,
-            } => GGUFLoaderBuilder::new(
-                GGUFSpecificConfig {
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                },
-                chat_template,
-                tokenizer_json,
-                Some(tok_model_id),
-                quantized_model_id,
-                quantized_filename,
-            )
-            .build(),
-            Which::XLoraGGUF {
-                tok_model_id,
-                tokenizer_json,
-                quantized_model_id,
-                quantized_filename,
-                repeat_last_n,
-                xlora_model_id,
-                order,
-                tgt_non_granular_index,
-            } => GGUFLoaderBuilder::new(
-                GGUFSpecificConfig {
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                },
-                chat_template,
-                tokenizer_json,
-                tok_model_id,
-                quantized_model_id,
-                quantized_filename,
-            )
-            .with_xlora(
-                xlora_model_id,
-                serde_json::from_reader(
-                    File::open(order.clone())
-                        .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-                )
-                .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                no_kv_cache,
-                tgt_non_granular_index,
-            )
-            .build(),
-            Which::LoraGGUF {
-                tok_model_id,
-                tokenizer_json,
-                quantized_model_id,
-                quantized_filename,
-                repeat_last_n,
-                adapters_model_id,
-                order,
-                tgt_non_granular_index,
-            } => GGUFLoaderBuilder::new(
-                GGUFSpecificConfig {
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                },
-                chat_template,
-                tokenizer_json,
-                tok_model_id,
-                quantized_model_id,
-                quantized_filename,
-            )
-            .with_lora(
-                adapters_model_id,
-                serde_json::from_reader(
-                    File::open(order.clone())
-                        .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-                )
-                .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                no_kv_cache,
-                tgt_non_granular_index,
-            )
-            .build(),
-            Which::GGML {
-                tok_model_id,
-                tokenizer_json,
-                quantized_model_id,
-                quantized_filename,
-                repeat_last_n,
-                gqa,
-            } => GGMLLoaderBuilder::new(
-                GGMLSpecificConfig {
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                    gqa: gqa.unwrap_or(GQA_DEFAULT),
-                },
-                chat_template,
-                tokenizer_json,
-                Some(tok_model_id),
-                quantized_model_id,
-                quantized_filename,
-            )
-            .build(),
-            Which::XLoraGGML {
-                tok_model_id,
-                tokenizer_json,
-                quantized_model_id,
-                quantized_filename,
-                repeat_last_n,
-                xlora_model_id,
-                order,
-                tgt_non_granular_index,
-                gqa,
-            } => GGMLLoaderBuilder::new(
-                GGMLSpecificConfig {
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                    gqa: gqa.unwrap_or(GQA_DEFAULT),
-                },
-                chat_template,
-                tokenizer_json,
-                tok_model_id,
-                quantized_model_id,
-                quantized_filename,
-            )
-            .with_xlora(
-                xlora_model_id,
-                serde_json::from_reader(
-                    File::open(order.clone())
-                        .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-                )
-                .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                no_kv_cache,
-                tgt_non_granular_index,
-            )
-            .build(),
-            Which::LoraGGML {
-                tok_model_id,
-                tokenizer_json,
-                quantized_model_id,
-                quantized_filename,
-                repeat_last_n,
-                adapters_model_id,
-                order,
-                tgt_non_granular_index,
-                gqa,
-            } => GGMLLoaderBuilder::new(
-                GGMLSpecificConfig {
-                    repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                    gqa: gqa.unwrap_or(GQA_DEFAULT),
-                },
-                chat_template,
-                tokenizer_json,
-                tok_model_id,
-                quantized_model_id,
-                quantized_filename,
-            )
-            .with_lora(
-                adapters_model_id,
-                serde_json::from_reader(
-                    File::open(order.clone())
-                        .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-                )
-                .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                no_kv_cache,
-                tgt_non_granular_index,
-            )
-            .build(),
+            })
+        } else {
+            loader
         };
 
         let device = get_device().map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -415,7 +431,7 @@ impl Runner {
         &mut self,
         request: Py<ChatCompletionRequest>,
     ) -> PyResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
-        let (tx, rx) = channel();
+        let (tx, mut rx) = channel(10_000);
         Python::with_gil(|py| {
             let request = request.bind(py).borrow();
             let stop_toks = request
@@ -443,7 +459,7 @@ impl Runner {
             } else {
                 Constraint::None
             };
-            let model_request = _Request {
+            let model_request = _Request::Normal(NormalRequest {
                 id: {
                     let l = NEXT_REQUEST_ID.lock().unwrap();
                     let last = &mut *l.borrow_mut();
@@ -455,14 +471,16 @@ impl Runner {
                     Either::Left(ref messages) => {
                         let mut messages_vec = Vec::new();
                         for message in messages {
+                            let role = message.get("role").expect("Expected role");
+                            let content = message.get("content").expect("Expected role");
                             let mut message_map = IndexMap::new();
-                            let role = match message.role {
-                                Role::Assistant => "assistant",
-                                Role::User => "user",
-                                Role::System => "system",
-                            };
+                            if !["user", "assistant", "system"].contains(&role.as_str()) {
+                                return Err(PyValueError::new_err(
+                                    "Only `user`, `assistant`, `system` roles supported.",
+                                ));
+                            }
                             message_map.insert("role".to_string(), role.to_string());
-                            message_map.insert("content".to_string(), message.content.clone());
+                            message_map.insert("content".to_string(), content.clone());
                             messages_vec.push(message_map);
                         }
                         RequestMessage::Chat(messages_vec)
@@ -493,16 +511,17 @@ impl Runner {
                 is_streaming: request.stream,
                 constraint,
                 suffix: None,
-            };
+                adapters: request.adapters.clone(),
+            });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
             let sender = self.runner.get_sender();
-            sender.send(model_request).unwrap();
+            sender.blocking_send(model_request).unwrap();
 
             if request.stream {
                 Ok(Either::Right(ChatCompletionStreamer::from_rx(rx)))
             } else {
-                let response = rx.recv().unwrap();
+                let response = rx.blocking_recv().unwrap();
 
                 match response {
                     Response::ValidationError(e) | Response::InternalError(e) => {
@@ -523,7 +542,7 @@ impl Runner {
         &mut self,
         request: Py<CompletionRequest>,
     ) -> PyResult<CompletionResponse> {
-        let (tx, rx) = channel();
+        let (tx, mut rx) = channel(10_000);
         Python::with_gil(|py| {
             let request = request.bind(py).borrow();
             let stop_toks = request
@@ -551,7 +570,7 @@ impl Runner {
             } else {
                 Constraint::None
             };
-            let model_request = _Request {
+            let model_request = _Request::Normal(NormalRequest {
                 id: {
                     let l = NEXT_REQUEST_ID.lock().unwrap();
                     let last = &mut *l.borrow_mut();
@@ -581,12 +600,13 @@ impl Runner {
                 is_streaming: false,
                 constraint,
                 suffix: request.suffix.clone(),
-            };
+                adapters: request.adapters.clone(),
+            });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
             let sender = self.runner.get_sender();
-            sender.send(model_request).unwrap();
-            let response = rx.recv().unwrap();
+            sender.blocking_send(model_request).unwrap();
+            let response = rx.blocking_recv().unwrap();
 
             match response {
                 Response::ValidationError(e) | Response::InternalError(e) => {
@@ -606,9 +626,16 @@ impl Runner {
     /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
     /// then nothing will happen.
     fn send_re_isq(&self, dtype: String) -> PyResult<()> {
-        self.runner
-            .send_re_isq(parse_isq(&dtype).map_err(|e| PyValueError::new_err(e.to_string()))?);
+        let request =
+            _Request::ReIsq(parse_isq(&dtype).map_err(|e| PyValueError::new_err(e.to_string()))?);
+        self.runner.get_sender().blocking_send(request).unwrap();
         Ok(())
+    }
+
+    /// Send a request to make the specified adapters the active adapters for the model.
+    fn activate_adapters(&self, adapter_names: Vec<String>) {
+        let request = _Request::ActivateAdapters(adapter_names);
+        self.runner.get_sender().blocking_send(request).unwrap();
     }
 }
 
@@ -632,6 +659,7 @@ struct CompletionRequest {
     top_k: Option<usize>,
     grammar: Option<String>,
     grammar_type: Option<String>,
+    adapters: Option<Vec<String>>,
 }
 
 #[pymethods]
@@ -653,7 +681,8 @@ impl CompletionRequest {
         suffix=None,
         top_k=None,
         grammar = None,
-        grammar_type = None
+        grammar_type = None,
+        adapters = None
     ))]
     fn new(
         prompt: String,
@@ -672,6 +701,7 @@ impl CompletionRequest {
         top_k: Option<usize>,
         grammar: Option<String>,
         grammar_type: Option<String>,
+        adapters: Option<Vec<String>>,
     ) -> PyResult<Self> {
         Ok(Self {
             prompt,
@@ -690,6 +720,7 @@ impl CompletionRequest {
             top_k,
             grammar,
             grammar_type,
+            adapters,
         })
     }
 }
@@ -698,7 +729,7 @@ impl CompletionRequest {
 #[derive(Debug)]
 /// An OpenAI API compatible chat completion request.
 struct ChatCompletionRequest {
-    messages: Either<Vec<Message>, String>,
+    messages: Either<Vec<IndexMap<String, String>>, String>,
     _model: String,
     logit_bias: Option<HashMap<u32, f32>>,
     logprobs: bool,
@@ -714,6 +745,7 @@ struct ChatCompletionRequest {
     top_k: Option<usize>,
     grammar: Option<String>,
     grammar_type: Option<String>,
+    adapters: Option<Vec<String>>,
 }
 
 #[pymethods]
@@ -735,7 +767,8 @@ impl ChatCompletionRequest {
         top_k = None,
         stream=false,
         grammar = None,
-        grammar_type = None
+        grammar_type = None,
+        adapters = None
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -754,17 +787,20 @@ impl ChatCompletionRequest {
         stream: Option<bool>,
         grammar: Option<String>,
         grammar_type: Option<String>,
+        adapters: Option<Vec<String>>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
                 let mut messages_vec = Vec::new();
                 for message in messages {
-                    messages_vec.push(message.extract::<Message>()?);
+                    messages_vec.push(message.extract::<IndexMap<String, String>>()?);
                 }
-                Ok::<Either<Vec<Message>, String>, PyErr>(Either::Left(messages_vec))
+                Ok::<Either<Vec<IndexMap<String, String>>, String>, PyErr>(Either::Left(
+                    messages_vec,
+                ))
             } else if let Ok(messages) = messages.bind(py).downcast_exact::<PyString>() {
                 let prompt = messages.extract::<String>()?;
-                Ok::<Either<Vec<Message>, String>, PyErr>(Either::Right(prompt))
+                Ok::<Either<Vec<IndexMap<String, String>>, String>, PyErr>(Either::Right(prompt))
             } else {
                 return Err(PyTypeError::new_err("Expected a string or list of dicts."));
             }
@@ -786,6 +822,7 @@ impl ChatCompletionRequest {
             stream: stream.unwrap_or(false),
             grammar,
             grammar_type,
+            adapters,
         })
     }
 }
@@ -801,8 +838,6 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Which>()?;
     m.add_class::<ChatCompletionRequest>()?;
     m.add_class::<CompletionRequest>()?;
-    m.add_class::<Message>()?;
-    m.add_class::<Role>()?;
     m.add_class::<Architecture>()?;
 
     m.add_class::<mistralrs_core::ResponseMessage>()?;

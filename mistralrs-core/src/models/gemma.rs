@@ -8,6 +8,7 @@ use mistralrs_lora::layer::QLinear;
 
 use crate::{
     device_map::DeviceMapper,
+    layers::CausalMasker,
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
@@ -135,6 +136,7 @@ struct Attention {
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
     use_flash_attn: bool,
+    neg_inf: Tensor,
 }
 
 impl Attention {
@@ -160,6 +162,7 @@ impl Attention {
             head_dim,
             rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
+            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())?.to_dtype(vb.dtype())?,
         })
     }
 
@@ -231,10 +234,8 @@ impl Attention {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
             let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
 
-            let attn_weights = match attention_mask {
-                None => attn_weights,
-                Some(mask) => attn_weights.broadcast_add(mask)?,
-            };
+            let attn_weights =
+                CausalMasker.apply_mask(&attention_mask.cloned(), attn_weights, &self.neg_inf)?;
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
             attn_weights.matmul(&v)?
         };
@@ -323,7 +324,6 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: QMatMul,
-    dtype: DType,
     hidden_size: usize,
     pub device: Device,
     pub cache: Cache,
@@ -380,7 +380,6 @@ impl Model {
             norm,
             lm_head,
             device: real_device,
-            dtype: vb.dtype(),
             hidden_size: cfg.hidden_size,
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: default_max_position_embeddings(),
@@ -388,43 +387,17 @@ impl Model {
         })
     }
 
-    fn prepare_decoder_attention_mask(
-        &self,
-        b_size: usize,
-        tgt_len: usize,
-        seqlen_offset: usize,
-    ) -> Result<Tensor> {
-        let mask: Vec<_> = (0..tgt_len)
-            .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. }))
-            .collect();
-        let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
-        let mask = if seqlen_offset > 0 {
-            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, &self.device)?;
-            Tensor::cat(&[&mask0, &mask], D::Minus1)?
-        } else {
-            mask
-        };
-        mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
-            .to_dtype(self.dtype)
-    }
-
     pub fn forward(
         &mut self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        context_lens: Vec<usize>,
+        context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
-        let (b_size, seq_len) = input_ids.dims2()?;
-        let attention_mask = if seq_len <= 1 {
-            None
-        } else {
-            let mask = self.prepare_decoder_attention_mask(b_size, seq_len, seqlen_offsets[0])?;
-            Some(mask)
-        };
         let xs = self.embed_tokens.forward(input_ids)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
         let mut cache = self.cache.lock();
+        let attention_mask = CausalMasker.make_causal_mask(input_ids, &cache)?;
         for (i, layer) in self.layers.iter_mut().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
@@ -453,7 +426,8 @@ impl NormalModel for Model {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        context_lens: Vec<usize>,
+        context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
@@ -472,7 +446,8 @@ impl NormalModel for Model {
         _start_offsets_kernel_full: Tensor,
         _no_kv_cache: bool,
         _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
-        _context_lens: Vec<usize>,
+        _context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         unimplemented!()
     }

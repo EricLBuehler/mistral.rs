@@ -1,7 +1,13 @@
 name: deploy_cpu_docker
 
 # gh workflow run deploy_cpu_docker
-on: workflow_dispatch
+# This also runs on release deploy
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+    tags:
+       - 'v*'
 
 jobs:
     build-and-push-image:

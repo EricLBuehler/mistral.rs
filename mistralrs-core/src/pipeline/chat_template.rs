@@ -94,7 +94,7 @@ pub fn calculate_eos_tokens(
     let mut bos_tok_ids = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
 
     for alternate in SUPPORTED_ALTERNATE_EOS {
-        if tokenizer.get_vocab(true).get(alternate).is_some() {
+        if tokenizer.get_vocab(true).contains_key(alternate) {
             eos_tok_ids.push(alternate.to_string())
         }
     }

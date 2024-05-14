@@ -1,4 +1,4 @@
-use std::{collections::HashMap, str::FromStr};
+use std::{collections::HashMap, fmt::Debug, str::FromStr};
 
 use anyhow::Result;
 use candle_core::Device;
@@ -16,15 +16,22 @@ use crate::{
 };
 
 #[pyclass]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize)]
 /// The architecture to load the normal model as.
 pub enum NormalLoaderType {
+    #[serde(rename = "mistral")]
     Mistral,
+    #[serde(rename = "gemma")]
     Gemma,
+    #[serde(rename = "mixtral")]
     Mixtral,
+    #[serde(rename = "llama")]
     Llama,
+    #[serde(rename = "phi2")]
     Phi2,
+    #[serde(rename = "phi3")]
     Phi3,
+    #[serde(rename = "qwen2")]
     Qwen2,
 }
 
@@ -46,7 +53,7 @@ impl FromStr for NormalLoaderType {
 
 // ======================== Mistral loader
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct MistralBasicConfig {
     vocab_size: usize,
     hidden_size: usize,
@@ -107,12 +114,13 @@ impl NormalModelLoader for MistralLoader {
         config: &str,
         use_flash_attn: bool,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         mapper: DeviceMapMetadata,
         loading_isq: bool,
         device: Device,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraMistral::new(
             &MistralBasicConfig::deserialize(config, use_flash_attn)?,
@@ -124,10 +132,17 @@ impl NormalModelLoader for MistralLoader {
             mapper,
             loading_isq,
             device,
+            preload_adapters,
         )?))
     }
     fn is_gptx(&self) -> bool {
         true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(MistralBasicConfig::deserialize(
+            config,
+            use_flash_attn,
+        )?))
     }
 }
 
@@ -205,12 +220,13 @@ impl NormalModelLoader for GemmaLoader {
         config: &str,
         use_flash_attn: bool,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         mapper: DeviceMapMetadata,
         loading_isq: bool,
         device: Device,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraGemma::new(
             &GemmaBasicConfig::deserialize(config, use_flash_attn)?,
@@ -222,10 +238,17 @@ impl NormalModelLoader for GemmaLoader {
             mapper,
             loading_isq,
             device,
+            preload_adapters,
         )?))
     }
     fn is_gptx(&self) -> bool {
         true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(GemmaBasicConfig::deserialize(
+            config,
+            use_flash_attn,
+        )?))
     }
 }
 
@@ -295,12 +318,13 @@ impl NormalModelLoader for LlamaLoader {
         config: &str,
         use_flash_attn: bool,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         mapper: DeviceMapMetadata,
         loading_isq: bool,
         device: Device,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraLlama::new(
             &LlamaBasicConfig::deserialize(config, use_flash_attn)?,
@@ -312,10 +336,17 @@ impl NormalModelLoader for LlamaLoader {
             mapper,
             loading_isq,
             device,
+            preload_adapters,
         )?))
     }
     fn is_gptx(&self) -> bool {
         true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(LlamaBasicConfig::deserialize(
+            config,
+            use_flash_attn,
+        )?))
     }
 }
 
@@ -386,12 +417,13 @@ impl NormalModelLoader for MixtralLoader {
         config: &str,
         use_flash_attn: bool,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         mapper: DeviceMapMetadata,
         loading_isq: bool,
         device: Device,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraMixtral::new(
             &MixtralBasicConfig::deserialize(config, use_flash_attn)?,
@@ -403,10 +435,17 @@ impl NormalModelLoader for MixtralLoader {
             mapper,
             loading_isq,
             device,
+            preload_adapters,
         )?))
     }
     fn is_gptx(&self) -> bool {
         true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(MixtralBasicConfig::deserialize(
+            config,
+            use_flash_attn,
+        )?))
     }
 }
 
@@ -477,12 +516,13 @@ impl NormalModelLoader for Phi2Loader {
         config: &str,
         use_flash_attn: bool,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         mapper: DeviceMapMetadata,
         loading_isq: bool,
         device: Device,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraPhi2::new(
             &Phi2BasicConfig::deserialize(config, use_flash_attn)?,
@@ -494,10 +534,17 @@ impl NormalModelLoader for Phi2Loader {
             mapper,
             loading_isq,
             device,
+            preload_adapters,
         )?))
     }
     fn is_gptx(&self) -> bool {
         true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(Phi2BasicConfig::deserialize(
+            config,
+            use_flash_attn,
+        )?))
     }
 }
 
@@ -579,12 +626,13 @@ impl NormalModelLoader for Phi3Loader {
         config: &str,
         use_flash_attn: bool,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         mapper: DeviceMapMetadata,
         loading_isq: bool,
         device: Device,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraPhi3::new(
             &Phi3BasicConfig::deserialize(config, use_flash_attn)?,
@@ -596,10 +644,17 @@ impl NormalModelLoader for Phi3Loader {
             mapper,
             loading_isq,
             device,
+            preload_adapters,
         )?))
     }
     fn is_gptx(&self) -> bool {
         true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(Phi3BasicConfig::deserialize(
+            config,
+            use_flash_attn,
+        )?))
     }
 }
 
@@ -672,16 +727,23 @@ impl NormalModelLoader for Qwen2Loader {
         _config: &str,
         _use_flash_attn: bool,
         _vb: VarBuilder,
-        _lora_config: &[(String, LoraConfig)],
+        _lora_config: &[((String, String), LoraConfig)],
         _xlora_config: Option<XLoraConfig>,
         _xlora_ordering: Ordering,
         _mapper: DeviceMapMetadata,
         _loading_isq: bool,
         _device: Device,
+        _preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         todo!()
     }
     fn is_gptx(&self) -> bool {
         true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(Qwen2BasicConfig::deserialize(
+            config,
+            use_flash_attn,
+        )?))
     }
 }

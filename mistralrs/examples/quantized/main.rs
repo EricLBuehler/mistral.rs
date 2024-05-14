@@ -1,10 +1,11 @@
-use std::sync::{mpsc::channel, Arc};
+use std::sync::Arc;
+use tokio::sync::mpsc::channel;
 
 use candle_core::Device;
 use mistralrs::{
     Constraint, DeviceMapMetadata, GGUFLoaderBuilder, GGUFSpecificConfig, MistralRs,
-    MistralRsBuilder, Request, RequestMessage, Response, SamplingParams, SchedulerMethod,
-    TokenSource,
+    MistralRsBuilder, NormalRequest, Request, RequestMessage, Response, SamplingParams,
+    SchedulerMethod, TokenSource,
 };
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {
@@ -35,8 +36,8 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
 fn main() -> anyhow::Result<()> {
     let mistralrs = setup()?;
 
-    let (tx, rx) = channel();
-    let request = Request {
+    let (tx, mut rx) = channel(10_000);
+    let request = Request::Normal(NormalRequest {
         messages: RequestMessage::Completion {
             text: "Hello! My name is ".to_string(),
             echo_prompt: false,
@@ -49,10 +50,11 @@ fn main() -> anyhow::Result<()> {
         id: 0,
         constraint: Constraint::None,
         suffix: None,
-    };
-    mistralrs.get_sender().send(request)?;
+        adapters: None,
+    });
+    mistralrs.get_sender().blocking_send(request)?;
 
-    let response = rx.recv().unwrap();
+    let response = rx.blocking_recv().unwrap();
     match response {
         Response::CompletionDone(c) => println!("Text: {}", c.choices[0].text),
         _ => unreachable!(),

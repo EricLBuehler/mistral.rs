@@ -2,16 +2,16 @@
 
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
-use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 use mistralrs_lora::{layer::QLinear, linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
 use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{PhiRotaryEmbedding, RmsNorm},
+    layers::{CausalMasker, PhiRotaryEmbedding, RmsNorm},
     models::phi3::Config,
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
@@ -32,6 +32,7 @@ struct Attention {
     rotary_emb: Arc<PhiRotaryEmbedding>,
     use_flash_attn: bool,
     sliding_window: Option<usize>,
+    neg_inf: Tensor,
 }
 
 impl Attention {
@@ -40,12 +41,13 @@ impl Attention {
         rotary_emb: Arc<PhiRotaryEmbedding>,
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -59,6 +61,7 @@ impl Attention {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         let o_proj = linear_no_bias(
             num_heads * head_dim,
@@ -68,6 +71,7 @@ impl Attention {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         Ok(Self {
             qkv_proj,
@@ -79,6 +83,7 @@ impl Attention {
             head_dim,
             use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
+            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())?.to_dtype(vb.dtype())?,
         })
     }
 
@@ -88,7 +93,7 @@ impl Attention {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        _start_offsets_kernel: Tensor,
+        position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
@@ -129,7 +134,9 @@ impl Attention {
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        let (q, k) = self
+            .rotary_emb
+            .forward(&q, &k, seqlen_offsets, position_ids)?;
 
         let (k, v, attn_mask) = match kv_cache.clone() {
             None => (k, v, attention_mask.cloned()),
@@ -183,10 +190,7 @@ impl Attention {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
             let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
 
-            let attn_weights = match attn_mask {
-                None => attn_weights,
-                Some(mask) => attn_weights.broadcast_add(&mask)?,
-            };
+            let attn_weights = CausalMasker.apply_mask(&attn_mask, attn_weights, &self.neg_inf)?;
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
             attn_weights.matmul(&v)?
         };
@@ -219,12 +223,13 @@ impl Mlp {
     fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
@@ -236,6 +241,7 @@ impl Mlp {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         let down_proj = linear_no_bias(
             i_size,
@@ -245,6 +251,7 @@ impl Mlp {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         Ok(Self {
             gate_up_proj,
@@ -302,12 +309,13 @@ impl DecoderLayer {
         rotary_emb: Arc<PhiRotaryEmbedding>,
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             rotary_emb,
@@ -319,6 +327,7 @@ impl DecoderLayer {
             mapper,
             layer_idx,
             loading_isq,
+            preload_adapters,
         )?;
         let mlp = Mlp::new(
             cfg,
@@ -329,6 +338,7 @@ impl DecoderLayer {
             mapper,
             layer_idx,
             loading_isq,
+            preload_adapters,
         )?;
         let input_layernorm = RmsNorm::new(
             cfg.hidden_size,
@@ -354,7 +364,7 @@ impl DecoderLayer {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
+        position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
@@ -366,7 +376,7 @@ impl DecoderLayer {
             &xs,
             attention_mask,
             seqlen_offsets,
-            start_offsets_kernel,
+            position_ids,
             kv_cache,
             scalings.clone(),
             global_scaling_weight,
@@ -403,13 +413,14 @@ impl Model {
     pub fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         _is_gptx: bool,
         mapper: DeviceMapMetadata,
         loading_isq: bool,
         real_device: Device,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
@@ -437,10 +448,11 @@ impl Model {
                 &*mapper,
                 layer_idx,
                 loading_isq,
+                preload_adapters,
             )?;
             layers.push(layer)
         }
-        if xlora_config.is_none() {
+        if xlora_config.is_none() && preload_adapters.is_none() {
             // We are now a LoRA model so we must merge the weights
             info!("Merging LoRA adapters.");
             for layer in layers.iter_mut().tqdm() {
@@ -486,77 +498,17 @@ impl Model {
         })
     }
 
-    fn prepare_decoder_attention_mask(
-        &self,
-        b_size: usize,
-        tgt_len: usize,
-        seqlen_offset: usize,
-        sliding_window: Option<usize>,
-    ) -> Result<Tensor> {
-        // Sliding window mask
-        let sliding_window = sliding_window.unwrap_or(tgt_len + 1);
-        let mask: Vec<_> = (0..tgt_len)
-            .flat_map(|i| {
-                (0..tgt_len).map(move |j| {
-                    if i < j || j + sliding_window < i {
-                        f32::NEG_INFINITY
-                    } else {
-                        0.
-                    }
-                })
-            })
-            .collect();
-        let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
-        let mask = if seqlen_offset > 0 {
-            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, &self.device)?;
-            Tensor::cat(&[&mask0, &mask], D::Minus1)?
-        } else {
-            mask
-        };
-        mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
-            .to_dtype(self.dtype)
-    }
-
-    fn calculate_past_kv_len(&mut self, seq_len: usize) -> Result<usize> {
-        let cache = self.cache.lock();
-        let kv_cache_1 = cache.first().unwrap();
-        if kv_cache_1.is_none() {
-            return Ok(0);
-        }
-        let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
-        if k_cache_1.dims()[0] <= seq_len {
-            Ok(0)
-        } else {
-            let indexed = k_cache_1.i(seq_len)?;
-            let dims = indexed.dims();
-            Ok(dims[dims.len() - 2])
-        }
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn inner_forward(
         &mut self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
+        position_ids: &[usize],
         scalings: Option<Tensor>,
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let (b_size, seq_len) = input_ids.dims2()?;
-        let past_key_values_length = self.calculate_past_kv_len(seq_len)?;
-        let attention_mask = if seq_len <= 1 {
-            None
-        } else {
-            let mask = self.prepare_decoder_attention_mask(
-                b_size,
-                seq_len,
-                past_key_values_length,
-                self.sliding_window,
-            )?;
-            Some(mask)
-        };
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let mut cache = if is_full_pass {
             if no_kv_cache {
@@ -565,12 +517,22 @@ impl Model {
                     new_cache.push(None);
                 }
 
-                *self.cache.xlora_lock() = new_cache.clone();
+                self.cache.xlora_lock().clone_from(&new_cache);
             }
             self.cache.xlora_lock()
         } else {
             self.cache.lock()
         };
+        let attention_mask = CausalMasker.make_causal_mask_with_sliding_window(
+            input_ids,
+            &cache,
+            self.sliding_window,
+        )?;
+        let past_key_values_length = CausalMasker.calculate_past_kv_len(&cache)?;
+        let position_ids = position_ids
+            .iter()
+            .map(|p| *p + past_key_values_length)
+            .collect::<Vec<_>>();
         for (i, layer) in self.layers.iter_mut().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
@@ -580,7 +542,7 @@ impl Model {
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
                 seqlen_offsets,
-                start_offsets_kernel.clone(),
+                &position_ids,
                 &mut cache[i],
                 scalings.clone(),
                 self.xlora_classifier
@@ -605,7 +567,8 @@ impl Model {
         start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
-        context_lens: Vec<usize>,
+        context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         if self.xlora_classifier.is_some() {
             let scalings = self.get_scalings(
@@ -617,6 +580,7 @@ impl Model {
                 &start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
+                &position_ids,
             )?;
 
             if no_kv_cache {
@@ -624,7 +588,7 @@ impl Model {
                     .inner_forward(
                         input_ids_full,
                         seqlen_offsets_full,
-                        start_offsets_kernel_full,
+                        &position_ids,
                         Some(scalings),
                         true,
                         no_kv_cache,
@@ -641,7 +605,7 @@ impl Model {
                     .inner_forward(
                         input_ids,
                         seqlen_offsets,
-                        start_offsets_kernel,
+                        &position_ids,
                         Some(scalings),
                         true,
                         no_kv_cache,
@@ -658,7 +622,7 @@ impl Model {
                 .inner_forward(
                     input_ids,
                     seqlen_offsets,
-                    start_offsets_kernel,
+                    &position_ids,
                     None,
                     false,
                     no_kv_cache,
@@ -679,7 +643,8 @@ impl NormalModel for Model {
         _input_ids: &Tensor,
         _seqlen_offsets: &[usize],
         _start_offsets_kernel: Tensor,
-        _context_lens: Vec<usize>,
+        _context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -693,7 +658,8 @@ impl NormalModel for Model {
         start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: &Option<crate::xlora_models::NonGranularState>,
-        context_lens: Vec<usize>,
+        context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
@@ -705,6 +671,7 @@ impl NormalModel for Model {
             no_kv_cache,
             non_granular_state,
             context_lens,
+            position_ids,
         )
     }
     fn cache(&self) -> &Cache {
@@ -742,6 +709,25 @@ impl NormalModel for Model {
         }
         (tensors, &*self.mapper)
     }
+    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
+        let mut sum = 0;
+        for layer in self.layers.iter_mut() {
+            sum += Arc::get_mut(&mut layer.self_attn.qkv_proj)
+                .unwrap()
+                .activate(&adapter_names)?;
+            sum += Arc::get_mut(&mut layer.self_attn.o_proj)
+                .unwrap()
+                .activate(&adapter_names)?;
+
+            sum += Arc::get_mut(&mut layer.mlp.down_proj)
+                .unwrap()
+                .activate(&adapter_names)?;
+            sum += Arc::get_mut(&mut layer.mlp.gate_up_proj)
+                .unwrap()
+                .activate(&adapter_names)?;
+        }
+        Ok(sum)
+    }
 }
 
 impl ScalingsMaker for Model {
@@ -758,16 +744,18 @@ impl ScalingsMaker for Model {
         &mut self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
+        _start_offsets_kernel: Tensor,
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
+        context_lens: &[usize],
     ) -> Result<Tensor> {
+        // NOTE(EricLBuehler): hacky yes, but passing the context lens to start the position ids calculation works
         self.inner_forward(
             input_ids,
             seqlen_offsets,
-            start_offsets_kernel,
+            context_lens,
             Some(scalings),
             is_full_pass,
             no_kv_cache,

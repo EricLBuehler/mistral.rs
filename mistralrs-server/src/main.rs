@@ -9,9 +9,10 @@ use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
 use mistralrs_core::{
     get_tgt_non_granular_index, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs,
-    MistralRsBuilder, ModelKind, ModelSelected, SchedulerMethod, TokenSource,
+    MistralRsBuilder, ModelKind, ModelSelected, Request, SchedulerMethod, TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 mod chat_completion;
@@ -24,8 +25,8 @@ mod openai;
 
 use interactive_mode::interactive_mode;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tracing::{info, level_filters::LevelFilter};
-use utoipa::OpenApi;
+use tracing::{info, level_filters::LevelFilter, warn};
+use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
@@ -38,8 +39,8 @@ fn parse_isq(s: &str) -> Result<GgmlDType, String> {
         "Q4_1" => Ok(GgmlDType::Q4_1),
         "Q5_0" => Ok(GgmlDType::Q5_0),
         "Q5_1" => Ok(GgmlDType::Q5_1),
-        "Q8_0" => Ok(GgmlDType::Q8_1),
-        "Q8_1" => Ok(GgmlDType::Q4_0),
+        "Q8_0" => Ok(GgmlDType::Q8_0),
+        "Q8_1" => Ok(GgmlDType::Q8_1),
         "Q2K" => Ok(GgmlDType::Q2K),
         "Q3K" => Ok(GgmlDType::Q3K),
         "Q4K" => Ok(GgmlDType::Q4K),
@@ -71,7 +72,7 @@ struct Args {
     #[clap(long, short, action)]
     truncate_sequence: bool,
 
-    /// Model
+    /// Model selector
     #[clap(subcommand)]
     model: ModelSelected,
 
@@ -139,6 +140,54 @@ async fn health() -> &'static str {
     "OK"
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+struct AdapterActivationRequest {
+    #[schema(example = json!(vec!["adapter_1","adapter_2"]))]
+    adapter_names: Vec<String>,
+}
+
+#[utoipa::path(
+    post,
+    tag = "Mistral.rs",
+    path = "/activate_adapters",
+    request_body = AdapterActivationRequest,
+    responses((status = 200, description = "Activate a set of pre-loaded LoRA adapters"))
+)]
+async fn activate_adapters(
+    State(state): State<Arc<MistralRs>>,
+    Json(request): Json<AdapterActivationRequest>,
+) -> String {
+    let repr = format!("Adapter activation: {:?}", request.adapter_names);
+    MistralRs::maybe_log_request(state.clone(), repr.clone());
+    let request = Request::ActivateAdapters(request.adapter_names);
+    state.get_sender().send(request).await.unwrap();
+    repr
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+struct ReIsqRequest {
+    #[schema(example = "Q4K")]
+    ggml_type: String,
+}
+
+#[utoipa::path(
+    post,
+    tag = "Mistral.rs",
+    path = "/re_isq",
+    request_body = ReIsqRequest,
+    responses((status = 200, description = "Reapply ISQ to a non GGUF or GGML model."))
+)]
+async fn re_isq(
+    State(state): State<Arc<MistralRs>>,
+    Json(request): Json<ReIsqRequest>,
+) -> Result<String, String> {
+    let repr = format!("Re ISQ: {:?}", request.ggml_type);
+    MistralRs::maybe_log_request(state.clone(), repr.clone());
+    let request = Request::ReIsq(parse_isq(&request.ggml_type)?);
+    state.get_sender().send(request).await.unwrap();
+    Ok(repr)
+}
+
 fn get_router(state: Arc<MistralRs>) -> Router {
     #[derive(OpenApi)]
     #[openapi(
@@ -173,6 +222,8 @@ fn get_router(state: Arc<MistralRs>) -> Router {
         .route("/v1/models", get(models))
         .route("/health", get(health))
         .route("/", get(health))
+        .route("/activate_adapters", post(activate_adapters))
+        .route("/re_isq", post(re_isq))
         .with_state(state)
 }
 
@@ -228,9 +279,9 @@ async fn main() -> Result<()> {
                 | ModelKind::XLoraGGUF
         )
     {
-        info!("⚠️ WARNING: Using flash attention with a quantized model has no effect!")
+        warn!("Using flash attention with a quantized model has no effect!")
     }
-    info!("Model kind is: {}", loader.get_kind().as_ref());
+    info!("Model kind is: {}", loader.get_kind().to_string());
     let pipeline = loader.load_model(
         None,
         args.token_source,
@@ -251,13 +302,14 @@ async fn main() -> Result<()> {
     .with_opt_log(args.log)
     .with_truncate_sequence(args.truncate_sequence)
     .with_no_kv_cache(args.no_kv_cache)
-    .with_prefix_cache_n(args.prefix_cache_n)
-    .build();
+    .with_prefix_cache_n(args.prefix_cache_n);
 
     if args.interactive_mode {
-        interactive_mode(mistralrs);
+        interactive_mode(mistralrs.with_interactive().build()).await;
         return Ok(());
     }
+
+    let mistralrs = mistralrs.build();
 
     let port = args.port.expect("Expected port to be specified.");
 

@@ -12,9 +12,11 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
-mistralrs-core = { version = "0.1.1", path = "../mistralrs-core" }
+mistralrs-core = { version = "0.1.6", path = "../mistralrs-core" }
 anyhow.workspace = true
+tokio.workspace = true
 candle-core.workspace = true
+serde_json.workspace = true
 
 [features]
 cuda = ["mistralrs-core/cuda"]
@@ -38,4 +40,16 @@ required-features = []
 
 [[example]]
 name = "isq"
+required-features = []
+
+[[example]]
+name = "lora"
+required-features = []
+
+[[example]]
+name = "xlora"
+required-features = []
+
+[[example]]
+name = "lora_activation"
 required-features = []

@@ -32,7 +32,7 @@ Mistral.rs is a fast LLM inference platform supporting inference on a variety of
 - Quantized model support: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit for faster inference and optimized memory usage.
 - Continuous batching.
 - Prefix caching.
-- Device mapping: load and run some layers on the device and the reset on the CPU.
+- Device mapping: load and run some layers on the device and the rest on the CPU.
 
 **Accelerator support**:
 - Apple silicon support with the Metal framework.
@@ -43,11 +43,13 @@ Mistral.rs is a fast LLM inference platform supporting inference on a variety of
 - Lightweight OpenAI API compatible HTTP server.
 - Python API.
 - Grammar support with Regex and Yacc.
-- [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from Huggingface Hub by quantizing them after loading instead of creating a GGUF file. This loads the ISQ-able weights on CPU before quantizing with ISQ and then moving back to the device to avoid memory spikes.
+- [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from Hugging Face Hub by quantizing them after loading instead of creating a GGUF file. This loads the ISQ-able weights on CPU before quantizing with ISQ and then moving back to the device to avoid memory spikes.
 
 **Powerful**:
 - Fast LoRA support with weight merging.
 - First X-LoRA inference platform with first class support.
+- Speculative Decoding: Mix supported models as the draft model or the target model
+- Dynamic LoRA adapter swapping at runtime with adapter preloading: [examples and docs](docs/ADAPTER_MODELS.md#adapter-model-dynamic-adapter-activation)
 
 
 This is a demo of interactive mode with streaming running Mistral GGUF:
@@ -85,7 +87,7 @@ Python API for mistral.rs.
 - [Cookbook](examples/python/cookbook.ipynb)
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest, Message, Role
+from mistralrs import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
     which=Which.GGUF(
@@ -100,7 +102,7 @@ runner = Runner(
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
         model="mistral",
-        messages=[Message(Role.User, "Tell me a story about the Rust type system.")],
+        messages=[{"role":"user", "content":"Tell me a story about the Rust type system."}],
         max_tokens=256,
         presence_penalty=1.0,
         top_p=0.1,
@@ -121,9 +123,7 @@ OpenAI API compatible API server
 
 **Llama Index integration**
 
-- [Source](integrations/llama_index_integration.py).
-- [Example](examples/llama_index/xlora_gguf.py)
-- [Cookbook](examples/llama_index/cookbook.ipynb)
+- Docs: https://docs.llamaindex.ai/en/stable/examples/llm/mistral_rs/
 
 ---
 
@@ -148,14 +148,14 @@ Enabling features is done by passing `--features ...` to the build system. When 
 |-|-|-|-|-|
 |A10 GPU, CUDA|78|78|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 |Intel Xeon 8358 CPU, AVX|6|19|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-|Raspberry Pi 5 (8GB), Neon|2|*segfault*|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|2_K|
+|Raspberry Pi 5 (8GB), Neon|2|3|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|2_K|
 |A100 GPU, CUDA|110|119|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 
 Please submit more benchmarks via raising an issue!
 
 ## Usage
 ### Installation and Build
-To install mistral.rs, one should ensure they have Rust installed by following [this](https://rustup.rs/) link. Additionally, the Huggingface token should be provided in `~/.cache/huggingface/token` when using the server to enable automatic download of gated models.
+To install mistral.rs, one should ensure they have Rust installed by following [this](https://rustup.rs/) link. Additionally, the Hugging Face token should be provided in `~/.cache/huggingface/token` when using the server to enable automatic download of gated models.
 
 1) Install required packages
     - `openssl` (ex., `sudo apt install libssl-dev`)
@@ -220,8 +220,7 @@ To install mistral.rs, one should ensure they have Rust installed by following [
 
     You can install Python support by following the guide [here](/mistralrs-pyo3/README.md).
 
-### Getting models
-**Loading from HF Hub:**
+### Getting models from HF Hub
 
 Mistral.rs can automatically download models from HF Hub. To access gated models, you should provide a token source. They may be one of:
 - `literal:<value>`: Load from a specified literal
@@ -241,11 +240,16 @@ This is passed in the following ways:
 
 If token cannot be loaded, no token will be used (i.e. effectively using `none`).
 
-**Loading from local files:**
+## Loading models from local files:**
 
 You can also instruct mistral.rs to load models locally by modifying the `*_model_id` arguments or options:
 ```bash
 ./mistralrs_server --port 1234 plain -m . -a mistral
+```
+or
+
+```bash
+./mistralrs-server gguf -m . -t . -f Phi-3-mini-128k-instruct-q4_K_M.gguf
 ```
 
 The following files must be present in the paths for the options below:
@@ -330,6 +334,14 @@ To start a server running Mistral from safetensors.
 ./mistralrs_server --port 1234 gguf -m mistralai/Mistral-7B-Instruct-v0.1
 ```
 
+### Structured selection with a `.toml` file
+
+We provide a method to select models with a `.toml` file. The keys are the same as the command line, with `no_kv_cache` and `tokenizer_json` being "global" keys.
+
+Example:
+```bash
+./mistralrs_server --port 1234 toml -f toml-selectors/gguf.toml
+```
 
 **Command line docs**
 
@@ -401,6 +413,14 @@ If you have any problems or want to contribute something, please raise an issue 
 Consider enabling `RUST_LOG=debug` environment variable.
 
 If you want to add a new model, please see [our guide](docs/ADDING_MODELS.md).
+
+## CUDA FAQ
+
+- Setting the compiler path:
+    - Set the `NVCC_CCBIN` environment variable during build.
+- Error: `recompile with -fPIE`:
+    - Some Linux distributions require compiling with `-fPIE`.
+    - Set the `CUDA_NVCC_FLAGS` environment variable to `-fPIE` during build: `CUDA_NVCC_FLAGS=-fPIE`
 
 ## Credits
 This project would not be possible without the excellent work at [`candle`](https://github.com/huggingface/candle). Additionally, thank you to all contributors! Contributing can range from raising an issue or suggesting a feature to adding some new functionality.

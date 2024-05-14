@@ -7,8 +7,9 @@ mod mixtral;
 mod phi2;
 mod phi3;
 mod quantized_llama;
+mod quantized_phi3;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use candle_core::{DType, Device, Result, Tensor};
 pub use config::XLoraConfig;
@@ -19,7 +20,9 @@ use mistralrs_lora::Ordering;
 pub use mixtral::XLoraModel as XLoraMixtral;
 pub use phi2::Model as XLoraPhi2;
 pub use phi3::Model as XLoraPhi3;
-pub use quantized_llama::ModelWeights as XLoraModelWeights;
+pub use quantized_llama::ModelWeights as XLoraQLlama;
+pub use quantized_phi3::ModelWeights as XLoraQPhi3;
+use tokio::sync::Mutex;
 
 use crate::{get_mut_arcmutex, models::Cache};
 
@@ -44,6 +47,7 @@ trait ScalingsMaker {
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
+        context_lens: &[usize],
     ) -> Result<Tensor>;
     fn get_cache(&self) -> &Cache;
 
@@ -58,6 +62,7 @@ trait ScalingsMaker {
         start_offsets_kernel_full: &Tensor,
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
+        position_ids: &[usize],
     ) -> Result<Tensor> {
         let (b_size, _) = input_ids_full.dims2()?;
         let (_, seq_len) = input_ids.dims2()?;
@@ -87,6 +92,7 @@ trait ScalingsMaker {
                 true,
                 no_kv_cache,
                 Some(self.get_classifier().config.scaling_pass_value),
+                position_ids,
             )?;
 
             let mut new_cache = Vec::new();
@@ -96,7 +102,7 @@ trait ScalingsMaker {
                     Tensor::zeros((1,), DType::U8, &Device::Cpu)?,
                 )));
             }
-            *self.get_cache().lock() = new_cache.clone();
+            self.get_cache().lock().clone_from(&new_cache);
 
             res
         } else {
@@ -108,6 +114,7 @@ trait ScalingsMaker {
                 false,
                 no_kv_cache,
                 Some(self.get_classifier().config.scaling_pass_value),
+                position_ids,
             )?
         };
 

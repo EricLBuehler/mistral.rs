@@ -1,9 +1,9 @@
-use std::{cell::RefCell, rc::Rc};
+use std::sync::{Arc, Mutex};
 
 use candle_core::{Device, Result, Tensor};
 use radix_trie::{Trie, TrieCommon, TrieKey};
 
-use crate::{models::LayerCaches, sequence::Sequence};
+use crate::{get_mut_arcmutex, models::LayerCaches, sequence::Sequence};
 
 #[derive(PartialEq, Eq)]
 struct Tokens(Vec<u32>);
@@ -23,11 +23,11 @@ impl From<Vec<u32>> for Tokens {
     }
 }
 
-type EvictionCacheGroup = (Rc<RefCell<LayerCaches>>, Option<Rc<RefCell<LayerCaches>>>);
+type EvictionCacheGroup = (Arc<Mutex<LayerCaches>>, Option<Arc<Mutex<LayerCaches>>>);
 
 pub struct PrefixCacheManager {
-    caches: Trie<Tokens, Rc<RefCell<LayerCaches>>>,
-    xlora_caches: Option<Trie<Tokens, Rc<RefCell<LayerCaches>>>>,
+    caches: Trie<Tokens, Arc<Mutex<LayerCaches>>>,
+    xlora_caches: Option<Trie<Tokens, Arc<Mutex<LayerCaches>>>>,
     device: Device,
     pub n_on_device: usize,
     no_prefix_cache: bool,
@@ -59,11 +59,11 @@ impl PrefixCacheManager {
         if self.no_prefix_cache {
             return;
         }
-        let cache = Rc::new(RefCell::new(seq.cache().clone()));
+        let cache = Arc::new(Mutex::new(seq.cache().clone()));
         self.caches
             .insert(seq.get_toks().to_vec().into(), cache.clone());
         if seq.is_xlora() {
-            let xlora_cache = Rc::new(RefCell::new(seq.xlora_cache().clone()));
+            let xlora_cache = Arc::new(Mutex::new(seq.xlora_cache().clone()));
             self.xlora_caches
                 .as_mut()
                 .unwrap()
@@ -95,7 +95,11 @@ impl PrefixCacheManager {
         let mut n_on_device = 0;
         for (cache, _) in &self.eviction_cache_ptrs {
             if !matches!(
-                cache.as_ref().borrow()[0].as_ref().unwrap().0.device(),
+                get_mut_arcmutex!(cache.as_ref())[0]
+                    .as_ref()
+                    .unwrap()
+                    .0
+                    .device(),
                 Device::Cpu
             ) {
                 n_on_device += 1;
@@ -108,11 +112,15 @@ impl PrefixCacheManager {
                 break;
             }
             if !matches!(
-                cache.as_ref().borrow()[0].as_ref().unwrap().0.device(),
+                get_mut_arcmutex!(cache.as_ref())[0]
+                    .as_ref()
+                    .unwrap()
+                    .0
+                    .device(),
                 Device::Cpu
             ) {
-                let mut cache = cache.borrow_mut();
-                let mut xlora_cache = xlora_cache.as_ref().map(|c| c.borrow_mut());
+                let mut cache = get_mut_arcmutex!(cache);
+                let mut xlora_cache = xlora_cache.as_ref().map(|c| get_mut_arcmutex!(c));
 
                 Self::cache_to(cache.iter_mut(), &Device::Cpu)?;
                 if let Some(ref mut xlora_cache) = xlora_cache {
@@ -132,11 +140,15 @@ impl PrefixCacheManager {
         // Intentionally evict the first ones first, as they are the oldest
         for (cache, xlora_cache) in &self.eviction_cache_ptrs {
             if !matches!(
-                cache.as_ref().borrow()[0].as_ref().unwrap().0.device(),
+                get_mut_arcmutex!(cache.as_ref())[0]
+                    .as_ref()
+                    .unwrap()
+                    .0
+                    .device(),
                 Device::Cpu
             ) {
-                let mut cache = cache.borrow_mut();
-                let mut xlora_cache = xlora_cache.as_ref().map(|c| c.borrow_mut());
+                let mut cache = get_mut_arcmutex!(cache);
+                let mut xlora_cache = xlora_cache.as_ref().map(|c| get_mut_arcmutex!(c));
 
                 Self::cache_to(cache.iter_mut(), &Device::Cpu)?;
                 if let Some(ref mut xlora_cache) = xlora_cache {
@@ -155,10 +167,10 @@ impl PrefixCacheManager {
 
         let toks = Tokens(toks.to_vec());
         if let Some(cache) = self.caches.get(&toks) {
-            Self::cache_to(cache.as_ref().borrow_mut().iter_mut(), &self.device)?;
-            let cache = cache.as_ref().borrow().clone();
+            Self::cache_to(get_mut_arcmutex!(cache.as_ref()).iter_mut(), &self.device)?;
+            let cache = get_mut_arcmutex!(cache.as_ref()).clone();
             let xlora_cache = if let Some(ref xlora_caches) = self.xlora_caches {
-                let mut xlora_cache = xlora_caches.get(&toks).unwrap().as_ref().borrow_mut();
+                let mut xlora_cache = get_mut_arcmutex!(xlora_caches.get(&toks).unwrap().as_ref());
                 Self::cache_to(xlora_cache.iter_mut(), &self.device)?;
                 Some(xlora_cache.clone())
             } else {

@@ -7,8 +7,8 @@ use cfgrammar::{
 };
 use lrtable::{from_yacc, Action, Minimiser, StIdx, StateTable};
 use rustc_hash::FxHashMap;
-use std::sync::Arc;
-use std::{cell::RefCell, vec};
+use std::sync::{Arc, RwLock};
+use std::vec;
 use tracing::debug;
 use vob::{vob, Vob};
 
@@ -30,7 +30,6 @@ struct CfgStats {
     states_pushed: usize,
 }
 
-#[derive(Clone)]
 pub struct CfgParser {
     grm: Arc<YaccGrammar<StorageT>>,
     stable: Arc<StateTable<StorageT>>,
@@ -38,7 +37,7 @@ pub struct CfgParser {
     byte_states: Vec<ByteState>,
     pat_idx_to_tidx: Vec<TIdx<u32>>,
     vobset: VobSet,
-    stats: RefCell<CfgStats>,
+    stats: RwLock<CfgStats>,
     tidx_to_pat_idx: FxHashMap<TIdx<u32>, usize>,
     parse_stacks: Vec<Vec<StIdx<u32>>>,
     skip_patterns: Vob,
@@ -242,7 +241,7 @@ impl CfgParser {
             friendly_pattern_names,
             parse_stacks,
             vobset,
-            stats: RefCell::new(CfgStats {
+            stats: RwLock::new(CfgStats {
                 yacc_actions: 0,
                 states_pushed: 0,
             }),
@@ -373,7 +372,7 @@ impl CfgParser {
 
     fn run_parser(&mut self, pat_idx: usize, top: &ByteState, ls: LexerState) -> Option<ByteState> {
         {
-            let mut s = self.stats.borrow_mut();
+            let mut s = self.stats.write().unwrap();
             s.yacc_actions += 1;
         }
 
@@ -410,7 +409,7 @@ impl CfgParser {
     }
 
     pub fn get_stats(&self) -> String {
-        let mut s = self.stats.borrow_mut();
+        let mut s = self.stats.write().unwrap();
         let r = format!("yacc: {}/{}", s.yacc_actions, s.states_pushed);
         s.yacc_actions = 0;
         s.states_pushed = 0;
@@ -424,7 +423,7 @@ impl CfgParser {
         viable: VobIdx,
     ) -> Option<ByteState> {
         {
-            let mut s = self.stats.borrow_mut();
+            let mut s = self.stats.write().unwrap();
             s.states_pushed += 1;
         }
         if self.vobset.and_is_zero(viable, ls.reachable) {

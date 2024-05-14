@@ -8,6 +8,7 @@ use candle_nn::{
     VarBuilder,
 };
 
+use mistralrs_lora::LoraConfig;
 use tqdm::Iter;
 
 /// Load tensors into a VarBuilder backed by a VarMap using MmapedSafetensors.
@@ -122,4 +123,57 @@ pub(crate) fn from_mmaped_safetensors<'a>(
         ws.extend(h.join().unwrap()?);
     }
     Ok(VarBuilder::from_tensors(ws, dtype, device))
+}
+
+pub(crate) fn load_preload_adapters<'a>(
+    paths: &Option<HashMap<String, (PathBuf, LoraConfig)>>,
+    dtype: DType,
+    device: &Device,
+    silent: bool,
+) -> Result<Option<HashMap<String, (VarBuilder<'a>, LoraConfig)>>> {
+    if let Some(paths) = paths {
+        let mut map = HashMap::new();
+        for (name, (path, config)) in paths {
+            let tensors = unsafe { candle_core::safetensors::MmapedSafetensors::new(path)? };
+            let mut accum = HashMap::new();
+
+            if silent {
+                for (name, _) in tensors.tensors() {
+                    let new_name = if name.contains("base_model.model.model") {
+                        name.replace("base_model.model.model", "model")
+                    } else {
+                        name.clone()
+                    };
+                    let tensor = tensors
+                        .load(&name, device)?
+                        .to_device(device)?
+                        .to_dtype(dtype)?;
+                    accum.insert(new_name, tensor);
+                }
+            } else {
+                for (name, _) in tensors.tensors().into_iter().tqdm() {
+                    let new_name = if name.contains("base_model.model.model") {
+                        name.replace("base_model.model.model", "model")
+                    } else {
+                        name.clone()
+                    };
+                    let tensor = tensors
+                        .load(&name, device)?
+                        .to_device(device)?
+                        .to_dtype(dtype)?;
+                    accum.insert(new_name, tensor);
+                }
+            }
+            map.insert(
+                name.clone(),
+                (
+                    VarBuilder::from_tensors(accum, dtype, device),
+                    config.clone(),
+                ),
+            );
+        }
+        Ok(Some(map))
+    } else {
+        Ok(None)
+    }
 }

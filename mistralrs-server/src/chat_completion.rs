@@ -2,13 +2,11 @@ use std::{
     env,
     error::Error,
     pin::Pin,
-    sync::{
-        mpsc::{channel, Receiver, Sender},
-        Arc,
-    },
+    sync::Arc,
     task::{Context, Poll},
     time::Duration,
 };
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::openai::{ChatCompletionRequest, Grammar, StopTokens};
 use anyhow::Result;
@@ -23,8 +21,8 @@ use axum::{
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    ChatCompletionResponse, Constraint, MistralRs, Request, RequestMessage, Response,
-    SamplingParams, StopTokens as InternalStopTokens,
+    ChatCompletionResponse, Constraint, MistralRs, NormalRequest, Request, RequestMessage,
+    Response, SamplingParams, StopTokens as InternalStopTokens,
 };
 use serde::Serialize;
 
@@ -149,7 +147,7 @@ fn parse_request(
     oairequest: ChatCompletionRequest,
     state: Arc<MistralRs>,
     tx: Sender<Response>,
-) -> Request {
+) -> (Request, bool) {
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
     MistralRs::maybe_log_request(state.clone(), repr);
 
@@ -179,31 +177,36 @@ fn parse_request(
         }
     };
 
-    Request {
-        id: state.next_request_id(),
-        messages,
-        sampling_params: SamplingParams {
-            temperature: oairequest.temperature,
-            top_k: oairequest.top_k,
-            top_p: oairequest.top_p,
-            top_n_logprobs: oairequest.top_logprobs.unwrap_or(1),
-            frequency_penalty: oairequest.frequency_penalty,
-            presence_penalty: oairequest.presence_penalty,
-            max_len: oairequest.max_tokens,
-            stop_toks,
-            logits_bias: oairequest.logit_bias,
-            n_choices: oairequest.n_choices,
-        },
-        response: tx,
-        return_logprobs: oairequest.logprobs,
-        is_streaming: oairequest.stream.unwrap_or(false),
-        suffix: None,
-        constraint: match oairequest.grammar {
-            Some(Grammar::Yacc(yacc)) => Constraint::Yacc(yacc),
-            Some(Grammar::Regex(regex)) => Constraint::Regex(regex),
-            None => Constraint::None,
-        },
-    }
+    let is_streaming = oairequest.stream.unwrap_or(false);
+    (
+        Request::Normal(NormalRequest {
+            id: state.next_request_id(),
+            messages,
+            sampling_params: SamplingParams {
+                temperature: oairequest.temperature,
+                top_k: oairequest.top_k,
+                top_p: oairequest.top_p,
+                top_n_logprobs: oairequest.top_logprobs.unwrap_or(1),
+                frequency_penalty: oairequest.frequency_penalty,
+                presence_penalty: oairequest.presence_penalty,
+                max_len: oairequest.max_tokens,
+                stop_toks,
+                logits_bias: oairequest.logit_bias,
+                n_choices: oairequest.n_choices,
+            },
+            response: tx,
+            return_logprobs: oairequest.logprobs,
+            is_streaming,
+            suffix: None,
+            constraint: match oairequest.grammar {
+                Some(Grammar::Yacc(yacc)) => Constraint::Yacc(yacc),
+                Some(Grammar::Regex(regex)) => Constraint::Regex(regex),
+                None => Constraint::None,
+            },
+            adapters: oairequest.adapters,
+        }),
+        is_streaming,
+    )
 }
 
 #[utoipa::path(
@@ -217,11 +220,15 @@ pub async fn chatcompletions(
     State(state): State<Arc<MistralRs>>,
     Json(oairequest): Json<ChatCompletionRequest>,
 ) -> ChatCompletionResponder {
-    let (tx, rx) = channel();
-    let request = parse_request(oairequest, state.clone(), tx);
-    let is_streaming = request.is_streaming;
+    let (tx, mut rx) = channel(10_000);
+    let (request, is_streaming) = parse_request(oairequest, state.clone(), tx);
     let sender = state.get_sender();
-    sender.send(request).unwrap();
+
+    if let Err(e) = sender.send(request).await {
+        let e = anyhow::Error::msg(e.to_string());
+        MistralRs::maybe_log_error(state, &*e);
+        return ChatCompletionResponder::InternalError(e.into());
+    }
 
     if is_streaming {
         let streamer = Streamer {
@@ -242,7 +249,14 @@ pub async fn chatcompletions(
             ),
         )
     } else {
-        let response = rx.recv().unwrap();
+        let response = match rx.recv().await {
+            Some(response) => response,
+            None => {
+                let e = anyhow::Error::msg("No response received from the model.");
+                MistralRs::maybe_log_error(state, &*e);
+                return ChatCompletionResponder::InternalError(e.into());
+            }
+        };
 
         match response {
             Response::InternalError(e) => {

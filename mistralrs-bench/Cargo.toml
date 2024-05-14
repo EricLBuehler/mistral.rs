@@ -17,10 +17,11 @@ candle-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 clap.workspace = true
-mistralrs-core = { version = "0.1.1", path = "../mistralrs-core" }
+mistralrs-core = { version = "0.1.6", path = "../mistralrs-core" }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 either.workspace = true
+tokio.workspace = true
 cli-table = "0.4.7"
 
 [features]

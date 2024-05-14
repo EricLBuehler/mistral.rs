@@ -9,7 +9,7 @@ class ChatCompletionRequest:
     about input data, sampling, and how to return the response.
     """
 
-    messages: list[Message] | str
+    messages: list[dict[str, str]] | str
     model: str
     logit_bias: dict[int, float] | None = None
     logprobs: bool = False
@@ -25,6 +25,7 @@ class ChatCompletionRequest:
     top_k: int | None = None
     grammar: str | None = None
     grammar_type: str | None = None
+    adapters: list[str] | None = None
 
 @dataclass
 class CompletionRequest:
@@ -49,6 +50,7 @@ class CompletionRequest:
     suffix: str | None = None
     grammar: str | None = None
     grammar_type: str | None = None
+    adapters: list[str] | None = None
 
 @dataclass
 class Architecture(Enum):
@@ -86,7 +88,6 @@ class Which(Enum):
         arch: Architecture
         adapters_model_id: str
         order: str
-        tgt_non_granular_index: int | None = None
         model_id: str | None = None
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
@@ -114,7 +115,6 @@ class Which(Enum):
         quantized_filename: str
         adapters_model_id: str
         order: str
-        tgt_non_granular_index: int | None = None
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
     @dataclass
@@ -141,7 +141,6 @@ class Which(Enum):
         quantized_filename: str
         adapters_model_id: str
         order: str
-        tgt_non_granular_index: int | None = None
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
 
@@ -153,6 +152,8 @@ class Runner:
         no_kv_cache: bool = False,
         prefix_cache_n: int = 16,
         token_source: str = "cache",
+        speculative_gamma: int = 32,
+        which_draft: Which | None = None,
         chat_template: str | None = None,
         num_device_layers: int | None = None,
         in_situ_quant: str | None = None,
@@ -160,12 +161,16 @@ class Runner:
         """
         Load a model.
 
-        - `which` specified which model to load.
+        - `which` specifies which model to load or the target model to load in the case of speculative decoding.
         - `max_seqs` specifies how many sequences may be running at any time.
         - `no_kv_cache` disables the KV cache.
         - `prefix_cache_n` sets the number of sequences to hold in the device prefix cache, others will be evicted to CPU.
         - `token_source` specifies where to load the HF token from.
             The token source follows the following format: "literal:<value>", "env:<value>", "path:<value>", "cache" to use a cached token or "none" to use no token.
+        - `speculative_gamma` specifies the `gamma` parameter for specuative decoding, the ratio of draft tokens to generate before calling
+            the target model. If `which_draft` is not specified, this is ignored.
+        - `which_draft` specifies which draft model to load. Setting this parameter will cause a speculative decoding model to be loaded,
+            with `which` as the target (higher quality) model and `which_draft` as the draft (lower quality) model.
         - `chat_template` specifies an optional JINJA chat template.
             The JINJA template should have `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
             It is used if the automatic deserialization fails. If this ends with `.json` (ie., it is a file) then that template is loaded.
@@ -192,24 +197,10 @@ class Runner:
         Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML then nothing will happen.
         """
 
-@dataclass
-class Role(Enum):
-    """
-    The role for each `Message` of a chat completion request.
-    """
-
-    User = 1
-    Assistant = 2
-    System = 3
-
-@dataclass
-class Message:
-    """
-    A message for a chat completion request.
-    """
-
-    role: Role
-    content: str
+    def activate_adapters(self, adapter_names: list[str]) -> None:
+        """
+        Send a request to make the specified adapters the active adapters for the model.
+        """
 
 @dataclass
 class Usage:

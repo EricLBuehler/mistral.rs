@@ -17,7 +17,7 @@ doc = false
 
 [dependencies]
 pyo3.workspace = true
-mistralrs-core = { version = "0.1.1", path = "../mistralrs-core" }
+mistralrs-core = { version = "0.1.6", path = "../mistralrs-core" }
 serde.workspace = true
 serde_json.workspace = true
 candle-core.workspace = true
@@ -26,7 +26,11 @@ accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
 either.workspace = true
 futures.workspace = true
+tokio.workspace = true
 tracing-subscriber.workspace = true
+
+[build-dependencies]
+pyo3-build-config = "0.21"
 
 [features]
 cuda = ["candle-core/cuda", "mistralrs-core/cuda"]

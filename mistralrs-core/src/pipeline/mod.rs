@@ -1,11 +1,16 @@
+mod cache_manager;
 mod chat_template;
 mod ggml;
 mod gguf;
 mod loaders;
 mod macros;
 mod normal;
+mod sampling;
+mod speculative;
 use crate::aici::toktree::TokTrie;
 use crate::device_map::DeviceMapper;
+use crate::prefix_cacher::PrefixCacheManager;
+mod sampling_pipeline;
 use crate::{api_dir_list, api_get_file, DeviceMapMetadata};
 use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
 use candle_nn::VarBuilder;
@@ -26,19 +31,22 @@ pub use loaders::{
 };
 use mistralrs_lora::{LoraConfig, Ordering};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
+use rand_isaac::Isaac64Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
+use std::fmt::{Debug, Display};
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
-use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr, sync::Mutex};
+use std::{collections::HashMap, fs, iter::repeat, path::PathBuf, str::FromStr};
 use tokenizers::Tokenizer;
-use tracing::info;
+use tokio::sync::Mutex;
+use tracing::{info, warn};
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 
 use crate::{
-    get_mut_arcmutex,
     models::Cache,
     sequence::Sequence,
     utils::tokens::get_token,
@@ -51,11 +59,12 @@ pub trait ModelPaths {
     fn get_tokenizer_filename(&self) -> &PathBuf;
     fn get_template_filename(&self) -> &PathBuf;
     fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>>;
-    fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>>;
+    fn get_adapter_configs(&self) -> &Option<Vec<((String, String), LoraConfig)>>; // (id name, name)
     fn get_classifier_path(&self) -> &Option<PathBuf>;
     fn get_classifier_config(&self) -> &Option<XLoraConfig>;
     fn get_ordering(&self) -> &Option<Ordering>;
     fn get_gen_conf_filename(&self) -> Option<&PathBuf>;
+    fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>>;
 }
 
 pub struct SimpleModelPaths<P> {
@@ -64,11 +73,12 @@ pub struct SimpleModelPaths<P> {
     template_filename: P,
     filenames: Vec<P>,
     xlora_adapter_filenames: Option<Vec<(String, P)>>,
-    xlora_adapter_configs: Option<Vec<(String, LoraConfig)>>,
+    xlora_adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
     classifier_path: Option<P>,
     classifier_config: Option<XLoraConfig>,
     xlora_ordering: Option<Ordering>,
     gen_conf: Option<P>,
+    lora_preload_adapter_info: Option<HashMap<String, (P, LoraConfig)>>,
 }
 
 impl ModelPaths for SimpleModelPaths<PathBuf> {
@@ -84,7 +94,7 @@ impl ModelPaths for SimpleModelPaths<PathBuf> {
     fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>> {
         &self.xlora_adapter_filenames
     }
-    fn get_adapter_configs(&self) -> &Option<Vec<(String, LoraConfig)>> {
+    fn get_adapter_configs(&self) -> &Option<Vec<((String, String), LoraConfig)>> {
         &self.xlora_adapter_configs
     }
     fn get_classifier_config(&self) -> &Option<XLoraConfig> {
@@ -101,6 +111,9 @@ impl ModelPaths for SimpleModelPaths<PathBuf> {
     }
     fn get_gen_conf_filename(&self) -> Option<&PathBuf> {
         self.gen_conf.as_ref()
+    }
+    fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>> {
+        &self.lora_preload_adapter_info
     }
 }
 
@@ -153,7 +166,7 @@ impl fmt::Display for TokenSource {
     }
 }
 
-#[derive(Copy, Clone, Default)]
+#[derive(Clone, Default)]
 /// The kind of model to build.
 pub enum ModelKind {
     #[default]
@@ -166,20 +179,27 @@ pub enum ModelKind {
     LoraGGUF,
     LoraGGML,
     LoraNormal,
+    Speculative {
+        target: Box<ModelKind>,
+        draft: Box<ModelKind>,
+    },
 }
 
-impl AsRef<str> for ModelKind {
-    fn as_ref(&self) -> &str {
+impl Display for ModelKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ModelKind::Normal => "normal (no quant, no adapters)",
-            ModelKind::QuantizedGGML => "quantized from ggml (no adapters)",
-            ModelKind::QuantizedGGUF => "quantized from gguf (no adapters)",
-            ModelKind::XLoraNormal => "x-lora (no quant)",
-            ModelKind::XLoraGGML => "x-lora, quantized from ggml",
-            ModelKind::XLoraGGUF => "x-lora, quantized from gguf",
-            ModelKind::LoraGGUF => "lora, quantized from gguf",
-            ModelKind::LoraGGML => "lora, quantized from ggml",
-            ModelKind::LoraNormal => "lora (no quant)",
+            ModelKind::Normal => write!(f, "normal (no quant, no adapters)"),
+            ModelKind::QuantizedGGML => write!(f, "quantized from ggml (no adapters)"),
+            ModelKind::QuantizedGGUF => write!(f, "quantized from gguf (no adapters)"),
+            ModelKind::XLoraNormal => write!(f, "x-lora (no quant)"),
+            ModelKind::XLoraGGML => write!(f, "x-lora, quantized from ggml"),
+            ModelKind::XLoraGGUF => write!(f, "x-lora, quantized from gguf"),
+            ModelKind::LoraGGUF => write!(f, "lora, quantized from gguf"),
+            ModelKind::LoraGGML => write!(f, "lora, quantized from ggml"),
+            ModelKind::LoraNormal => write!(f, "lora (no quant)"),
+            ModelKind::Speculative { target, draft } => {
+                write!(f, "speculative: target: `{target}`, draft: `{draft}`")
+            }
         }
     }
 }
@@ -204,24 +224,6 @@ impl AsRef<str> for ModelKind {
 /// ).unwrap();
 /// ```
 pub trait Loader {
-    fn download_model(
-        &self,
-        revision: Option<String>,
-        token_source: TokenSource,
-        silent: bool,
-    ) -> Result<Box<dyn ModelPaths>>;
-
-    #[allow(clippy::type_complexity)]
-    fn _setup_model(
-        &self,
-        paths: &dyn ModelPaths,
-        dtype: Option<DType>,
-        device: &Device,
-        silent: bool,
-        mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
-
     /// If `revision` is None, then it defaults to `main`.
     /// If `dtype` is None, then it defaults to the model default (usually BF16).
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -234,21 +236,133 @@ pub trait Loader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let paths = self.download_model(revision, token_source, silent)?;
-        self._setup_model(&*paths, dtype, device, silent, mapper, in_situ_quant)
-    }
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
 
-    fn get_id(&self) -> &str;
+    fn get_id(&self) -> String;
     fn get_kind(&self) -> ModelKind;
 }
 
+#[derive(Clone)]
+pub struct GeneralMetadata {
+    pub max_seq_len: usize,
+    pub repeat_last_n: usize,
+    pub tok_trie: Arc<TokTrie>,
+    pub has_no_kv_cache: bool,
+    pub is_xlora: bool,
+    pub num_hidden_layers: usize,
+    pub eos_tok: Vec<u32>,
+    pub is_lora: bool,
+}
+
+pub enum AdapterInstruction {
+    Activate(Vec<String>),
+    None,
+}
+
+pub enum CacheInstruction {
+    In(AdapterInstruction),
+    Out,
+    Reset {
+        reset_non_granular: bool,
+        adapter_inst: AdapterInstruction,
+    },
+    Nothing(AdapterInstruction),
+}
+
+#[async_trait::async_trait]
 pub trait Pipeline: Send + Sync {
-    fn forward(
+    fn forward_inputs(&mut self, inputs: ModelInputs) -> Result<Tensor, candle_core::Error>;
+    /// This does forward pass of model followed by run.
+    #[allow(clippy::too_many_arguments)]
+    async fn step(
         &mut self,
-        input_seqs: &[&mut Sequence],
+        input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
-    ) -> Result<Tensor, candle_core::Error>;
+        prefix_cacher: &mut PrefixCacheManager,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+        pre_op: CacheInstruction,
+        post_op: CacheInstruction,
+    ) -> Result<(), candle_core::Error> {
+        let inputs = calculate_inputs(
+            input_seqs,
+            is_prompt,
+            self.get_metadata().is_xlora,
+            &self.device(),
+            self.get_metadata().has_no_kv_cache,
+            None,
+        )
+        .unwrap();
+
+        match pre_op {
+            CacheInstruction::In(adapter_inst) => {
+                match adapter_inst {
+                    AdapterInstruction::Activate(adapters) => {
+                        self.activate_adapters(adapters).map_err(|e| {
+                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                dyn std::error::Error,
+                            >>::as_ref(&e))
+                        })?
+                    }
+                    AdapterInstruction::None => 0,
+                };
+                self.clone_in_cache(input_seqs, false)
+            }
+            CacheInstruction::Nothing(adapter_inst) => {
+                match adapter_inst {
+                    AdapterInstruction::Activate(adapters) => {
+                        self.activate_adapters(adapters).map_err(|e| {
+                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                dyn std::error::Error,
+                            >>::as_ref(&e))
+                        })?
+                    }
+                    AdapterInstruction::None => 0,
+                };
+            }
+            CacheInstruction::Reset {
+                reset_non_granular,
+                adapter_inst,
+            } => {
+                match adapter_inst {
+                    AdapterInstruction::Activate(adapters) => {
+                        self.activate_adapters(adapters).map_err(|e| {
+                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                dyn std::error::Error,
+                            >>::as_ref(&e))
+                        })?
+                    }
+                    AdapterInstruction::None => 0,
+                };
+                self.set_none_cache(reset_non_granular, false)
+            }
+            _ => unreachable!("Unreachable PRE cache op."),
+        }
+
+        let logits = self.forward_inputs(inputs)?;
+
+        match post_op {
+            CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
+            CacheInstruction::Nothing(_) => (),
+            CacheInstruction::Reset {
+                reset_non_granular,
+                adapter_inst: _,
+            } => self.set_none_cache(reset_non_granular, false),
+            _ => unreachable!("Unreachable POST cache op."),
+        }
+
+        self.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
+            .await?;
+        Ok(())
+    }
+    async fn sample(
+        &self,
+        seqs: &mut [&mut Sequence],
+        logits: Tensor,
+        prefix_cacher: &mut PrefixCacheManager,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    ) -> Result<(), candle_core::Error>;
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
         let encoding = self
             .tokenizer()
@@ -256,22 +370,16 @@ pub trait Pipeline: Send + Sync {
             .map_err(|e| anyhow::Error::msg(e.to_string()))?;
         Ok(encoding.get_ids().to_vec())
     }
-    fn device(&self) -> &Device;
-    fn num_hidden_layers(&self) -> usize;
-    fn cache(&self) -> &Cache;
+    fn device(&self) -> Device;
     fn tokenizer(&self) -> Arc<Tokenizer>;
-    fn tok_trie(&self) -> Arc<TokTrie>;
-    fn eos_tok(&self) -> &[u32];
     fn name(&self) -> String;
-    fn get_max_seq_len(&self) -> usize;
-    fn is_xlora(&self) -> bool;
-    fn has_no_kv_cache(&self) -> bool;
     fn apply_chat_template(
         &self,
         messages: Vec<IndexMap<String, String>>,
         add_generation_prompt: bool,
     ) -> Result<String> {
-        let template = self.get_chat_template().chat_template.as_ref().unwrap();
+        let chat_template = self.get_chat_template();
+        let template = chat_template.chat_template.as_ref().unwrap();
         let bos_tok = if let Some(ref bos) = self.get_chat_template().bos_token {
             match bos.0 {
                 Either::Left(ref lit) => Some(lit.to_string()),
@@ -280,7 +388,7 @@ pub trait Pipeline: Send + Sync {
         } else {
             None
         };
-        let eos_tok = match self.get_chat_template().eos_token {
+        let eos_tok = match chat_template.eos_token {
             Either::Left(ref lit) => lit,
             Either::Right(ref added) => &added.content,
         };
@@ -301,20 +409,40 @@ pub trait Pipeline: Send + Sync {
             unk_tok,
         )
     }
-    fn get_chat_template(&self) -> &ChatTemplate;
-    fn get_non_granular_state(&self) -> &Option<NonGranularState>;
-    fn reset_non_granular_state(&self) {
-        if let Some(s) = self.get_non_granular_state().as_ref() {
-            *self.cache().get_scalings_cache() = None;
-            *get_mut_arcmutex!(s.non_granular_index) = 0;
-        }
-    }
-    fn get_repeat_last_n(&self) -> usize;
-
+    fn get_chat_template(&self) -> Arc<ChatTemplate>;
+    fn reset_non_granular_state(&self);
+    fn get_metadata(&self) -> &GeneralMetadata;
     fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()>;
+    /// Clone the cache FROM the sequences' cache TO the model cache. Only called for completion seqs.
+    /// It is not a guarantee that this will be called for each completion step.
+    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool);
+    /// Clone the cache FROM the model cache TO the sequences. Called for prompt and completion seqs.
+    /// It is not a guarantee that this will be called for each step.
+    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool);
+    /// Set the model cache to all None. Only called for prompt seqs.
+    /// It is not a guarantee that this will be called for each prompt step.
+    /// This may also reset the non granular state if applicable.
+    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool);
+    fn cache(&self) -> &Cache;
+    /// Returns the number of activated adapters.
+    fn activate_adapters(&mut self, adapters: Vec<String>) -> Result<usize>;
 }
 
-pub trait ConfigMarker {}
+pub trait CacheManager {
+    fn clone_in_cache(
+        &self,
+        pipeline: &mut dyn Pipeline,
+        seqs: &mut [&mut Sequence],
+        modify_draft_cache: bool,
+    );
+    fn clone_out_cache(
+        &self,
+        pipeline: &mut dyn Pipeline,
+        seqs: &mut [&mut Sequence],
+        modify_draft_cache: bool,
+    );
+    fn set_none_cache(&self, pipeline: &mut dyn Pipeline, modify_draft_cache: bool);
+}
 
 pub trait NormalModelLoader {
     fn load(
@@ -332,14 +460,60 @@ pub trait NormalModelLoader {
         config: &str,
         use_flash_attn: bool,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         mapper: DeviceMapMetadata,
         loading_isq: bool,
         device: Device,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn is_gptx(&self) -> bool;
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
+}
+
+pub enum QuantizationBehaviour {
+    Quantize(GgmlDType),
+    Skip,
+}
+
+/// Return the fallback dtype for the given dtype.
+fn get_fallback(dtype: GgmlDType) -> QuantizationBehaviour {
+    // The normal `Q` quants are a bit more lenient than the `K` quants.
+    // => Try to fallback to a similar `Q` quant.
+    // If that's not possible, skip this tensor.
+    match dtype {
+        GgmlDType::Q2K => QuantizationBehaviour::Quantize(GgmlDType::Q4_0),
+        GgmlDType::Q3K => QuantizationBehaviour::Quantize(GgmlDType::Q4_0),
+        GgmlDType::Q4K => QuantizationBehaviour::Quantize(GgmlDType::Q4_1),
+        GgmlDType::Q5K => QuantizationBehaviour::Quantize(GgmlDType::Q5_0),
+        GgmlDType::Q6K => QuantizationBehaviour::Quantize(GgmlDType::Q5_1),
+        GgmlDType::Q8K => QuantizationBehaviour::Quantize(GgmlDType::Q8_1),
+        _ => QuantizationBehaviour::Skip,
+    }
+}
+
+/// Check if the tensor can be quantized with the given dtype.
+fn can_quantize(tensor: &Tensor, dtype: GgmlDType) -> bool {
+    let dims = tensor.shape().dims();
+    // The tensor must not be empty and the last dimension must be a multiple of the block size.
+    !(dims.is_empty() || (dims[dims.len() - 1] % dtype.block_size() != 0))
+}
+
+/// Check if we should quantize the tensor and if so, with which dtype.
+fn get_quantization_behaviour(tensor: &Tensor, dtype: GgmlDType) -> QuantizationBehaviour {
+    if dtype == GgmlDType::F32 {
+        return QuantizationBehaviour::Skip;
+    }
+
+    if can_quantize(tensor, dtype) {
+        return QuantizationBehaviour::Quantize(dtype);
+    }
+    let fallback = get_fallback(dtype);
+    match fallback {
+        QuantizationBehaviour::Skip => fallback,
+        QuantizationBehaviour::Quantize(new_dtype) => get_quantization_behaviour(tensor, new_dtype),
+    }
 }
 
 pub trait NormalModel {
@@ -348,7 +522,8 @@ pub trait NormalModel {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        context_lens: Vec<usize>,
+        context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
     ) -> candle_core::Result<Tensor>;
     #[allow(clippy::too_many_arguments)]
     fn xlora_forward(
@@ -361,7 +536,8 @@ pub trait NormalModel {
         start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
-        context_lens: Vec<usize>,
+        context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
     ) -> candle_core::Result<Tensor>;
     fn is_xlora(&self) -> bool;
     fn device(&self) -> &Device;
@@ -400,24 +576,42 @@ pub trait NormalModel {
             .progress_with(bar)
             .for_each(|((tensor, _), device)| {
                 if let QMatMul::Tensor(t) = tensor {
-                    n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let t = t.to_device(&device).unwrap();
-                    *tensor = QMatMul::QTensor(Arc::new(QTensor::quantize(&t, dtype).unwrap()));
+                    let quantization_behaviour = get_quantization_behaviour(&t, dtype);
+                    *tensor =  match quantization_behaviour{
+                        QuantizationBehaviour::Skip => {
+                            let shape = t.shape();
+                            warn!("Skipping quantization of tensor with shape {shape:?} as it is not quantizable.");
+                            QMatMul::QTensor(Arc::new(QTensor::quantize(&t, GgmlDType::F32).unwrap()))
+                        },
+                        QuantizationBehaviour::Quantize(dtype) => {
+                            n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            QMatMul::QTensor(Arc::new(QTensor::quantize(&t, dtype).unwrap()))
+                        }
+                    }
                 }
             });
         info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors.");
         Ok(())
+    }
+    fn activate_adapters(&mut self, _: Vec<String>) -> candle_core::Result<usize> {
+        candle_core::bail!("Unable to activate adapters for model without adapters");
     }
 }
 
 struct InputMetadata {
     input: Tensor,
     positions: Vec<usize>,
-    positions_kernel: Tensor, // [bs, seq len]
-    context_lens: Vec<usize>,
+    positions_kernel: Tensor,          // [bs, seq len]
+    context_lens: Vec<(usize, usize)>, // (start index, len)
+    position_ids: Vec<usize>,
 }
 
-fn get_prompt_input(input_seqs: &[&mut Sequence], device: &Device) -> Result<InputMetadata> {
+fn get_prompt_input(
+    input_seqs: &[&mut Sequence],
+    device: &Device,
+    last_n_context_len: Option<(usize, usize)>,
+) -> Result<InputMetadata> {
     let max_len = input_seqs
         .iter()
         .map(|seq| seq.len())
@@ -428,22 +622,45 @@ fn get_prompt_input(input_seqs: &[&mut Sequence], device: &Device) -> Result<Inp
     let mut seqs_tensors = Vec::new();
     let mut seqlen_offsets = Vec::new();
     let mut context_lens = Vec::new();
+    let mut position_ids = Vec::new();
     for seq in input_seqs.iter() {
         let mut ctxt = seq.get_toks().to_vec();
-        seqlen_offsets.push(0);
+        let offset = if let Some((_, offset)) = last_n_context_len {
+            offset
+        } else {
+            0
+        };
+        seqlen_offsets.push(offset);
 
         ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));
-        context_lens.push(seq.len() - 1);
+        context_lens.push((
+            seq.len() - last_n_context_len.map(|(a, _)| a).unwrap_or(1),
+            last_n_context_len.map(|(a, _)| a).unwrap_or(1),
+        ));
+        position_ids.push(seq.len());
 
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
     }
 
     let mut tmp = Vec::new();
-    for pos in (0..seqs_tensors.len())
-        .map(|_| (0..max_len).map(|x| x as i64).collect::<Vec<_>>())
-        .collect::<Vec<_>>()
-    {
-        tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
+    if last_n_context_len.is_some() {
+        for pos in (0..seqs_tensors.len())
+            .map(|i| {
+                (*seqlen_offsets.get(i).unwrap() as i64
+                    ..*seqlen_offsets.get(i).unwrap() as i64 + max_len as i64)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+        {
+            tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
+        }
+    } else {
+        for pos in (0..seqs_tensors.len())
+            .map(|_| (0..max_len).map(|x| x as i64).collect::<Vec<_>>())
+            .collect::<Vec<_>>()
+        {
+            tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
+        }
     }
     let positions_kernel = Tensor::cat(&tmp, 0)?;
     Ok(InputMetadata {
@@ -451,6 +668,7 @@ fn get_prompt_input(input_seqs: &[&mut Sequence], device: &Device) -> Result<Inp
         positions: seqlen_offsets,
         positions_kernel,
         context_lens,
+        position_ids,
     })
 }
 
@@ -458,19 +676,22 @@ fn get_completion_input(
     input_seqs: &[&mut Sequence],
     device: &Device,
     no_kv_cache: bool,
+    last_n_context_len: Option<(usize, usize)>,
 ) -> Result<InputMetadata> {
     if no_kv_cache {
-        return get_prompt_input(input_seqs, device);
+        return get_prompt_input(input_seqs, device, last_n_context_len);
     }
     // Pad each sequence by the padding token to the max len.
     let mut seqs_tensors = Vec::new();
     let mut seqlen_offsets = Vec::new();
     let mut context_lens = Vec::new();
+    let mut position_ids = Vec::new();
     for seq in input_seqs.iter() {
         let start_pos = seq.get_toks().len().saturating_sub(1);
         let ctxt = seq.get_toks()[start_pos..].to_vec();
         seqlen_offsets.push(start_pos);
-        context_lens.push(0);
+        context_lens.push((0, 1));
+        position_ids.push(seq.len());
 
         seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
     }
@@ -487,17 +708,20 @@ fn get_completion_input(
         positions: seqlen_offsets,
         positions_kernel,
         context_lens,
+        position_ids,
     })
 }
 
-struct ModelInputs {
+#[derive(Clone)]
+pub struct ModelInputs {
     input_ids: Tensor,
     input_ids_full: Option<Tensor>,
     seqlen_offsets: Vec<usize>,
     seqlen_offsets_full: Option<Vec<usize>>,
     seqlen_offsets_kernel: Tensor,
     seqlen_offsets_kernel_full: Option<Tensor>,
-    context_lens: Vec<usize>,
+    context_lens: Vec<(usize, usize)>,
+    position_ids: Vec<usize>,
 }
 
 fn calculate_inputs(
@@ -506,6 +730,7 @@ fn calculate_inputs(
     is_xlora: bool,
     device: &Device,
     no_kv_cache: bool,
+    last_n_context_len: Option<(usize, usize)>,
 ) -> Result<ModelInputs> {
     if is_xlora && !is_prompt {
         let InputMetadata {
@@ -513,13 +738,15 @@ fn calculate_inputs(
             positions: seqlen_offsets_full,
             positions_kernel: seqlen_offsets_kernel_full,
             context_lens: _,
-        } = get_prompt_input(input_seqs, device)?;
+            position_ids,
+        } = get_prompt_input(input_seqs, device, last_n_context_len)?;
         let InputMetadata {
             input: input_ids,
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
-        } = get_completion_input(input_seqs, device, no_kv_cache)?;
+            position_ids: _,
+        } = get_completion_input(input_seqs, device, no_kv_cache, last_n_context_len)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: Some(input_ids_full),
@@ -528,6 +755,7 @@ fn calculate_inputs(
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel_full),
             context_lens,
+            position_ids,
         })
     } else if is_xlora && is_prompt {
         let InputMetadata {
@@ -535,7 +763,8 @@ fn calculate_inputs(
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
-        } = get_prompt_input(input_seqs, device)?;
+            position_ids,
+        } = get_prompt_input(input_seqs, device, last_n_context_len)?;
         Ok(ModelInputs {
             input_ids: input_ids.clone(),
             input_ids_full: Some(input_ids),
@@ -544,6 +773,7 @@ fn calculate_inputs(
             seqlen_offsets_kernel: seqlen_offsets_kernel.clone(),
             seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel),
             context_lens,
+            position_ids,
         })
     } else if is_prompt {
         let InputMetadata {
@@ -551,7 +781,8 @@ fn calculate_inputs(
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
-        } = get_prompt_input(input_seqs, device)?;
+            position_ids,
+        } = get_prompt_input(input_seqs, device, last_n_context_len)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: None,
@@ -560,6 +791,7 @@ fn calculate_inputs(
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full: None,
             context_lens,
+            position_ids,
         })
     } else {
         let InputMetadata {
@@ -567,7 +799,8 @@ fn calculate_inputs(
             positions: seqlen_offsets,
             positions_kernel: seqlen_offsets_kernel,
             context_lens,
-        } = get_completion_input(input_seqs, device, no_kv_cache)?;
+            position_ids,
+        } = get_completion_input(input_seqs, device, no_kv_cache, last_n_context_len)?;
         Ok(ModelInputs {
             input_ids,
             input_ids_full: None,
@@ -576,24 +809,29 @@ fn calculate_inputs(
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full: None,
             context_lens,
+            position_ids,
         })
     }
 }
 
-pub fn extract_logits(logits: &Tensor, context_lens: Vec<usize>) -> candle_core::Result<Tensor> {
+pub(crate) fn extract_logits(
+    logits: &Tensor,
+    context_lens: Vec<(usize, usize)>,
+) -> candle_core::Result<Tensor> {
     let mut toks = Vec::new();
-    for (dim, start) in logits.chunk(logits.dims()[0], 0)?.iter().zip(context_lens) {
-        toks.push(dim.narrow(1, start, 1)?);
+    for (dim, (start, len)) in logits.chunk(logits.dims()[0], 0)?.iter().zip(context_lens) {
+        toks.push(dim.narrow(1, start, len)?);
     }
     Tensor::cat(&toks, 0)
 }
 
 struct XLoraPaths {
-    adapter_configs: Option<Vec<(String, LoraConfig)>>,
+    adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
     adapter_safetensors: Option<Vec<(String, PathBuf)>>,
     classifier_path: Option<PathBuf>,
     xlora_order: Option<Ordering>,
     xlora_config: Option<XLoraConfig>,
+    lora_preload_adapter_info: Option<HashMap<String, (PathBuf, LoraConfig)>>,
 }
 
 fn get_xlora_paths(
@@ -619,15 +857,15 @@ fn get_xlora_paths(
             .filter(|x| x.contains("xlora_classifier.safetensors"))
             .collect::<Vec<_>>();
         if xlora_classifier.len() != 1 {
-            info!("⚠️ WARNING: Detected multiple X-LoRA classifiers: {xlora_classifier:?}");
-            info!("⚠️ WARNING: Selected classifier: `{}`", &xlora_classifier[0]);
+            warn!("Detected multiple X-LoRA classifiers: {xlora_classifier:?}");
+            warn!("Selected classifier: `{}`", &xlora_classifier[0]);
         }
         let xlora_classifier = &xlora_classifier[0];
         let xlora_configs = &api_dir_list!(api, model_id)
             .filter(|x| x.contains("xlora_config.json"))
             .collect::<Vec<_>>();
         if xlora_configs.len() != 1 {
-            info!("⚠️ WARNING: Detected multiple X-LoRA configs: {xlora_configs:?}");
+            warn!("Detected multiple X-LoRA configs: {xlora_configs:?}");
         }
 
         let classifier_path = api_get_file!(api, xlora_classifier, Path::new(""));
@@ -636,7 +874,7 @@ fn get_xlora_paths(
         let mut last_err: Option<serde_json::Error> = None;
         for (i, config_path) in xlora_configs.iter().enumerate() {
             if xlora_configs.len() != 1 {
-                info!("⚠️ WARNING: Selecting config: `{}`", config_path);
+                warn!("Selecting config: `{}`", config_path);
             }
             let config_path = api_get_file!(api, config_path, Path::new(""));
             let conf = fs::read_to_string(config_path)?;
@@ -648,7 +886,7 @@ fn get_xlora_paths(
                 }
                 Err(e) => {
                     if i != xlora_configs.len() - 1 {
-                        info!("⚠️ WARNING: Config is broken with error `{e}`");
+                        warn!("Config is broken with error `{e}`");
                     }
                     last_err = Some(e);
                 }
@@ -702,7 +940,7 @@ fn get_xlora_paths(
                 } else {
                     let conf = fs::read_to_string(path)?;
                     let lora_config: LoraConfig = serde_json::from_str(&conf)?;
-                    adapters_configs.push(((i + 1).to_string(), lora_config));
+                    adapters_configs.push((((i + 1).to_string(), name.clone()), lora_config));
                 }
             }
         }
@@ -720,12 +958,66 @@ fn get_xlora_paths(
             );
         }
 
+        let lora_preload_adapter_info = if let Some(xlora_order) = xlora_order {
+            if let Some(preload_adapters) = &xlora_order.preload_adapters {
+                let mut output = HashMap::new();
+                for adapter in preload_adapters {
+                    let adapter_files = api_dir_list!(api, &adapter.adapter_model_id)
+                        .filter_map(|f| {
+                            if f.contains(&adapter.name) {
+                                Some((f, adapter.name.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    if adapter_files.is_empty() {
+                        anyhow::bail!("Adapter files are empty. Perhaps the ordering file adapters does not match the actual adapters?")
+                    }
+                    let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
+                    for (file, name) in adapter_files {
+                        if let Some(paths) = adapters_paths.get_mut(&name) {
+                            paths.push(api_get_file!(api, &file, Path::new("")));
+                        } else {
+                            adapters_paths
+                                .insert(name, vec![api_get_file!(api, &file, Path::new(""))]);
+                        }
+                    }
+
+                    let mut config = None;
+                    let mut safetensor = None;
+
+                    let paths = adapters_paths
+                        .get(&adapter.name)
+                        .unwrap_or_else(|| panic!("Adapter {} not found.", adapter.name));
+                    for path in paths {
+                        if path.extension().unwrap() == "safetensors" {
+                            safetensor = Some(path.to_owned());
+                        } else {
+                            let conf = fs::read_to_string(path)?;
+                            let lora_config: LoraConfig = serde_json::from_str(&conf)?;
+                            config = Some(lora_config);
+                        }
+                    }
+
+                    let (config, safetensor) = (config.unwrap(), safetensor.unwrap());
+                    output.insert(adapter.name.clone(), (safetensor, config));
+                }
+                Some(output)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         XLoraPaths {
             adapter_configs: Some(adapters_configs),
             adapter_safetensors: Some(adapters_safetensors),
             classifier_path: Some(classifier_path),
             xlora_order: xlora_order.clone(),
             xlora_config: Some(xlora_config),
+            lora_preload_adapter_info,
         }
     } else {
         XLoraPaths {
@@ -734,6 +1026,7 @@ fn get_xlora_paths(
             classifier_path: None,
             xlora_order: None,
             xlora_config: None,
+            lora_preload_adapter_info: None,
         }
     })
 }

@@ -1,14 +1,12 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::collections::HashMap;
-
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 
 use crate::device_map::DeviceMapper;
-use crate::layers::QRmsNorm;
+use crate::layers::{CausalMasker, QRmsNorm};
 use crate::pipeline::extract_logits;
 use crate::DeviceMapMetadata;
 
@@ -136,12 +134,6 @@ struct LayerWeights {
     neg_inf: Tensor,
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Tensor> {
-    let shape = mask.shape();
-    let m = mask.where_cond(&on_true.broadcast_as(shape.dims())?, on_false)?;
-    Ok(m)
-}
-
 impl LayerWeights {
     fn forward_attn(
         &mut self,
@@ -200,13 +192,8 @@ impl LayerWeights {
             (q.contiguous()?.matmul(&k.t()?.contiguous()?)? / (self.head_dim as f64).sqrt())?
         };
 
-        let att = match mask {
-            None => att,
-            Some(mask) => {
-                let mask = mask.broadcast_as(att.shape())?;
-                masked_fill(&att, &mask, &self.neg_inf)?
-            }
-        };
+        let att = (q.contiguous()?.matmul(&k.t()?.contiguous()?)? / (self.head_dim as f64).sqrt())?;
+        let att = CausalMasker.apply_mask(mask, att, &self.neg_inf)?;
         let att = candle_nn::ops::softmax_last_dim(&att)?;
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = if via_f16 {
@@ -229,7 +216,6 @@ pub struct ModelWeights {
     layers: Vec<LayerWeights>,
     norm: QRmsNorm,
     output: QMatMul,
-    masks: HashMap<usize, Tensor>,
     pub device: Device,
     pub cache: Cache,
     pub max_seq_len: usize,
@@ -292,7 +278,6 @@ impl ModelWeights {
             layers,
             norm,
             output: QMatMul::from_qtensor(output)?,
-            masks: HashMap::new(),
             device: ct.device.clone(),
             cache: Cache::new(ct.hparams.n_layer as usize, false),
             max_seq_len: MAX_SEQ_LEN as usize, // Cannot determine from ggml.
@@ -424,7 +409,6 @@ impl ModelWeights {
             layers,
             norm,
             output: QMatMul::from_qtensor(output)?,
-            masks: HashMap::new(),
             device: device.clone(),
             cache: Cache::new(block_count, false),
             max_seq_len,
@@ -432,38 +416,17 @@ impl ModelWeights {
         })
     }
 
-    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
-        if let Some(mask) = self.masks.get(&t) {
-            Ok(mask.clone())
-        } else {
-            let mask: Vec<_> = (0..t)
-                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
-                .collect();
-            let mask = Tensor::from_slice(&mask, (t, t), device)?;
-            self.masks.insert(t, mask.clone());
-            Ok(mask)
-        }
-    }
-
     pub fn forward(
         &mut self,
         x: &Tensor,
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        context_lens: Vec<usize>,
+        context_lens: Vec<(usize, usize)>,
         is_prompt: bool,
     ) -> Result<Tensor> {
-        let (_b_sz, seq_len) = x.dims2()?;
-        let mask: Option<Tensor> = if seq_len == 1 {
-            None
-        } else {
-            Some(self.mask(seq_len, x.device())?)
-        };
-
-        let via_f16 = if is_prompt { seq_len > 32 } else { false };
-
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();
+        let mask = CausalMasker.make_causal_mask(x, &cache)?;
         for (i, layer) in self.layers.iter_mut().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;

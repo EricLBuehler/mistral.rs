@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 /// Phi model.
 /// https://huggingface.co/microsoft/phi-2
@@ -17,6 +17,7 @@ use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
+    layers::CausalMasker,
     models::{flash_attn, phi2::Config, repeat_kv},
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
@@ -37,12 +38,13 @@ impl MLP {
     fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let fc1 = linear(
             cfg.hidden_size,
@@ -52,6 +54,7 @@ impl MLP {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         let fc2 = linear(
             cfg.intermediate_size,
@@ -61,6 +64,7 @@ impl MLP {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         Ok(Self {
             fc1,
@@ -118,20 +122,7 @@ struct Attention {
     num_kv_heads: usize,
     head_dim: usize,
     use_flash_attn: bool,
-}
-
-fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
-    let mask: Vec<_> = (0..size)
-        .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
-        .collect();
-    Tensor::from_slice(&mask, (size, size), device)
-}
-
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
-    let shape = mask.shape();
-    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
-    let m = mask.where_cond(&on_true, on_false)?;
-    Ok(m)
+    neg_inf: Tensor,
 }
 
 impl Attention {
@@ -139,13 +130,14 @@ impl Attention {
     fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
         rope: RotaryEmbedding,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads();
@@ -158,6 +150,7 @@ impl Attention {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         let k_proj = linear(
             cfg.hidden_size,
@@ -167,6 +160,7 @@ impl Attention {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         let v_proj = linear(
             cfg.hidden_size,
@@ -176,6 +170,7 @@ impl Attention {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         let dense = linear(
             num_heads * head_dim,
@@ -185,6 +180,7 @@ impl Attention {
             lora_config,
             count,
             ord,
+            preload_adapters,
         )?;
         let (q_layernorm, k_layernorm) = if cfg.qk_layernorm {
             let q_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp("q_layernorm"))?;
@@ -207,6 +203,7 @@ impl Attention {
             num_kv_heads,
             head_dim,
             use_flash_attn: cfg.use_flash_attn,
+            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())?.to_dtype(vb.dtype())?,
         })
     }
 
@@ -311,14 +308,8 @@ impl Attention {
                 .contiguous()?
                 .matmul(&k.to_dtype(DType::F32)?.t()?)?
                 * self.softmax_scale)?;
-            let attn_weights = match mask {
-                None => attn_weights,
-                Some(mask) => masked_fill(
-                    &attn_weights,
-                    &mask.broadcast_left((b_size, self.num_heads))?,
-                    f32::NEG_INFINITY,
-                )?,
-            };
+            let attn_weights =
+                CausalMasker.apply_mask(&mask.cloned(), attn_weights, &self.neg_inf)?;
             let attn_weights =
                 candle_nn::ops::softmax_last_dim(&attn_weights)?.to_dtype(v.dtype())?;
             attn_weights.matmul(&v)?
@@ -355,13 +346,14 @@ impl DecoderLayer {
     fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
         rope: RotaryEmbedding,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             cfg,
@@ -373,6 +365,7 @@ impl DecoderLayer {
             layer_idx,
             loading_isq,
             rope,
+            preload_adapters,
         )?;
         let mlp = MLP::new(
             cfg,
@@ -383,6 +376,7 @@ impl DecoderLayer {
             mapper,
             layer_idx,
             loading_isq,
+            preload_adapters,
         )?;
         let input_layernorm = layer_norm(
             cfg.hidden_size,
@@ -445,13 +439,14 @@ impl Model {
     pub fn new(
         cfg: &Config,
         vb: VarBuilder,
-        lora_config: &[(String, LoraConfig)],
+        lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         is_gptx: bool,
         mapper: DeviceMapMetadata,
         loading_isq: bool,
         real_device: Device,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
@@ -489,10 +484,11 @@ impl Model {
                 layer_idx,
                 loading_isq,
                 rotary_emb,
+                preload_adapters,
             )?;
             layers.push(layer)
         }
-        if xlora_config.is_none() {
+        if xlora_config.is_none() && preload_adapters.is_none() {
             // We are now a LoRA model so we must merge the weights
             info!("Merging LoRA adapters.");
             for layer in layers.iter_mut().tqdm() {
@@ -537,7 +533,7 @@ impl Model {
     #[allow(clippy::too_many_arguments)]
     fn inner_forward(
         &mut self,
-        xs: &Tensor,
+        input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         scalings: Option<Tensor>,
@@ -545,13 +541,7 @@ impl Model {
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let (_b_size, seq_len) = xs.dims2()?;
-        let mut xs = xs.apply(&self.embed_tokens)?;
-        let mask = if seq_len <= 1 {
-            None
-        } else {
-            Some(get_mask(seq_len, xs.device())?)
-        };
+        let mut xs = input_ids.apply(&self.embed_tokens)?;
         let mut cache = if is_full_pass {
             if no_kv_cache {
                 let mut new_cache = Vec::new();
@@ -559,12 +549,13 @@ impl Model {
                     new_cache.push(None);
                 }
 
-                *self.cache.xlora_lock() = new_cache.clone();
+                self.cache.xlora_lock().clone_from(&new_cache);
             }
             self.cache.xlora_lock()
         } else {
             self.cache.lock()
         };
+        let mask = CausalMasker.make_causal_mask(input_ids, &cache)?;
         for (i, layer) in self.layers.iter_mut().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
@@ -598,7 +589,7 @@ impl Model {
         start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
-        context_lens: Vec<usize>,
+        context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
         if self.xlora_classifier.is_some() {
             let scalings = self.get_scalings(
@@ -610,6 +601,7 @@ impl Model {
                 &start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
+                &vec![usize::MAX; context_lens.len()],
             )?;
 
             if no_kv_cache {
@@ -672,7 +664,8 @@ impl NormalModel for Model {
         _input_ids: &Tensor,
         _seqlen_offsets: &[usize],
         _start_offsets_kernel: Tensor,
-        _context_lens: Vec<usize>,
+        _context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -686,7 +679,8 @@ impl NormalModel for Model {
         start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: &Option<crate::xlora_models::NonGranularState>,
-        context_lens: Vec<usize>,
+        context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
@@ -737,6 +731,31 @@ impl NormalModel for Model {
         }
         (tensors, &*self.mapper)
     }
+    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
+        let mut sum = 0;
+        for layer in self.layers.iter_mut() {
+            sum += Arc::get_mut(&mut layer.self_attn.k_proj)
+                .unwrap()
+                .activate(&adapter_names)?;
+            sum += Arc::get_mut(&mut layer.self_attn.dense)
+                .unwrap()
+                .activate(&adapter_names)?;
+            sum += Arc::get_mut(&mut layer.self_attn.q_proj)
+                .unwrap()
+                .activate(&adapter_names)?;
+            sum += Arc::get_mut(&mut layer.self_attn.v_proj)
+                .unwrap()
+                .activate(&adapter_names)?;
+
+            sum += Arc::get_mut(&mut layer.mlp.fc1)
+                .unwrap()
+                .activate(&adapter_names)?;
+            sum += Arc::get_mut(&mut layer.mlp.fc2)
+                .unwrap()
+                .activate(&adapter_names)?;
+        }
+        Ok(sum)
+    }
 }
 
 impl ScalingsMaker for Model {
@@ -758,6 +777,7 @@ impl ScalingsMaker for Model {
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
+        _context_lens: &[usize],
     ) -> Result<Tensor> {
         self.inner_forward(
             input_ids,

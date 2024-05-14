@@ -2,14 +2,14 @@
 
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
-use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
 use candle_nn::{linear_no_bias, VarBuilder};
 use either::Either;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{PhiRotaryEmbedding, RmsNorm},
+    layers::{CausalMasker, PhiRotaryEmbedding, RmsNorm},
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
@@ -54,6 +54,7 @@ struct Attention {
     rotary_emb: Arc<PhiRotaryEmbedding>,
     use_flash_attn: bool,
     sliding_window: Option<usize>,
+    neg_inf: Tensor,
 }
 
 impl Attention {
@@ -74,6 +75,7 @@ impl Attention {
             head_dim,
             use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
+            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())?.to_dtype(vb.dtype())?,
         })
     }
 
@@ -82,7 +84,7 @@ impl Attention {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        _start_offsets_kernel: Tensor,
+        position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
@@ -115,7 +117,9 @@ impl Attention {
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        let (q, k) = self
+            .rotary_emb
+            .forward(&q, &k, seqlen_offsets, position_ids)?;
 
         let (k, v, attn_mask) = match kv_cache.clone() {
             None => (k, v, attention_mask.cloned()),
@@ -169,10 +173,7 @@ impl Attention {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
             let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
 
-            let attn_weights = match attn_mask {
-                None => attn_weights,
-                Some(mask) => attn_weights.broadcast_add(&mask)?,
-            };
+            let attn_weights = CausalMasker.apply_mask(&attn_mask, attn_weights, &self.neg_inf)?;
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
             attn_weights.matmul(&v)?
         };
@@ -278,18 +279,14 @@ impl DecoderLayer {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
+        position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self.self_attn.forward(
-            &xs,
-            attention_mask,
-            seqlen_offsets,
-            start_offsets_kernel,
-            kv_cache,
-        )?;
+        let xs =
+            self.self_attn
+                .forward(&xs, attention_mask, seqlen_offsets, position_ids, kv_cache)?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = xs.apply(&self.post_attention_layernorm)?.apply(&self.mlp)?;
@@ -303,7 +300,6 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: QMatMul,
-    dtype: DType,
     pub device: Device,
     pub cache: Cache,
     pub max_seq_len: usize,
@@ -361,7 +357,6 @@ impl Model {
             norm,
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             device: real_device,
-            dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
@@ -369,75 +364,26 @@ impl Model {
         })
     }
 
-    fn prepare_decoder_attention_mask(
-        &self,
-        b_size: usize,
-        tgt_len: usize,
-        seqlen_offset: usize,
-        sliding_window: Option<usize>,
-    ) -> Result<Tensor> {
-        // Sliding window mask
-        let sliding_window = sliding_window.unwrap_or(tgt_len + 1);
-        let mask: Vec<_> = (0..tgt_len)
-            .flat_map(|i| {
-                (0..tgt_len).map(move |j| {
-                    if i < j || j + sliding_window < i {
-                        f32::NEG_INFINITY
-                    } else {
-                        0.
-                    }
-                })
-            })
-            .collect();
-        let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
-        let mask = if seqlen_offset > 0 {
-            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, &self.device)?;
-            Tensor::cat(&[&mask0, &mask], D::Minus1)?
-        } else {
-            mask
-        };
-        mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
-            .to_dtype(self.dtype)
-    }
-
-    fn calculate_past_kv_len(&mut self, seq_len: usize) -> Result<usize> {
-        let cache = self.cache.lock();
-        let kv_cache_1 = cache.first().unwrap();
-        if kv_cache_1.is_none() {
-            return Ok(0);
-        }
-        let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
-        if k_cache_1.dims()[0] <= seq_len {
-            Ok(0)
-        } else {
-            let indexed = k_cache_1.i(seq_len)?;
-            let dims = indexed.dims();
-            Ok(dims[dims.len() - 2])
-        }
-    }
-
     pub fn forward(
         &mut self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
-        context_lens: Vec<usize>,
+        position_ids: &[usize],
+        context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
-        let (b_size, seq_len) = input_ids.dims2()?;
-        let past_key_values_length = self.calculate_past_kv_len(seq_len)?;
-        let attention_mask = if seq_len <= 1 {
-            None
-        } else {
-            let mask = self.prepare_decoder_attention_mask(
-                b_size,
-                seq_len,
-                past_key_values_length,
-                self.sliding_window,
-            )?;
-            Some(mask)
-        };
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let mut cache = self.cache.lock();
+        let attention_mask = CausalMasker.make_causal_mask_with_sliding_window(
+            input_ids,
+            &cache,
+            self.sliding_window,
+        )?;
+        let past_key_values_length = CausalMasker.calculate_past_kv_len(&cache)?;
+        let position_ids = position_ids
+            .iter()
+            .map(|p| *p + past_key_values_length)
+            .collect::<Vec<_>>();
+
         for (i, layer) in self.layers.iter_mut().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
@@ -447,7 +393,7 @@ impl Model {
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
                 seqlen_offsets,
-                start_offsets_kernel.clone(),
+                &position_ids,
                 &mut cache[i],
             )?
         }
@@ -465,15 +411,11 @@ impl NormalModel for Model {
         &mut self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
-        context_lens: Vec<usize>,
+        _start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
     ) -> Result<Tensor> {
-        self.forward(
-            input_ids,
-            seqlen_offsets,
-            start_offsets_kernel,
-            context_lens,
-        )
+        self.forward(input_ids, seqlen_offsets, &position_ids, context_lens)
     }
     fn xlora_forward(
         &mut self,
@@ -485,7 +427,8 @@ impl NormalModel for Model {
         _start_offsets_kernel_full: Tensor,
         _no_kv_cache: bool,
         _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
-        _context_lens: Vec<usize>,
+        _context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         unimplemented!()
     }
