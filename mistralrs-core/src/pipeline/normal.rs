@@ -9,8 +9,8 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
-use crate::models::Cache;
 use crate::pipeline::chat_template::calculate_eos_tokens;
+use crate::pipeline::Cache;
 use crate::pipeline::{ChatTemplate, SimpleModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;

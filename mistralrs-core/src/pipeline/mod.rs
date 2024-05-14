@@ -47,11 +47,12 @@ use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 
 use crate::{
-    models::Cache,
     sequence::Sequence,
     utils::tokens::get_token,
     xlora_models::{NonGranularState, XLoraConfig},
 };
+
+pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
 
 pub trait ModelPaths  {
     fn get_weight_filenames(&self) -> &[PathBuf];
@@ -470,23 +471,6 @@ pub trait Pipeline: Send + Sync {
     /// Returns the number of activated adapters.
     fn activate_adapters(&mut self, adapters: Vec<String>) -> Result<usize>;
 }
-
-pub trait CacheManager {
-    fn clone_in_cache(
-        &self,
-        pipeline: &mut dyn Pipeline,
-        seqs: &mut [&mut Sequence],
-        modify_draft_cache: bool,
-    );
-    fn clone_out_cache(
-        &self,
-        pipeline: &mut dyn Pipeline,
-        seqs: &mut [&mut Sequence],
-        modify_draft_cache: bool,
-    );
-    fn set_none_cache(&self, pipeline: &mut dyn Pipeline, modify_draft_cache: bool);
-}
-
 pub trait NormalModelLoader {
     fn load(
         &self,
@@ -899,7 +883,7 @@ fn get_xlora_paths(
         let xlora_classifier = &api_dir_list!(api, model_id)
             .filter(|x| x.contains("xlora_classifier.safetensors"))
             .collect::<Vec<_>>();
-        if xlora_classifier.len() != 1 {
+        if xlora_classifier.len() > 1 {
             warn!("Detected multiple X-LoRA classifiers: {xlora_classifier:?}");
             warn!("Selected classifier: `{}`", &xlora_classifier[0]);
         }
@@ -907,7 +891,7 @@ fn get_xlora_paths(
         let xlora_configs = &api_dir_list!(api, model_id)
             .filter(|x| x.contains("xlora_config.json"))
             .collect::<Vec<_>>();
-        if xlora_configs.len() != 1 {
+        if xlora_configs.len() > 1 {
             warn!("Detected multiple X-LoRA configs: {xlora_configs:?}");
         }
 

@@ -15,7 +15,7 @@ use crate::{
 };
 use crate::{
     get_mut_group,
-    models::LayerCaches,
+    pipeline::LayerCaches,
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
     ChatCompletionResponse, Usage,

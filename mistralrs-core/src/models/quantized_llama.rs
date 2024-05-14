@@ -6,11 +6,9 @@ use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 
 use crate::device_map::DeviceMapper;
-use crate::layers::{CausalMasker, QRmsNorm};
-use crate::pipeline::extract_logits;
+use crate::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, QRmsNorm};
+use crate::pipeline::{extract_logits, Cache};
 use crate::DeviceMapMetadata;
-
-use super::{repeat_kv, verify_sanity_gguf, Cache};
 
 const MAX_SEQ_LEN: u32 = 4096;
 
@@ -159,15 +157,7 @@ impl LayerWeights {
                 .transpose(1, 2)?;
         }
 
-        let (k, v) = match &*kv_cache {
-            None => (k, v),
-            Some((k_cache, v_cache)) => {
-                let k = candle_nn::ops::kvconcat(k_cache, &k, 2)?.contiguous()?;
-                let v = candle_nn::ops::kvconcat(v_cache, &v, 2)?.contiguous()?;
-                (k, v)
-            }
-        };
-        *kv_cache = Some((k.clone(), v.clone()));
+        let (k, v) = Cache::update_kv_cache(kv_cache, k, v)?;
 
         let k = repeat_kv(k, self.n_head / self.n_kv_head)?.contiguous()?;
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?.contiguous()?;

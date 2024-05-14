@@ -1,18 +1,14 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::device_map::DeviceMapper;
-use crate::layers::CausalMasker;
-use crate::layers::RmsNorm;
+use crate::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, RmsNorm};
+use crate::pipeline::Cache;
 use crate::DeviceMapMetadata;
 use candle_core::quantized::gguf_file;
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Embedding;
-
-use super::repeat_kv;
-use super::verify_sanity_gguf;
-use super::Cache;
 
 #[derive(Debug, Clone)]
 struct Mlp {
@@ -101,33 +97,8 @@ impl LayerWeights {
         let q = self.apply_rotary_emb(&q, seqlen_offsets)?.contiguous()?;
         let k = self.apply_rotary_emb(&k, seqlen_offsets)?;
 
-        let (k, v, attn_mask) = match kv_cache.clone() {
-            None => (k, v, mask.cloned()),
-            Some((mut prev_k, mut prev_v)) => {
-                let mut mask = mask.cloned();
-                let kv_seq_len = prev_k.dim(2)?;
-                let sliding_window = self.sliding_window;
-                if kv_seq_len > sliding_window {
-                    prev_k =
-                        prev_k.narrow(2, kv_seq_len - (sliding_window - 1), sliding_window - 1)?;
-                    prev_v =
-                        prev_v.narrow(2, kv_seq_len - (sliding_window - 1), sliding_window - 1)?;
-                    if let Some(ref mut mask) = mask {
-                        let mask_len = mask.dim(1)?;
-                        *mask =
-                            mask.narrow(1, mask_len - (sliding_window - 1), sliding_window - 1)?;
-                        *mask = Tensor::cat(
-                            &[&*mask, &mask.narrow(1, mask_len - 1, 1)?.ones_like()?],
-                            D::Minus1,
-                        )?;
-                    }
-                }
-                let k = Tensor::cat(&[prev_k, k], 2)?;
-                let v = Tensor::cat(&[prev_v, v], 2)?;
-                (k, v, mask)
-            }
-        };
-        *kv_cache = Some((k.clone(), v.clone()));
+        let (k, v, attn_mask) =
+            Cache::update_kv_cache_sliding_window(kv_cache, k, v, mask, Some(self.sliding_window))?;
 
         let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?;

@@ -7,12 +7,9 @@ use candle_nn::{Embedding, LayerNorm};
 use mistralrs_lora::layer::QLinear;
 
 use crate::device_map::DeviceMapper;
-use crate::layers::CausalMasker;
-use crate::pipeline::extract_logits;
+use crate::layers::{repeat_kv, CausalMasker};
+use crate::pipeline::{extract_logits, Cache};
 use crate::DeviceMapMetadata;
-
-use super::repeat_kv;
-use super::Cache;
 
 pub const MAX_SEQ_LEN: usize = 4096;
 
@@ -83,15 +80,7 @@ impl LayerWeights {
         let q = self.forward(&q, seqlen_offsets)?.contiguous()?;
         let k = self.forward(&k, seqlen_offsets)?;
 
-        let (k, v) = match &*kv_cache {
-            None => (k, v),
-            Some((prev_k, prev_v)) => {
-                let k = Tensor::cat(&[prev_k, &k], 2)?;
-                let v = Tensor::cat(&[prev_v, &v], 2)?;
-                (k, v)
-            }
-        };
-        *kv_cache = Some((k.clone(), v.clone()));
+        let (k, v) = Cache::update_kv_cache(kv_cache, k, v)?;
 
         let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
