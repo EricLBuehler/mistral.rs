@@ -138,43 +138,13 @@ impl Attention {
             .rotary_emb
             .forward(&q, &k, seqlen_offsets, position_ids)?;
 
-        let (k, v, attn_mask) = match kv_cache.clone() {
-            None => (k, v, attention_mask.cloned()),
-            Some((mut prev_k, mut prev_v)) => {
-                let mut mask = attention_mask.cloned();
-                if let Some(sliding_window) = self.sliding_window {
-                    let kv_seq_len = prev_k.dim(2)?;
-                    if kv_seq_len > sliding_window {
-                        prev_k = prev_k.narrow(
-                            2,
-                            kv_seq_len - (sliding_window - 1),
-                            sliding_window - 1,
-                        )?;
-                        prev_v = prev_v.narrow(
-                            2,
-                            kv_seq_len - (sliding_window - 1),
-                            sliding_window - 1,
-                        )?;
-                        if let Some(ref mut mask) = mask {
-                            let mask_len = mask.dim(1)?;
-                            *mask = mask.narrow(
-                                1,
-                                mask_len - (sliding_window - 1),
-                                sliding_window - 1,
-                            )?;
-                            *mask = Tensor::cat(
-                                &[&*mask, &mask.narrow(1, mask_len - 1, 1)?.ones_like()?],
-                                D::Minus1,
-                            )?;
-                        }
-                    }
-                }
-                let k = Tensor::cat(&[prev_k, k], 2)?;
-                let v = Tensor::cat(&[prev_v, v], 2)?;
-                (k, v, mask)
-            }
-        };
-        *kv_cache = Some((k.clone(), v.clone()));
+        let (k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
+            kv_cache,
+            k,
+            v,
+            attention_mask,
+            self.sliding_window,
+        )?;
 
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;

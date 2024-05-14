@@ -71,7 +71,7 @@ impl CausalSelfAttention {
 
         let mut q = q.reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.num_key_value_heads, self.head_dim))?;
-        let mut v = v
+        let v = v
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
 
@@ -89,20 +89,7 @@ impl CausalSelfAttention {
                 .contiguous()?;
         }
 
-        if let Some((cache_k, cache_v)) = &kv_cache[block_idx] {
-            k = candle_nn::ops::kvconcat(cache_k, &k, 2)?.contiguous()?;
-            v = candle_nn::ops::kvconcat(cache_v, &v, 2)?.contiguous()?;
-            let kv_seq_len = k.dims()[2];
-            if kv_seq_len > self.max_seq_len {
-                k = k
-                    .narrow(2, kv_seq_len - self.max_seq_len, self.max_seq_len)?
-                    .contiguous()?;
-                v = v
-                    .narrow(2, kv_seq_len - self.max_seq_len, self.max_seq_len)?
-                    .contiguous()?;
-            }
-        }
-        kv_cache[block_idx] = Some((k.clone(), v.clone()));
+        let (k, v) = crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v)?;
 
         let k = repeat_kv(k, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
         let v = repeat_kv(v, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
