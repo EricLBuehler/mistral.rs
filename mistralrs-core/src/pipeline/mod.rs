@@ -856,7 +856,7 @@ fn get_xlora_paths(
         let xlora_classifier = &api_dir_list!(api, model_id)
             .filter(|x| x.contains("xlora_classifier.safetensors"))
             .collect::<Vec<_>>();
-        if xlora_classifier.len() != 1 {
+        if xlora_classifier.len() > 1 {
             warn!("Detected multiple X-LoRA classifiers: {xlora_classifier:?}");
             warn!("Selected classifier: `{}`", &xlora_classifier[0]);
         }
@@ -864,7 +864,7 @@ fn get_xlora_paths(
         let xlora_configs = &api_dir_list!(api, model_id)
             .filter(|x| x.contains("xlora_config.json"))
             .collect::<Vec<_>>();
-        if xlora_configs.len() != 1 {
+        if xlora_configs.len() > 1 {
             warn!("Detected multiple X-LoRA configs: {xlora_configs:?}");
         }
 
