@@ -31,12 +31,12 @@ ENV HUGGINGFACE_HUB_CACHE=/data \
     RAYON_NUM_THREADS=8 \ 
     LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 
-# create symlinks
+# Run the script to create symlinks in /usr/local/cuda/lib64
 RUN set -eux; \
     for lib in $(ls /usr/local/cuda/lib64); do \
         base=$(echo $lib | sed -r 's/(.+)\.so\..+/\1.so/'); \
         if [ "$lib" != "$base" ]; then \
-            ln -sf $lib $base; \
+            ln -sf "/usr/local/cuda/lib64/$lib" "/usr/local/cuda/lib64/$base"; \
         fi; \
     done
 
