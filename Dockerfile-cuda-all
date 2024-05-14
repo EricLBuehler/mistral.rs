@@ -31,6 +31,14 @@ ENV HUGGINGFACE_HUB_CACHE=/data \
     RAYON_NUM_THREADS=8 \ 
     LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 
+# create symlinks
+RUN for lib in $(ls /usr/local/cuda/lib64); do \
+        base=$(echo $lib | sed -r 's/(.+)\.so\..+/\1.so/'); \
+        if [ "$lib" != "$base" ]; then \
+            ln -s $lib $base; \
+        fi; \
+    done
+
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     libomp-dev \
     ca-certificates \
@@ -38,7 +46,6 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     curl \
     pkg-config \
     libpython3.10-dev \
-    && ln -s /usr/local/cuda/lib64/libcublas.so.12 /usr/local/cuda/lib64/libcublas.so \
     && rm -rf /var/lib/apt/lists/*
 
 FROM base
