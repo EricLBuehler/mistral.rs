@@ -1,18 +1,14 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::device_map::DeviceMapper;
-use crate::layers::CausalMasker;
-use crate::layers::RmsNorm;
+use crate::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, RmsNorm};
+use crate::pipeline::Cache;
 use crate::DeviceMapMetadata;
 use candle_core::quantized::gguf_file;
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Embedding;
-
-use super::repeat_kv;
-use super::verify_sanity_gguf;
-use super::Cache;
 
 #[derive(Debug, Clone)]
 struct Mlp {

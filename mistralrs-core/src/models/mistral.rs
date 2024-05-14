@@ -7,12 +7,10 @@ use std::sync::Arc;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{CausalMasker, RmsNorm},
-    pipeline::{extract_logits, NormalModel},
+    layers::{flash_attn, repeat_kv, CausalMasker, RmsNorm},
+    pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };
-
-use super::{flash_attn, repeat_kv, Cache};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {

@@ -47,11 +47,12 @@ use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 
 use crate::{
-    models::Cache,
     sequence::Sequence,
     utils::tokens::get_token,
     xlora_models::{NonGranularState, XLoraConfig},
 };
+
+pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
 
 pub trait ModelPaths {
     fn get_weight_filenames(&self) -> &[PathBuf];
@@ -427,23 +428,6 @@ pub trait Pipeline: Send + Sync {
     /// Returns the number of activated adapters.
     fn activate_adapters(&mut self, adapters: Vec<String>) -> Result<usize>;
 }
-
-pub trait CacheManager {
-    fn clone_in_cache(
-        &self,
-        pipeline: &mut dyn Pipeline,
-        seqs: &mut [&mut Sequence],
-        modify_draft_cache: bool,
-    );
-    fn clone_out_cache(
-        &self,
-        pipeline: &mut dyn Pipeline,
-        seqs: &mut [&mut Sequence],
-        modify_draft_cache: bool,
-    );
-    fn set_none_cache(&self, pipeline: &mut dyn Pipeline, modify_draft_cache: bool);
-}
-
 pub trait NormalModelLoader {
     fn load(
         &self,

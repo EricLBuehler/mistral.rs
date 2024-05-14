@@ -1,8 +1,80 @@
+use std::sync::{Arc, Mutex, MutexGuard};
+
 use candle_core::Tensor;
 
-use crate::{models::LayerCaches, Pipeline};
+use crate::{get_mut_arcmutex, sequence::Sequence, Pipeline};
 
-use super::CacheManager;
+pub trait CacheManager {
+    fn clone_in_cache(
+        &self,
+        pipeline: &mut dyn Pipeline,
+        seqs: &mut [&mut Sequence],
+        modify_draft_cache: bool,
+    );
+    fn clone_out_cache(
+        &self,
+        pipeline: &mut dyn Pipeline,
+        seqs: &mut [&mut Sequence],
+        modify_draft_cache: bool,
+    );
+    fn set_none_cache(&self, pipeline: &mut dyn Pipeline, modify_draft_cache: bool);
+}
+
+pub type LayerCaches = Vec<Option<(Tensor, Tensor)>>;
+
+#[derive(Debug, Clone)]
+pub struct Cache {
+    cache: Arc<Mutex<LayerCaches>>,
+    xlora_cache: Option<Arc<Mutex<LayerCaches>>>,
+    draft_cache: Arc<Mutex<LayerCaches>>,
+    scalings_cache: Option<Arc<Mutex<Option<Tensor>>>>,
+}
+
+impl Cache {
+    pub(crate) fn new(len: usize, is_xlora: bool) -> Self {
+        Self {
+            cache: Arc::new(Mutex::new(vec![None; len])),
+            xlora_cache: if is_xlora {
+                Some(Arc::new(Mutex::new(vec![None; len])))
+            } else {
+                None
+            },
+            draft_cache: Arc::new(Mutex::new(vec![None; len])),
+            scalings_cache: if is_xlora {
+                Some(Arc::new(Mutex::new(None)))
+            } else {
+                None
+            },
+        }
+    }
+
+    pub(crate) fn lock(&self) -> MutexGuard<'_, LayerCaches> {
+        get_mut_arcmutex!(self.cache)
+    }
+
+    pub(crate) fn draft_lock(&self) -> MutexGuard<'_, LayerCaches> {
+        get_mut_arcmutex!(self.draft_cache)
+    }
+
+    /// # Panics
+    /// If there is no xlora cache
+    pub(crate) fn xlora_lock(&self) -> MutexGuard<'_, LayerCaches> {
+        get_mut_arcmutex!(self.xlora_cache.as_ref().expect("No X-LoRA cache."))
+    }
+
+    /// # Panics
+    /// If there is no xlora cache
+    pub(crate) fn get_scalings_cache(&self) -> MutexGuard<'_, Option<Tensor>> {
+        get_mut_arcmutex!(self
+            .scalings_cache
+            .as_ref()
+            .expect("No X-LoRA scalings cache."))
+    }
+
+    pub(crate) fn is_xlora(&self) -> bool {
+        self.xlora_cache.is_some()
+    }
+}
 
 pub struct DefaultCacheManager;
 

@@ -7,12 +7,9 @@ use candle_nn::{Embedding, LayerNorm};
 use mistralrs_lora::layer::QLinear;
 
 use crate::device_map::DeviceMapper;
-use crate::layers::CausalMasker;
-use crate::pipeline::extract_logits;
+use crate::layers::{repeat_kv, CausalMasker};
+use crate::pipeline::{extract_logits, Cache};
 use crate::DeviceMapMetadata;
-
-use super::repeat_kv;
-use super::Cache;
 
 pub const MAX_SEQ_LEN: usize = 4096;
 

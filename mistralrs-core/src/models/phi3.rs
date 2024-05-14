@@ -9,12 +9,10 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{CausalMasker, PhiRotaryEmbedding, RmsNorm},
-    pipeline::{extract_logits, NormalModel},
+    layers::{flash_attn, repeat_kv, CausalMasker, PhiRotaryEmbedding, RmsNorm},
+    pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };
-
-use super::{flash_attn, repeat_kv, Cache};
 
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
 #[derive(Debug, Clone, serde::Deserialize)]

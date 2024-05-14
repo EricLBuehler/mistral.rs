@@ -3,10 +3,10 @@
 use std::collections::HashMap;
 
 use crate::device_map::DeviceMapper;
+use crate::layers::repeat_kv;
+use crate::layers::verify_sanity_gguf;
 use crate::layers::CausalMasker;
 use crate::layers::RmsNorm;
-use crate::models::repeat_kv;
-use crate::models::verify_sanity_gguf;
 use crate::pipeline::extract_logits;
 use crate::DeviceMapMetadata;
 use candle_core::quantized::gguf_file;

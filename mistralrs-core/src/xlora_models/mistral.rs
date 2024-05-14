@@ -10,9 +10,9 @@ use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{CausalMasker, RmsNorm},
-    models::{flash_attn, mistral::Config, repeat_kv, Cache},
-    pipeline::{extract_logits, NormalModel},
+    layers::{flash_attn, repeat_kv, CausalMasker, RmsNorm},
+    models::mistral::Config,
+    pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };
 

@@ -17,8 +17,8 @@ use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::CausalMasker,
-    models::{flash_attn, phi2::Config, repeat_kv},
+    layers::{flash_attn, repeat_kv, CausalMasker},
+    models::phi2::Config,
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };

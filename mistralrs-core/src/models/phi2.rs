@@ -14,12 +14,10 @@ use serde::Deserialize;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::CausalMasker,
-    pipeline::{extract_logits, NormalModel},
+    layers::{flash_attn, repeat_kv, CausalMasker},
+    pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };
-
-use super::{flash_attn, repeat_kv, Cache};
 
 // https://huggingface.co/microsoft/phi-2/blob/main/configuration_phi.py
 #[derive(Debug, Clone, PartialEq, Deserialize)]

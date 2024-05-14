@@ -13,9 +13,8 @@ use tqdm::Iter;
 use tracing::info;
 
 use crate::device_map::DeviceMapper;
-use crate::layers::{CausalMasker, QRmsNorm};
-use crate::models::{repeat_kv, verify_sanity_gguf, Cache};
-use crate::pipeline::extract_logits;
+use crate::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, QRmsNorm};
+use crate::pipeline::{extract_logits, Cache};
 use crate::DeviceMapMetadata;
 
 use super::classifier::XLoraClassifier;

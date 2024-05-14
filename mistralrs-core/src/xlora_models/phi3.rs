@@ -11,13 +11,13 @@ use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{CausalMasker, PhiRotaryEmbedding, RmsNorm},
+    layers::{flash_attn, repeat_kv, CausalMasker, PhiRotaryEmbedding, RmsNorm},
     models::phi3::Config,
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
 
-use crate::models::{flash_attn, repeat_kv, Cache};
+use crate::pipeline::Cache;
 
 use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
 

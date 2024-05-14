@@ -9,12 +9,10 @@ use std::sync::Arc;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{CausalMasker, RmsNorm},
+    layers::{flash_attn, repeat_kv, CausalMasker, RmsNorm},
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
-
-use super::{flash_attn, repeat_kv};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -53,7 +51,7 @@ impl CausalSelfAttention {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         block_idx: usize,
-        kv_cache: &mut super::LayerCaches,
+        kv_cache: &mut crate::pipeline::LayerCaches,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
 
@@ -214,7 +212,7 @@ impl Block {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         block_idx: usize,
-        kv_cache: &mut super::LayerCaches,
+        kv_cache: &mut crate::pipeline::LayerCaches,
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
@@ -270,7 +268,7 @@ pub struct Llama {
     blocks: Vec<Block>,
     ln_f: RmsNorm,
     lm_head: QMatMul,
-    pub kv_cache: super::Cache,
+    pub kv_cache: crate::pipeline::Cache,
     pub device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
@@ -361,7 +359,7 @@ impl Llama {
             blocks,
             ln_f,
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
-            kv_cache: super::Cache::new(cfg.num_hidden_layers, false),
+            kv_cache: crate::pipeline::Cache::new(cfg.num_hidden_layers, false),
             device: real_device,
             mapper,
         })
@@ -399,7 +397,7 @@ impl NormalModel for Llama {
     ) -> Result<Tensor> {
         unimplemented!()
     }
-    fn cache(&self) -> &super::Cache {
+    fn cache(&self) -> &crate::pipeline::Cache {
         &self.kv_cache
     }
     fn device(&self) -> &Device {

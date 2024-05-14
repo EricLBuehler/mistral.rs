@@ -8,12 +8,10 @@ use mistralrs_lora::layer::QLinear;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::CausalMasker,
-    pipeline::{extract_logits, NormalModel},
+    layers::{flash_attn, repeat_kv, CausalMasker},
+    pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };
-
-use super::{flash_attn, repeat_kv, Cache};
 
 fn default_max_position_embeddings() -> usize {
     4096

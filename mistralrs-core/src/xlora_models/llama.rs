@@ -11,9 +11,9 @@ use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{CausalMasker, RmsNorm},
-    models::{self, flash_attn, llama::Config, repeat_kv, LayerCaches},
-    pipeline::{extract_logits, NormalModel},
+    layers::{flash_attn, repeat_kv, CausalMasker, RmsNorm},
+    models::llama::Config,
+    pipeline::{self, extract_logits, LayerCaches, NormalModel},
     DeviceMapMetadata,
 };
 
@@ -423,7 +423,7 @@ pub struct XLoraLlama {
     blocks: Vec<Block>,
     ln_f: RmsNorm,
     lm_head: QLinear,
-    pub kv_cache: models::Cache,
+    pub kv_cache: pipeline::Cache,
     pub device: Device,
     xlora_classifier: Option<XLoraClassifier>,
     dtype: DType,
@@ -651,7 +651,7 @@ impl XLoraLlama {
             blocks,
             ln_f,
             lm_head: QLinear::from_linear(lm_head),
-            kv_cache: models::Cache::new(cfg.num_hidden_layers, true),
+            kv_cache: pipeline::Cache::new(cfg.num_hidden_layers, true),
             device: real_device,
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
@@ -773,7 +773,7 @@ impl ScalingsMaker for XLoraLlama {
     fn dtype(&self) -> DType {
         self.dtype
     }
-    fn get_cache(&self) -> &models::Cache {
+    fn get_cache(&self) -> &pipeline::Cache {
         &self.kv_cache
     }
     fn get_classifier(&self) -> &XLoraClassifier {

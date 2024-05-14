@@ -10,9 +10,9 @@ use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::CausalMasker,
-    models::{flash_attn, gemma::Config, repeat_kv, Cache},
-    pipeline::{extract_logits, NormalModel},
+    layers::{flash_attn, repeat_kv, CausalMasker},
+    models::gemma::Config,
+    pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };
 

@@ -10,12 +10,10 @@ use std::sync::Arc;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{CausalMasker, RmsNorm},
-    pipeline::{extract_logits, NormalModel},
+    layers::{flash_attn, repeat_kv, CausalMasker, RmsNorm},
+    pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };
-
-use super::{flash_attn, repeat_kv, Cache};
 
 /// https://github.com/huggingface/transformers/blob/1a585c1222a56bcaecc070966d558d4a9d862e83/src/transformers/models/mixtral/configuration_mixtral.py#L113
 #[derive(Debug, Clone, PartialEq, Deserialize)]
