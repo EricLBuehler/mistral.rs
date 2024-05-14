@@ -1,8 +1,146 @@
-use candle_core::Tensor;
+use std::sync::{Arc, Mutex, MutexGuard};
 
-use crate::{models::LayerCaches, Pipeline};
+use candle_core::{Tensor, D};
 
-use super::CacheManager;
+use crate::{get_mut_arcmutex, sequence::Sequence, Pipeline};
+
+pub trait CacheManager {
+    fn clone_in_cache(
+        &self,
+        pipeline: &mut dyn Pipeline,
+        seqs: &mut [&mut Sequence],
+        modify_draft_cache: bool,
+    );
+    fn clone_out_cache(
+        &self,
+        pipeline: &mut dyn Pipeline,
+        seqs: &mut [&mut Sequence],
+        modify_draft_cache: bool,
+    );
+    fn set_none_cache(&self, pipeline: &mut dyn Pipeline, modify_draft_cache: bool);
+}
+
+pub type LayerCaches = Vec<Option<(Tensor, Tensor)>>;
+
+#[derive(Debug, Clone)]
+pub struct Cache {
+    cache: Arc<Mutex<LayerCaches>>,
+    xlora_cache: Option<Arc<Mutex<LayerCaches>>>,
+    draft_cache: Arc<Mutex<LayerCaches>>,
+    scalings_cache: Option<Arc<Mutex<Option<Tensor>>>>,
+}
+
+impl Cache {
+    pub(crate) fn new(len: usize, is_xlora: bool) -> Self {
+        Self {
+            cache: Arc::new(Mutex::new(vec![None; len])),
+            xlora_cache: if is_xlora {
+                Some(Arc::new(Mutex::new(vec![None; len])))
+            } else {
+                None
+            },
+            draft_cache: Arc::new(Mutex::new(vec![None; len])),
+            scalings_cache: if is_xlora {
+                Some(Arc::new(Mutex::new(None)))
+            } else {
+                None
+            },
+        }
+    }
+
+    pub(crate) fn lock(&self) -> MutexGuard<'_, LayerCaches> {
+        get_mut_arcmutex!(self.cache)
+    }
+
+    pub(crate) fn draft_lock(&self) -> MutexGuard<'_, LayerCaches> {
+        get_mut_arcmutex!(self.draft_cache)
+    }
+
+    /// # Panics
+    /// If there is no xlora cache
+    pub(crate) fn xlora_lock(&self) -> MutexGuard<'_, LayerCaches> {
+        get_mut_arcmutex!(self.xlora_cache.as_ref().expect("No X-LoRA cache."))
+    }
+
+    /// # Panics
+    /// If there is no xlora cache
+    pub(crate) fn get_scalings_cache(&self) -> MutexGuard<'_, Option<Tensor>> {
+        get_mut_arcmutex!(self
+            .scalings_cache
+            .as_ref()
+            .expect("No X-LoRA scalings cache."))
+    }
+
+    pub(crate) fn is_xlora(&self) -> bool {
+        self.xlora_cache.is_some()
+    }
+
+    /// Update the KV cache and return (k,v)
+    pub(crate) fn update_kv_cache(
+        cache: &mut Option<(Tensor, Tensor)>,
+        k: Tensor,
+        v: Tensor,
+    ) -> Result<(Tensor, Tensor), candle_core::Error> {
+        let (k, v) = match &*cache {
+            None => (k, v),
+            Some((k_cache, v_cache)) => {
+                let k = candle_nn::ops::kvconcat(k_cache, &k, 2)?.contiguous()?;
+                let v = candle_nn::ops::kvconcat(v_cache, &v, 2)?.contiguous()?;
+                (k, v)
+            }
+        };
+        *cache = Some((k.clone(), v.clone()));
+        Ok((k, v))
+    }
+
+    /// Update the KV cache and return (k,v,attn_mask)
+    pub(crate) fn update_kv_cache_sliding_window(
+        cache: &mut Option<(Tensor, Tensor)>,
+        k: Tensor,
+        v: Tensor,
+        attention_mask: Option<&Tensor>,
+        sliding_window: Option<usize>,
+    ) -> Result<(Tensor, Tensor, Option<Tensor>), candle_core::Error> {
+        let (k, v, attention_mask) = match cache.clone() {
+            None => (k, v, attention_mask.cloned()),
+            Some((mut prev_k, mut prev_v)) => {
+                let mut mask = attention_mask.cloned();
+                if let Some(sliding_window) = sliding_window {
+                    let kv_seq_len = prev_k.dim(2)?;
+                    if kv_seq_len > sliding_window {
+                        prev_k = prev_k.narrow(
+                            2,
+                            kv_seq_len - (sliding_window - 1),
+                            sliding_window - 1,
+                        )?;
+                        prev_v = prev_v.narrow(
+                            2,
+                            kv_seq_len - (sliding_window - 1),
+                            sliding_window - 1,
+                        )?;
+                        if let Some(ref mut mask) = mask {
+                            let mask_len = mask.dim(1)?;
+                            *mask = mask.narrow(
+                                1,
+                                mask_len - (sliding_window - 1),
+                                sliding_window - 1,
+                            )?;
+                            *mask = Tensor::cat(
+                                &[&*mask, &mask.narrow(1, mask_len - 1, 1)?.ones_like()?],
+                                D::Minus1,
+                            )?;
+                        }
+                    }
+                }
+                let k = candle_nn::ops::kvconcat(&prev_k, &k, 2)?;
+                let v = candle_nn::ops::kvconcat(&prev_v, &v, 2)?;
+                (k, v, mask)
+            }
+        };
+        *cache = Some((k.clone(), v.clone()));
+        Ok((k, v, attention_mask))
+    }
+}
 
 pub struct DefaultCacheManager;
 

@@ -11,9 +11,9 @@ use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{CausalMasker, RmsNorm},
-    models::{self, flash_attn, llama::Config, repeat_kv, LayerCaches},
-    pipeline::{extract_logits, NormalModel},
+    layers::{flash_attn, repeat_kv, CausalMasker, RmsNorm},
+    models::llama::Config,
+    pipeline::{self, extract_logits, LayerCaches, NormalModel},
     DeviceMapMetadata,
 };
 
@@ -81,7 +81,7 @@ impl CausalSelfAttention {
 
         let mut q = q.reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.num_key_value_heads, self.head_dim))?;
-        let mut v = v
+        let v = v
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
 
@@ -99,20 +99,7 @@ impl CausalSelfAttention {
                 .contiguous()?;
         }
 
-        if let Some((cache_k, cache_v)) = &kv_cache[block_idx] {
-            k = candle_nn::ops::kvconcat(cache_k, &k, 2)?.contiguous()?;
-            v = candle_nn::ops::kvconcat(cache_v, &v, 2)?.contiguous()?;
-            let kv_seq_len = k.dims()[2];
-            if kv_seq_len > self.max_seq_len {
-                k = k
-                    .narrow(2, kv_seq_len - self.max_seq_len, self.max_seq_len)?
-                    .contiguous()?;
-                v = v
-                    .narrow(2, kv_seq_len - self.max_seq_len, self.max_seq_len)?
-                    .contiguous()?;
-            }
-        }
-        kv_cache[block_idx] = Some((k.clone(), v.clone()));
+        let (k, v) = crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v)?;
 
         let k = repeat_kv(k, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
         let v = repeat_kv(v, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
@@ -423,7 +410,7 @@ pub struct XLoraLlama {
     blocks: Vec<Block>,
     ln_f: RmsNorm,
     lm_head: QLinear,
-    pub kv_cache: models::Cache,
+    pub kv_cache: pipeline::Cache,
     pub device: Device,
     xlora_classifier: Option<XLoraClassifier>,
     dtype: DType,
@@ -651,7 +638,7 @@ impl XLoraLlama {
             blocks,
             ln_f,
             lm_head: QLinear::from_linear(lm_head),
-            kv_cache: models::Cache::new(cfg.num_hidden_layers, true),
+            kv_cache: pipeline::Cache::new(cfg.num_hidden_layers, true),
             device: real_device,
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
@@ -773,7 +760,7 @@ impl ScalingsMaker for XLoraLlama {
     fn dtype(&self) -> DType {
         self.dtype
     }
-    fn get_cache(&self) -> &models::Cache {
+    fn get_cache(&self) -> &pipeline::Cache {
         &self.kv_cache
     }
     fn get_classifier(&self) -> &XLoraClassifier {

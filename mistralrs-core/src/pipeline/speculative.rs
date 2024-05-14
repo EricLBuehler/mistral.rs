@@ -9,10 +9,9 @@ use tokenizers::Tokenizer;
 
 use crate::{
     finish_and_add_tokens_to_seq, get_mut_arcmutex,
-    models::Cache,
     pipeline::{
         sampling::{sample_sequence, sample_target_sequence_speculative},
-        AdapterInstruction,
+        AdapterInstruction, Cache,
     },
     prefix_cacher::PrefixCacheManager,
     sequence::{Sequence, SequenceRecognizer},

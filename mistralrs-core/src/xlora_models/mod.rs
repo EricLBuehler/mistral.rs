@@ -12,19 +12,19 @@ mod quantized_phi3;
 use std::sync::Arc;
 
 use candle_core::{DType, Device, Result, Tensor};
-pub use config::XLoraConfig;
-pub use gemma::XLoraModel as XLoraGemma;
-pub use llama::XLoraLlama;
-pub use mistral::XLoraModel as XLoraMistral;
+pub(crate) use config::XLoraConfig;
+pub(crate) use gemma::XLoraModel as XLoraGemma;
+pub(crate) use llama::XLoraLlama;
+pub(crate) use mistral::XLoraModel as XLoraMistral;
 use mistralrs_lora::Ordering;
-pub use mixtral::XLoraModel as XLoraMixtral;
-pub use phi2::Model as XLoraPhi2;
-pub use phi3::Model as XLoraPhi3;
-pub use quantized_llama::ModelWeights as XLoraQLlama;
-pub use quantized_phi3::ModelWeights as XLoraQPhi3;
+pub(crate) use mixtral::XLoraModel as XLoraMixtral;
+pub(crate) use phi2::Model as XLoraPhi2;
+pub(crate) use phi3::Model as XLoraPhi3;
+pub(crate) use quantized_llama::ModelWeights as XLoraQLlama;
+pub(crate) use quantized_phi3::ModelWeights as XLoraQPhi3;
 use tokio::sync::Mutex;
 
-use crate::{get_mut_arcmutex, models::Cache};
+use crate::{get_mut_arcmutex, pipeline::Cache};
 
 use self::classifier::XLoraClassifier;
 
