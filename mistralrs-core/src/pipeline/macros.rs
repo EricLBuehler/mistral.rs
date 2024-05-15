@@ -275,8 +275,7 @@ macro_rules! xlora_model_loader {
 #[macro_export]
 macro_rules! lora_model_loader {
     ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
-        let mut safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
-        safetensors_paths.push($paths.get_classifier_path().as_ref().unwrap());
+        let safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
         let vb = from_mmaped_safetensors(
             safetensors_paths
                 .iter()

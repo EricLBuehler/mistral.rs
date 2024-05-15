@@ -52,7 +52,7 @@ enum TomlModelSelected {
         /// Force a base model ID to load from instead of using the ordering file. This may be a HF hub repo or a local path.
         model_id: Option<String>,
 
-        /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
+        /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
         adapters_model_id: String,
 
         /// Ordering JSON file
@@ -111,7 +111,7 @@ enum TomlModelSelected {
         /// Quantized filename, only applicable if `quantized` is set.
         quantized_filename: String,
 
-        /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
+        /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
         adapters_model_id: String,
 
         /// Ordering JSON file
@@ -175,7 +175,7 @@ enum TomlModelSelected {
         /// Quantized filename, only applicable if `quantized` is set.
         quantized_filename: String,
 
-        /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
+        /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
         adapters_model_id: String,
 
         /// Ordering JSON file

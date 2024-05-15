@@ -97,7 +97,7 @@ Options:
 
 ## For X-LoRA and quantized models
 
-This is an example which is roughly the same for all adapter + quantized models. This is specifically for: `./mistralrs_server x-lora-gguf --help`
+This is an example similar to X-LoRA/LoRA + quantized models. This is specifically for: `./mistralrs_server x-lora-gguf --help`
 
 ```bash
 Select a GGUF model with X-LoRA
