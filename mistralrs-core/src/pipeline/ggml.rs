@@ -7,7 +7,7 @@ use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::pipeline::chat_template::calculate_eos_tokens;
 use crate::pipeline::Cache;
-use crate::pipeline::{ChatTemplate, SimpleModelPaths};
+use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
@@ -359,7 +359,7 @@ impl Loader for GGMLLoader {
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
-            SimpleModelPaths,
+            LocalModelPaths,
             &token_source,
             revision,
             self,

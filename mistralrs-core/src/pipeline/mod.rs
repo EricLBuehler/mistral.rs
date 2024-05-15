@@ -95,7 +95,7 @@ pub trait ModelPaths  {
 }
 
 #[derive(Clone)]
-pub struct SimpleModelPaths<P> {
+pub struct LocalModelPaths<P> {
     tokenizer_filename: P,
     config_filename: P,
     template_filename: P,
@@ -109,7 +109,7 @@ pub struct SimpleModelPaths<P> {
     lora_preload_adapter_info: Option<HashMap<String, (P, LoraConfig)>>,
 }
 
-impl<P> SimpleModelPaths<P> {
+impl<P> LocalModelPaths<P> {
     pub fn new(
         tokenizer_filename: P,
         config_filename: P,
@@ -140,7 +140,7 @@ impl<P> SimpleModelPaths<P> {
 }
 
 
-impl ModelPaths for SimpleModelPaths<PathBuf> {
+impl ModelPaths for LocalModelPaths<PathBuf> {
     fn get_config_filename(&self) -> &PathBuf {
         &self.config_filename
     }
