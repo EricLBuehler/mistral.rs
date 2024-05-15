@@ -1,11 +1,16 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{collections::HashMap, ops::Mul, str::FromStr, sync::Mutex};
+use std::{
+    collections::HashMap,
+    ops::{Add, Mul},
+    str::FromStr,
+    sync::Mutex,
+};
 
 use candle_core::{quantized::QTensor, DType, Device, IndexOp, Result, Tensor, WithDType};
 use candle_nn::{
     layer_norm::{RmsNormNonQuantized, RmsNormQuantized},
-    Conv2dConfig, Module, VarBuilder,
+    Module, VarBuilder,
 };
 use once_cell::sync::Lazy;
 
@@ -255,7 +260,7 @@ fn apply_tril(xs: &Tensor, diagonal: isize) -> Result<Tensor> {
 
 // https://github.com/mokeyish/candle-ext/blob/main/src/masked_fill.rs
 fn masked_fill<D: WithDType>(xs: &Tensor, mask: &Tensor, value: D) -> Result<Tensor> {
-    let on_true = Tensor::full(value, xs.shape(), xs.device())?;
+    let on_true = Tensor::full(value, xs.shape(), xs.device())?.to_dtype(mask.dtype())?;
     let on_false = xs;
     mask.broadcast_as(xs.shape())?
         .where_cond(&on_true, on_false)
@@ -268,6 +273,23 @@ impl CausalMasker {
             .flat_map(|i| (0..offset).map(move |j| u8::from(j + tgt_len > i + offset)))
             .collect();
         Tensor::from_slice(&mask, (tgt_len, offset), device)
+    }
+
+    /// Expands a mask from (bs, seq_len) to (bs, 1, seq_len, seq_len)
+    pub fn expand_mask(&self, mask: &Tensor, dtype: DType) -> Result<Tensor> {
+        let (bs, src_len) = mask.dims2()?;
+
+        let expanded_mask = mask.unsqueeze(1)?.unsqueeze(1)?;
+        let expanded_mask = expanded_mask
+            .expand((bs, 1, src_len, src_len))?
+            .to_dtype(dtype)?;
+
+        let inverted_mask = expanded_mask.neg()?.add(1.0f64)?;
+        masked_fill(
+            &inverted_mask,
+            &inverted_mask.to_dtype(DType::U8)?,
+            f32::MIN,
+        )
     }
 
     pub fn calculate_past_kv_len(
