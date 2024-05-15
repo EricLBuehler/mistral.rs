@@ -176,9 +176,12 @@
 <a href="#174" id="174">174</a>
 <a href="#175" id="175">175</a>
 <a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a>
+<a href="#178" id="178">178</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::error::Error;
 
-<span class="kw">use </span>pyo3::{pyclass, pymethods};
+<span class="attr">#[cfg(feature = <span class="string">"pyo3_macros"</span>)]
+</span><span class="kw">use </span>pyo3::{pyclass, pymethods};
 <span class="kw">use </span>serde::Serialize;
 
 <span class="kw">use </span><span class="kw">crate</span>::sampler::TopLogprob;
@@ -187,7 +190,8 @@
 
 <span class="macro">macro_rules! </span>generate_repr {
     (<span class="macro-nonterminal">$t</span>:ident) =&gt; {
-        <span class="attr">#[pymethods]
+        <span class="attr">#[cfg(feature = <span class="string">"pyo3_macros"</span>)]
+        #[pymethods]
         </span><span class="kw">impl </span><span class="macro-nonterminal">$t </span>{
             <span class="kw">fn </span>__repr__(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
                 <span class="macro">format!</span>(<span class="string">"{self:#?}"</span>)
@@ -196,8 +200,8 @@
     };
 }
 
-<span class="attr">#[pyclass]
-#[pyo3(get_all)]
+<span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass)]
+#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 </span><span class="kw">pub struct </span>ResponseMessage {
     <span class="kw">pub </span>content: String,
@@ -206,8 +210,8 @@
 
 <span class="macro">generate_repr!</span>(ResponseMessage);
 
-<span class="attr">#[pyclass]
-#[pyo3(get_all)]
+<span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass)]
+#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 </span><span class="kw">pub struct </span>Delta {
     <span class="kw">pub </span>content: String,
@@ -216,8 +220,8 @@
 
 <span class="macro">generate_repr!</span>(Delta);
 
-<span class="attr">#[pyclass]
-#[pyo3(get_all)]
+<span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass)]
+#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 </span><span class="kw">pub struct </span>ResponseLogprob {
     <span class="kw">pub </span>token: String,
@@ -228,8 +232,8 @@
 
 <span class="macro">generate_repr!</span>(ResponseLogprob);
 
-<span class="attr">#[pyclass]
-#[pyo3(get_all)]
+<span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass)]
+#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 </span><span class="kw">pub struct </span>Logprobs {
     <span class="kw">pub </span>content: <span class="prelude-ty">Option</span>&lt;Vec&lt;ResponseLogprob&gt;&gt;,
@@ -237,8 +241,8 @@
 
 <span class="macro">generate_repr!</span>(Logprobs);
 
-<span class="attr">#[pyclass]
-#[pyo3(get_all)]
+<span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass)]
+#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 </span><span class="kw">pub struct </span>Choice {
     <span class="kw">pub </span>finish_reason: String,
@@ -249,8 +253,8 @@
 
 <span class="macro">generate_repr!</span>(Choice);
 
-<span class="attr">#[pyclass]
-#[pyo3(get_all)]
+<span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass)]
+#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 </span><span class="kw">pub struct </span>ChunkChoice {
     <span class="kw">pub </span>finish_reason: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -261,8 +265,8 @@
 
 <span class="macro">generate_repr!</span>(ChunkChoice);
 
-<span class="attr">#[pyclass]
-#[pyo3(get_all)]
+<span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass)]
+#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 </span><span class="doccomment">/// OpenAI compatible (superset) usage during a request.
 </span><span class="kw">pub struct </span>Usage {
@@ -279,8 +283,8 @@
 
 <span class="macro">generate_repr!</span>(Usage);
 
-<span class="attr">#[pyclass]
-#[pyo3(get_all)]
+<span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass)]
+#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 </span><span class="doccomment">/// An OpenAI compatible chat completion response.
 </span><span class="kw">pub struct </span>ChatCompletionResponse {
@@ -295,8 +299,8 @@
 
 <span class="macro">generate_repr!</span>(ChatCompletionResponse);
 
-<span class="attr">#[pyclass]
-#[pyo3(get_all)]
+<span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass)]
+#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 </span><span class="kw">pub struct </span>ChatCompletionChunkResponse {
     <span class="kw">pub </span>id: String,
@@ -309,8 +313,8 @@
 
 <span class="macro">generate_repr!</span>(ChatCompletionChunkResponse);
 
-<span class="attr">#[pyclass]
-#[pyo3(get_all)]
+<span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass)]
+#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 </span><span class="kw">pub struct </span>CompletionChoice {
     <span class="kw">pub </span>finish_reason: String,
@@ -321,8 +325,8 @@
 
 <span class="macro">generate_repr!</span>(CompletionChoice);
 
-<span class="attr">#[pyclass]
-#[pyo3(get_all)]
+<span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass)]
+#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 </span><span class="doccomment">/// An OpenAI compatible completion response.
 </span><span class="kw">pub struct </span>CompletionResponse {

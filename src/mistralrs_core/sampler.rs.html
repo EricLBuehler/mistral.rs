@@ -464,6 +464,8 @@
 <a href="#462" id="462">462</a>
 <a href="#463" id="463">463</a>
 <a href="#464" id="464">464</a>
+<a href="#465" id="465">465</a>
+<a href="#466" id="466">466</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -473,7 +475,9 @@
 };
 
 <span class="kw">use </span>candle_core::{bail, Device, Error, <span class="prelude-ty">Result</span>, Tensor, D};
-<span class="kw">use </span>pyo3::pyclass;
+<span class="attr">#[cfg(feature = <span class="string">"pyo3_macros"</span>)]
+</span><span class="kw">use </span>pyo3::pyclass;
+
 <span class="kw">use </span>rand::distributions::{Distribution, WeightedIndex};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
@@ -531,8 +535,8 @@
     topp: f64,
 }
 
-<span class="attr">#[pyclass]
-#[pyo3(get_all)]
+<span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass)]
+#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3(get_all))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 </span><span class="comment">// Top-n logprobs element
 </span><span class="kw">pub struct </span>TopLogprob {

@@ -749,6 +749,9 @@
 <a href="#747" id="747">747</a>
 <a href="#748" id="748">748</a>
 <a href="#749" id="749">749</a>
+<a href="#750" id="750">750</a>
+<a href="#751" id="751">751</a>
+<a href="#752" id="752">752</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, fmt::Debug, str::FromStr};
 
 <span class="kw">use </span>anyhow::Result;
@@ -756,7 +759,10 @@
 <span class="kw">use </span>candle_nn::{Activation, VarBuilder};
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
-<span class="kw">use </span>pyo3::pyclass;
+
+<span class="attr">#[cfg(feature = <span class="string">"pyo3_macros"</span>)]
+</span><span class="kw">use </span>pyo3::pyclass;
+
 <span class="kw">use </span>serde::Deserialize;
 
 <span class="kw">use super</span>::{NormalModel, NormalModelLoader};
@@ -766,7 +772,7 @@
     DeviceMapMetadata,
 };
 
-<span class="attr">#[pyclass]
+<span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass)]
 #[derive(Clone, Debug, Deserialize)]
 </span><span class="doccomment">/// The architecture to load the normal model as.
 </span><span class="kw">pub enum </span>NormalLoaderType {
