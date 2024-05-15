@@ -54,17 +54,43 @@ use crate::{
 
 pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
 
+/// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For 
+/// example `SimpleModelPaths` implements `ModelPaths` when all files are in the local file system.
 pub trait ModelPaths  {
+
+    /// Model weights files (multiple files supported).
     fn get_weight_filenames(&self) -> &[PathBuf];
+
+    /// Retrieve the PretrainedConfig file.
+    /// See: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/configuration#transformers.PretrainedConfig
     fn get_config_filename(&self) -> &PathBuf;
+
+    /// A serialised `tokenizers.Tokenizer` HuggingFace object.
+    /// See: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/tokenizer
     fn get_tokenizer_filename(&self) -> &PathBuf;
+
+    /// Jinja format chat templating for chat completion.
+    /// See: https://huggingface.co/docs/transformers/chat_templating
     fn get_template_filename(&self) -> &PathBuf;
+
+    /// Optional adapter files. `(String, PathBuf)` is of the form `(id name, path)`.
     fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>>;
-    fn get_adapter_configs(&self) -> &Option<Vec<((String, String), LoraConfig)>>; // (id name, name)
+
+    /// Configuration of optional adapters. `(String, String)` is of the form `(id name, name)`.
+    fn get_adapter_configs(&self) -> &Option<Vec<((String, String), LoraConfig)>>;
+
+    /// Filepath for the XLORA classifier
     fn get_classifier_path(&self) -> &Option<PathBuf>;
+
+    /// `XLoraConfig` for the XLORA classifier
     fn get_classifier_config(&self) -> &Option<XLoraConfig>;
+
+    /// Return the defined ordering of adapters and layers within the model.
     fn get_ordering(&self) -> &Option<Ordering>;
+
+    /// Filepath for general model configuration.
     fn get_gen_conf_filename(&self) -> Option<&PathBuf>;
+    
     fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>>;
 }
 
@@ -259,6 +285,7 @@ impl Display for ModelKind {
 pub trait Loader {
     /// If `revision` is None, then it defaults to `main`.
     /// If `dtype` is None, then it defaults to the model default (usually BF16).
+    /// If model is not found on HF, will attempt to resolve locally.
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_hf(
         &self,
