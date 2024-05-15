@@ -5,7 +5,10 @@ use candle_core::Device;
 use candle_nn::{Activation, VarBuilder};
 use either::Either;
 use mistralrs_lora::{LoraConfig, Ordering};
+
+#[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
+
 use serde::Deserialize;
 
 use super::{NormalModel, NormalModelLoader};
@@ -15,7 +18,7 @@ use crate::{
     DeviceMapMetadata,
 };
 
-#[pyclass]
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[derive(Clone, Debug, Deserialize)]
 /// The architecture to load the normal model as.
 pub enum NormalLoaderType {

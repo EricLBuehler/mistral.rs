@@ -16,7 +16,11 @@ Possible values for ISQ quantization:
 - Q6K
 - Q8K
 
-When using ISQ, it will automatically load non ISQ-able weights into CPU memory before applying ISQ. The ISQ application process moves the weights to device memory. This process is implemented to avoid memory spikes from loading the model in full precision.
+When using ISQ, it will automatically load ISQ-able weights into CPU memory before applying ISQ. The ISQ application process moves the weights to device memory. This process is implemented to avoid memory spikes from loading the model in full precision.
+
+If a tensor cannot be quantized, the fallback process is as follows:
+1) If using a `K` quant, fallback to a similar `Q` quant.
+2) If that is not possible, use `F32` as the data type.
 
 ## Python Example
 ```python
