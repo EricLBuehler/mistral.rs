@@ -225,14 +225,20 @@ pub fn linear(
     let linear_config = LoraLinearConfig::new(d1, d2);
     let inner = candle_nn::linear(d1, d2, base_vb.clone())?;
 
-    let target_modules = &lora_config[0].1.target_modules;
+    let target_modules = &lora_config.first().map(|c| &c.1.target_modules);
     for (_, cfg) in lora_config {
-        if &cfg.target_modules != target_modules {
+        if target_modules
+            .as_ref()
+            .is_some_and(|target_modules| &cfg.target_modules != *target_modules)
+        {
             candle_core::bail!("Expected all target modules to be the same.");
         }
     }
 
-    if !target_modules.contains(module) {
+    if !target_modules
+        .as_ref()
+        .is_some_and(|target_modules| target_modules.contains(module))
+    {
         return Ok(Arc::new(inner));
     }
     let name = prefix.split("lora_A").last().unwrap();
@@ -271,14 +277,20 @@ pub fn linear_no_bias(
     let linear_config = LoraLinearConfig::new(d1, d2);
     let inner = candle_nn::linear_no_bias(d1, d2, base_vb.clone())?;
 
-    let target_modules = &lora_config[0].1.target_modules;
+    let target_modules = &lora_config.first().map(|c| &c.1.target_modules);
     for (_, cfg) in lora_config {
-        if &cfg.target_modules != target_modules {
+        if target_modules
+            .as_ref()
+            .is_some_and(|target_modules| &cfg.target_modules != *target_modules)
+        {
             candle_core::bail!("Expected all target modules to be the same.");
         }
     }
 
-    if !target_modules.contains(module) {
+    if !target_modules
+        .as_ref()
+        .is_some_and(|target_modules| target_modules.contains(module))
+    {
         return Ok(Arc::new(inner));
     }
     let name = prefix.split("lora_A").last().unwrap();

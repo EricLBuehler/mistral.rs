@@ -905,7 +905,7 @@ fn get_xlora_paths(
                 None
             })
             .collect::<Vec<_>>();
-        if adapter_files.is_empty() {
+        if adapter_files.is_empty() && xlora_order.as_ref().unwrap().adapters.is_some() {
             anyhow::bail!("Adapter files are empty. Perhaps the ordering file adapters does not match the actual adapters?")
         }
 
