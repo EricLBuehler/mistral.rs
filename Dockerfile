@@ -1,7 +1,6 @@
 FROM rust:latest as builder
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /mistralrs
@@ -24,8 +23,6 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     libssl-dev \
     curl \
     pkg-config \
-    python3 \
-    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 FROM base

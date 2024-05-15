@@ -283,7 +283,7 @@ impl Attention {
                 .contiguous()?;
         }
 
-        let (k, v) = Cache::update_kv_cache(kv_cache, k, v)?;
+        let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
         let k = repeat_kv(k, self.num_heads / self.num_kv_heads)?.contiguous()?;
         let v = repeat_kv(v, self.num_heads / self.num_kv_heads)?.contiguous()?;

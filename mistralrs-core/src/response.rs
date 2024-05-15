@@ -1,5 +1,6 @@
 use std::error::Error;
 
+#[cfg(feature = "pyo3_macros")]
 use pyo3::{pyclass, pymethods};
 use serde::Serialize;
 
@@ -9,6 +10,7 @@ pub const SYSTEM_FINGERPRINT: &str = "local";
 
 macro_rules! generate_repr {
     ($t:ident) => {
+        #[cfg(feature = "pyo3_macros")]
         #[pymethods]
         impl $t {
             fn __repr__(&self) -> String {
@@ -18,8 +20,8 @@ macro_rules! generate_repr {
     };
 }
 
-#[pyclass]
-#[pyo3(get_all)]
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 pub struct ResponseMessage {
     pub content: String,
@@ -28,8 +30,8 @@ pub struct ResponseMessage {
 
 generate_repr!(ResponseMessage);
 
-#[pyclass]
-#[pyo3(get_all)]
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 pub struct Delta {
     pub content: String,
@@ -38,8 +40,8 @@ pub struct Delta {
 
 generate_repr!(Delta);
 
-#[pyclass]
-#[pyo3(get_all)]
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 pub struct ResponseLogprob {
     pub token: String,
@@ -50,8 +52,8 @@ pub struct ResponseLogprob {
 
 generate_repr!(ResponseLogprob);
 
-#[pyclass]
-#[pyo3(get_all)]
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 pub struct Logprobs {
     pub content: Option<Vec<ResponseLogprob>>,
@@ -59,8 +61,8 @@ pub struct Logprobs {
 
 generate_repr!(Logprobs);
 
-#[pyclass]
-#[pyo3(get_all)]
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 pub struct Choice {
     pub finish_reason: String,
@@ -71,8 +73,8 @@ pub struct Choice {
 
 generate_repr!(Choice);
 
-#[pyclass]
-#[pyo3(get_all)]
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 pub struct ChunkChoice {
     pub finish_reason: Option<String>,
@@ -83,8 +85,8 @@ pub struct ChunkChoice {
 
 generate_repr!(ChunkChoice);
 
-#[pyclass]
-#[pyo3(get_all)]
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 /// OpenAI compatible (superset) usage during a request.
 pub struct Usage {
@@ -101,8 +103,8 @@ pub struct Usage {
 
 generate_repr!(Usage);
 
-#[pyclass]
-#[pyo3(get_all)]
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 /// An OpenAI compatible chat completion response.
 pub struct ChatCompletionResponse {
@@ -117,8 +119,8 @@ pub struct ChatCompletionResponse {
 
 generate_repr!(ChatCompletionResponse);
 
-#[pyclass]
-#[pyo3(get_all)]
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatCompletionChunkResponse {
     pub id: String,
@@ -131,8 +133,8 @@ pub struct ChatCompletionChunkResponse {
 
 generate_repr!(ChatCompletionChunkResponse);
 
-#[pyclass]
-#[pyo3(get_all)]
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 pub struct CompletionChoice {
     pub finish_reason: String,
@@ -143,8 +145,8 @@ pub struct CompletionChoice {
 
 generate_repr!(CompletionChoice);
 
-#[pyclass]
-#[pyo3(get_all)]
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 /// An OpenAI compatible completion response.
 pub struct CompletionResponse {

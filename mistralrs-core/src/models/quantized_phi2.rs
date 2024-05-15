@@ -80,7 +80,7 @@ impl LayerWeights {
         let q = self.forward(&q, seqlen_offsets)?.contiguous()?;
         let k = self.forward(&k, seqlen_offsets)?;
 
-        let (k, v) = Cache::update_kv_cache(kv_cache, k, v)?;
+        let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
         let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
