@@ -488,6 +488,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{ChatTemplate, SimpleModelPaths};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
+<span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
 <span class="kw">use </span><span class="kw">crate</span>::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
 <span class="kw">use crate</span>::{deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata};
@@ -791,8 +792,7 @@
             <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
         };
 
-        <span class="kw">let </span>tokenizer =
-            Tokenizer::from_file(paths.get_tokenizer_filename()).map_err(anyhow::Error::msg)<span class="question-mark">?</span>;
+        <span class="kw">let </span>tokenizer = get_tokenizer(paths.get_tokenizer_filename())<span class="question-mark">?</span>;
 
         <span class="kw">let </span>(chat_template, gen_conf) = <span class="macro">deserialize_chat_template!</span>(paths, <span class="self">self</span>);
 
