@@ -158,7 +158,7 @@ impl Attention {
                 .contiguous()?;
         }
 
-        let (k, v) = Cache::update_kv_cache(kv_cache, k, v)?;
+        let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
