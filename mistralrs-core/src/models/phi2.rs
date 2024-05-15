@@ -206,7 +206,7 @@ impl Attention {
             flash_attn(&q, &k, &v, self.softmax_scale as f32, seq_len > 1)?.transpose(1, 2)?
         } else {
             let attn_weights =
-                MatMul.matmul_affine(&q.contiguous()?, &k.t()?, self.softmax_scale)?;
+                MatMul.matmul_affine_div(&q.contiguous()?, &k.t()?, self.softmax_scale)?;
             let attn_weights =
                 CausalMasker.apply_mask(&mask.cloned(), attn_weights, &self.neg_inf)?;
             let attn_weights =

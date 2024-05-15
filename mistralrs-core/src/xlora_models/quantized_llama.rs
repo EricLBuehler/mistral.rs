@@ -233,7 +233,7 @@ impl LayerWeights {
         let k = repeat_kv(k, self.n_head / self.n_kv_head)?.contiguous()?;
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?.contiguous()?;
 
-        let att = MatMul.matmul_affine(
+        let att = MatMul.matmul_affine_div(
             &q.contiguous()?,
             &k.t()?.contiguous()?,
             (self.head_dim as f64).sqrt(),

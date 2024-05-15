@@ -297,8 +297,11 @@ impl Attention {
             let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
             flash_attn(&q, &k, &v, softmax_scale, q_len > 1)?.transpose(1, 2)?
         } else {
-            let attn_weights =
-                MatMul.matmul_affine(&q, &k.transpose(2, 3)?, f64::sqrt(self.head_dim as f64))?;
+            let attn_weights = MatMul.matmul_affine_div(
+                &q,
+                &k.transpose(2, 3)?,
+                f64::sqrt(self.head_dim as f64),
+            )?;
 
             let attn_weights = CausalMasker.apply_mask(&attn_mask, attn_weights, &self.neg_inf)?;
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;

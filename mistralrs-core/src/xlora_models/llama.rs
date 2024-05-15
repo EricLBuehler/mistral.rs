@@ -114,7 +114,7 @@ impl CausalSelfAttention {
             let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
             flash_attn(&q, &k, &v, softmax_scale, seq_len > 1)?.transpose(1, 2)?
         } else {
-            let att = MatMul.matmul_affine(&q, &k.t()?, (self.head_dim as f64).sqrt())?;
+            let att = MatMul.matmul_affine_div(&q, &k.t()?, (self.head_dim as f64).sqrt())?;
             let att = CausalMasker.apply_mask(mask, att, &self.neg_inf)?;
             let att = candle_nn::ops::softmax(&att, D::Minus1)?;
             // Convert to contiguous as matmul doesn't support strided vs for now.
