@@ -54,21 +54,47 @@ use crate::{
 
 pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
 
+/// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
+/// example `SimpleModelPaths` implements `ModelPaths` when all files are in the local file system.
 pub trait ModelPaths {
+    /// Model weights files (multiple files supported).
     fn get_weight_filenames(&self) -> &[PathBuf];
+
+    /// Retrieve the PretrainedConfig file.
+    /// See: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/configuration#transformers.PretrainedConfig
     fn get_config_filename(&self) -> &PathBuf;
+
+    /// A serialised `tokenizers.Tokenizer` HuggingFace object.
+    /// See: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/tokenizer
     fn get_tokenizer_filename(&self) -> &PathBuf;
+
+    /// Jinja format chat templating for chat completion.
+    /// See: https://huggingface.co/docs/transformers/chat_templating
     fn get_template_filename(&self) -> &PathBuf;
+
+    /// Optional adapter files. `(String, PathBuf)` is of the form `(id name, path)`.
     fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>>;
-    fn get_adapter_configs(&self) -> &Option<Vec<((String, String), LoraConfig)>>; // (id name, name)
+
+    /// Configuration of optional adapters. `(String, String)` is of the form `(id name, name)`.
+    fn get_adapter_configs(&self) -> &Option<Vec<((String, String), LoraConfig)>>;
+
+    /// Filepath for the XLORA classifier
     fn get_classifier_path(&self) -> &Option<PathBuf>;
+
+    /// `XLoraConfig` for the XLORA classifier
     fn get_classifier_config(&self) -> &Option<XLoraConfig>;
+
+    /// Return the defined ordering of adapters and layers within the model.
     fn get_ordering(&self) -> &Option<Ordering>;
+
+    /// Filepath for general model configuration.
     fn get_gen_conf_filename(&self) -> Option<&PathBuf>;
+
     fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>>;
 }
 
-pub struct SimpleModelPaths<P> {
+#[derive(Clone)]
+pub struct LocalModelPaths<P> {
     tokenizer_filename: P,
     config_filename: P,
     template_filename: P,
@@ -82,7 +108,38 @@ pub struct SimpleModelPaths<P> {
     lora_preload_adapter_info: Option<HashMap<String, (P, LoraConfig)>>,
 }
 
-impl ModelPaths for SimpleModelPaths<PathBuf> {
+impl<P> LocalModelPaths<P> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        tokenizer_filename: P,
+        config_filename: P,
+        template_filename: P,
+        filenames: Vec<P>,
+        xlora_adapter_filenames: Option<Vec<(String, P)>>,
+        xlora_adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
+        classifier_path: Option<P>,
+        classifier_config: Option<XLoraConfig>,
+        xlora_ordering: Option<Ordering>,
+        gen_conf: Option<P>,
+        lora_preload_adapter_info: Option<HashMap<String, (P, LoraConfig)>>,
+    ) -> Self {
+        Self {
+            tokenizer_filename,
+            config_filename,
+            template_filename,
+            filenames,
+            xlora_adapter_filenames,
+            xlora_adapter_configs,
+            classifier_path,
+            classifier_config,
+            xlora_ordering,
+            gen_conf,
+            lora_preload_adapter_info,
+        }
+    }
+}
+
+impl ModelPaths for LocalModelPaths<PathBuf> {
     fn get_config_filename(&self) -> &PathBuf {
         &self.config_filename
     }
@@ -214,7 +271,7 @@ impl Display for ModelKind {
 /// use candle_core::Device;
 ///
 /// let loader: Box<dyn Loader> = todo!();
-/// let pipeline = loader.load_model(
+/// let pipeline = loader.load_model_from_hf(
 ///     None,
 ///     TokenSource::CacheToken,
 ///     None,
@@ -227,12 +284,28 @@ impl Display for ModelKind {
 pub trait Loader {
     /// If `revision` is None, then it defaults to `main`.
     /// If `dtype` is None, then it defaults to the model default (usually BF16).
+    /// If model is not found on HF, will attempt to resolve locally.
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    fn load_model(
+    fn load_model_from_hf(
         &self,
         revision: Option<String>,
         token_source: TokenSource,
         dtype: Option<DType>,
+        device: &Device,
+        silent: bool,
+        mapper: DeviceMapMetadata,
+        in_situ_quant: Option<GgmlDType>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
+
+    #[allow(
+        clippy::type_complexity,
+        clippy::too_many_arguments,
+        clippy::borrowed_box
+    )]
+    fn load_model_from_path(
+        &self,
+        paths: &Box<dyn ModelPaths>,
+        _dtype: Option<DType>,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
