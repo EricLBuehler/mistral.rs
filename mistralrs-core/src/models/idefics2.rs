@@ -345,7 +345,7 @@ impl Attention {
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let (k, v) = Cache::update_kv_cache(vision_transformer_kv_cache, k, v)?;
+        let (k, v) = Cache::update_kv_cache(vision_transformer_kv_cache, k, v, false)?;
 
         let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * self.scale)?;
 
@@ -620,7 +620,7 @@ impl PerceiverAttention {
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let (k, v) = Cache::update_kv_cache(perceiver_kv_cache, k, v)?;
+        let (k, v) = Cache::update_kv_cache(perceiver_kv_cache, k, v, false)?;
 
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
