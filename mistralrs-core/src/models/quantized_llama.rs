@@ -157,7 +157,7 @@ impl LayerWeights {
                 .transpose(1, 2)?;
         }
 
-        let (k, v) = Cache::update_kv_cache(kv_cache, k, v)?;
+        let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
         let k = repeat_kv(k, self.n_head / self.n_kv_head)?.contiguous()?;
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?.contiguous()?;
