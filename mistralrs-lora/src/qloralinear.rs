@@ -38,15 +38,18 @@ impl QLoraLinear {
         count: &mut usize,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
-        let target_modules = &config[0].1.target_modules;
+        let target_modules = &config.first().map(|c| &c.1.target_modules);
         for (_, cfg) in config {
-            if &cfg.target_modules != target_modules {
+            if target_modules
+                .as_ref()
+                .is_some_and(|target_modules| &cfg.target_modules != *target_modules)
+            {
                 candle_core::bail!("Expected all target modules to be the same.");
             }
         }
 
         let module = prefix.split('.').last().unwrap();
-        if !target_modules.contains(module) {
+        if target_modules.is_some_and(|target_modules| !target_modules.contains(module)) {
             return Ok(Self {
                 old,
                 a_adapters: Either::Left(vec![]),
@@ -110,7 +113,11 @@ impl QLoraLinear {
             }
         }
 
-        let layer = *ordering.layers.get(&prefix).unwrap();
+        let layer = if let Some(ref layers) = ordering.layers {
+            *layers.get(&prefix).unwrap()
+        } else {
+            0
+        };
 
         if all_same {
             let a_adapters_stack = Tensor::cat(

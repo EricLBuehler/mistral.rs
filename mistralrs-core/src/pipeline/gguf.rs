@@ -435,7 +435,7 @@ impl Loader for GGUFLoader {
                             silent,
                         )?,
                     )?),
-                    a => bail!("Unsupported architecture for GGUF X-LoRA `{a:?}`"),
+                    a => bail!("Unsupported architecture for GGUF LoRA `{a:?}`"),
                 }
             }
             _ => unreachable!(),
