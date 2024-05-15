@@ -632,6 +632,8 @@
 <a href="#630" id="630">630</a>
 <a href="#631" id="631">631</a>
 <a href="#632" id="632">632</a>
+<a href="#633" id="633">633</a>
+<a href="#634" id="634">634</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
@@ -946,9 +948,11 @@
             .map_err(anyhow::Error::msg)<span class="question-mark">?</span>;
 
         <span class="macro">info!</span>(<span class="string">"Model config:"</span>);
-        <span class="kw">for </span>(name, value) <span class="kw">in </span><span class="kw-2">&amp;</span>model.metadata {
+        <span class="kw">let </span><span class="kw-2">mut </span>sorted_keys = model.metadata.keys().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+        sorted_keys.sort();
+        <span class="kw">for </span>name <span class="kw">in </span>sorted_keys {
             <span class="kw">if </span>!name.contains(<span class="string">"tokenizer"</span>) {
-                <span class="kw">let </span>value = parse_gguf_value(value);
+                <span class="kw">let </span>value = parse_gguf_value(<span class="kw-2">&amp;</span>model.metadata[name]);
                 <span class="macro">println!</span>(<span class="string">"{name}: {}"</span>, value);
             }
         }
