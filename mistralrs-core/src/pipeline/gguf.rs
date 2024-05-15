@@ -312,9 +312,11 @@ impl Loader for GGUFLoader {
             .map_err(anyhow::Error::msg)?;
 
         info!("Model config:");
-        for (name, value) in &model.metadata {
+        let mut sorted_keys = model.metadata.keys().collect::<Vec<_>>();
+        sorted_keys.sort();
+        for name in sorted_keys {
             if !name.contains("tokenizer") {
-                let value = parse_gguf_value(value);
+                let value = parse_gguf_value(&model.metadata[name]);
                 println!("{name}: {}", value);
             }
         }
