@@ -140,6 +140,9 @@
 <a href="#138" id="138">138</a>
 <a href="#139" id="139">139</a>
 <a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>classifier;
 <span class="kw">mod </span>config;
 <span class="kw">mod </span>gemma;
@@ -273,7 +276,10 @@
 }
 
 <span class="kw">fn </span>verify_sanity_adapters(ordering: <span class="kw-2">&amp;</span>Ordering, supported_layers: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>str]) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-    <span class="kw">for </span>path <span class="kw">in </span>ordering.layers.keys() {
+    <span class="kw">if </span>ordering.layers.is_none() {
+        <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+    }
+    <span class="kw">for </span>path <span class="kw">in </span>ordering.layers.as_ref().unwrap().keys() {
         <span class="kw">if </span>!supported_layers.iter().any(|layer| path.ends_with(layer)) {
             <span class="macro">candle_core::bail!</span>(<span class="string">"Got a layer name `{path}` in the ordering, expected it to end with one of {supported_layers:?}"</span>);
         }

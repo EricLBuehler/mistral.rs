@@ -341,6 +341,13 @@
 <a href="#339" id="339">339</a>
 <a href="#340" id="340">340</a>
 <a href="#341" id="341">341</a>
+<a href="#342" id="342">342</a>
+<a href="#343" id="343">343</a>
+<a href="#344" id="344">344</a>
+<a href="#345" id="345">345</a>
+<a href="#346" id="346">346</a>
+<a href="#347" id="347">347</a>
+<a href="#348" id="348">348</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, iter::zip, ops::Mul};
 
 <span class="kw">use </span>candle_core::{
@@ -381,15 +388,18 @@
         count: <span class="kw-2">&amp;mut </span>usize,
         preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>target_modules = <span class="kw-2">&amp;</span>config[<span class="number">0</span>].<span class="number">1</span>.target_modules;
+        <span class="kw">let </span>target_modules = <span class="kw-2">&amp;</span>config.first().map(|c| <span class="kw-2">&amp;</span>c.<span class="number">1</span>.target_modules);
         <span class="kw">for </span>(<span class="kw">_</span>, cfg) <span class="kw">in </span>config {
-            <span class="kw">if </span><span class="kw-2">&amp;</span>cfg.target_modules != target_modules {
+            <span class="kw">if </span>target_modules
+                .as_ref()
+                .is_some_and(|target_modules| <span class="kw-2">&amp;</span>cfg.target_modules != <span class="kw-2">*</span>target_modules)
+            {
                 <span class="macro">candle_core::bail!</span>(<span class="string">"Expected all target modules to be the same."</span>);
             }
         }
 
         <span class="kw">let </span>module = prefix.split(<span class="string">'.'</span>).last().unwrap();
-        <span class="kw">if </span>!target_modules.contains(module) {
+        <span class="kw">if </span>target_modules.is_some_and(|target_modules| !target_modules.contains(module)) {
             <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="self">Self </span>{
                 old,
                 a_adapters: Either::Left(<span class="macro">vec!</span>[]),
@@ -453,7 +463,11 @@
             }
         }
 
-        <span class="kw">let </span>layer = <span class="kw-2">*</span>ordering.layers.get(<span class="kw-2">&amp;</span>prefix).unwrap();
+        <span class="kw">let </span>layer = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>layers) = ordering.layers {
+            <span class="kw-2">*</span>layers.get(<span class="kw-2">&amp;</span>prefix).unwrap()
+        } <span class="kw">else </span>{
+            <span class="number">0
+        </span>};
 
         <span class="kw">if </span>all_same {
             <span class="kw">let </span>a_adapters_stack = Tensor::cat(

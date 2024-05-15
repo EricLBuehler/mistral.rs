@@ -1125,6 +1125,27 @@
 <a href="#1123" id="1123">1123</a>
 <a href="#1124" id="1124">1124</a>
 <a href="#1125" id="1125">1125</a>
+<a href="#1126" id="1126">1126</a>
+<a href="#1127" id="1127">1127</a>
+<a href="#1128" id="1128">1128</a>
+<a href="#1129" id="1129">1129</a>
+<a href="#1130" id="1130">1130</a>
+<a href="#1131" id="1131">1131</a>
+<a href="#1132" id="1132">1132</a>
+<a href="#1133" id="1133">1133</a>
+<a href="#1134" id="1134">1134</a>
+<a href="#1135" id="1135">1135</a>
+<a href="#1136" id="1136">1136</a>
+<a href="#1137" id="1137">1137</a>
+<a href="#1138" id="1138">1138</a>
+<a href="#1139" id="1139">1139</a>
+<a href="#1140" id="1140">1140</a>
+<a href="#1141" id="1141">1141</a>
+<a href="#1142" id="1142">1142</a>
+<a href="#1143" id="1143">1143</a>
+<a href="#1144" id="1144">1144</a>
+<a href="#1145" id="1145">1145</a>
+<a href="#1146" id="1146">1146</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>cache_manager;
 <span class="kw">mod </span>chat_template;
 <span class="kw">mod </span>ggml;
@@ -1964,22 +1985,27 @@
         ));
         <span class="kw">let </span>model_id = Path::new(<span class="kw-2">&amp;</span>xlora_id);
 
-        <span class="kw">let </span>xlora_classifier = <span class="kw-2">&amp;</span><span class="macro">api_dir_list!</span>(api, model_id)
+        <span class="comment">// Get the path for the xlora classifier
+        </span><span class="kw">let </span>xlora_classifier = <span class="kw-2">&amp;</span><span class="macro">api_dir_list!</span>(api, model_id)
             .filter(|x| x.contains(<span class="string">"xlora_classifier.safetensors"</span>))
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
         <span class="kw">if </span>xlora_classifier.len() &gt; <span class="number">1 </span>{
             <span class="macro">warn!</span>(<span class="string">"Detected multiple X-LoRA classifiers: {xlora_classifier:?}"</span>);
             <span class="macro">warn!</span>(<span class="string">"Selected classifier: `{}`"</span>, <span class="kw-2">&amp;</span>xlora_classifier[<span class="number">0</span>]);
         }
-        <span class="kw">let </span>xlora_classifier = <span class="kw-2">&amp;</span>xlora_classifier[<span class="number">0</span>];
-        <span class="kw">let </span>xlora_configs = <span class="kw-2">&amp;</span><span class="macro">api_dir_list!</span>(api, model_id)
+        <span class="kw">let </span>xlora_classifier = xlora_classifier.first();
+
+        <span class="kw">let </span>classifier_path =
+            xlora_classifier.map(|xlora_classifier| <span class="macro">api_get_file!</span>(api, xlora_classifier, model_id));
+
+        <span class="comment">// Get the path for the xlora config by checking all for valid versions.
+        // NOTE(EricLBuehler): Remove this functionality because all configs should be deserializable
+        </span><span class="kw">let </span>xlora_configs = <span class="kw-2">&amp;</span><span class="macro">api_dir_list!</span>(api, model_id)
             .filter(|x| x.contains(<span class="string">"xlora_config.json"</span>))
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
         <span class="kw">if </span>xlora_configs.len() &gt; <span class="number">1 </span>{
             <span class="macro">warn!</span>(<span class="string">"Detected multiple X-LoRA configs: {xlora_configs:?}"</span>);
         }
-
-        <span class="kw">let </span>classifier_path = <span class="macro">api_get_file!</span>(api, xlora_classifier, Path::new(<span class="string">""</span>));
 
         <span class="kw">let </span><span class="kw-2">mut </span>xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt; = <span class="prelude-val">None</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>last_err: <span class="prelude-ty">Option</span>&lt;serde_json::Error&gt; = <span class="prelude-val">None</span>;
@@ -1987,7 +2013,7 @@
             <span class="kw">if </span>xlora_configs.len() != <span class="number">1 </span>{
                 <span class="macro">warn!</span>(<span class="string">"Selecting config: `{}`"</span>, config_path);
             }
-            <span class="kw">let </span>config_path = <span class="macro">api_get_file!</span>(api, config_path, Path::new(<span class="string">""</span>));
+            <span class="kw">let </span>config_path = <span class="macro">api_get_file!</span>(api, config_path, model_id);
             <span class="kw">let </span>conf = fs::read_to_string(config_path)<span class="question-mark">?</span>;
             <span class="kw">let </span>deser: <span class="prelude-ty">Result</span>&lt;XLoraConfig, serde_json::Error&gt; = serde_json::from_str(<span class="kw-2">&amp;</span>conf);
             <span class="kw">match </span>deser {
@@ -2003,77 +2029,92 @@
                 }
             }
         }
-        <span class="kw">let </span>xlora_config = xlora_config.unwrap_or_else(|| {
-            <span class="macro">panic!</span>(
-                <span class="string">"Unable to derserialize any configs. Last error: {}"</span>,
-                last_err.unwrap()
-            )
+        <span class="kw">let </span>xlora_config = xlora_config.map(<span class="prelude-val">Some</span>).unwrap_or_else(|| {
+            <span class="kw">if let </span><span class="prelude-val">Some</span>(last_err) = last_err {
+                <span class="macro">panic!</span>(
+                    <span class="string">"Unable to derserialize any configs. Last error: {}"</span>,
+                    last_err
+                )
+            } <span class="kw">else </span>{
+                <span class="prelude-val">None
+            </span>}
         });
 
-        <span class="kw">let </span>adapter_files = <span class="macro">api_dir_list!</span>(api, model_id)
+        <span class="comment">// If there are adapters in the ordering file, get their names and remote paths
+        </span><span class="kw">let </span>adapter_files = <span class="macro">api_dir_list!</span>(api, model_id)
             .filter_map(|name| {
-                <span class="kw">for </span>adapter_name <span class="kw">in </span>xlora_order.as_ref().unwrap().adapters.as_ref().unwrap() {
-                    <span class="kw">if </span>name.contains(adapter_name) {
-                        <span class="kw">return </span><span class="prelude-val">Some</span>((name, adapter_name.clone()));
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>adapters) = xlora_order.as_ref().unwrap().adapters {
+                    <span class="kw">for </span>adapter_name <span class="kw">in </span>adapters {
+                        <span class="kw">if </span>name.contains(adapter_name) {
+                            <span class="kw">return </span><span class="prelude-val">Some</span>((name, adapter_name.clone()));
+                        }
                     }
                 }
                 <span class="prelude-val">None
             </span>})
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-        <span class="kw">if </span>adapter_files.is_empty() {
+        <span class="kw">if </span>adapter_files.is_empty() &amp;&amp; xlora_order.as_ref().unwrap().adapters.is_some() {
             <span class="macro">anyhow::bail!</span>(<span class="string">"Adapter files are empty. Perhaps the ordering file adapters does not match the actual adapters?"</span>)
         }
-        <span class="kw">let </span><span class="kw-2">mut </span>adapters_paths: HashMap&lt;String, Vec&lt;PathBuf&gt;&gt; = HashMap::new();
+
+        <span class="comment">// Get the local paths for each adapter
+        </span><span class="kw">let </span><span class="kw-2">mut </span>adapters_paths: HashMap&lt;String, Vec&lt;PathBuf&gt;&gt; = HashMap::new();
         <span class="kw">for </span>(file, name) <span class="kw">in </span>adapter_files {
             <span class="kw">if let </span><span class="prelude-val">Some</span>(paths) = adapters_paths.get_mut(<span class="kw-2">&amp;</span>name) {
-                paths.push(<span class="macro">api_get_file!</span>(api, <span class="kw-2">&amp;</span>file, Path::new(<span class="string">""</span>)));
+                paths.push(<span class="macro">api_get_file!</span>(api, <span class="kw-2">&amp;</span>file, model_id));
             } <span class="kw">else </span>{
-                adapters_paths.insert(name, <span class="macro">vec!</span>[<span class="macro">api_get_file!</span>(api, <span class="kw-2">&amp;</span>file, Path::new(<span class="string">""</span>))]);
+                adapters_paths.insert(name, <span class="macro">vec!</span>[<span class="macro">api_get_file!</span>(api, <span class="kw-2">&amp;</span>file, model_id)]);
             }
         }
-        <span class="kw">let </span><span class="kw-2">mut </span>adapters_configs = Vec::new();
+
+        <span class="comment">// Sort local paths for the adapter configs and safetensors files
+        </span><span class="kw">let </span><span class="kw-2">mut </span>adapters_configs = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>adapters_safetensors = Vec::new();
-        <span class="kw">for </span>(i, name) <span class="kw">in </span>xlora_order
-            .as_ref()
-            .unwrap()
-            .adapters
-            .as_ref()
-            .unwrap()
-            .iter()
-            .enumerate()
-        {
-            <span class="kw">let </span>paths = adapters_paths
-                .get(name)
-                .unwrap_or_else(|| <span class="macro">panic!</span>(<span class="string">"Adapter {name} not found."</span>));
-            <span class="kw">for </span>path <span class="kw">in </span>paths {
-                <span class="kw">if </span>path.extension().unwrap() == <span class="string">"safetensors" </span>{
-                    adapters_safetensors.push((name.clone(), path.to_owned()));
-                } <span class="kw">else </span>{
-                    <span class="kw">let </span>conf = fs::read_to_string(path)<span class="question-mark">?</span>;
-                    <span class="kw">let </span>lora_config: LoraConfig = serde_json::from_str(<span class="kw-2">&amp;</span>conf)<span class="question-mark">?</span>;
-                    adapters_configs.push((((i + <span class="number">1</span>).to_string(), name.clone()), lora_config));
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>adapters) = xlora_order.as_ref().unwrap().adapters {
+            <span class="kw">for </span>(i, name) <span class="kw">in </span>adapters.iter().enumerate() {
+                <span class="kw">let </span>paths = adapters_paths
+                    .get(name)
+                    .unwrap_or_else(|| <span class="macro">panic!</span>(<span class="string">"Adapter {name} not found."</span>));
+                <span class="kw">for </span>path <span class="kw">in </span>paths {
+                    <span class="kw">if </span>path.extension().unwrap() == <span class="string">"safetensors" </span>{
+                        adapters_safetensors.push((name.clone(), path.to_owned()));
+                    } <span class="kw">else </span>{
+                        <span class="kw">let </span>conf = fs::read_to_string(path)<span class="question-mark">?</span>;
+                        <span class="kw">let </span>lora_config: LoraConfig = serde_json::from_str(<span class="kw-2">&amp;</span>conf)<span class="question-mark">?</span>;
+                        adapters_configs.push((((i + <span class="number">1</span>).to_string(), name.clone()), lora_config));
+                    }
                 }
             }
         }
 
-        <span class="kw">if </span>xlora_order
+        <span class="comment">// Make sure they all match
+        </span><span class="kw">if </span>xlora_order.as_ref().is_some_and(|order| {
+            <span class="kw-2">&amp;</span>order.base_model_id
+                != xlora_config
+                    .as_ref()
+                    .map(|cfg| <span class="kw-2">&amp;</span>cfg.base_model_id)
+                    .unwrap_or(<span class="kw-2">&amp;</span>base_model_id)
+        }) || xlora_config
             .as_ref()
-            .is_some_and(|order| order.base_model_id != xlora_config.base_model_id)
-            || xlora_config.base_model_id != base_model_id
+            .map(|cfg| <span class="kw-2">&amp;</span>cfg.base_model_id)
+            .unwrap_or(<span class="kw-2">&amp;</span>base_model_id)
+            != <span class="kw-2">&amp;</span>base_model_id
         {
             <span class="macro">anyhow::bail!</span>(
                 <span class="string">"Adapter ordering file, adapter model config, and base model ID do not match: {}, {}, and {} respectively."</span>,
                 xlora_order.as_ref().unwrap().base_model_id,
-                xlora_config.base_model_id,
+                xlora_config.map(|cfg| cfg.base_model_id).unwrap_or(base_model_id.clone()),
                 base_model_id
             );
         }
 
         <span class="kw">let </span>lora_preload_adapter_info = <span class="kw">if let </span><span class="prelude-val">Some</span>(xlora_order) = xlora_order {
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(preload_adapters) = <span class="kw-2">&amp;</span>xlora_order.preload_adapters {
+            <span class="comment">// If preload adapters are specified, get their metadata like above
+            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(preload_adapters) = <span class="kw-2">&amp;</span>xlora_order.preload_adapters {
                 <span class="kw">let </span><span class="kw-2">mut </span>output = HashMap::new();
                 <span class="kw">for </span>adapter <span class="kw">in </span>preload_adapters {
-                    <span class="kw">let </span>adapter_files = <span class="macro">api_dir_list!</span>(api, <span class="kw-2">&amp;</span>adapter.adapter_model_id)
+                    <span class="comment">// Get the names and remote paths of the files associated with this adapter
+                    </span><span class="kw">let </span>adapter_files = <span class="macro">api_dir_list!</span>(api, <span class="kw-2">&amp;</span>adapter.adapter_model_id)
                         .filter_map(|f| {
                             <span class="kw">if </span>f.contains(<span class="kw-2">&amp;</span>adapter.name) {
                                 <span class="prelude-val">Some</span>((f, adapter.name.clone()))
@@ -2085,20 +2126,21 @@
                     <span class="kw">if </span>adapter_files.is_empty() {
                         <span class="macro">anyhow::bail!</span>(<span class="string">"Adapter files are empty. Perhaps the ordering file adapters does not match the actual adapters?"</span>)
                     }
-                    <span class="kw">let </span><span class="kw-2">mut </span>adapters_paths: HashMap&lt;String, Vec&lt;PathBuf&gt;&gt; = HashMap::new();
+                    <span class="comment">// Get local paths for this adapter
+                    </span><span class="kw">let </span><span class="kw-2">mut </span>adapters_paths: HashMap&lt;String, Vec&lt;PathBuf&gt;&gt; = HashMap::new();
                     <span class="kw">for </span>(file, name) <span class="kw">in </span>adapter_files {
                         <span class="kw">if let </span><span class="prelude-val">Some</span>(paths) = adapters_paths.get_mut(<span class="kw-2">&amp;</span>name) {
-                            paths.push(<span class="macro">api_get_file!</span>(api, <span class="kw-2">&amp;</span>file, Path::new(<span class="string">""</span>)));
+                            paths.push(<span class="macro">api_get_file!</span>(api, <span class="kw-2">&amp;</span>file, model_id));
                         } <span class="kw">else </span>{
-                            adapters_paths
-                                .insert(name, <span class="macro">vec!</span>[<span class="macro">api_get_file!</span>(api, <span class="kw-2">&amp;</span>file, Path::new(<span class="string">""</span>))]);
+                            adapters_paths.insert(name, <span class="macro">vec!</span>[<span class="macro">api_get_file!</span>(api, <span class="kw-2">&amp;</span>file, model_id)]);
                         }
                     }
 
                     <span class="kw">let </span><span class="kw-2">mut </span>config = <span class="prelude-val">None</span>;
                     <span class="kw">let </span><span class="kw-2">mut </span>safetensor = <span class="prelude-val">None</span>;
 
-                    <span class="kw">let </span>paths = adapters_paths
+                    <span class="comment">// Sort local paths for the adapter configs and safetensors files
+                    </span><span class="kw">let </span>paths = adapters_paths
                         .get(<span class="kw-2">&amp;</span>adapter.name)
                         .unwrap_or_else(|| <span class="macro">panic!</span>(<span class="string">"Adapter {} not found."</span>, adapter.name));
                     <span class="kw">for </span>path <span class="kw">in </span>paths {
@@ -2125,9 +2167,9 @@
         XLoraPaths {
             adapter_configs: <span class="prelude-val">Some</span>(adapters_configs),
             adapter_safetensors: <span class="prelude-val">Some</span>(adapters_safetensors),
-            classifier_path: <span class="prelude-val">Some</span>(classifier_path),
+            classifier_path,
             xlora_order: xlora_order.clone(),
-            xlora_config: <span class="prelude-val">Some</span>(xlora_config),
+            xlora_config,
             lora_preload_adapter_info,
         }
     } <span class="kw">else </span>{
@@ -2170,7 +2212,7 @@
         <span class="prelude-val">None </span>=&gt; {
             <span class="kw">let </span><span class="kw-2">mut </span>filenames = <span class="macro">vec!</span>[];
             <span class="kw">for </span>rfilename <span class="kw">in </span><span class="macro">api_dir_list!</span>(api, model_id).filter(|x| x.ends_with(<span class="string">".safetensors"</span>)) {
-                filenames.push(<span class="macro">api_get_file!</span>(api, <span class="kw-2">&amp;</span>rfilename, Path::new(<span class="string">""</span>)));
+                filenames.push(<span class="macro">api_get_file!</span>(api, <span class="kw-2">&amp;</span>rfilename, model_id));
             }
             <span class="prelude-val">Ok</span>(filenames)
         }

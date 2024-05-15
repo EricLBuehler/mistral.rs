@@ -314,7 +314,6 @@
 <a href="#312" id="312">312</a>
 <a href="#313" id="313">313</a>
 <a href="#314" id="314">314</a>
-<a href="#315" id="315">315</a>
 </pre></div><pre class="rust"><code><span class="attr">#[macro_export]
 </span><span class="macro">macro_rules! </span>api_dir_list {
     (<span class="macro-nonterminal">$api</span>:expr, <span class="macro-nonterminal">$model_id</span>:expr) =&gt; {
@@ -592,8 +591,7 @@
 <span class="attr">#[macro_export]
 </span><span class="macro">macro_rules! </span>lora_model_loader {
     (<span class="macro-nonterminal">$paths</span>:expr, <span class="macro-nonterminal">$dtype</span>:expr, <span class="macro-nonterminal">$default_dtype</span>:expr, <span class="macro-nonterminal">$device</span>:expr, <span class="macro-nonterminal">$config</span>:expr, <span class="macro-nonterminal">$loader</span>:expr, <span class="macro-nonterminal">$use_flash_attn</span>:expr, <span class="macro-nonterminal">$silent</span>:expr, <span class="macro-nonterminal">$mapper</span>:expr, <span class="macro-nonterminal">$loading_isq</span>:expr, <span class="macro-nonterminal">$real_device</span>:expr) =&gt; {{
-        <span class="kw">let </span><span class="kw-2">mut </span>safetensors_paths = <span class="macro-nonterminal">$paths</span>.get_weight_filenames().iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-        safetensors_paths.push(<span class="macro-nonterminal">$paths</span>.get_classifier_path().as_ref().unwrap());
+        <span class="kw">let </span>safetensors_paths = <span class="macro-nonterminal">$paths</span>.get_weight_filenames().iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
         <span class="kw">let </span>vb = from_mmaped_safetensors(
             safetensors_paths
                 .iter()
