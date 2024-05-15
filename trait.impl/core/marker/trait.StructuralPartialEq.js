@@ -1,3 +1,3 @@
 (function() {var implementors = {
-"mistralrs_core":[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.77.2/core/marker/trait.StructuralPartialEq.html\" title=\"trait core::marker::StructuralPartialEq\">StructuralPartialEq</a> for <a class=\"struct\" href=\"mistralrs_core/struct.TopLogprob.html\" title=\"struct mistralrs_core::TopLogprob\">TopLogprob</a>"]]
+"mistralrs_core":[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.78.0/core/marker/trait.StructuralPartialEq.html\" title=\"trait core::marker::StructuralPartialEq\">StructuralPartialEq</a> for <a class=\"struct\" href=\"mistralrs_core/struct.TopLogprob.html\" title=\"struct mistralrs_core::TopLogprob\">TopLogprob</a>"]]
 };if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()
