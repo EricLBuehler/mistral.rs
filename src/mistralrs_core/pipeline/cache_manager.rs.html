@@ -309,6 +309,21 @@
 <a href="#307" id="307">307</a>
 <a href="#308" id="308">308</a>
 <a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
 
 <span class="kw">use </span>candle_core::{Tensor, D};
@@ -391,13 +406,20 @@
         cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
         k: Tensor,
         v: Tensor,
+        slow_cat: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor), candle_core::Error&gt; {
         <span class="kw">let </span>(k, v) = <span class="kw">match </span><span class="kw-2">&amp;*</span>cache {
             <span class="prelude-val">None </span>=&gt; (k, v),
             <span class="prelude-val">Some</span>((k_cache, v_cache)) =&gt; {
-                <span class="kw">let </span>k = candle_nn::ops::kvconcat(k_cache, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-                <span class="kw">let </span>v = candle_nn::ops::kvconcat(v_cache, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-                (k, v)
+                <span class="kw">if </span>slow_cat {
+                    <span class="kw">let </span>k = candle_nn::ops::kvconcat(k_cache, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+                    <span class="kw">let </span>v = candle_nn::ops::kvconcat(v_cache, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+                    (k, v)
+                } <span class="kw">else </span>{
+                    <span class="kw">let </span>k = Tensor::cat(<span class="kw-2">&amp;</span>[k_cache, <span class="kw-2">&amp;</span>k], <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+                    <span class="kw">let </span>v = Tensor::cat(<span class="kw-2">&amp;</span>[v_cache, <span class="kw-2">&amp;</span>v], <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+                    (k, v)
+                }
             }
         };
         <span class="kw-2">*</span>cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
@@ -411,6 +433,7 @@
         v: Tensor,
         attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+        slow_cat: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor, <span class="prelude-ty">Option</span>&lt;Tensor&gt;), candle_core::Error&gt; {
         <span class="kw">let </span>(k, v, attention_mask) = <span class="kw">match </span>cache.clone() {
             <span class="prelude-val">None </span>=&gt; (k, v, attention_mask.cloned()),
@@ -443,8 +466,15 @@
                         }
                     }
                 }
-                <span class="kw">let </span>k = candle_nn::ops::kvconcat(<span class="kw-2">&amp;</span>prev_k, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>;
-                <span class="kw">let </span>v = candle_nn::ops::kvconcat(<span class="kw-2">&amp;</span>prev_v, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>;
+                <span class="kw">let </span>(k, v) = <span class="kw">if </span>!slow_cat {
+                    <span class="kw">let </span>k = candle_nn::ops::kvconcat(<span class="kw-2">&amp;</span>prev_k, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>;
+                    <span class="kw">let </span>v = candle_nn::ops::kvconcat(<span class="kw-2">&amp;</span>prev_v, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>;
+                    (k, v)
+                } <span class="kw">else </span>{
+                    <span class="kw">let </span>k = Tensor::cat(<span class="kw-2">&amp;</span>[prev_k, k], <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+                    <span class="kw">let </span>v = Tensor::cat(<span class="kw-2">&amp;</span>[prev_v, v], <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+                    (k, v)
+                };
                 (k, v, mask)
             }
         };
