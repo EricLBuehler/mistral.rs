@@ -12,6 +12,8 @@ use crate::{
     pipeline::Cache,
 };
 
+use super::mistral;
+
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/idefics2/modeling_idefics2.py
 
 fn default_32000() -> usize {
@@ -159,6 +161,25 @@ struct TextConfig {
     #[serde(default = "default_false")]
     use_flash_attn: bool,
     model_type: String, // Must be mistral for now
+}
+
+impl Into<mistral::Config> for TextConfig {
+    fn into(self) -> mistral::Config {
+        mistral::Config {
+            vocab_size: self.vocab_size,
+            hidden_act: self.hidden_act,
+            hidden_size: self.hidden_size,
+            intermediate_size: self.intermediate_size,
+            num_hidden_layers: self.num_hidden_layers,
+            num_attention_heads: self.num_attention_heads,
+            num_key_value_heads: self.num_key_value_heads,
+            max_position_embeddings: self.max_position_embeddings,
+            rms_norm_eps: self.rms_norm_eps,
+            rope_theta: self.rope_theta,
+            sliding_window: self.sliding_window,
+            use_flash_attn: self.use_flash_attn,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
