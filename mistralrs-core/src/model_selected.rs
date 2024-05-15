@@ -76,7 +76,7 @@ pub enum ModelSelected {
         #[arg(short, long)]
         tokenizer_json: Option<String>,
 
-        /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
+        /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         adapters_model_id: String,
 
@@ -177,7 +177,7 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
 
-        /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
+        /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         adapters_model_id: String,
 
@@ -278,7 +278,7 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = 64)]
         repeat_last_n: usize,
 
-        /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
+        /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         adapters_model_id: String,
 

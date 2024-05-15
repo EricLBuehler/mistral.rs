@@ -9,11 +9,12 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
-use crate::models::Cache;
 use crate::pipeline::chat_template::calculate_eos_tokens;
+use crate::pipeline::Cache;
 use crate::pipeline::{ChatTemplate, SimpleModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
+use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
 use crate::{
@@ -268,8 +269,7 @@ impl Loader for NormalLoader {
             } => unreachable!(),
         };
 
-        let tokenizer =
-            Tokenizer::from_file(paths.get_tokenizer_filename()).map_err(anyhow::Error::msg)?;
+        let tokenizer = get_tokenizer(paths.get_tokenizer_filename())?;
 
         let (chat_template, gen_conf) = deserialize_chat_template!(paths, self);
 

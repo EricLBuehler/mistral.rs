@@ -12,6 +12,7 @@ use std::{
 use tokio::sync::mpsc::{channel, Sender};
 
 use engine::Engine;
+pub use engine::TERMINATE_ALL_NEXT_STEP;
 pub use mistralrs_lora::Ordering;
 pub use pipeline::Pipeline;
 
@@ -78,7 +79,6 @@ pub struct MistralRsBuilder {
     prefix_cache_n: Option<usize>,
     disable_eos_stop: Option<bool>,
     gemm_full_precision_f16: Option<bool>,
-    interactive: Option<bool>,
 }
 
 impl MistralRsBuilder {
@@ -93,7 +93,6 @@ impl MistralRsBuilder {
             prefix_cache_n: None,
             disable_eos_stop: None,
             gemm_full_precision_f16: None,
-            interactive: None,
         }
     }
     pub fn with_log(mut self, log: String) -> Self {
@@ -128,10 +127,6 @@ impl MistralRsBuilder {
         self.gemm_full_precision_f16 = Some(gemm_full_precision);
         self
     }
-    pub fn with_interactive(mut self) -> Self {
-        self.interactive = Some(true);
-        self
-    }
 
     pub fn build(self) -> Arc<MistralRs> {
         MistralRs::new(self)
@@ -159,7 +154,6 @@ impl MistralRs {
             prefix_cache_n,
             disable_eos_stop,
             gemm_full_precision_f16,
-            interactive,
         } = config;
 
         if !gemm_full_precision_f16.unwrap_or(false) {
@@ -171,7 +165,6 @@ impl MistralRs {
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);
         let prefix_cache_n = prefix_cache_n.unwrap_or(16);
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
-        let interactive = interactive.unwrap_or(false);
 
         let (tx, rx) = channel(10_000);
 
@@ -197,7 +190,6 @@ impl MistralRs {
                     no_prefix_cache,
                     prefix_cache_n,
                     disable_eos_stop,
-                    interactive,
                 );
                 engine.run().await;
             });

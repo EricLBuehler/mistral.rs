@@ -9,12 +9,10 @@ use std::sync::Arc;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{CausalMasker, RmsNorm},
+    layers::{flash_attn, repeat_kv, CausalMasker, RmsNorm},
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
-
-use super::{flash_attn, repeat_kv};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -53,7 +51,7 @@ impl CausalSelfAttention {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         block_idx: usize,
-        kv_cache: &mut super::LayerCaches,
+        kv_cache: &mut crate::pipeline::LayerCaches,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
 
@@ -73,7 +71,7 @@ impl CausalSelfAttention {
 
         let mut q = q.reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.num_key_value_heads, self.head_dim))?;
-        let mut v = v
+        let v = v
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
 
@@ -91,23 +89,8 @@ impl CausalSelfAttention {
                 .contiguous()?;
         }
 
-        if let Some((cache_k, cache_v)) = &kv_cache[block_idx] {
-            k = candle_nn::ops::kvconcat(cache_k, &k, 2)?.contiguous()?;
-            v = candle_nn::ops::kvconcat(cache_v, &v, 2)?.contiguous()?;
-            let k_seq_len = k.dims()[1];
-            if k_seq_len > self.max_seq_len {
-                k = k
-                    .narrow(D::Minus1, k_seq_len - self.max_seq_len, self.max_seq_len)?
-                    .contiguous()?
-            }
-            let v_seq_len = v.dims()[1];
-            if v_seq_len > 2 * self.max_seq_len {
-                v = v
-                    .narrow(D::Minus1, v_seq_len - self.max_seq_len, self.max_seq_len)?
-                    .contiguous()?
-            }
-        }
-        kv_cache[block_idx] = Some((k.clone(), v.clone()));
+        let (k, v) =
+            crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v, false)?;
 
         let k = repeat_kv(k, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
         let v = repeat_kv(v, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
@@ -217,7 +200,7 @@ impl Block {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         block_idx: usize,
-        kv_cache: &mut super::LayerCaches,
+        kv_cache: &mut crate::pipeline::LayerCaches,
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
@@ -273,7 +256,7 @@ pub struct Llama {
     blocks: Vec<Block>,
     ln_f: RmsNorm,
     lm_head: QMatMul,
-    pub kv_cache: super::Cache,
+    pub kv_cache: crate::pipeline::Cache,
     pub device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
@@ -364,7 +347,7 @@ impl Llama {
             blocks,
             ln_f,
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
-            kv_cache: super::Cache::new(cfg.num_hidden_layers, false),
+            kv_cache: crate::pipeline::Cache::new(cfg.num_hidden_layers, false),
             device: real_device,
             mapper,
         })
@@ -402,7 +385,7 @@ impl NormalModel for Llama {
     ) -> Result<Tensor> {
         unimplemented!()
     }
-    fn cache(&self) -> &super::Cache {
+    fn cache(&self) -> &crate::pipeline::Cache {
         &self.kv_cache
     }
     fn device(&self) -> &Device {
