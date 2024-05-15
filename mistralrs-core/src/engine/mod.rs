@@ -1,9 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::{atomic::AtomicBool, Arc},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{mpsc::Receiver, Mutex};
@@ -33,7 +30,8 @@ use crate::{
 };
 
 const SEED: u64 = 0;
-pub(crate) static TERMINATE_ALL_NEXT_STEP: AtomicBool = AtomicBool::new(false);
+/// Terminate all sequences on the next scheduling step. Be sure to reset this.
+pub static TERMINATE_ALL_NEXT_STEP: AtomicBool = AtomicBool::new(false);
 
 pub struct Engine {
     rx: Receiver<Request>,
@@ -58,16 +56,9 @@ impl Engine {
         no_prefix_cache: bool,
         prefix_cache_n: usize,
         disable_eos_stop: bool,
-        interactive: bool,
     ) -> Self {
         let device = get_mut_arcmutex!(pipeline).device().clone();
         let is_xlora = get_mut_arcmutex!(pipeline).get_metadata().is_xlora;
-        if interactive {
-            ctrlc::set_handler(move || {
-                TERMINATE_ALL_NEXT_STEP.store(true, Ordering::SeqCst);
-            })
-            .expect("Failed to set CTRL-C handler for interactive mode");
-        }
         Self {
             rx,
             pipeline,

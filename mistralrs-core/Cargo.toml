@@ -54,7 +54,6 @@ indicatif = { version = "0.17.8", features = ["rayon"] }
 async-trait = "0.1.80"
 once_cell = "1.19.0"
 toml = "0.8.12"
-ctrlc = "3.4.4"
 
 
 [features]
