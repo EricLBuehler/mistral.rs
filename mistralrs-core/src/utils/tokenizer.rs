@@ -13,7 +13,7 @@ struct AddedToken {
 
 /// May fix the tokenizer according to: https://gist.github.com/jneuff/682d47b786329f19291d166957b3274a
 pub(crate) fn get_tokenizer<P: AsRef<Path> + Clone>(p: P) -> Result<Tokenizer> {
-    let fixed_path = format!("{}_mistralrs_fixed", p.as_ref().display().to_string());
+    let fixed_path = format!("{}_mistralrs_fixed", p.as_ref().display());
     let fixed_path = Path::new(&fixed_path);
 
     if !fixed_path.exists() {
