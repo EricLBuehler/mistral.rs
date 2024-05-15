@@ -78,6 +78,7 @@ pub struct MistralRsBuilder {
     no_prefix_cache: Option<bool>,
     prefix_cache_n: Option<usize>,
     disable_eos_stop: Option<bool>,
+    gemm_full_precision_f16: Option<bool>,
 }
 
 impl MistralRsBuilder {
@@ -91,9 +92,9 @@ impl MistralRsBuilder {
             no_prefix_cache: None,
             prefix_cache_n: None,
             disable_eos_stop: None,
+            gemm_full_precision_f16: None,
         }
     }
-
     pub fn with_log(mut self, log: String) -> Self {
         self.log = Some(log);
         self
@@ -122,11 +123,24 @@ impl MistralRsBuilder {
         self.disable_eos_stop = Some(disable_eos_stop);
         self
     }
+    pub fn with_gemm_full_precision_f16(mut self, gemm_full_precision: bool) -> Self {
+        self.gemm_full_precision_f16 = Some(gemm_full_precision);
+        self
+    }
 
     pub fn build(self) -> Arc<MistralRs> {
         MistralRs::new(self)
     }
 }
+
+#[cfg(feature = "cuda")]
+fn set_gemm_reduced_precision_f16() {
+    candle_core::cuda::set_gemm_reduced_precision_f16(true);
+    candle_core::cuda::set_gemm_reduced_precision_bf16(true);
+}
+
+#[cfg(not(feature = "cuda"))]
+fn set_gemm_reduced_precision_f16() {}
 
 impl MistralRs {
     fn new(config: MistralRsBuilder) -> Arc<Self> {
@@ -139,7 +153,12 @@ impl MistralRs {
             no_prefix_cache,
             prefix_cache_n,
             disable_eos_stop,
+            gemm_full_precision_f16,
         } = config;
+
+        if !gemm_full_precision_f16.unwrap_or(false) {
+            set_gemm_reduced_precision_f16();
+        }
 
         let truncate_sequence = truncate_sequence.unwrap_or(false);
         let no_kv_cache = no_kv_cache.unwrap_or(false);
