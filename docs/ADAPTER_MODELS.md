@@ -28,10 +28,10 @@ The X-LoRA/LoRA ordering file is necessary to prepare before inference with an X
 ### X-LoRA case
 An ordering JSON file for X-LoRA contains 2 major parts. 
 
-1) The adapter names
+1) The adapter names `order`
     - The order matters!
     - Should be an array of strings which are the adapter names corresponding to the order the adapters were specified during training. For example, if the adapters were specified as a dictionary:
-2) The layer ordering
+2) The layer ordering `layers`
     - Automatically generated and should not be manipulated as it controls the application of scalings. 
 
 ```python
@@ -48,11 +48,11 @@ We provide an [ordering file](../orderings/xlora-paper-ordering.json) which cont
 
 ### LoRA case
 An ordering JSON file for LoRA contains 2 major parts:
-1) The adapter names (optional)
+1) The adapter names `order` (optional):
     - The order does not matter
     - Come controls which adapters will be initially activated
-    - If this key is not specified or if the value is `[]`, then no adapters will be activated initially
-2) Preload adapter section (optional): [see this section](#adapter-model-dynamic-adapter-activation)
+    - If this key is not specified, then no adapters will be activated initially
+2) Preload adapter section `preload_adapters` (optional): [see this section](#adapter-model-dynamic-adapter-activation)
     - Order does not matter
     - Specifies the adapter name and the model ID to find them, which may be a local path.
 
