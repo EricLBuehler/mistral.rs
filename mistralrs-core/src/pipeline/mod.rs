@@ -649,6 +649,7 @@ fn get_prompt_input(
     }
     let positions_kernel = Tensor::cat(&tmp, 0)?;
     let input = Tensor::cat(&seqs_tensors, 0).unwrap();
+    // Only use matmul via f16 if prompt and seqlen > 32
     if input.dim(1)? > 32 {
         set_use_matmul_via_f16(true);
     } else {
@@ -716,7 +717,8 @@ pub struct ModelInputs {
     position_ids: Vec<usize>,
 }
 
-/// This will also enable matmul via F16 if prompt and the sequence length is greater than 32.
+/// This will also enable matmul via f16 if prompt and the sequence length is greater than 32.
+/// Otherwise, matmul via f16 is disabled
 fn calculate_inputs(
     input_seqs: &[&mut Sequence],
     is_prompt: bool,
