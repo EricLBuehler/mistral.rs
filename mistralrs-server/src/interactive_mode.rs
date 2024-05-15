@@ -1,10 +1,11 @@
 use indexmap::IndexMap;
 use mistralrs_core::{
     Constraint, MistralRs, NormalRequest, Request, RequestMessage, Response, SamplingParams,
+    TERMINATE_ALL_NEXT_STEP,
 };
 use std::{
     io::{self, Write},
-    sync::Arc,
+    sync::{atomic::Ordering, Arc},
 };
 use tokio::sync::mpsc::channel;
 use tracing::{error, info};
@@ -27,6 +28,8 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>) {
     };
     info!("Starting interactive loop with sampling params: {sampling_params:?}");
     'outer: loop {
+        ctrlc::set_handler(move || std::process::exit(0))
+            .expect("Failed to set CTRL-C handler for interactive mode");
         let mut prompt = String::new();
         print!("> ");
         io::stdout().flush().unwrap();
@@ -36,6 +39,10 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>) {
         if prompt.is_empty() {
             return;
         }
+        ctrlc::set_handler(move || {
+            TERMINATE_ALL_NEXT_STEP.store(true, Ordering::SeqCst);
+        })
+        .expect("Failed to set CTRL-C handler for interactive mode");
         let mut user_message = IndexMap::new();
         user_message.insert("role".to_string(), "user".to_string());
         user_message.insert("content".to_string(), prompt);
