@@ -275,13 +275,19 @@ impl CausalMasker {
         Tensor::from_slice(&mask, (tgt_len, offset), device)
     }
 
-    /// Expands a mask from (bs, seq_len) to (bs, 1, seq_len, seq_len)
-    pub fn expand_mask(&self, mask: &Tensor, dtype: DType) -> Result<Tensor> {
+    /// Expands a mask from (bs, seq_len) to (bs, 1, tgt_len, seq_len)
+    /// If tgt_len is None, use seq_len
+    pub fn expand_mask(
+        &self,
+        mask: &Tensor,
+        dtype: DType,
+        tgt_len: Option<usize>,
+    ) -> Result<Tensor> {
         let (bs, src_len) = mask.dims2()?;
 
         let expanded_mask = mask.unsqueeze(1)?.unsqueeze(1)?;
         let expanded_mask = expanded_mask
-            .expand((bs, 1, src_len, src_len))?
+            .expand((bs, 1, tgt_len.unwrap_or(src_len), src_len))?
             .to_dtype(dtype)?;
 
         let inverted_mask = expanded_mask.neg()?.add(1.0f64)?;
