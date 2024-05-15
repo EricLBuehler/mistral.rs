@@ -54,10 +54,9 @@ use crate::{
 
 pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
 
-/// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For 
+/// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
 /// example `SimpleModelPaths` implements `ModelPaths` when all files are in the local file system.
-pub trait ModelPaths  {
-
+pub trait ModelPaths {
     /// Model weights files (multiple files supported).
     fn get_weight_filenames(&self) -> &[PathBuf];
 
@@ -90,7 +89,7 @@ pub trait ModelPaths  {
 
     /// Filepath for general model configuration.
     fn get_gen_conf_filename(&self) -> Option<&PathBuf>;
-    
+
     fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>>;
 }
 
@@ -110,6 +109,7 @@ pub struct LocalModelPaths<P> {
 }
 
 impl<P> LocalModelPaths<P> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         tokenizer_filename: P,
         config_filename: P,
@@ -138,7 +138,6 @@ impl<P> LocalModelPaths<P> {
         }
     }
 }
-
 
 impl ModelPaths for LocalModelPaths<PathBuf> {
     fn get_config_filename(&self) -> &PathBuf {
@@ -298,7 +297,11 @@ pub trait Loader {
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
 
-    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    #[allow(
+        clippy::type_complexity,
+        clippy::too_many_arguments,
+        clippy::borrowed_box
+    )]
     fn load_model_from_path(
         &self,
         paths: &Box<dyn ModelPaths>,

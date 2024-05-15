@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::Result as anyhowResult;
-use candle_core::{quantized::GgmlDType, DType, Device, IndexOp, Tensor, Result};
+use candle_core::{quantized::GgmlDType, DType, Device, IndexOp, Result, Tensor};
 use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
 
@@ -21,7 +21,8 @@ use crate::{
 
 use super::{
     cache_manager::DefaultCacheManager, calculate_inputs, chat_template::ChatTemplate,
-    sampling::SpeculativeSample, CacheInstruction, CacheManager, GeneralMetadata, ModelInputs, ModelPaths,
+    sampling::SpeculativeSample, CacheInstruction, CacheManager, GeneralMetadata, ModelInputs,
+    ModelPaths,
 };
 
 pub struct SpeculativeLoader {
@@ -43,7 +44,7 @@ impl Loader for SpeculativeLoader {
         in_situ_quant: Option<GgmlDType>,
     ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let target = self.target.load_model_from_hf(
-            revision.clone(), 
+            revision.clone(),
             token_source.clone(),
             dtype,
             device,
@@ -52,7 +53,7 @@ impl Loader for SpeculativeLoader {
             in_situ_quant,
         )?;
         let draft = self.draft.load_model_from_hf(
-            revision, 
+            revision,
             token_source,
             dtype,
             device,

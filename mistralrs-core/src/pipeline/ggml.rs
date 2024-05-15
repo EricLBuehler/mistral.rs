@@ -209,7 +209,6 @@ impl GGMLLoader {
 }
 
 impl Loader for GGMLLoader {
-
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
@@ -367,7 +366,7 @@ impl Loader for GGMLLoader {
             self.quantized_filename,
             silent
         );
-        self.load_model_from_path(&paths?, _dtype, device, silent, mapper, in_situ_quant)      
+        self.load_model_from_path(&paths?, _dtype, device, silent, mapper, in_situ_quant)
     }
 
     fn get_id(&self) -> String {
