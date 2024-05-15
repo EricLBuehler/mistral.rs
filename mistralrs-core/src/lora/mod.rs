@@ -1,3 +1,5 @@
+#![allow(clippy::cast_precision_loss)]
+
 use std::{collections::HashSet, fmt::Debug, sync::Arc};
 
 use candle_core::{
@@ -9,7 +11,6 @@ use loralinear::LoraLinear;
 pub use qloralinear::QLoraLinear;
 use serde::Deserialize;
 
-pub mod layer;
 mod loralinear;
 mod qloralinear;
 
@@ -61,22 +62,6 @@ fn apply_scalings_to_x(x: Tensor, scalings_layer: &Tensor, adapter: usize) -> Re
     let scalings = scalings_layer.i((.., .., adapter))?.unsqueeze(D::Minus1)?;
     let res = x.broadcast_mul(&scalings)?;
     Ok(res)
-}
-
-impl LoraConfig {
-    pub const fn new(
-        rank: usize,
-        alpha: f64,
-        dropout: Option<f32>,
-        target_modules: HashSet<String>,
-    ) -> Self {
-        Self {
-            rank,
-            alpha,
-            dropout,
-            target_modules,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -142,15 +127,6 @@ pub trait AdapterSwapper {
         }
     }
     fn _activate_adapters(&mut self, adapters: &[String]) -> Result<()>;
-    fn has_adapter(&self, adapter: String) -> bool;
-    /// Pass the prefix for the layer (excluding .lora_?) as `module_prefix`
-    fn load_new_adapter(
-        &mut self,
-        name: String,
-        vb: VarBuilder,
-        cfg: &LoraConfig,
-        module_prefix: String,
-    ) -> Result<()>;
     fn can_load(&self) -> bool;
 }
 
@@ -169,18 +145,6 @@ impl AdapterSwapper for Linear {
     }
     fn can_load(&self) -> bool {
         false
-    }
-    fn has_adapter(&self, _adapter: String) -> bool {
-        false
-    }
-    fn load_new_adapter(
-        &mut self,
-        _name: String,
-        _vb: VarBuilder,
-        _cfg: &LoraConfig,
-        _module_prefix: String,
-    ) -> Result<()> {
-        unreachable!()
     }
 }
 
@@ -212,7 +176,7 @@ impl LinearLayerLike for Linear {
 pub fn linear(
     d1: usize,
     d2: usize,
-    base_vb: crate::VarBuilder,
+    base_vb: VarBuilder,
     vb: VarBuilder,
     lora_config: &[((String, String), LoraConfig)],
     count: &mut usize,
@@ -264,7 +228,7 @@ pub fn linear(
 pub fn linear_no_bias(
     d1: usize,
     d2: usize,
-    base_vb: crate::VarBuilder,
+    base_vb: VarBuilder,
     vb: VarBuilder,
     lora_config: &[((String, String), LoraConfig)],
     count: &mut usize,
@@ -321,8 +285,8 @@ pub fn linear_b(
     in_dim: usize,
     out_dim: usize,
     bias: bool,
-    base_vb: crate::VarBuilder,
-    vb: crate::VarBuilder,
+    base_vb: VarBuilder,
+    vb: VarBuilder,
     lora_config: &[((String, String), LoraConfig)],
     count: &mut usize,
     ord: &Ordering,

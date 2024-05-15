@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::device_map::DeviceMapper;
-use crate::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, RmsNorm};
+use crate::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, RmsNorm};
 use crate::pipeline::Cache;
 use crate::DeviceMapMetadata;
 use candle_core::quantized::gguf_file;
@@ -109,11 +109,11 @@ impl LayerWeights {
         let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
 
-        let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
+        let att = MatMul.matmul_affine(&q, &k.t()?, (self.head_dim as f64).sqrt())?;
         let att = CausalMasker.apply_mask(&attn_mask, att, &self.neg_inf)?;
         let att = candle_nn::ops::softmax_last_dim(&att)?;
         // Convert to contiguous as matmul doesn't support strided vs for now.
-        let y = att.matmul(&v.contiguous()?)?;
+        let y = MatMul.matmul(&att, &v.contiguous()?)?;
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = self.attn_output.forward(&y)?;
         Ok(y)

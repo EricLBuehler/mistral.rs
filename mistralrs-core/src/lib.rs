@@ -13,12 +13,13 @@ use tokio::sync::mpsc::{channel, Sender};
 
 use engine::Engine;
 pub use engine::TERMINATE_ALL_NEXT_STEP;
-pub use mistralrs_lora::Ordering;
+pub use lora::Ordering;
 pub use pipeline::Pipeline;
 
 mod aici;
 mod device_map;
 mod engine;
+mod lora;
 mod model_loader;
 pub use model_loader::{get_tgt_non_granular_index, LoaderBuilder};
 mod model_selected;

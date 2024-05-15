@@ -9,8 +9,10 @@ mod sampling;
 mod speculative;
 use crate::aici::toktree::TokTrie;
 use crate::device_map::DeviceMapper;
+use crate::layers::set_use_matmul_via_f16;
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
+use crate::lora::{LoraConfig, Ordering};
 use crate::{api_dir_list, api_get_file, DeviceMapMetadata};
 use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
 use candle_nn::VarBuilder;
@@ -29,7 +31,6 @@ pub use loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
     Phi3Loader, Qwen2Loader,
 };
-use mistralrs_lora::{LoraConfig, Ordering};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
@@ -647,8 +648,14 @@ fn get_prompt_input(
         }
     }
     let positions_kernel = Tensor::cat(&tmp, 0)?;
+    let input = Tensor::cat(&seqs_tensors, 0).unwrap();
+    if input.dim(1)? > 32 {
+        set_use_matmul_via_f16(true);
+    } else {
+        set_use_matmul_via_f16(false);
+    }
     Ok(InputMetadata {
-        input: Tensor::cat(&seqs_tensors, 0).unwrap(),
+        input,
         positions: seqlen_offsets,
         positions_kernel,
         context_lens,
@@ -687,6 +694,7 @@ fn get_completion_input(
         tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
     }
     let positions_kernel = Tensor::cat(&tmp, 0)?;
+    set_use_matmul_via_f16(false);
     Ok(InputMetadata {
         input: Tensor::cat(&seqs_tensors, 0).unwrap(),
         positions: seqlen_offsets,
@@ -708,6 +716,7 @@ pub struct ModelInputs {
     position_ids: Vec<usize>,
 }
 
+/// This will also enable matmul via F16 if prompt and the sequence length is greater than 32.
 fn calculate_inputs(
     input_seqs: &[&mut Sequence],
     is_prompt: bool,

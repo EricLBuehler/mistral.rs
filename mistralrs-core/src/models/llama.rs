@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{flash_attn, repeat_kv, CausalMasker, RmsNorm},
+    layers::{flash_attn, repeat_kv, CausalMasker, MatMul, RmsNorm},
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
 };
@@ -103,15 +103,11 @@ impl CausalSelfAttention {
             let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
             flash_attn(&q, &k, &v, softmax_scale, seq_len > 1)?.transpose(1, 2)?
         } else {
-            let in_dtype = q.dtype();
-            let q = q.to_dtype(DType::F32)?;
-            let k = k.to_dtype(DType::F32)?;
-            let v = v.to_dtype(DType::F32)?;
-            let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
+            let att = MatMul.matmul_affine(&q, &k.t()?, (self.head_dim as f64).sqrt())?;
             let att = CausalMasker.apply_mask(attention_mask, att, &self.neg_inf)?;
             let att = candle_nn::ops::softmax(&att, D::Minus1)?;
             // Convert to contiguous as matmul doesn't support strided vs for now.
-            att.matmul(&v.contiguous()?)?.to_dtype(in_dtype)?
+            MatMul.matmul(&att, &v.contiguous()?)?
         };
         if matches!(self.q_proj, QMatMul::QTensor(_)) {
             y = y.to_dtype(DType::F32)?;

@@ -2,16 +2,19 @@
 
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
+use crate::{
+    layers::MatMul,
+    lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
+};
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
-use mistralrs_lora::{layer::QLinear, linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
 use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{flash_attn, repeat_kv, CausalMasker, PhiRotaryEmbedding, RmsNorm},
+    layers::{flash_attn, repeat_kv, CausalMasker, PhiRotaryEmbedding, QLinear, RmsNorm},
     models::phi3::Config,
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
@@ -158,12 +161,12 @@ impl Attention {
             let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
             flash_attn(&q, &k, &v, softmax_scale, q_len > 1)?.transpose(1, 2)?
         } else {
-            let scale = 1f64 / f64::sqrt(self.head_dim as f64);
-            let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+            let attn_weights =
+                MatMul.matmul_affine(&q, &k.transpose(2, 3)?, f64::sqrt(self.head_dim as f64))?;
 
             let attn_weights = CausalMasker.apply_mask(&attn_mask, attn_weights, &self.neg_inf)?;
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-            attn_weights.matmul(&v)?
+            MatMul.matmul(&attn_weights, &v)?
         };
         if self.qkv_proj.is_quant() {
             attn_output = attn_output.to_dtype(DType::F32)?;

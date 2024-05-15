@@ -2,12 +2,11 @@
 
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor};
 use candle_nn::{linear, linear_no_bias, Activation, RotaryEmbedding, VarBuilder};
-use mistralrs_lora::layer::QLinear;
 use std::sync::Arc;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{flash_attn, repeat_kv, CausalMasker, RmsNorm},
+    layers::{flash_attn, repeat_kv, CausalMasker, MatMul, QLinear, RmsNorm},
     pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };
@@ -171,13 +170,13 @@ impl Attention {
             let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
             flash_attn(&q, &k, &v, softmax_scale, q_len > 1)?.transpose(1, 2)?
         } else {
-            let scale = 1f64 / f64::sqrt(self.head_dim as f64);
-            let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+            let attn_weights =
+                MatMul.matmul_affine(&q, &k.transpose(2, 3)?, f64::sqrt(self.head_dim as f64))?;
 
             let attn_weights =
                 CausalMasker.apply_mask(&attention_mask.cloned(), attn_weights, &self.neg_inf)?;
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-            attn_weights.matmul(&v)?
+            MatMul.matmul(&attn_weights, &v)?
         };
         if self.q_proj.is_quant() {
             attn_output = attn_output.to_dtype(DType::F32)?;

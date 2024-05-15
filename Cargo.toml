@@ -2,7 +2,6 @@
 members = [
     "mistralrs-server",
     "mistralrs-core",
-    "mistralrs-lora",
     "mistralrs-pyo3",
     "mistralrs",
     "mistralrs-bench",
