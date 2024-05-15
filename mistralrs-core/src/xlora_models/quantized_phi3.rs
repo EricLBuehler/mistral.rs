@@ -147,8 +147,14 @@ impl LayerWeights {
         let q = self.apply_rotary_emb(&q, seqlen_offsets)?.contiguous()?;
         let k = self.apply_rotary_emb(&k, seqlen_offsets)?;
 
-        let (k, v, attn_mask) =
-            Cache::update_kv_cache_sliding_window(kv_cache, k, v, mask, Some(self.sliding_window))?;
+        let (k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
+            kv_cache,
+            k,
+            v,
+            mask,
+            Some(self.sliding_window),
+            true,
+        )?;
 
         let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?;

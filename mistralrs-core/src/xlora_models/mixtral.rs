@@ -180,6 +180,7 @@ impl Attention {
             v,
             attention_mask,
             self.sliding_window,
+            false,
         )?;
 
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
