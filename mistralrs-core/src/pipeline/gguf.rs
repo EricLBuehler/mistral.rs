@@ -10,6 +10,7 @@ use crate::pipeline::Cache;
 use crate::pipeline::{ChatTemplate, SimpleModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
+use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 use crate::xlora_models::NonGranularState;
 use crate::{deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata};
@@ -441,8 +442,7 @@ impl Loader for GGUFLoader {
             _ => unreachable!(),
         };
 
-        let tokenizer =
-            Tokenizer::from_file(paths.get_tokenizer_filename()).map_err(anyhow::Error::msg)?;
+        let tokenizer = get_tokenizer(paths.get_tokenizer_filename())?;
 
         let (chat_template, gen_conf) = deserialize_chat_template!(paths, self);
 
