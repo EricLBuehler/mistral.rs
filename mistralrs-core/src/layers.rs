@@ -1,18 +1,13 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use std::{
-    
     collections::HashMap,
-   
     ops::{Add, Mul},
-   
     str::FromStr,
-   
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
-,
 };
 
 use candle_core::{

@@ -3,9 +3,7 @@ use candle_nn::{
     conv2d, embedding, layer_norm, linear_no_bias, Activation, Conv2d, Conv2dConfig, Embedding,
     LayerNorm, Linear, Module, VarBuilder,
 };
-use rayon::result;
 use serde::Deserialize;
-use std::ops::Add;
 
 use crate::{
     layers::{repeat_kv, CausalMasker, RmsNorm},
