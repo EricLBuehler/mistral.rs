@@ -2,6 +2,10 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use crate::{
+    layers::MatMul,
+    lora::{linear, LinearLayerLike, LoraConfig, Ordering},
+};
 /// Phi model.
 /// https://huggingface.co/microsoft/phi-2
 /// There is an alternative implementation of the phi model in mixformers.rs.
@@ -11,13 +15,12 @@ use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
 use candle_nn::{
     embedding, layer_norm, Activation, Embedding, LayerNorm, RotaryEmbedding, VarBuilder,
 };
-use mistralrs_lora::{layer::QLinear, linear, LinearLayerLike, LoraConfig, Ordering};
 use tqdm::Iter;
 use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{flash_attn, repeat_kv, CausalMasker},
+    layers::{flash_attn, repeat_kv, CausalMasker, QLinear},
     models::phi2::Config,
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
@@ -189,7 +192,7 @@ impl Attention {
         } else {
             (None, None)
         };
-        let softmax_scale = 1f64 / (head_dim as f64).sqrt();
+        let softmax_scale = (head_dim as f64).sqrt();
         Ok(Self {
             q_proj,
             k_proj,
@@ -295,16 +298,13 @@ impl Attention {
             let v = v.transpose(1, 2)?;
             flash_attn(&q, &k, &v, self.softmax_scale as f32, seq_len > 1)?.transpose(1, 2)?
         } else {
-            let attn_weights = (q
-                .to_dtype(DType::F32)?
-                .contiguous()?
-                .matmul(&k.to_dtype(DType::F32)?.t()?)?
-                * self.softmax_scale)?;
+            let attn_weights =
+                MatMul.matmul_affine_div(&q.contiguous()?, &k.t()?, self.softmax_scale)?;
             let attn_weights =
                 CausalMasker.apply_mask(&mask.cloned(), attn_weights, &self.neg_inf)?;
             let attn_weights =
                 candle_nn::ops::softmax_last_dim(&attn_weights)?.to_dtype(v.dtype())?;
-            attn_weights.matmul(&v)?
+            MatMul.matmul(&attn_weights, &v)?
         };
 
         let mut attn_output = attn_output

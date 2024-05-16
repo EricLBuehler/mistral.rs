@@ -8,7 +8,7 @@ use candle_nn::{
     VarBuilder,
 };
 
-use mistralrs_lora::LoraConfig;
+use crate::lora::LoraConfig;
 use tqdm::Iter;
 
 /// Load tensors into a VarBuilder backed by a VarMap using MmapedSafetensors.

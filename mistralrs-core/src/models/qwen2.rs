@@ -2,12 +2,11 @@
 
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor};
 use candle_nn::{linear, linear_no_bias, Activation, RotaryEmbedding, VarBuilder};
-use mistralrs_lora::layer::QLinear;
 use std::sync::Arc;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{flash_attn, repeat_kv, CausalMasker, RmsNorm},
+    layers::{flash_attn, repeat_kv, CausalMasker, MatMul, QLinear, RmsNorm},
     pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };
@@ -63,9 +62,9 @@ impl Module for MLP {
         if matches!(self.gate_proj, QMatMul::QTensor(_)) {
             xs = xs.to_dtype(DType::F32)?;
         }
-        let lhs = xs.apply(&self.gate_proj)?.apply(&self.act_fn)?;
-        let rhs = xs.apply(&self.up_proj)?;
-        let mut res = (lhs * rhs)?.apply(&self.down_proj)?;
+        let lhs = MatMul.qmatmul(&xs, &self.gate_proj)?.apply(&self.act_fn)?;
+        let rhs = MatMul.qmatmul(&xs, &self.up_proj)?;
+        let mut res = MatMul.qmatmul(&(lhs * rhs)?, &self.down_proj)?;
         if matches!(self.gate_proj, QMatMul::QTensor(_)) {
             res = res.to_dtype(original_dtype)?;
         }
@@ -171,21 +170,24 @@ impl Attention {
             let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
             flash_attn(&q, &k, &v, softmax_scale, q_len > 1)?.transpose(1, 2)?
         } else {
-            let scale = 1f64 / f64::sqrt(self.head_dim as f64);
-            let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+            let attn_weights = MatMul.matmul_affine_div(
+                &q,
+                &k.transpose(2, 3)?,
+                f64::sqrt(self.head_dim as f64),
+            )?;
 
             let attn_weights =
                 CausalMasker.apply_mask(&attention_mask.cloned(), attn_weights, &self.neg_inf)?;
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-            attn_weights.matmul(&v)?
+            MatMul.matmul(&attn_weights, &v)?
         };
         if self.q_proj.is_quant() {
             attn_output = attn_output.to_dtype(DType::F32)?;
         }
-        let mut res = attn_output
-            .transpose(1, 2)?
-            .reshape((b_sz, q_len, ()))?
-            .apply(&self.o_proj)?;
+        let mut res = MatMul.qmatmul(
+            &attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?,
+            &self.o_proj,
+        )?;
         if self.q_proj.is_quant() {
             res = res.to_dtype(original_dtype)?;
         }
@@ -364,7 +366,7 @@ impl Model {
         if matches!(self.lm_head, QMatMul::QTensor(_)) {
             xs = xs.to_dtype(DType::F32)?;
         }
-        extract_logits(&xs.apply(&self.lm_head)?, context_lens)
+        extract_logits(&MatMul.qmatmul(&xs, &self.lm_head)?, context_lens)
     }
 }
 

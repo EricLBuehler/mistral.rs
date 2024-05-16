@@ -1,11 +1,14 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::{
+    layers::MatMul,
+    lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
+};
 /// Mixtral Model
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor};
 use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
-use mistralrs_lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering};
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
 use tracing::info;
@@ -194,12 +197,15 @@ impl Attention {
             let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
             flash_attn(&q, &k, &v, softmax_scale, q_len > 1)?.transpose(1, 2)?
         } else {
-            let scale = 1f64 / f64::sqrt(self.head_dim as f64);
-            let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+            let attn_weights = MatMul.matmul_affine_div(
+                &q,
+                &k.transpose(2, 3)?,
+                f64::sqrt(self.head_dim as f64),
+            )?;
 
             let attn_weights = CausalMasker.apply_mask(&attn_mask, attn_weights, &self.neg_inf)?;
             let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-            attn_weights.matmul(&v)?
+            MatMul.matmul(&attn_weights, &v)?
         };
         if self.q_proj.is_quant() {
             attn_output = attn_output.to_dtype(DType::F32)?;
@@ -764,7 +770,7 @@ impl XLoraModel {
                 if matches!(self.lm_head, QMatMul::QTensor(_)) {
                     res = res.to_dtype(DType::F32)?;
                 }
-                extract_logits(&res.apply(&self.lm_head)?, context_lens)
+                extract_logits(&MatMul.qmatmul(&res, &self.lm_head)?, context_lens)
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
                 let mut res = self
@@ -781,7 +787,7 @@ impl XLoraModel {
                 if matches!(self.lm_head, QMatMul::QTensor(_)) {
                     res = res.to_dtype(DType::F32)?;
                 }
-                extract_logits(&res.apply(&self.lm_head)?, context_lens)
+                extract_logits(&MatMul.qmatmul(&res, &self.lm_head)?, context_lens)
             }
         } else {
             let mut res = self
@@ -798,7 +804,7 @@ impl XLoraModel {
             if matches!(self.lm_head, QMatMul::QTensor(_)) {
                 res = res.to_dtype(DType::F32)?;
             }
-            extract_logits(&res.apply(&self.lm_head)?, context_lens)
+            extract_logits(&MatMul.qmatmul(&res, &self.lm_head)?, context_lens)
         }
     }
 }

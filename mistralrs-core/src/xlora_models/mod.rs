@@ -11,12 +11,12 @@ mod quantized_phi3;
 
 use std::sync::Arc;
 
+use crate::lora::Ordering;
 use candle_core::{DType, Device, Result, Tensor};
 pub(crate) use config::XLoraConfig;
 pub(crate) use gemma::XLoraModel as XLoraGemma;
 pub(crate) use llama::XLoraLlama;
 pub(crate) use mistral::XLoraModel as XLoraMistral;
-use mistralrs_lora::Ordering;
 pub(crate) use mixtral::XLoraModel as XLoraMixtral;
 pub(crate) use phi2::Model as XLoraPhi2;
 pub(crate) use phi3::Model as XLoraPhi3;

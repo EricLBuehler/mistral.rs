@@ -5,9 +5,10 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
+use crate::lora::Ordering;
 use crate::pipeline::chat_template::calculate_eos_tokens;
 use crate::pipeline::Cache;
-use crate::pipeline::{ChatTemplate, SimpleModelPaths};
+use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
@@ -22,7 +23,6 @@ use anyhow::Result;
 use candle_core::quantized::{ggml_file, GgmlDType};
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use mistralrs_lora::Ordering;
 use rand_isaac::Isaac64Rng;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -211,27 +211,15 @@ impl GGMLLoader {
 
 impl Loader for GGMLLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    fn load_model(
+    fn load_model_from_path(
         &self,
-        revision: Option<String>,
-        token_source: TokenSource,
+        paths: &Box<dyn ModelPaths>,
         _dtype: Option<DType>,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
-            SimpleModelPaths,
-            &token_source,
-            revision,
-            self,
-            self.quantized_model_id,
-            self.quantized_filename,
-            silent
-        );
-        let paths = paths?;
-
         if in_situ_quant.is_some() {
             anyhow::bail!(
                 "You are trying to in-situ quantize a GGUF model. This will not do anything."
@@ -356,6 +344,29 @@ impl Loader for GGMLLoader {
                 is_lora,
             },
         })))
+    }
+
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    fn load_model_from_hf(
+        &self,
+        revision: Option<String>,
+        token_source: TokenSource,
+        _dtype: Option<DType>,
+        device: &Device,
+        silent: bool,
+        mapper: DeviceMapMetadata,
+        in_situ_quant: Option<GgmlDType>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
+            LocalModelPaths,
+            &token_source,
+            revision,
+            self,
+            self.quantized_model_id,
+            self.quantized_filename,
+            silent
+        );
+        self.load_model_from_path(&paths?, _dtype, device, silent, mapper, in_situ_quant)
     }
 
     fn get_id(&self) -> String {

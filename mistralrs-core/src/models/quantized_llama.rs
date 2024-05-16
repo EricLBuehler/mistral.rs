@@ -6,7 +6,7 @@ use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 
 use crate::device_map::DeviceMapper;
-use crate::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, QRmsNorm};
+use crate::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm};
 use crate::pipeline::{extract_logits, Cache};
 use crate::DeviceMapMetadata;
 
@@ -19,12 +19,12 @@ struct Mlp {
     feed_forward_w3: QMatMul,
 }
 
-impl Module for Mlp {
+impl Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let w1 = self.feed_forward_w1.forward(xs)?;
-        let w3 = self.feed_forward_w3.forward(xs)?;
-        self.feed_forward_w2
-            .forward(&(candle_nn::ops::silu(&w1)? * w3)?)
+        let w1 = MatMul.qmatmul(xs, &self.feed_forward_w1)?;
+        let w3 = MatMul.qmatmul(xs, &self.feed_forward_w3)?;
+        let y = &(candle_nn::ops::silu(&w1)? * w3)?;
+        MatMul.qmatmul(y, &self.feed_forward_w2)
     }
 }
 
@@ -38,7 +38,7 @@ enum MlpOrMoe {
     },
 }
 
-impl Module for MlpOrMoe {
+impl MlpOrMoe {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
             Self::MoE {
@@ -134,9 +134,10 @@ impl LayerWeights {
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
-        let q = self.attention_wq.forward(x)?;
-        let k = self.attention_wk.forward(x)?;
-        let v = self.attention_wv.forward(x)?;
+
+        let q = MatMul.qmatmul(x, &self.attention_wq)?;
+        let k = MatMul.qmatmul(x, &self.attention_wk)?;
+        let v = MatMul.qmatmul(x, &self.attention_wv)?;
 
         let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
@@ -159,16 +160,21 @@ impl LayerWeights {
 
         let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-        let k = repeat_kv(k, self.n_head / self.n_kv_head)?.contiguous()?;
-        let v = repeat_kv(v, self.n_head / self.n_kv_head)?.contiguous()?;
+        let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
+        let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
+        let att = MatMul.matmul_affine_div(
+            &q.contiguous()?,
+            &k.t()?.contiguous()?,
+            (self.head_dim as f64).sqrt(),
+        )?;
 
-        let att = (q.contiguous()?.matmul(&k.t()?.contiguous()?)? / (self.head_dim as f64).sqrt())?;
         let att = CausalMasker.apply_mask(mask, att, &self.neg_inf)?;
         let att = candle_nn::ops::softmax_last_dim(&att)?;
         // Convert to contiguous as matmul doesn't support strided vs for now.
-        let y = att.matmul(&v.contiguous()?)?;
+        let y = MatMul.matmul(&att, &v.contiguous()?)?;
+
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
-        let y = self.attention_wo.forward(&y)?;
+        let y = MatMul.qmatmul(&y, &self.attention_wo)?;
         Ok(y)
     }
 }
@@ -414,6 +420,9 @@ impl ModelWeights {
         }
         let layer_in = layer_in.to_device(&self.device)?;
         let x = self.norm.forward(&layer_in)?;
-        extract_logits(&self.output.forward(&x.contiguous()?)?, context_lens)
+        extract_logits(
+            &MatMul.qmatmul(&x.contiguous()?, &self.output)?,
+            context_lens,
+        )
     }
 }

@@ -2,18 +2,18 @@
 
 use std::collections::HashMap;
 
+use crate::lora::{
+    get_lora_cfg, AdapterSwapper, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear,
+};
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
-use mistralrs_lora::{
-    get_lora_cfg, AdapterSwapper, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear,
-};
 use tqdm::Iter;
 use tracing::info;
 
 use crate::device_map::DeviceMapper;
-use crate::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, QRmsNorm};
+use crate::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm};
 use crate::pipeline::{extract_logits, Cache};
 use crate::DeviceMapMetadata;
 
@@ -93,7 +93,7 @@ impl MlpOrMoe {
             } => {
                 let (b_size, seq_len, hidden_dim) = xs.dims3()?;
                 let xs = xs.reshape(((), hidden_dim))?;
-                let router_logits = feed_forward_gate_inp.forward(&xs)?;
+                let router_logits = MatMul.qmatmul(&xs, feed_forward_gate_inp)?;
                 let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
 
                 // In order to extract topk, we extract the data from the tensor and manipulate it
@@ -233,11 +233,15 @@ impl LayerWeights {
         let k = repeat_kv(k, self.n_head / self.n_kv_head)?.contiguous()?;
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?.contiguous()?;
 
-        let att = (q.contiguous()?.matmul(&k.t()?.contiguous()?)? / (self.head_dim as f64).sqrt())?;
+        let att = MatMul.matmul_affine_div(
+            &q.contiguous()?,
+            &k.t()?.contiguous()?,
+            (self.head_dim as f64).sqrt(),
+        )?;
         let att = CausalMasker.apply_mask(mask, att, &self.neg_inf)?;
         let att = candle_nn::ops::softmax_last_dim(&att)?;
         // Convert to contiguous as matmul doesn't support strided vs for now.
-        let y = att.matmul(&v.contiguous()?)?;
+        let y = MatMul.matmul(&att, &v.contiguous()?)?;
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = self.attention_wo.lora_forward(
             &y,
@@ -831,52 +835,58 @@ impl ModelWeights {
 
             if no_kv_cache {
                 extract_logits(
-                    &self
-                        .inner_forward(
-                            input_ids_full,
-                            seqlen_offsets_full,
-                            start_offsets_kernel_full,
-                            Some(scalings),
-                            true,
-                            no_kv_cache,
-                            None,
-                        )?
-                        .contiguous()?
-                        .apply(&self.output)?,
+                    &MatMul.qmatmul(
+                        &self
+                            .inner_forward(
+                                input_ids_full,
+                                seqlen_offsets_full,
+                                start_offsets_kernel_full,
+                                Some(scalings),
+                                true,
+                                no_kv_cache,
+                                None,
+                            )?
+                            .contiguous()?,
+                        &self.output,
+                    )?,
                     context_lens,
                 )
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
                 extract_logits(
-                    &self
-                        .inner_forward(
-                            input_ids,
-                            seqlen_offsets,
-                            start_offsets_kernel,
-                            Some(scalings),
-                            true,
-                            no_kv_cache,
-                            None,
-                        )?
-                        .contiguous()?
-                        .apply(&self.output)?,
+                    &MatMul.qmatmul(
+                        &self
+                            .inner_forward(
+                                input_ids,
+                                seqlen_offsets,
+                                start_offsets_kernel,
+                                Some(scalings),
+                                true,
+                                no_kv_cache,
+                                None,
+                            )?
+                            .contiguous()?,
+                        &self.output,
+                    )?,
                     context_lens,
                 )
             }
         } else {
             extract_logits(
-                &self
-                    .inner_forward(
-                        input_ids,
-                        seqlen_offsets,
-                        start_offsets_kernel,
-                        None,
-                        false,
-                        no_kv_cache,
-                        None,
-                    )?
-                    .contiguous()?
-                    .apply(&self.output)?,
+                &MatMul.qmatmul(
+                    &self
+                        .inner_forward(
+                            input_ids,
+                            seqlen_offsets,
+                            start_offsets_kernel,
+                            None,
+                            false,
+                            no_kv_cache,
+                            None,
+                        )?
+                        .contiguous()?,
+                    &self.output,
+                )?,
                 context_lens,
             )
         }

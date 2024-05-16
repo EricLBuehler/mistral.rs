@@ -5,7 +5,7 @@ use std::{
     error::Error,
     fs::OpenOptions,
     io::Write,
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicBool, Arc, Mutex},
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -13,12 +13,13 @@ use tokio::sync::mpsc::{channel, Sender};
 
 use engine::Engine;
 pub use engine::TERMINATE_ALL_NEXT_STEP;
-pub use mistralrs_lora::Ordering;
+pub use lora::Ordering;
 pub use pipeline::Pipeline;
 
 mod aici;
 mod device_map;
 mod engine;
+mod lora;
 mod model_loader;
 pub use model_loader::{get_tgt_non_granular_index, LoaderBuilder};
 mod model_selected;
@@ -40,10 +41,10 @@ mod xlora_models;
 pub use device_map::{DeviceMapMetadata, LayerDeviceMapper};
 pub use pipeline::{
     GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder,
-    GGUFSpecificConfig, GemmaLoader, LlamaLoader, Loader, MistralLoader, MixtralLoader, ModelKind,
-    NormalLoader, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader,
-    Phi3Loader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline,
-    TokenSource,
+    GGUFSpecificConfig, GemmaLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader,
+    MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
+    NormalSpecificConfig, Phi2Loader, Phi3Loader, Qwen2Loader, SpeculativeConfig,
+    SpeculativeLoader, SpeculativePipeline, TokenSource,
 };
 pub use request::{Constraint, NormalRequest, Request, RequestMessage};
 pub use response::Response;
@@ -78,6 +79,7 @@ pub struct MistralRsBuilder {
     no_prefix_cache: Option<bool>,
     prefix_cache_n: Option<usize>,
     disable_eos_stop: Option<bool>,
+    gemm_full_precision_f16: Option<bool>,
 }
 
 impl MistralRsBuilder {
@@ -91,9 +93,9 @@ impl MistralRsBuilder {
             no_prefix_cache: None,
             prefix_cache_n: None,
             disable_eos_stop: None,
+            gemm_full_precision_f16: None,
         }
     }
-
     pub fn with_log(mut self, log: String) -> Self {
         self.log = Some(log);
         self
@@ -122,11 +124,60 @@ impl MistralRsBuilder {
         self.disable_eos_stop = Some(disable_eos_stop);
         self
     }
+    pub fn with_gemm_full_precision_f16(mut self, gemm_full_precision: bool) -> Self {
+        self.gemm_full_precision_f16 = Some(gemm_full_precision);
+        self
+    }
 
     pub fn build(self) -> Arc<MistralRs> {
         MistralRs::new(self)
     }
 }
+
+pub(crate) static INHIBIT_GEMM_F16: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "cuda")]
+fn set_gemm_reduced_precision_f16() {
+    use candle_core::{DType, Device, Tensor};
+
+    // NOTE(EricLBuehler): When we support multi-GPU inference, we should check for each gpu here
+    let a = Tensor::zeros((2, 2), DType::BF16, &Device::new_cuda(0).unwrap()).unwrap();
+    candle_core::cuda::set_gemm_reduced_precision_bf16(true);
+    match a.matmul(&a) {
+        Ok(_) => (),
+        Err(e) => match e {
+            candle_core::Error::Cuda(e) => {
+                let x = e.downcast::<candle_core::cuda::cudarc::cublas::result::CublasError>();
+                if format!("{x:?}").contains("CUBLAS_STATUS_NOT_SUPPORTED") {
+                    tracing::info!("GEMM reduced precision in BF16 not supported.");
+                    candle_core::cuda::set_gemm_reduced_precision_bf16(false);
+                    INHIBIT_GEMM_F16.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            _ => (),
+        },
+    }
+
+    let a = Tensor::zeros((2, 2), DType::F16, &Device::new_cuda(0).unwrap()).unwrap();
+    candle_core::cuda::set_gemm_reduced_precision_f16(true);
+    match a.matmul(&a) {
+        Ok(_) => (),
+        Err(e) => match e {
+            candle_core::Error::Cuda(e) => {
+                let x = e.downcast::<candle_core::cuda::cudarc::cublas::result::CublasError>();
+                if format!("{x:?}").contains("CUBLAS_STATUS_NOT_SUPPORTED") {
+                    tracing::info!("GEMM reduced precision in F16 not supported.");
+                    candle_core::cuda::set_gemm_reduced_precision_f16(false);
+                    INHIBIT_GEMM_F16.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            _ => (),
+        },
+    }
+}
+
+#[cfg(not(feature = "cuda"))]
+fn set_gemm_reduced_precision_f16() {}
 
 impl MistralRs {
     fn new(config: MistralRsBuilder) -> Arc<Self> {
@@ -139,7 +190,12 @@ impl MistralRs {
             no_prefix_cache,
             prefix_cache_n,
             disable_eos_stop,
+            gemm_full_precision_f16,
         } = config;
+
+        if !gemm_full_precision_f16.unwrap_or(false) {
+            set_gemm_reduced_precision_f16();
+        }
 
         let truncate_sequence = truncate_sequence.unwrap_or(false);
         let no_kv_cache = no_kv_cache.unwrap_or(false);

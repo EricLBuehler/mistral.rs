@@ -397,7 +397,7 @@ impl Runner {
             None
         };
         let pipeline = loader
-            .load_model(
+            .load_model_from_hf(
                 None,
                 TokenSource::from_str(token_source)
                     .map_err(|e| PyValueError::new_err(e.to_string()))?,

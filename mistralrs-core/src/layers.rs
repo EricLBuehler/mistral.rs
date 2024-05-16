@@ -1,23 +1,34 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use std::{
+    
     collections::HashMap,
+   
     ops::{Add, Mul},
+   
     str::FromStr,
-    sync::Mutex,
+   
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+,
 };
 
-use candle_core::{quantized::QTensor, DType, Device, IndexOp, Result, Tensor, WithDType};
+use candle_core::{
+    quantized::{gguf_file, QMatMul, QTensor},
+    DType, Device, IndexOp, Result, Tensor, WithDType,
+};
 use candle_nn::{
     layer_norm::{RmsNormNonQuantized, RmsNormQuantized},
-    Module, VarBuilder,
+    Linear, Module, VarBuilder,
 };
 use once_cell::sync::Lazy;
 
 static MASKS: Lazy<Mutex<HashMap<(usize, usize), Tensor>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-use crate::models::phi3;
+use crate::{models::phi3, INHIBIT_GEMM_F16};
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
@@ -390,6 +401,146 @@ impl CausalMasker {
                     &att,
                 )
             }
+        }
+    }
+}
+
+/// Matrix multiplcation, configurable to be via f16 (to use the faster GEMM kernels) optionally.
+pub struct MatMul;
+
+/// Set the matmuls to go via f16
+pub(crate) static USE_MATMUL_VIA_F16: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_use_matmul_via_f16(via_f16: bool) {
+    if !INHIBIT_GEMM_F16.load(Ordering::Relaxed) {
+        USE_MATMUL_VIA_F16.store(via_f16, Ordering::Relaxed)
+    }
+}
+pub fn get_use_matmul_via_f16() -> bool {
+    USE_MATMUL_VIA_F16.load(Ordering::Relaxed)
+}
+
+impl MatMul {
+    /// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    pub fn matmul(&self, a: &Tensor, b: &Tensor) -> Result<Tensor> {
+        if !get_use_matmul_via_f16() {
+            return a.matmul(b);
+        }
+        let original_dtype = a.dtype();
+        a.to_dtype(DType::F16)?
+            .matmul(&b.to_dtype(DType::F16)?)?
+            .to_dtype(original_dtype)
+    }
+
+    /// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    /// The result will be divided by the `scale` parameter in an affine division.
+    pub fn matmul_affine_div(&self, a: &Tensor, b: &Tensor, scale: f64) -> Result<Tensor> {
+        // TODO(EricLBuehler): Optimize this by using the gemm parameter
+        self.matmul(a, b)? / scale
+    }
+
+    /// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    pub fn qmatmul(&self, x: &Tensor, matmul: &QMatMul) -> Result<Tensor> {
+        if get_use_matmul_via_f16() {
+            matmul.forward_via_f16(x)
+        } else {
+            matmul.forward(x)
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct QLinear {
+    inner: QMatMul,
+    bias: Option<Tensor>,
+    dtype: DType,
+}
+
+impl QLinear {
+    pub fn new<R: std::io::Read + std::io::Seek>(
+        ct: &gguf_file::Content,
+        r: &mut R,
+        name: &str,
+        device: &Device,
+    ) -> Result<Self> {
+        let w = ct.tensor(r, &format!("{name}.weight"), device)?;
+        let b = ct.tensor(r, &format!("{name}.bias"), device)?;
+        let inner = QMatMul::from_qtensor(w)?;
+        let bias = b.dequantize(device)?;
+        Ok(Self {
+            inner,
+            bias: Some(bias),
+            dtype: DType::F32,
+        })
+    }
+
+    pub fn from_linear(linear: Linear) -> Self {
+        Self {
+            inner: QMatMul::Tensor(linear.weight().clone()),
+            bias: linear.bias().cloned(),
+            dtype: if linear.weight().device().is_cuda() {
+                DType::BF16
+            } else {
+                DType::F32
+            },
+        }
+    }
+
+    pub fn from_parts(w: Tensor, b: Option<Tensor>) -> Self {
+        let dtype = if w.device().is_cuda() {
+            DType::BF16
+        } else {
+            DType::F32
+        };
+        Self {
+            inner: QMatMul::Tensor(w),
+            bias: b,
+            dtype,
+        }
+    }
+
+    pub fn from_qparts(w: QTensor, b: Option<Tensor>) -> Self {
+        if let Some(ref b) = b {
+            assert_eq!(b.dtype(), DType::F32);
+        }
+        Self {
+            inner: QMatMul::QTensor(Arc::new(w)),
+            bias: b,
+            dtype: DType::F32,
+        }
+    }
+
+    pub fn inner(&mut self) -> &mut QMatMul {
+        &mut self.inner
+    }
+
+    pub fn is_quant(&self) -> bool {
+        matches!(self.inner, QMatMul::QTensor(_))
+    }
+
+    pub fn bias(&self) -> Option<&Tensor> {
+        self.bias.as_ref()
+    }
+}
+
+impl Module for QLinear {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let xs = if self.is_quant() {
+            xs.to_dtype(DType::F32)?
+        } else {
+            xs.clone()
+        };
+        let forward_fn = if get_use_matmul_via_f16() {
+            QMatMul::forward
+        } else {
+            QMatMul::forward_via_f16
+        };
+        if let Some(bias) = &self.bias {
+            forward_fn(&self.inner, &xs)?
+                .broadcast_add(bias)?
+                .to_dtype(self.dtype)
+        } else {
+            forward_fn(&self.inner, &xs)?.to_dtype(self.dtype)
         }
     }
 }
