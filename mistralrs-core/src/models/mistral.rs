@@ -292,8 +292,29 @@ impl Model {
         loading_isq: bool,
         real_device: Device,
     ) -> Result<Self> {
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
         let vb_m = vb.pp("model");
+        let vb_lm_head = vb.pp("lm_head");
+        Self::new_inner(
+            cfg,
+            vb_m,
+            vb_lm_head,
+            is_gptx,
+            mapper,
+            loading_isq,
+            real_device,
+        )
+    }
+
+    pub fn new_inner(
+        cfg: &Config,
+        vb_m: VarBuilder,
+        vb_lm_head: VarBuilder,
+        is_gptx: bool,
+        mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        real_device: Device,
+    ) -> Result<Self> {
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -309,7 +330,7 @@ impl Model {
                 cfg.max_position_embeddings,
                 mapper.device_for(layer_idx, false).unwrap_or(&real_device),
                 is_gptx,
-                vb.dtype(),
+                vb_m.dtype(),
             )?);
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
@@ -329,7 +350,7 @@ impl Model {
         let lm_head = linear_no_bias(
             cfg.hidden_size,
             cfg.vocab_size,
-            mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
+            mapper.set_nm_device(vb_lm_head, loading_isq),
         )?;
         Ok(Self {
             embed_tokens,

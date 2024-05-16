@@ -1,4 +1,4 @@
-use candle_core::{DType, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
     conv2d, embedding, layer_norm, linear_no_bias, Activation, Conv2d, Conv2dConfig, Embedding,
     LayerNorm, Linear, Module, VarBuilder,
@@ -7,7 +7,9 @@ use serde::Deserialize;
 
 use crate::{
     layers::{repeat_kv, CausalMasker, RmsNorm},
+    models::mistral::Model as Mistral,
     pipeline::Cache,
+    DeviceMapMetadata,
 };
 
 use super::mistral;
@@ -439,7 +441,7 @@ struct Encoder {
 }
 
 impl Encoder {
-    fn new(config: VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &VisionConfig, vb: VarBuilder) -> Result<Self> {
         let mut layers = Vec::new();
         let vb_l = vb.pp("layers");
         for i in 0..config.num_hidden_layers {
@@ -469,19 +471,19 @@ struct VisionTransformer {
 }
 
 impl VisionTransformer {
-    fn new(config: VisionConfig, vb: VarBuilder) -> Result<Self> {
-        let embeddings = VisionEmbeddings::new(&config, vb.pp("embeddings"))?;
+    fn new(config: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+        let embeddings = VisionEmbeddings::new(config, vb.pp("embeddings"))?;
         let post_layernorm = layer_norm(
             config.hidden_size,
             config.layer_norm_eps,
             vb.pp("post_layernorm"),
         )?;
-        let encoder = Encoder::new(config.clone(), vb.pp("encoder"))?;
+        let encoder = Encoder::new(config, vb.pp("encoder"))?;
         Ok(Self {
             embeddings,
             encoder,
             post_layernorm,
-            config,
+            config: config.clone(),
         })
     }
 
@@ -568,7 +570,7 @@ struct PerceiverAttention {
 }
 
 impl PerceiverAttention {
-    fn new(config: Config, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
         let hidden_size = config.text_config.hidden_size;
         let num_heads = config.perceiver_config.resampler_n_heads;
         let head_dim = config.perceiver_config.resampler_head_dim;
@@ -646,7 +648,7 @@ struct PerceiverLayer {
 }
 
 impl PerceiverLayer {
-    fn new(config: Config, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
         let hidden_size = config.text_config.hidden_size;
         let mlp_act = config.perceiver_config.hidden_act;
         let rms_eps = config.text_config.rms_norm_eps;
@@ -699,7 +701,7 @@ struct PerceiverResampler {
 }
 
 impl PerceiverResampler {
-    fn new(config: Config, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
         let n_latents = config.perceiver_config.resampler_n_latents;
         let hidden_size = config.text_config.hidden_size;
         let depth = config.perceiver_config.resampler_depth;
@@ -708,7 +710,7 @@ impl PerceiverResampler {
         let mut layers = Vec::new();
         let vb_l = vb.pp("layers");
         for i in 0..depth {
-            layers.push(PerceiverLayer::new(config.clone(), vb_l.pp(i))?);
+            layers.push(PerceiverLayer::new(config, vb_l.pp(i))?);
         }
         let norm = RmsNorm::new(hidden_size, config.text_config.rms_norm_eps, vb.pp("norm"))?;
         Ok(Self {
@@ -755,7 +757,7 @@ struct Connector {
 }
 
 impl Connector {
-    fn new(config: Config, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
         let modality_projection = MLP::new(
             config.vision_config.hidden_size,
             config.text_config.intermediate_size,
@@ -778,3 +780,80 @@ impl Connector {
 }
 
 // == END CONNECTOR ==
+
+// == START MODEL ==
+
+struct Idefics2 {
+    vision_model: VisionTransformer,
+    connector: Connector,
+    text_model: Mistral,
+    dtype: DType,
+}
+
+impl Idefics2 {
+    pub fn new(
+        config: &Config,
+        vb: VarBuilder,
+        is_gptx: bool,
+        mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        real_device: Device,
+    ) -> Result<Self> {
+        let vb_m = vb.pp("model");
+        let vision_model = VisionTransformer::new(&config.vision_config, vb_m.pp("vision_model"))?;
+        let connector = Connector::new(config, vb_m.pp("connector"))?;
+        let text_model = Mistral::new_inner(
+            &config.text_config.clone().into(),
+            vb_m.pp("text_model"),
+            vb.pp("lm_head"),
+            is_gptx,
+            mapper,
+            loading_isq,
+            real_device,
+        )?;
+        Ok(Self {
+            vision_model,
+            connector,
+            text_model,
+            dtype: vb.dtype(),
+        })
+    }
+
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        pixel_values: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+    ) -> Result<Tensor> {
+        // == START VISUAL INPUTS INTEGRATION ==
+        let (batch_size, num_images, num_channels, height, width) = pixel_values.dims5()?;
+        let pixel_values = pixel_values.to_dtype(self.dtype)?;
+        let pixel_values = pixel_values
+            .reshape(vec![batch_size * num_images].extend(pixel_values.dims()[2..].to_vec()))?;
+
+        // Remove padding images which are full of 0s
+        let nb_values_per_image = pixel_values.dims()[1..].iter().product::<usize>();
+        let real_images_inds = pixel_values
+            .eq(0.0f64)?
+            .reshape((batch_size * num_images, num_channels * height * width))?
+            .sum(D::Minus1)?
+            .ne(nb_values_per_image as f64)?;
+        let pixel_values = pixel_values.gather(&real_images_inds, 0)?;
+
+        // Vision attention mask
+        let pixel_attention_mask = Tensor::ones(
+            (
+                pixel_values.dims()[0],
+                pixel_values.dims()[2],
+                pixel_values.dims()[3],
+            ),
+            DType::U8,
+            pixel_values.device(),
+        )?;
+
+        // todo line: https://github.com/huggingface/transformers/blob/4b3eb19fa7f359d25f62ca9108479f71de912ebc/src/transformers/models/idefics2/modeling_idefics2.py#L1633
+        todo!()
+    }
+}
