@@ -156,12 +156,12 @@
 
 <span class="kw">use </span>std::sync::Arc;
 
+<span class="kw">use </span><span class="kw">crate</span>::lora::Ordering;
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>config::XLoraConfig;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>gemma::XLoraModel <span class="kw">as </span>XLoraGemma;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>llama::XLoraLlama;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>mistral::XLoraModel <span class="kw">as </span>XLoraMistral;
-<span class="kw">use </span>mistralrs_lora::Ordering;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>mixtral::XLoraModel <span class="kw">as </span>XLoraMixtral;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>phi2::Model <span class="kw">as </span>XLoraPhi2;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>phi3::Model <span class="kw">as </span>XLoraPhi3;

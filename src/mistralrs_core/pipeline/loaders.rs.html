@@ -754,11 +754,11 @@
 <a href="#752" id="752">752</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, fmt::Debug, str::FromStr};
 
+<span class="kw">use </span><span class="kw">crate</span>::lora::{LoraConfig, Ordering};
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>candle_nn::{Activation, VarBuilder};
 <span class="kw">use </span>either::Either;
-<span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
 
 <span class="attr">#[cfg(feature = <span class="string">"pyo3_macros"</span>)]
 </span><span class="kw">use </span>pyo3::pyclass;

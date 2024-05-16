@@ -441,10 +441,6 @@
 <a href="#439" id="439">439</a>
 <a href="#440" id="440">440</a>
 <a href="#441" id="441">441</a>
-<a href="#442" id="442">442</a>
-<a href="#443" id="443">443</a>
-<a href="#444" id="444">444</a>
-<a href="#445" id="445">445</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Phi model.
@@ -456,12 +452,11 @@
 <span class="kw">use </span>candle_nn::{
     embedding, layer_norm, linear, Activation, Embedding, LayerNorm, RotaryEmbedding, VarBuilder,
 };
-<span class="kw">use </span>mistralrs_lora::layer::QLinear;
 <span class="kw">use </span>serde::Deserialize;
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    layers::{flash_attn, repeat_kv, CausalMasker},
+    layers::{flash_attn, repeat_kv, CausalMasker, MatMul, QLinear},
     pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };
@@ -565,7 +560,7 @@
         } <span class="kw">else </span>{
             (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
         };
-        <span class="kw">let </span>softmax_scale = <span class="number">1f64 </span>/ (head_dim <span class="kw">as </span>f64).sqrt();
+        <span class="kw">let </span>softmax_scale = (head_dim <span class="kw">as </span>f64).sqrt();
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             q_proj: QLinear::from_linear(q_proj),
             k_proj: QLinear::from_linear(k_proj),
@@ -653,16 +648,13 @@
             <span class="kw">let </span>v = v.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
             flash_attn(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, <span class="self">self</span>.softmax_scale <span class="kw">as </span>f32, seq_len &gt; <span class="number">1</span>)<span class="question-mark">?</span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
         </span>} <span class="kw">else </span>{
-            <span class="kw">let </span>attn_weights = (q
-                .to_dtype(DType::F32)<span class="question-mark">?
-                </span>.contiguous()<span class="question-mark">?
-                </span>.matmul(<span class="kw-2">&amp;</span>k.to_dtype(DType::F32)<span class="question-mark">?</span>.t()<span class="question-mark">?</span>)<span class="question-mark">?
-                </span>* <span class="self">self</span>.softmax_scale)<span class="question-mark">?</span>;
+            <span class="kw">let </span>attn_weights =
+                MatMul.matmul_affine_div(<span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>, <span class="self">self</span>.softmax_scale)<span class="question-mark">?</span>;
             <span class="kw">let </span>attn_weights =
                 CausalMasker.apply_mask(<span class="kw-2">&amp;</span>mask.cloned(), attn_weights, <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf)<span class="question-mark">?</span>;
             <span class="kw">let </span>attn_weights =
                 candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>.to_dtype(v.dtype())<span class="question-mark">?</span>;
-            attn_weights.matmul(<span class="kw-2">&amp;</span>v)<span class="question-mark">?
+            MatMul.matmul(<span class="kw-2">&amp;</span>attn_weights, <span class="kw-2">&amp;</span>v)<span class="question-mark">?
         </span>};
         <span class="kw">if </span><span class="self">self</span>.q_proj.is_quant() {
             attn_output = attn_output.to_dtype(DType::F32)<span class="question-mark">?</span>;

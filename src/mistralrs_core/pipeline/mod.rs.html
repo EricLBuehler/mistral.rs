@@ -1219,6 +1219,17 @@
 <a href="#1217" id="1217">1217</a>
 <a href="#1218" id="1218">1218</a>
 <a href="#1219" id="1219">1219</a>
+<a href="#1220" id="1220">1220</a>
+<a href="#1221" id="1221">1221</a>
+<a href="#1222" id="1222">1222</a>
+<a href="#1223" id="1223">1223</a>
+<a href="#1224" id="1224">1224</a>
+<a href="#1225" id="1225">1225</a>
+<a href="#1226" id="1226">1226</a>
+<a href="#1227" id="1227">1227</a>
+<a href="#1228" id="1228">1228</a>
+<a href="#1229" id="1229">1229</a>
+<a href="#1230" id="1230">1230</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>cache_manager;
 <span class="kw">mod </span>chat_template;
 <span class="kw">mod </span>ggml;
@@ -1230,8 +1241,10 @@
 <span class="kw">mod </span>speculative;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
+<span class="kw">use </span><span class="kw">crate</span>::layers::set_use_matmul_via_f16;
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">mod </span>sampling_pipeline;
+<span class="kw">use </span><span class="kw">crate</span>::lora::{LoraConfig, Ordering};
 <span class="kw">use crate</span>::{api_dir_list, api_get_file, DeviceMapMetadata};
 <span class="kw">use </span>candle_core::quantized::{GgmlDType, QMatMul, QTensor};
 <span class="kw">use </span>candle_nn::VarBuilder;
@@ -1250,7 +1263,6 @@
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
     Phi3Loader, Qwen2Loader,
 };
-<span class="kw">use </span>mistralrs_lora::{LoraConfig, Ordering};
 <span class="kw">pub use </span>normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
@@ -1941,8 +1953,15 @@
         }
     }
     <span class="kw">let </span>positions_kernel = Tensor::cat(<span class="kw-2">&amp;</span>tmp, <span class="number">0</span>)<span class="question-mark">?</span>;
+    <span class="kw">let </span>input = Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap();
+    <span class="comment">// Only use matmul via f16 if prompt and seqlen &gt; 32
+    </span><span class="kw">if </span>input.dim(<span class="number">1</span>)<span class="question-mark">? </span>&gt; <span class="number">32 </span>{
+        set_use_matmul_via_f16(<span class="bool-val">true</span>);
+    } <span class="kw">else </span>{
+        set_use_matmul_via_f16(<span class="bool-val">false</span>);
+    }
     <span class="prelude-val">Ok</span>(InputMetadata {
-        input: Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap(),
+        input,
         positions: seqlen_offsets,
         positions_kernel,
         context_lens,
@@ -1981,6 +2000,7 @@
         tmp.push(Tensor::from_slice(<span class="kw-2">&amp;</span>pos, pos.len(), device)<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>);
     }
     <span class="kw">let </span>positions_kernel = Tensor::cat(<span class="kw-2">&amp;</span>tmp, <span class="number">0</span>)<span class="question-mark">?</span>;
+    set_use_matmul_via_f16(<span class="bool-val">false</span>);
     <span class="prelude-val">Ok</span>(InputMetadata {
         input: Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap(),
         positions: seqlen_offsets,
@@ -2002,7 +2022,9 @@
     position_ids: Vec&lt;usize&gt;,
 }
 
-<span class="kw">fn </span>calculate_inputs(
+<span class="doccomment">/// This will also enable matmul via f16 if prompt and the sequence length is greater than 32.
+/// Otherwise, matmul via f16 is disabled
+</span><span class="kw">fn </span>calculate_inputs(
     input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
     is_prompt: bool,
     is_xlora: bool,

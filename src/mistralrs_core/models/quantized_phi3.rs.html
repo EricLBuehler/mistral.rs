@@ -279,11 +279,10 @@
 <a href="#277" id="277">277</a>
 <a href="#278" id="278">278</a>
 <a href="#279" id="279">279</a>
-<a href="#280" id="280">280</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
-<span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, RmsNorm};
+<span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, RmsNorm};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::Cache;
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
 <span class="kw">use </span>candle_core::quantized::gguf_file;
@@ -301,11 +300,11 @@
 
 <span class="kw">impl </span>Module <span class="kw">for </span>Mlp {
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>up_states = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.ffn_up)<span class="question-mark">?</span>;
+        <span class="kw">let </span>up_states = MatMul.qmatmul(xs, <span class="kw-2">&amp;</span><span class="self">self</span>.ffn_up)<span class="question-mark">?</span>;
         <span class="kw">let </span>gate = up_states.narrow(D::Minus1, <span class="number">0</span>, <span class="self">self</span>.i_size)<span class="question-mark">?</span>;
         <span class="kw">let </span>up_states = up_states.narrow(D::Minus1, <span class="self">self</span>.i_size, <span class="self">self</span>.i_size)<span class="question-mark">?</span>;
         <span class="kw">let </span>up_states = (up_states * gate.silu()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-        up_states.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.ffn_down)
+        MatMul.qmatmul(<span class="kw-2">&amp;</span>up_states, <span class="kw-2">&amp;</span><span class="self">self</span>.ffn_down)
     }
 }
 
@@ -355,8 +354,7 @@
         kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, seq_len, n_embd) = x.dims3()<span class="question-mark">?</span>;
-        <span class="kw">let </span>qkv = <span class="self">self</span>.attn_qkv.forward(x)<span class="question-mark">?</span>;
-
+        <span class="kw">let </span>qkv = MatMul.qmatmul(x, <span class="kw-2">&amp;</span><span class="self">self</span>.attn_qkv)<span class="question-mark">?</span>;
         <span class="kw">let </span>query_pos = <span class="self">self</span>.n_head * <span class="self">self</span>.head_dim;
         <span class="kw">let </span>q = qkv.narrow(D::Minus1, <span class="number">0</span>, query_pos)<span class="question-mark">?</span>;
         <span class="kw">let </span>k = qkv.narrow(D::Minus1, query_pos, <span class="self">self</span>.n_kv_head * <span class="self">self</span>.head_dim)<span class="question-mark">?</span>;
@@ -391,13 +389,13 @@
         <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>att = (q.matmul(<span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>)<span class="question-mark">? </span>/ (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
+        <span class="kw">let </span>att = MatMul.matmul_affine_div(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>, (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
         <span class="kw">let </span>att = CausalMasker.apply_mask(<span class="kw-2">&amp;</span>attn_mask, att, <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf)<span class="question-mark">?</span>;
         <span class="kw">let </span>att = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>att)<span class="question-mark">?</span>;
         <span class="comment">// Convert to contiguous as matmul doesn't support strided vs for now.
-        </span><span class="kw">let </span>y = att.matmul(<span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+        </span><span class="kw">let </span>y = MatMul.matmul(<span class="kw-2">&amp;</span>att, <span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>y = y.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>.reshape(<span class="kw-2">&amp;</span>[b_sz, seq_len, n_embd])<span class="question-mark">?</span>;
-        <span class="kw">let </span>y = <span class="self">self</span>.attn_output.forward(<span class="kw-2">&amp;</span>y)<span class="question-mark">?</span>;
+        <span class="kw">let </span>y = MatMul.qmatmul(<span class="kw-2">&amp;</span>y, <span class="kw-2">&amp;</span><span class="self">self</span>.attn_output)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(y)
     }
 }
@@ -557,7 +555,7 @@
         </span>}
         <span class="kw">let </span>xs = xs.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
         <span class="kw">let </span>xs = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.output_norm)<span class="question-mark">?</span>.i((.., seq_len - <span class="number">1</span>, ..))<span class="question-mark">?</span>;
-        <span class="self">self</span>.output.forward(<span class="kw-2">&amp;</span>xs)
+        MatMul.qmatmul(<span class="kw-2">&amp;</span>xs, <span class="kw-2">&amp;</span><span class="self">self</span>.output)
     }
 }
 </code></pre></div></section></main></body></html>

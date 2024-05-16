@@ -428,37 +428,6 @@
 <a href="#426" id="426">426</a>
 <a href="#427" id="427">427</a>
 <a href="#428" id="428">428</a>
-<a href="#429" id="429">429</a>
-<a href="#430" id="430">430</a>
-<a href="#431" id="431">431</a>
-<a href="#432" id="432">432</a>
-<a href="#433" id="433">433</a>
-<a href="#434" id="434">434</a>
-<a href="#435" id="435">435</a>
-<a href="#436" id="436">436</a>
-<a href="#437" id="437">437</a>
-<a href="#438" id="438">438</a>
-<a href="#439" id="439">439</a>
-<a href="#440" id="440">440</a>
-<a href="#441" id="441">441</a>
-<a href="#442" id="442">442</a>
-<a href="#443" id="443">443</a>
-<a href="#444" id="444">444</a>
-<a href="#445" id="445">445</a>
-<a href="#446" id="446">446</a>
-<a href="#447" id="447">447</a>
-<a href="#448" id="448">448</a>
-<a href="#449" id="449">449</a>
-<a href="#450" id="450">450</a>
-<a href="#451" id="451">451</a>
-<a href="#452" id="452">452</a>
-<a href="#453" id="453">453</a>
-<a href="#454" id="454">454</a>
-<a href="#455" id="455">455</a>
-<a href="#456" id="456">456</a>
-<a href="#457" id="457">457</a>
-<a href="#458" id="458">458</a>
-<a href="#459" id="459">459</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::quantized::QMatMul;
@@ -467,19 +436,11 @@
 <span class="kw">use </span>candle_nn::{Embedding, Module, RotaryEmbedding};
 
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
-<span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, QRmsNorm};
+<span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, Cache};
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
 
 <span class="kw">const </span>MAX_SEQ_LEN: u32 = <span class="number">4096</span>;
-
-<span class="kw">fn </span>quantized_mat_mul(xs: <span class="kw-2">&amp;</span>Tensor, w: <span class="kw-2">&amp;</span>QMatMul, via_f16: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-    <span class="kw">if </span>via_f16 {
-        w.forward_via_f16(xs)
-    } <span class="kw">else </span>{
-        w.forward(xs)
-    }
-}
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">struct </span>Mlp {
@@ -489,11 +450,11 @@
 }
 
 <span class="kw">impl </span>Mlp {
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor, via_f16: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>w1 = quantized_mat_mul(xs, <span class="kw-2">&amp;</span><span class="self">self</span>.feed_forward_w1, via_f16)<span class="question-mark">?</span>;
-        <span class="kw">let </span>w3 = quantized_mat_mul(xs, <span class="kw-2">&amp;</span><span class="self">self</span>.feed_forward_w3, via_f16)<span class="question-mark">?</span>;
+    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">let </span>w1 = MatMul.qmatmul(xs, <span class="kw-2">&amp;</span><span class="self">self</span>.feed_forward_w1)<span class="question-mark">?</span>;
+        <span class="kw">let </span>w3 = MatMul.qmatmul(xs, <span class="kw-2">&amp;</span><span class="self">self</span>.feed_forward_w3)<span class="question-mark">?</span>;
         <span class="kw">let </span>y = <span class="kw-2">&amp;</span>(candle_nn::ops::silu(<span class="kw-2">&amp;</span>w1)<span class="question-mark">? </span>* w3)<span class="question-mark">?</span>;
-        quantized_mat_mul(y, <span class="kw-2">&amp;</span><span class="self">self</span>.feed_forward_w2, via_f16)
+        MatMul.qmatmul(y, <span class="kw-2">&amp;</span><span class="self">self</span>.feed_forward_w2)
     }
 }
 
@@ -508,7 +469,7 @@
 }
 
 <span class="kw">impl </span>MlpOrMoe {
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor, via_f16: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">match </span><span class="self">self </span>{
             <span class="self">Self</span>::MoE {
                 feed_forward_gate_inp,
@@ -563,7 +524,7 @@
                     // states by `routing_weights` on the corresponding tokens (top-1 and top-2)
                     </span><span class="kw">let </span>current_state = xs.index_select(<span class="kw-2">&amp;</span>top_x, <span class="number">0</span>)<span class="question-mark">?</span>.reshape(((), hidden_dim))<span class="question-mark">?</span>;
                     <span class="comment">// current_hidden_states = expert_layer(current_state, routing_weights[top_x_list, idx_list, None])
-                    </span><span class="kw">let </span>current_hidden_states = expert_layer.forward(<span class="kw-2">&amp;</span>current_state, via_f16)<span class="question-mark">?</span>;
+                    </span><span class="kw">let </span>current_hidden_states = expert_layer.forward(<span class="kw-2">&amp;</span>current_state)<span class="question-mark">?</span>;
                     <span class="kw">let </span>current_hidden_states =
                         current_hidden_states.broadcast_mul(<span class="kw-2">&amp;</span>selected_rws)<span class="question-mark">?</span>;
                     ys = ys.index_add(<span class="kw-2">&amp;</span>top_x, <span class="kw-2">&amp;</span>current_hidden_states, <span class="number">0</span>)<span class="question-mark">?</span>;
@@ -572,7 +533,7 @@
                 <span class="kw">let </span>ys = ys.reshape((b_size, seq_len, hidden_dim))<span class="question-mark">?</span>;
                 <span class="prelude-val">Ok</span>(ys)
             }
-            <span class="self">Self</span>::Mlp(mlp) =&gt; mlp.forward(xs, via_f16),
+            <span class="self">Self</span>::Mlp(mlp) =&gt; mlp.forward(xs),
         }
     }
 }
@@ -601,13 +562,12 @@
         start_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
         kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
-        via_f16: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, seq_len, n_embd) = x.dims3()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>q = quantized_mat_mul(x, <span class="kw-2">&amp;</span><span class="self">self</span>.attention_wq, via_f16)<span class="question-mark">?</span>;
-        <span class="kw">let </span>k = quantized_mat_mul(x, <span class="kw-2">&amp;</span><span class="self">self</span>.attention_wk, via_f16)<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = quantized_mat_mul(x, <span class="kw-2">&amp;</span><span class="self">self</span>.attention_wv, via_f16)<span class="question-mark">?</span>;
+        <span class="kw">let </span>q = MatMul.qmatmul(x, <span class="kw-2">&amp;</span><span class="self">self</span>.attention_wq)<span class="question-mark">?</span>;
+        <span class="kw">let </span>k = MatMul.qmatmul(x, <span class="kw-2">&amp;</span><span class="self">self</span>.attention_wk)<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = MatMul.qmatmul(x, <span class="kw-2">&amp;</span><span class="self">self</span>.attention_wv)<span class="question-mark">?</span>;
 
         <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz * seq_len, <span class="self">self</span>.n_head, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz * seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
@@ -632,30 +592,19 @@
 
         <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
-        <span class="kw">let </span>att = <span class="kw">if </span>via_f16 {
-            <span class="kw">let </span>mm = q
-                .to_dtype(DType::F16)<span class="question-mark">?
-                </span>.matmul(<span class="kw-2">&amp;</span>k.to_dtype(DType::F16)<span class="question-mark">?</span>.t()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-
-            ((mm / (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>).to_dtype(DType::F32)<span class="question-mark">?
-        </span>} <span class="kw">else </span>{
-            <span class="kw">let </span>k = k.contiguous()<span class="question-mark">?</span>;
-            (q.contiguous()<span class="question-mark">?</span>.matmul(<span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>)<span class="question-mark">? </span>/ (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?
-        </span>};
+        <span class="kw">let </span>att = MatMul.matmul_affine_div(
+            <span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>,
+            <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>,
+            (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt(),
+        )<span class="question-mark">?</span>;
 
         <span class="kw">let </span>att = CausalMasker.apply_mask(mask, att, <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf)<span class="question-mark">?</span>;
         <span class="kw">let </span>att = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>att)<span class="question-mark">?</span>;
         <span class="comment">// Convert to contiguous as matmul doesn't support strided vs for now.
-        </span><span class="kw">let </span>y = <span class="kw">if </span>via_f16 {
-            att.to_dtype(DType::F16)<span class="question-mark">?
-                </span>.matmul(<span class="kw-2">&amp;</span>v.to_dtype(DType::F16)<span class="question-mark">?</span>)<span class="question-mark">?
-                </span>.to_dtype(DType::F32)<span class="question-mark">?
-        </span>} <span class="kw">else </span>{
-            att.matmul(<span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?
-        </span>};
+        </span><span class="kw">let </span>y = MatMul.matmul(<span class="kw-2">&amp;</span>att, <span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>y = y.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>.reshape(<span class="kw-2">&amp;</span>[b_sz, seq_len, n_embd])<span class="question-mark">?</span>;
-        <span class="kw">let </span>y = quantized_mat_mul(<span class="kw-2">&amp;</span>y, <span class="kw-2">&amp;</span><span class="self">self</span>.attention_wo, via_f16)<span class="question-mark">?</span>;
+        <span class="kw">let </span>y = MatMul.qmatmul(<span class="kw-2">&amp;</span>y, <span class="kw-2">&amp;</span><span class="self">self</span>.attention_wo)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(y)
     }
 }
@@ -873,16 +822,6 @@
         start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>d = x.dims();
-        <span class="kw">if </span>d.len() &lt; <span class="number">2 </span>{
-            <span class="kw">return </span><span class="prelude-val">Err</span>(candle_core::Error::InvalidIndex {
-                op: <span class="string">"forward"</span>,
-                index: <span class="number">1</span>,
-                size: d.len(),
-            });
-        }
-        <span class="kw">let </span>via_f16 = d[<span class="number">1</span>] &gt; <span class="number">32</span>;
-
         <span class="kw">let </span><span class="kw-2">mut </span>layer_in = <span class="self">self</span>.tok_embeddings.forward(x)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
         <span class="kw">let </span>mask = CausalMasker.make_causal_mask(x, <span class="kw-2">&amp;</span>cache)<span class="question-mark">?</span>;
@@ -899,21 +838,20 @@
                 start_offsets,
                 start_offsets_kernel.clone(),
                 <span class="kw-2">&amp;mut </span>cache[i],
-                via_f16,
             )<span class="question-mark">?</span>;
             <span class="kw">let </span>x = (attn + residual)<span class="question-mark">?</span>;
 
             <span class="comment">// MLP
             </span><span class="kw">let </span>residual = <span class="kw-2">&amp;</span>x;
             <span class="kw">let </span>x = layer.ffn_norm.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>;
-            <span class="kw">let </span>x = layer.mlp_or_moe.forward(<span class="kw-2">&amp;</span>x, via_f16)<span class="question-mark">?</span>;
+            <span class="kw">let </span>x = layer.mlp_or_moe.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>;
             <span class="kw">let </span>x = (x + residual)<span class="question-mark">?</span>;
             layer_in = x;
         }
         <span class="kw">let </span>layer_in = layer_in.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
         <span class="kw">let </span>x = <span class="self">self</span>.norm.forward(<span class="kw-2">&amp;</span>layer_in)<span class="question-mark">?</span>;
         extract_logits(
-            <span class="kw-2">&amp;</span>quantized_mat_mul(<span class="kw-2">&amp;</span>x.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.output, via_f16)<span class="question-mark">?</span>,
+            <span class="kw-2">&amp;</span>MatMul.qmatmul(<span class="kw-2">&amp;</span>x.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.output)<span class="question-mark">?</span>,
             context_lens,
         )
     }

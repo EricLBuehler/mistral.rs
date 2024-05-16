@@ -917,22 +917,32 @@
 <a href="#915" id="915">915</a>
 <a href="#916" id="916">916</a>
 <a href="#917" id="917">917</a>
+<a href="#918" id="918">918</a>
+<a href="#919" id="919">919</a>
+<a href="#920" id="920">920</a>
+<a href="#921" id="921">921</a>
+<a href="#922" id="922">922</a>
+<a href="#923" id="923">923</a>
+<a href="#924" id="924">924</a>
+<a href="#925" id="925">925</a>
+<a href="#926" id="926">926</a>
+<a href="#927" id="927">927</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
 
+<span class="kw">use </span><span class="kw">crate</span>::lora::{
+    get_lora_cfg, AdapterSwapper, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear,
+};
 <span class="kw">use </span>candle_core::quantized::QMatMul;
 <span class="kw">use </span>candle_core::quantized::{ggml_file, gguf_file};
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
-<span class="kw">use </span>mistralrs_lora::{
-    get_lora_cfg, AdapterSwapper, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear,
-};
 <span class="kw">use </span>tqdm::Iter;
 <span class="kw">use </span>tracing::info;
 
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
-<span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, QRmsNorm};
+<span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, Cache};
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
 
@@ -1012,7 +1022,7 @@
             } =&gt; {
                 <span class="kw">let </span>(b_size, seq_len, hidden_dim) = xs.dims3()<span class="question-mark">?</span>;
                 <span class="kw">let </span>xs = xs.reshape(((), hidden_dim))<span class="question-mark">?</span>;
-                <span class="kw">let </span>router_logits = feed_forward_gate_inp.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
+                <span class="kw">let </span>router_logits = MatMul.qmatmul(<span class="kw-2">&amp;</span>xs, feed_forward_gate_inp)<span class="question-mark">?</span>;
                 <span class="kw">let </span>routing_weights = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>router_logits)<span class="question-mark">?</span>;
 
                 <span class="comment">// In order to extract topk, we extract the data from the tensor and manipulate it
@@ -1152,11 +1162,15 @@
         <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>att = (q.contiguous()<span class="question-mark">?</span>.matmul(<span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>)<span class="question-mark">? </span>/ (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
+        <span class="kw">let </span>att = MatMul.matmul_affine_div(
+            <span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>,
+            <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>,
+            (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt(),
+        )<span class="question-mark">?</span>;
         <span class="kw">let </span>att = CausalMasker.apply_mask(mask, att, <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf)<span class="question-mark">?</span>;
         <span class="kw">let </span>att = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>att)<span class="question-mark">?</span>;
         <span class="comment">// Convert to contiguous as matmul doesn't support strided vs for now.
-        </span><span class="kw">let </span>y = att.matmul(<span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+        </span><span class="kw">let </span>y = MatMul.matmul(<span class="kw-2">&amp;</span>att, <span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>y = y.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>.reshape(<span class="kw-2">&amp;</span>[b_sz, seq_len, n_embd])<span class="question-mark">?</span>;
         <span class="kw">let </span>y = <span class="self">self</span>.attention_wo.lora_forward(
             <span class="kw-2">&amp;</span>y,
@@ -1750,52 +1764,58 @@
 
             <span class="kw">if </span>no_kv_cache {
                 extract_logits(
-                    <span class="kw-2">&amp;</span><span class="self">self
-                        </span>.inner_forward(
-                            input_ids_full,
-                            seqlen_offsets_full,
-                            start_offsets_kernel_full,
-                            <span class="prelude-val">Some</span>(scalings),
-                            <span class="bool-val">true</span>,
-                            no_kv_cache,
-                            <span class="prelude-val">None</span>,
-                        )<span class="question-mark">?
-                        </span>.contiguous()<span class="question-mark">?
-                        </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.output)<span class="question-mark">?</span>,
+                    <span class="kw-2">&amp;</span>MatMul.qmatmul(
+                        <span class="kw-2">&amp;</span><span class="self">self
+                            </span>.inner_forward(
+                                input_ids_full,
+                                seqlen_offsets_full,
+                                start_offsets_kernel_full,
+                                <span class="prelude-val">Some</span>(scalings),
+                                <span class="bool-val">true</span>,
+                                no_kv_cache,
+                                <span class="prelude-val">None</span>,
+                            )<span class="question-mark">?
+                            </span>.contiguous()<span class="question-mark">?</span>,
+                        <span class="kw-2">&amp;</span><span class="self">self</span>.output,
+                    )<span class="question-mark">?</span>,
                     context_lens,
                 )
             } <span class="kw">else </span>{
                 <span class="comment">// is_full_pass=true is ok because no_kv_cache=false
                 </span>extract_logits(
-                    <span class="kw-2">&amp;</span><span class="self">self
-                        </span>.inner_forward(
-                            input_ids,
-                            seqlen_offsets,
-                            start_offsets_kernel,
-                            <span class="prelude-val">Some</span>(scalings),
-                            <span class="bool-val">true</span>,
-                            no_kv_cache,
-                            <span class="prelude-val">None</span>,
-                        )<span class="question-mark">?
-                        </span>.contiguous()<span class="question-mark">?
-                        </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.output)<span class="question-mark">?</span>,
+                    <span class="kw-2">&amp;</span>MatMul.qmatmul(
+                        <span class="kw-2">&amp;</span><span class="self">self
+                            </span>.inner_forward(
+                                input_ids,
+                                seqlen_offsets,
+                                start_offsets_kernel,
+                                <span class="prelude-val">Some</span>(scalings),
+                                <span class="bool-val">true</span>,
+                                no_kv_cache,
+                                <span class="prelude-val">None</span>,
+                            )<span class="question-mark">?
+                            </span>.contiguous()<span class="question-mark">?</span>,
+                        <span class="kw-2">&amp;</span><span class="self">self</span>.output,
+                    )<span class="question-mark">?</span>,
                     context_lens,
                 )
             }
         } <span class="kw">else </span>{
             extract_logits(
-                <span class="kw-2">&amp;</span><span class="self">self
-                    </span>.inner_forward(
-                        input_ids,
-                        seqlen_offsets,
-                        start_offsets_kernel,
-                        <span class="prelude-val">None</span>,
-                        <span class="bool-val">false</span>,
-                        no_kv_cache,
-                        <span class="prelude-val">None</span>,
-                    )<span class="question-mark">?
-                    </span>.contiguous()<span class="question-mark">?
-                    </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.output)<span class="question-mark">?</span>,
+                <span class="kw-2">&amp;</span>MatMul.qmatmul(
+                    <span class="kw-2">&amp;</span><span class="self">self
+                        </span>.inner_forward(
+                            input_ids,
+                            seqlen_offsets,
+                            start_offsets_kernel,
+                            <span class="prelude-val">None</span>,
+                            <span class="bool-val">false</span>,
+                            no_kv_cache,
+                            <span class="prelude-val">None</span>,
+                        )<span class="question-mark">?
+                        </span>.contiguous()<span class="question-mark">?</span>,
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.output,
+                )<span class="question-mark">?</span>,
                 context_lens,
             )
         }

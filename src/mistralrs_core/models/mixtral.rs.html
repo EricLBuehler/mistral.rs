@@ -541,6 +541,11 @@
 <a href="#539" id="539">539</a>
 <a href="#540" id="540">540</a>
 <a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
@@ -553,7 +558,7 @@
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    layers::{flash_attn, repeat_kv, CausalMasker, RmsNorm},
+    layers::{flash_attn, repeat_kv, CausalMasker, MatMul, RmsNorm},
     pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };
@@ -637,9 +642,9 @@
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.q_proj, QMatMul::QTensor(<span class="kw">_</span>)) {
             xs = xs.to_dtype(DType::F32)<span class="question-mark">?</span>;
         }
-        <span class="kw">let </span><span class="kw-2">mut </span>q = <span class="self">self</span>.q_proj.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>k = <span class="self">self</span>.k_proj.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>v = <span class="self">self</span>.v_proj.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>q = MatMul.qmatmul(<span class="kw-2">&amp;</span>xs, <span class="kw-2">&amp;</span><span class="self">self</span>.q_proj)<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>k = MatMul.qmatmul(<span class="kw-2">&amp;</span>xs, <span class="kw-2">&amp;</span><span class="self">self</span>.k_proj)<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>v = MatMul.qmatmul(<span class="kw-2">&amp;</span>xs, <span class="kw-2">&amp;</span><span class="self">self</span>.v_proj)<span class="question-mark">?</span>;
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.q_proj, QMatMul::QTensor(<span class="kw">_</span>)) {
             q = q.to_dtype(original_dtype)<span class="question-mark">?</span>;
             k = k.to_dtype(original_dtype)<span class="question-mark">?</span>;
@@ -686,20 +691,25 @@
             <span class="kw">let </span>softmax_scale = <span class="number">1f32 </span>/ (<span class="self">self</span>.head_dim <span class="kw">as </span>f32).sqrt();
             flash_attn(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, softmax_scale, q_len &gt; <span class="number">1</span>)<span class="question-mark">?</span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
         </span>} <span class="kw">else </span>{
-            <span class="kw">let </span>scale = <span class="number">1f64 </span>/ f64::sqrt(<span class="self">self</span>.head_dim <span class="kw">as </span>f64);
-            <span class="kw">let </span>attn_weights = (q.matmul(<span class="kw-2">&amp;</span>k.transpose(<span class="number">2</span>, <span class="number">3</span>)<span class="question-mark">?</span>)<span class="question-mark">? </span>* scale)<span class="question-mark">?</span>;
+            <span class="kw">let </span>attn_weights = MatMul.matmul_affine_div(
+                <span class="kw-2">&amp;</span>q,
+                <span class="kw-2">&amp;</span>k.transpose(<span class="number">2</span>, <span class="number">3</span>)<span class="question-mark">?</span>,
+                f64::sqrt(<span class="self">self</span>.head_dim <span class="kw">as </span>f64),
+            )<span class="question-mark">?</span>;
 
             <span class="kw">let </span>attn_weights = CausalMasker.apply_mask(<span class="kw-2">&amp;</span>attn_mask, attn_weights, <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf)<span class="question-mark">?</span>;
             <span class="kw">let </span>attn_weights = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>;
-            attn_weights.matmul(<span class="kw-2">&amp;</span>v)<span class="question-mark">?
+            MatMul.matmul(<span class="kw-2">&amp;</span>attn_weights, <span class="kw-2">&amp;</span>v)<span class="question-mark">?
         </span>};
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.q_proj, QMatMul::QTensor(<span class="kw">_</span>)) {
             attn_output = attn_output.to_dtype(DType::F32)<span class="question-mark">?</span>;
         }
-        <span class="kw">let </span><span class="kw-2">mut </span>res = attn_output
-            .transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-            </span>.reshape((b_sz, q_len, <span class="self">self</span>.hidden_size))<span class="question-mark">?
-            </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.o_proj)<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>res = MatMul.qmatmul(
+            <span class="kw-2">&amp;</span>attn_output
+                .transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+                </span>.reshape((b_sz, q_len, <span class="self">self</span>.hidden_size))<span class="question-mark">?</span>,
+            <span class="kw-2">&amp;</span><span class="self">self</span>.o_proj,
+        )<span class="question-mark">?</span>;
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.q_proj, QMatMul::QTensor(<span class="kw">_</span>)) {
             res = res.to_dtype(original_dtype)<span class="question-mark">?</span>;
         }
@@ -738,9 +748,9 @@
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.w1, QMatMul::QTensor(<span class="kw">_</span>)) {
             xs = xs.to_dtype(DType::F32)<span class="question-mark">?</span>;
         }
-        <span class="kw">let </span>lhs = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.w1)<span class="question-mark">?</span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.act_fn)<span class="question-mark">?</span>;
-        <span class="kw">let </span>rhs = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.w3)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>res = (lhs * rhs)<span class="question-mark">?</span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.w2)<span class="question-mark">?</span>;
+        <span class="kw">let </span>lhs = MatMul.qmatmul(<span class="kw-2">&amp;</span>xs, <span class="kw-2">&amp;</span><span class="self">self</span>.w1)<span class="question-mark">?</span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.act_fn)<span class="question-mark">?</span>;
+        <span class="kw">let </span>rhs = MatMul.qmatmul(<span class="kw-2">&amp;</span>xs, <span class="kw-2">&amp;</span><span class="self">self</span>.w3)<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>res = MatMul.qmatmul(<span class="kw-2">&amp;</span>(lhs * rhs)<span class="question-mark">?</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.w2)<span class="question-mark">?</span>;
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.w1, QMatMul::QTensor(<span class="kw">_</span>)) {
             res = res.to_dtype(original_dtype)<span class="question-mark">?</span>;
         }
@@ -782,7 +792,7 @@
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.gate, QMatMul::QTensor(<span class="kw">_</span>)) {
             xs = xs.to_dtype(DType::F32)<span class="question-mark">?</span>;
         }
-        <span class="kw">let </span><span class="kw-2">mut </span>router_logits = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.gate)<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>router_logits = MatMul.qmatmul(<span class="kw-2">&amp;</span>xs, <span class="kw-2">&amp;</span><span class="self">self</span>.gate)<span class="question-mark">?</span>;
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.gate, QMatMul::QTensor(<span class="kw">_</span>)) {
             router_logits = router_logits.to_dtype(original_dtype)<span class="question-mark">?</span>;
         }
@@ -1017,7 +1027,7 @@
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.lm_head, QMatMul::QTensor(<span class="kw">_</span>)) {
             xs = xs.to_dtype(DType::F32)<span class="question-mark">?</span>;
         }
-        extract_logits(<span class="kw-2">&amp;</span>xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>, context_lens)
+        extract_logits(<span class="kw-2">&amp;</span>MatMul.qmatmul(<span class="kw-2">&amp;</span>xs, <span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>, context_lens)
     }
 }
 

@@ -652,6 +652,7 @@
 };
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
+<span class="kw">use </span><span class="kw">crate</span>::lora::Ordering;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::calculate_eos_tokens;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::Cache;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{ChatTemplate, LocalModelPaths};
@@ -675,7 +676,6 @@
 };
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-<span class="kw">use </span>mistralrs_lora::Ordering;
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>serde_json::Value;
 <span class="kw">use </span>std::collections::HashMap;

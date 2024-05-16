@@ -788,6 +788,10 @@
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
+<span class="kw">use crate</span>::{
+    layers::MatMul,
+    lora::{linear, LinearLayerLike, LoraConfig, Ordering},
+};
 <span class="doccomment">/// Phi model.
 /// https://huggingface.co/microsoft/phi-2
 /// There is an alternative implementation of the phi model in mixformers.rs.
@@ -797,13 +801,12 @@
 <span class="kw">use </span>candle_nn::{
     embedding, layer_norm, Activation, Embedding, LayerNorm, RotaryEmbedding, VarBuilder,
 };
-<span class="kw">use </span>mistralrs_lora::{layer::QLinear, linear, LinearLayerLike, LoraConfig, Ordering};
 <span class="kw">use </span>tqdm::Iter;
 <span class="kw">use </span>tracing::info;
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    layers::{flash_attn, repeat_kv, CausalMasker},
+    layers::{flash_attn, repeat_kv, CausalMasker, QLinear},
     models::phi2::Config,
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
@@ -975,7 +978,7 @@
         } <span class="kw">else </span>{
             (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
         };
-        <span class="kw">let </span>softmax_scale = <span class="number">1f64 </span>/ (head_dim <span class="kw">as </span>f64).sqrt();
+        <span class="kw">let </span>softmax_scale = (head_dim <span class="kw">as </span>f64).sqrt();
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             q_proj,
             k_proj,
@@ -1081,16 +1084,13 @@
             <span class="kw">let </span>v = v.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
             flash_attn(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, <span class="self">self</span>.softmax_scale <span class="kw">as </span>f32, seq_len &gt; <span class="number">1</span>)<span class="question-mark">?</span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
         </span>} <span class="kw">else </span>{
-            <span class="kw">let </span>attn_weights = (q
-                .to_dtype(DType::F32)<span class="question-mark">?
-                </span>.contiguous()<span class="question-mark">?
-                </span>.matmul(<span class="kw-2">&amp;</span>k.to_dtype(DType::F32)<span class="question-mark">?</span>.t()<span class="question-mark">?</span>)<span class="question-mark">?
-                </span>* <span class="self">self</span>.softmax_scale)<span class="question-mark">?</span>;
+            <span class="kw">let </span>attn_weights =
+                MatMul.matmul_affine_div(<span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>, <span class="self">self</span>.softmax_scale)<span class="question-mark">?</span>;
             <span class="kw">let </span>attn_weights =
                 CausalMasker.apply_mask(<span class="kw-2">&amp;</span>mask.cloned(), attn_weights, <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf)<span class="question-mark">?</span>;
             <span class="kw">let </span>attn_weights =
                 candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>.to_dtype(v.dtype())<span class="question-mark">?</span>;
-            attn_weights.matmul(<span class="kw-2">&amp;</span>v)<span class="question-mark">?
+            MatMul.matmul(<span class="kw-2">&amp;</span>attn_weights, <span class="kw-2">&amp;</span>v)<span class="question-mark">?
         </span>};
 
         <span class="kw">let </span><span class="kw-2">mut </span>attn_output = attn_output
