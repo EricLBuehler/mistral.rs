@@ -414,7 +414,11 @@ impl ModelWeights {
     ) -> Result<Tensor> {
         let d = x.dims();
         if d.len() < 2 {
-            return Err(candle_core::Error::InvalidIndex { op: "forward", index: 1, size: d.len() }.into())
+            return Err(candle_core::Error::InvalidIndex {
+                op: "forward",
+                index: 1,
+                size: d.len(),
+            });
         }
         let via_f16 = d[1] > 32;
 
