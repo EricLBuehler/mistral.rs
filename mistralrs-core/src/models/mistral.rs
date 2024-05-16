@@ -60,9 +60,9 @@ impl Module for MLP {
         if matches!(self.gate_proj, QMatMul::QTensor(_)) {
             xs = xs.to_dtype(DType::F32)?;
         }
-        let lhs = xs.apply(&self.gate_proj)?.apply(&self.act_fn)?;
-        let rhs = xs.apply(&self.up_proj)?;
-        let mut res = (lhs * rhs)?.apply(&self.down_proj)?;
+        let lhs = MatMul.qmatmul(&xs, &self.gate_proj)?.apply(&self.act_fn)?;
+        let rhs = MatMul.qmatmul(&xs, &self.up_proj)?;
+        let mut res = MatMul.qmatmul(&(lhs * rhs)?, &self.down_proj)?;
         if matches!(self.gate_proj, QMatMul::QTensor(_)) {
             res = res.to_dtype(original_dtype)?;
         }
@@ -130,9 +130,9 @@ impl Attention {
         if matches!(self.q_proj, QMatMul::QTensor(_)) {
             xs = xs.to_dtype(DType::F32)?;
         }
-        let mut q = self.q_proj.forward(&xs)?;
-        let mut k = self.k_proj.forward(&xs)?;
-        let mut v = self.v_proj.forward(&xs)?;
+        let mut q = MatMul.qmatmul(&xs, &self.q_proj)?;
+        let mut k = MatMul.qmatmul(&xs, &self.k_proj)?;
+        let mut v = MatMul.qmatmul(&xs, &self.v_proj)?;
         if matches!(self.q_proj, QMatMul::QTensor(_)) {
             q = q.to_dtype(original_dtype)?;
             k = k.to_dtype(original_dtype)?;
@@ -192,10 +192,12 @@ impl Attention {
         if matches!(self.q_proj, QMatMul::QTensor(_)) {
             attn_output = attn_output.to_dtype(DType::F32)?;
         }
-        let mut res = attn_output
-            .transpose(1, 2)?
-            .reshape((b_sz, q_len, self.hidden_size))?
-            .apply(&self.o_proj)?;
+        let mut res = MatMul.qmatmul(
+            &attn_output
+                .transpose(1, 2)?
+                .reshape((b_sz, q_len, self.hidden_size))?,
+            &self.o_proj,
+        )?;
         if matches!(self.q_proj, QMatMul::QTensor(_)) {
             res = res.to_dtype(original_dtype)?;
         }
@@ -374,7 +376,7 @@ impl Model {
         if matches!(self.lm_head, QMatMul::QTensor(_)) {
             xs = xs.to_dtype(DType::F32)?;
         }
-        extract_logits(&xs.apply(&self.lm_head)?, context_lens)
+        extract_logits(&MatMul.qmatmul(&xs, &self.lm_head)?, context_lens)
     }
 }
 

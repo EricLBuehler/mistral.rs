@@ -60,9 +60,9 @@ impl CausalSelfAttention {
         if matches!(self.q_proj, QMatMul::QTensor(_)) {
             x = x.to_dtype(DType::F32)?;
         }
-        let mut q = self.q_proj.forward(&x)?;
-        let mut k = self.k_proj.forward(&x)?;
-        let mut v = self.v_proj.forward(&x)?;
+        let mut q = MatMul.qmatmul(&x, &self.q_proj)?;
+        let mut k = MatMul.qmatmul(&x, &self.k_proj)?;
+        let mut v = MatMul.qmatmul(&x, &self.v_proj)?;
         if matches!(self.q_proj, QMatMul::QTensor(_)) {
             q = q.to_dtype(original_dtype)?;
             k = k.to_dtype(original_dtype)?;
@@ -113,7 +113,7 @@ impl CausalSelfAttention {
             y = y.to_dtype(DType::F32)?;
         }
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
-        let mut y = self.o_proj.forward(&y)?;
+        let mut y = MatMul.qmatmul(&y, &self.o_proj)?;
         if matches!(self.q_proj, QMatMul::QTensor(_)) {
             y = y.to_dtype(original_dtype)?;
         }
@@ -158,8 +158,9 @@ impl Mlp {
         if matches!(self.c_fc1, QMatMul::QTensor(_)) {
             x = x.to_dtype(DType::F32)?;
         }
-        let x = (candle_nn::ops::silu(&self.c_fc1.forward(&x)?)? * self.c_fc2.forward(&x)?)?;
-        let mut res = self.c_proj.forward(&x)?;
+        let x = (candle_nn::ops::silu(&MatMul.qmatmul(&x, &self.c_fc1)?)?
+            * MatMul.qmatmul(&x, &self.c_fc2)?)?;
+        let mut res = MatMul.qmatmul(&x, &self.c_proj)?;
         if matches!(self.c_fc1, QMatMul::QTensor(_)) {
             res = res.to_dtype(original_dtype)?;
         }
@@ -284,7 +285,7 @@ impl Llama {
         if matches!(self.lm_head, QMatMul::QTensor(_)) {
             x = x.to_dtype(DType::F32)?;
         }
-        let logits = self.lm_head.forward(&x)?;
+        let logits = MatMul.qmatmul(&x, &self.lm_head)?;
         extract_logits(&logits, context_lens)
     }
 

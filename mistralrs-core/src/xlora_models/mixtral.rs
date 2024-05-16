@@ -770,7 +770,7 @@ impl XLoraModel {
                 if matches!(self.lm_head, QMatMul::QTensor(_)) {
                     res = res.to_dtype(DType::F32)?;
                 }
-                extract_logits(&res.apply(&self.lm_head)?, context_lens)
+                extract_logits(&MatMul.qmatmul(&res, &self.lm_head)?, context_lens)
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
                 let mut res = self
@@ -787,7 +787,7 @@ impl XLoraModel {
                 if matches!(self.lm_head, QMatMul::QTensor(_)) {
                     res = res.to_dtype(DType::F32)?;
                 }
-                extract_logits(&res.apply(&self.lm_head)?, context_lens)
+                extract_logits(&MatMul.qmatmul(&res, &self.lm_head)?, context_lens)
             }
         } else {
             let mut res = self
@@ -804,7 +804,7 @@ impl XLoraModel {
             if matches!(self.lm_head, QMatMul::QTensor(_)) {
                 res = res.to_dtype(DType::F32)?;
             }
-            extract_logits(&res.apply(&self.lm_head)?, context_lens)
+            extract_logits(&MatMul.qmatmul(&res, &self.lm_head)?, context_lens)
         }
     }
 }

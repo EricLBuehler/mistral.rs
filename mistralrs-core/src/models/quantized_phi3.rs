@@ -19,11 +19,11 @@ struct Mlp {
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let up_states = xs.apply(&self.ffn_up)?;
+        let up_states = MatMul.qmatmul(xs, &self.ffn_up)?;
         let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
         let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
         let up_states = (up_states * gate.silu()?)?;
-        up_states.apply(&self.ffn_down)
+        MatMul.qmatmul(&up_states, &self.ffn_down)
     }
 }
 
@@ -73,8 +73,7 @@ impl LayerWeights {
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
-        let qkv = self.attn_qkv.forward(x)?;
-
+        let qkv = MatMul.qmatmul(x, &self.attn_qkv)?;
         let query_pos = self.n_head * self.head_dim;
         let q = qkv.narrow(D::Minus1, 0, query_pos)?;
         let k = qkv.narrow(D::Minus1, query_pos, self.n_kv_head * self.head_dim)?;
@@ -115,7 +114,7 @@ impl LayerWeights {
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = MatMul.matmul(&att, &v.contiguous()?)?;
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
-        let y = self.attn_output.forward(&y)?;
+        let y = MatMul.qmatmul(&y, &self.attn_output)?;
         Ok(y)
     }
 }
@@ -275,6 +274,6 @@ impl ModelWeights {
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.output_norm)?.i((.., seq_len - 1, ..))?;
-        self.output.forward(&xs)
+        MatMul.qmatmul(&xs, &self.output)
     }
 }

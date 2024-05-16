@@ -92,7 +92,7 @@ impl Attention {
         if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
             xs = xs.to_dtype(DType::F32)?;
         }
-        let mut qkv = self.qkv_proj.forward(&xs)?;
+        let mut qkv = MatMul.qmatmul(&xs, &self.qkv_proj)?;
         if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
             qkv = qkv.to_dtype(original_dtype)?;
         }
@@ -152,10 +152,10 @@ impl Attention {
         if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
             attn_output = attn_output.to_dtype(DType::F32)?;
         }
-        let mut res = attn_output
-            .transpose(1, 2)?
-            .reshape((b_sz, q_len, ()))?
-            .apply(&self.o_proj)?;
+        let mut res = MatMul.qmatmul(
+            &attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?,
+            &self.o_proj,
+        )?;
         if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
             res = res.to_dtype(original_dtype)?;
         }
@@ -193,11 +193,11 @@ impl Module for Mlp {
         if matches!(self.gate_up_proj, QMatMul::QTensor(_)) {
             xs = xs.to_dtype(DType::F32)?;
         }
-        let up_states = xs.apply(&self.gate_up_proj)?;
+        let up_states = MatMul.qmatmul(&xs, &self.gate_up_proj)?;
         let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
         let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
         let up_states = (up_states * gate.apply(&self.act_fn))?;
-        let mut res = up_states.apply(&self.down_proj)?;
+        let mut res = MatMul.qmatmul(&up_states, &self.down_proj)?;
         if matches!(self.gate_up_proj, QMatMul::QTensor(_)) {
             res = res.to_dtype(original_dtype)?;
         }
@@ -374,7 +374,7 @@ impl Model {
         if matches!(self.lm_head, QMatMul::QTensor(_)) {
             xs = xs.to_dtype(DType::F32)?;
         }
-        extract_logits(&xs.apply(&self.lm_head)?, context_lens)
+        extract_logits(&MatMul.qmatmul(&xs, &self.lm_head)?, context_lens)
     }
 }
 

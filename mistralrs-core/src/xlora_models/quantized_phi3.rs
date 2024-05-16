@@ -452,42 +452,48 @@ impl ModelWeights {
 
             if no_kv_cache {
                 extract_logits(
-                    &self
-                        .inner_forward(
-                            input_ids_full,
-                            seqlen_offsets_full,
-                            Some(scalings),
-                            true,
-                            no_kv_cache,
-                            None,
-                        )?
-                        .contiguous()?
-                        .apply(&self.output)?,
+                    &MatMul.qmatmul(
+                        &self
+                            .inner_forward(
+                                input_ids_full,
+                                seqlen_offsets_full,
+                                Some(scalings),
+                                true,
+                                no_kv_cache,
+                                None,
+                            )?
+                            .contiguous()?,
+                        &self.output,
+                    )?,
                     context_lens,
                 )
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
                 extract_logits(
-                    &self
-                        .inner_forward(
-                            input_ids,
-                            seqlen_offsets,
-                            Some(scalings),
-                            true,
-                            no_kv_cache,
-                            None,
-                        )?
-                        .contiguous()?
-                        .apply(&self.output)?,
+                    &MatMul.qmatmul(
+                        &self
+                            .inner_forward(
+                                input_ids,
+                                seqlen_offsets,
+                                Some(scalings),
+                                true,
+                                no_kv_cache,
+                                None,
+                            )?
+                            .contiguous()?,
+                        &self.output,
+                    )?,
                     context_lens,
                 )
             }
         } else {
             extract_logits(
-                &self
-                    .inner_forward(input_ids, seqlen_offsets, None, false, no_kv_cache, None)?
-                    .contiguous()?
-                    .apply(&self.output)?,
+                &MatMul.qmatmul(
+                    &self
+                        .inner_forward(input_ids, seqlen_offsets, None, false, no_kv_cache, None)?
+                        .contiguous()?,
+                    &self.output,
+                )?,
                 context_lens,
             )
         }

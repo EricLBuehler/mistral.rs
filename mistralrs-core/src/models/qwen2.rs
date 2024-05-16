@@ -62,9 +62,9 @@ impl Module for MLP {
         if matches!(self.gate_proj, QMatMul::QTensor(_)) {
             xs = xs.to_dtype(DType::F32)?;
         }
-        let lhs = xs.apply(&self.gate_proj)?.apply(&self.act_fn)?;
-        let rhs = xs.apply(&self.up_proj)?;
-        let mut res = (lhs * rhs)?.apply(&self.down_proj)?;
+        let lhs = MatMul.qmatmul(&xs, &self.gate_proj)?.apply(&self.act_fn)?;
+        let rhs = MatMul.qmatmul(&xs, &self.up_proj)?;
+        let mut res = MatMul.qmatmul(&(lhs * rhs)?, &self.down_proj)?;
         if matches!(self.gate_proj, QMatMul::QTensor(_)) {
             res = res.to_dtype(original_dtype)?;
         }
@@ -184,10 +184,10 @@ impl Attention {
         if self.q_proj.is_quant() {
             attn_output = attn_output.to_dtype(DType::F32)?;
         }
-        let mut res = attn_output
-            .transpose(1, 2)?
-            .reshape((b_sz, q_len, ()))?
-            .apply(&self.o_proj)?;
+        let mut res = MatMul.qmatmul(
+            &attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?,
+            &self.o_proj,
+        )?;
         if self.q_proj.is_quant() {
             res = res.to_dtype(original_dtype)?;
         }
@@ -366,7 +366,7 @@ impl Model {
         if matches!(self.lm_head, QMatMul::QTensor(_)) {
             xs = xs.to_dtype(DType::F32)?;
         }
-        extract_logits(&xs.apply(&self.lm_head)?, context_lens)
+        extract_logits(&MatMul.qmatmul(&xs, &self.lm_head)?, context_lens)
     }
 }
 
