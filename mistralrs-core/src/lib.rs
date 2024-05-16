@@ -5,7 +5,7 @@ use std::{
     error::Error,
     fs::OpenOptions,
     io::Write,
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicBool, Arc, Mutex},
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -134,10 +134,46 @@ impl MistralRsBuilder {
     }
 }
 
+pub(crate) static INHIBIT_GEMM_F16: AtomicBool = AtomicBool::new(false);
+
 #[cfg(feature = "cuda")]
 fn set_gemm_reduced_precision_f16() {
-    candle_core::cuda::set_gemm_reduced_precision_f16(true);
+    use candle_core::{DType, Device, Tensor};
+
+    // NOTE(EricLBuehler): When we support multi-GPU inference, we should check for each gpu here
+    let a = Tensor::zeros((2, 2), DType::BF16, &Device::new_cuda(0).unwrap()).unwrap();
     candle_core::cuda::set_gemm_reduced_precision_bf16(true);
+    match a.matmul(&a) {
+        Ok(_) => (),
+        Err(e) => match e {
+            candle_core::Error::Cuda(e) => {
+                let x = e.downcast::<candle_core::cuda::cudarc::cublas::result::CublasError>();
+                if format!("{x:?}").contains("CUBLAS_STATUS_NOT_SUPPORTED") {
+                    tracing::info!("GEMM reduced precision in BF16 not supported.");
+                    candle_core::cuda::set_gemm_reduced_precision_bf16(false);
+                    INHIBIT_GEMM_F16.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            _ => (),
+        },
+    }
+
+    let a = Tensor::zeros((2, 2), DType::F16, &Device::new_cuda(0).unwrap()).unwrap();
+    candle_core::cuda::set_gemm_reduced_precision_f16(true);
+    match a.matmul(&a) {
+        Ok(_) => (),
+        Err(e) => match e {
+            candle_core::Error::Cuda(e) => {
+                let x = e.downcast::<candle_core::cuda::cudarc::cublas::result::CublasError>();
+                if format!("{x:?}").contains("CUBLAS_STATUS_NOT_SUPPORTED") {
+                    tracing::info!("GEMM reduced precision in F16 not supported.");
+                    candle_core::cuda::set_gemm_reduced_precision_f16(false);
+                    INHIBIT_GEMM_F16.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            _ => (),
+        },
+    }
 }
 
 #[cfg(not(feature = "cuda"))]

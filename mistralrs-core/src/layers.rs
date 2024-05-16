@@ -23,7 +23,7 @@ use once_cell::sync::Lazy;
 static MASKS: Lazy<Mutex<HashMap<(usize, usize), Tensor>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-use crate::models::phi3;
+use crate::{models::phi3, INHIBIT_GEMM_F16};
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
@@ -384,7 +384,9 @@ pub struct MatMul;
 pub(crate) static USE_MATMUL_VIA_F16: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn set_use_matmul_via_f16(via_f16: bool) {
-    USE_MATMUL_VIA_F16.store(via_f16, Ordering::Relaxed)
+    if !INHIBIT_GEMM_F16.load(Ordering::Relaxed) {
+        USE_MATMUL_VIA_F16.store(via_f16, Ordering::Relaxed)
+    }
 }
 pub fn get_use_matmul_via_f16() -> bool {
     USE_MATMUL_VIA_F16.load(Ordering::Relaxed)
