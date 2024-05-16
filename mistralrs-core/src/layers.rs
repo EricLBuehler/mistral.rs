@@ -265,6 +265,7 @@ fn apply_tril(xs: &Tensor, diagonal: isize) -> Result<Tensor> {
 }
 
 // https://github.com/mokeyish/candle-ext/blob/main/src/masked_fill.rs
+/// xs are on false (0), value is on true (1)
 fn masked_fill<D: WithDType>(xs: &Tensor, mask: &Tensor, value: D) -> Result<Tensor> {
     let on_true = Tensor::full(value, xs.shape(), xs.device())?;
     let on_false = xs;
@@ -291,6 +292,29 @@ impl CausalMasker {
         }
         let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
         return Ok(k_cache_1.dims()[2]);
+    }
+
+    pub fn make_causal_mask_as_attn_bias(
+        &self,
+        input_ids: &Tensor,
+        cache: &[Option<(Tensor, Tensor)>],
+        dtype: DType,
+    ) -> Result<Option<Tensor>> {
+        let neg_inf = Tensor::new(f32::NEG_INFINITY, input_ids.device())?;
+        let causal_mask = self.make_causal_mask(input_ids, cache)?;
+        Ok(causal_mask.map(|mask| {
+            // Mask: 0 means use from x (add 0.0), 1 means mask out (add -inf)
+            masked_fill(
+                &neg_inf
+                    .to_dtype(dtype)
+                    .expect("Failed to create mask")
+                    .broadcast_as(mask.shape())
+                    .expect("Failed to create mask"),
+                &mask,
+                0.0,
+            )
+            .expect("Failed to create mask")
+        }))
     }
 
     pub fn make_causal_mask(
