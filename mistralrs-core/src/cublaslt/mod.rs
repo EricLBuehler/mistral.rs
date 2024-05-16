@@ -28,7 +28,7 @@ pub fn get_cublas_lt_wrapper() -> Option<&'static CublasLtWrapper> {
                 // Check if we can call the driver
                 // Then check if we can create a device
                 // Then check that the device is CUDA
-                use candle::cuda_backend::cudarc::driver;
+                use candle_core::cuda_backend::cudarc::driver;
                 CUBLASLT = driver::result::init()
                     .ok()
                     .and_then(|_| Device::cuda_if_available(0).ok())
@@ -68,7 +68,7 @@ impl CublasLtWrapper {
             let inner_act = act.map(|a| match a {
                 CandleActivation::Relu => Activation::Relu,
                 CandleActivation::Gelu => Activation::Gelu,
-                _ => candle_core::bail!("Unsupported activation in cublaslt matmul"),
+                _ => unreachable!("Unsupported activation in cublaslt matmul"),
             });
             let mut result = fused_batch_matmul(
                 a,
@@ -81,7 +81,7 @@ impl CublasLtWrapper {
                 self.cublaslt.clone(),
             )?;
 
-            if Some(HiddenAct::Swiglu) == act {
+            if Some(CandleActivation::Swiglu) == act {
                 result = candle_nn::ops::swiglu(&result)?;
             }
             Ok(result)
