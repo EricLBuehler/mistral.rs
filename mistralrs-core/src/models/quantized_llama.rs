@@ -412,8 +412,15 @@ impl ModelWeights {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
-        let (_bz, seq_len, _) = x.dims3()?;
-        let via_f16 = seq_len > 32;
+        let d = x.dims();
+        if d.len() < 2 {
+            return Err(candle_core::Error::InvalidIndex {
+                op: "forward",
+                index: 1,
+                size: d.len(),
+            });
+        }
+        let via_f16 = d[1] > 32;
 
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();
