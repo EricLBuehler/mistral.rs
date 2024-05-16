@@ -53,11 +53,10 @@ indicatif = { version = "0.17.8", features = ["rayon"] }
 async-trait = "0.1.80"
 once_cell.workspace = true
 toml = "0.8.12"
-candle-cublaslt = { git = "https://github.com/EricLBuehler/candle-cublaslt.git", version = "0.2.2", optional = true }
 
 [features]
 pyo3_macros = ["pyo3"]
-cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda", "dep:candle-cublaslt"]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 cudnn = ["candle-core/cudnn"]
 metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
 flash-attn = ["cuda", "candle-transformers/flash-attn", "dep:candle-flash-attn"]

@@ -3,11 +3,14 @@
 #![allow(unused_variables, unused_imports, dead_code)]
 
 use candle_core::{Device, Result, Tensor};
-use candle_nn::Activation;
+use candle_nn::Activation as CandleActivation;
 use std::sync::Once;
 
 #[cfg(feature = "cuda")]
-use candle_cublaslt::{fused_batch_matmul, fused_matmul, Activation, CublasLt};
+mod api;
+
+#[cfg(feature = "cuda")]
+use api::{fused_batch_matmul, fused_matmul, Activation, CublasLt};
 
 static INIT: Once = Once::new();
 static mut CUBLASLT: Option<CublasLtWrapper> = None;
@@ -58,12 +61,25 @@ impl CublasLtWrapper {
         alpha: Option<f32>,
         beta: Option<f32>,
         bias: Option<&Tensor>,
-        act: Option<Activation>,
+        act: Option<CandleActivation>,
     ) -> Result<Tensor> {
         #[cfg(feature = "cuda")]
         {
-            let mut result =
-                fused_batch_matmul(a, b, out, alpha, beta, bias, act, self.cublaslt.clone())?;
+            let inner_act = act.map(|a| match a {
+                CandleActivation::Relu => Activation::Relu,
+                CandleActivation::Gelu => Activation::Gelu,
+                _ => candle_core::bail!("Unsupported activation in cublaslt matmul"),
+            });
+            let mut result = fused_batch_matmul(
+                a,
+                b,
+                out,
+                alpha,
+                beta,
+                bias,
+                inner_act,
+                self.cublaslt.clone(),
+            )?;
 
             if Some(HiddenAct::Swiglu) == act {
                 result = candle_nn::ops::swiglu(&result)?;
