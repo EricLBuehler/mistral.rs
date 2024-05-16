@@ -1,10 +1,10 @@
 use std::{collections::HashMap, fmt::Debug, str::FromStr};
 
+use crate::lora::{LoraConfig, Ordering};
 use anyhow::Result;
 use candle_core::Device;
 use candle_nn::{Activation, VarBuilder};
 use either::Either;
-use mistralrs_lora::{LoraConfig, Ordering};
 
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;

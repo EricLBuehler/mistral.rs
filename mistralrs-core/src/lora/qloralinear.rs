@@ -8,35 +8,66 @@ use candle_core::{
 use candle_nn::{Linear, VarBuilder};
 use either::Either;
 
-use crate::{
-    apply_scalings_to_x, get_maybe_topk_scalings, layer::QLinear, make_adapter, Adapter,
-    AdapterSwapper, LinearLayerLike, LoraConfig, LoraLinearConfig, Merge,
+use super::{
+    apply_scalings_to_x, get_maybe_topk_scalings, make_adapter, Adapter, AdapterSwapper,
+    LinearLayerLike, LoraConfig, LoraLinearConfig, Merge, Ordering,
 };
 
 #[derive(Debug)]
-pub struct LoraLinear {
-    old: QLinear,
+pub struct QLoraLinear {
+    old: QMatMul,
     a_adapters: Either<Vec<Linear>, (Tensor, Vec<Linear>)>,
     b_adapters: Either<Vec<Linear>, (Tensor, Vec<Linear>)>,
     scale_adapters: Vec<f64>,
     layer_n: usize,
     merged: bool,
     adapters: HashMap<String, Adapter>,
-    linear_config: LoraLinearConfig,
+    linear_config: Option<LoraLinearConfig>,
 }
 
-impl LoraLinear {
+/// Specialized QLoRA for no bias
+impl QLoraLinear {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        old: &dyn LinearLayerLike,
+        old: QMatMul,
         linear_config: &LoraLinearConfig,
         config: &[((String, String), LoraConfig)],
         vb: &VarBuilder,
-        layer_n: usize,
+        ordering: &Ordering,
+        prefix: String,
+        count: &mut usize,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
+        let target_modules = &config.first().map(|c| &c.1.target_modules);
+        for (_, cfg) in config {
+            if target_modules
+                .as_ref()
+                .is_some_and(|target_modules| &cfg.target_modules != *target_modules)
+            {
+                candle_core::bail!("Expected all target modules to be the same.");
+            }
+        }
+
+        let module = prefix.split('.').last().unwrap();
+        if target_modules.is_some_and(|target_modules| !target_modules.contains(module)) {
+            return Ok(Self {
+                old,
+                a_adapters: Either::Left(vec![]),
+                b_adapters: Either::Left(vec![]),
+                scale_adapters: vec![],
+                layer_n: usize::MAX,
+                merged: false,
+                adapters: HashMap::default(),
+                linear_config: None,
+            });
+        }
+
+        *count += 1;
+
         let mut a_adapters = Vec::with_capacity(config.len());
         let mut b_adapters = Vec::with_capacity(config.len());
         let mut scale_adapters = Vec::with_capacity(config.len());
+        let vb = vb.pp(prefix.clone());
         let a_vb = vb.pp("lora_A".to_string());
         let b_vb = vb.pp("lora_B".to_string());
         let mut state = None;
@@ -82,6 +113,12 @@ impl LoraLinear {
             }
         }
 
+        let layer = if let Some(ref layers) = ordering.layers {
+            *layers.get(&prefix).unwrap()
+        } else {
+            0
+        };
+
         if all_same {
             let a_adapters_stack = Tensor::cat(
                 &a_adapters
@@ -104,32 +141,32 @@ impl LoraLinear {
             )?
             .to_dtype(a_adapters_stack.dtype())?;
             let a_adapters_stack = a_adapters_stack.broadcast_mul(&scale_adapters_t)?;
-            Ok(LoraLinear {
-                old: QLinear::from_parts(old.weight().clone(), old.bias().cloned()),
+            Ok(QLoraLinear {
+                old,
                 a_adapters: Either::Right((a_adapters_stack.clone(), a_adapters)),
-                b_adapters: Either::Right((b_adapters_stack, b_adapters)),
+                b_adapters: Either::Right((b_adapters_stack.clone(), b_adapters)),
                 scale_adapters,
-                layer_n,
+                layer_n: layer,
                 merged: false,
                 adapters,
-                linear_config: linear_config.clone(),
+                linear_config: Some(linear_config.clone()),
             })
         } else {
-            Ok(LoraLinear {
-                old: QLinear::from_parts(old.weight().clone(), old.bias().cloned()),
+            Ok(QLoraLinear {
+                old,
                 a_adapters: Either::Left(a_adapters),
                 b_adapters: Either::Left(b_adapters),
                 scale_adapters,
-                layer_n,
+                layer_n: layer,
                 merged: false,
                 adapters,
-                linear_config: linear_config.clone(),
+                linear_config: Some(linear_config.clone()),
             })
         }
     }
 }
 
-impl AdapterSwapper for LoraLinear {
+impl AdapterSwapper for QLoraLinear {
     fn _activate_adapters(&mut self, adapter_names: &[String]) -> Result<()> {
         match (
             &mut self.a_adapters,
@@ -158,28 +195,12 @@ impl AdapterSwapper for LoraLinear {
         }
         Ok(())
     }
-    fn has_adapter(&self, adapter: String) -> bool {
-        self.adapters.contains_key(&adapter)
-    }
-    fn load_new_adapter(
-        &mut self,
-        name: String,
-        vb: VarBuilder,
-        cfg: &LoraConfig,
-        module_prefix: String,
-    ) -> Result<()> {
-        let a_vb = vb.set_prefix(&module_prefix).pp("lora_A".to_string());
-        let b_vb = vb.set_prefix(&module_prefix).pp("lora_B".to_string());
-        let adapter = make_adapter(a_vb, b_vb, cfg, &self.linear_config)?;
-        self.adapters.insert(name.clone(), adapter);
-        Ok(())
-    }
     fn can_load(&self) -> bool {
-        true
+        self.linear_config.is_some()
     }
 }
 
-impl Merge for LoraLinear {
+impl Merge for QLoraLinear {
     fn get_delta_weight(&self, adapter: usize) -> Result<Tensor> {
         match (&self.a_adapters, &self.b_adapters) {
             (Either::Left(a), Either::Left(b)) | (Either::Right((_, a)), Either::Right((_, b))) => {
@@ -193,40 +214,32 @@ impl Merge for LoraLinear {
     }
 
     fn merge_weights(&mut self) -> Result<()> {
-        match &self.old.inner() {
-            QMatMul::QTensor(q) => {
-                let (mut w_base_layer, dtype) = (q.dequantize(&q.device())?, q.dtype());
-                for adapter in 0..self.scale_adapters.len() {
-                    w_base_layer = (w_base_layer + self.get_delta_weight(adapter))?;
-                }
-                let new_w = QTensor::quantize(&w_base_layer, dtype)?;
-                self.old = QLinear::from_qparts(new_w, self.old.bias().cloned());
-            }
-            QMatMul::Tensor(w_base_layer) | QMatMul::TensorF16(w_base_layer) => {
-                let mut w_base_layer = w_base_layer.clone();
-                for adapter in 0..self.scale_adapters.len() {
-                    w_base_layer = (w_base_layer + self.get_delta_weight(adapter))?;
-                }
-                self.old = QLinear::from_parts(w_base_layer, self.old.bias().cloned());
-            }
+        let (mut w_base_layer, dtype) = match &self.old {
+            QMatMul::QTensor(q) => (q.dequantize(&q.device())?, q.dtype()),
+            QMatMul::Tensor(_) | QMatMul::TensorF16(_) => unreachable!(),
         };
+        for adapter in 0..self.scale_adapters.len() {
+            w_base_layer = (w_base_layer + self.get_delta_weight(adapter))?;
+        }
+        let new_w = QTensor::quantize(&w_base_layer, dtype)?;
+        self.old = QMatMul::from_qtensor(new_w)?;
         self.merged = true;
         Ok(())
     }
 }
 
-impl LinearLayerLike for LoraLinear {
+impl LinearLayerLike for QLoraLinear {
     fn bias(&self) -> Option<&Tensor> {
-        self.old.bias()
+        None
     }
     fn weight(&self) -> &Tensor {
-        unreachable!()
+        unimplemented!()
     }
     fn inner(&mut self) -> &mut QMatMul {
-        self.old.inner()
+        &mut self.old
     }
     fn is_quant(&self) -> bool {
-        self.old.is_quant()
+        true
     }
     fn lora_forward(
         &self,
@@ -235,13 +248,19 @@ impl LinearLayerLike for LoraLinear {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
+        //No fan_in_fan_out so no weight.transpose(0,1)
         let mut result = self.old.forward(input)?;
-
         if self.merged {
             return Ok(result);
         }
 
-        if is_scaling_pass.is_some_and(|x| x == 0.) {
+        if self
+            .a_adapters
+            .as_ref()
+            .left()
+            .is_some_and(|x| x.is_empty())
+            || (is_scaling_pass.is_some_and(|x| x == 0.))
+        {
             return Ok(result);
         }
 
@@ -262,15 +281,13 @@ impl LinearLayerLike for LoraLinear {
             } else {
                 self.b_adapters.as_ref().unwrap_left().clone()
             };
-            //No fan_in_fan_out so no weight.transpose(0,1)
             for (i, (adapter_a, (adapter_b, adapter_scale))) in
                 zip(a_adapters, zip(b_adapters, &self.scale_adapters)).enumerate()
             {
-                let input_new = input.to_dtype(adapter_a.weight().dtype())?;
                 let input_new = if let Some(scalings) = &scalings {
-                    apply_scalings_to_x(input_new, scalings, i)?
+                    apply_scalings_to_x(input.clone(), scalings, i)?
                 } else {
-                    input_new
+                    input.clone()
                 };
 
                 let res = adapter_b

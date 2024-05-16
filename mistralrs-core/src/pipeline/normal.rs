@@ -9,6 +9,7 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
+use crate::lora::Ordering;
 use crate::pipeline::chat_template::calculate_eos_tokens;
 use crate::pipeline::Cache;
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
@@ -25,7 +26,6 @@ use anyhow::Result;
 use candle_core::quantized::GgmlDType;
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use mistralrs_lora::Ordering;
 use rand_isaac::Isaac64Rng;
 use serde_json::Value;
 use std::collections::HashMap;

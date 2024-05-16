@@ -6,19 +6,11 @@ use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 
 use crate::device_map::DeviceMapper;
-use crate::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, QRmsNorm};
+use crate::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm};
 use crate::pipeline::{extract_logits, Cache};
 use crate::DeviceMapMetadata;
 
 const MAX_SEQ_LEN: u32 = 4096;
-
-fn quantized_mat_mul(xs: &Tensor, w: &QMatMul, via_f16: bool) -> Result<Tensor> {
-    if via_f16 {
-        w.forward_via_f16(xs)
-    } else {
-        w.forward(xs)
-    }
-}
 
 #[derive(Debug, Clone)]
 struct Mlp {
@@ -28,11 +20,11 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn forward(&self, xs: &Tensor, via_f16: bool) -> Result<Tensor> {
-        let w1 = quantized_mat_mul(xs, &self.feed_forward_w1, via_f16)?;
-        let w3 = quantized_mat_mul(xs, &self.feed_forward_w3, via_f16)?;
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let w1 = MatMul.qmatmul(xs, &self.feed_forward_w1)?;
+        let w3 = MatMul.qmatmul(xs, &self.feed_forward_w3)?;
         let y = &(candle_nn::ops::silu(&w1)? * w3)?;
-        quantized_mat_mul(y, &self.feed_forward_w2, via_f16)
+        MatMul.qmatmul(y, &self.feed_forward_w2)
     }
 }
 
@@ -47,7 +39,7 @@ enum MlpOrMoe {
 }
 
 impl MlpOrMoe {
-    fn forward(&self, xs: &Tensor, via_f16: bool) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
             Self::MoE {
                 feed_forward_gate_inp,
@@ -102,7 +94,7 @@ impl MlpOrMoe {
                     // states by `routing_weights` on the corresponding tokens (top-1 and top-2)
                     let current_state = xs.index_select(&top_x, 0)?.reshape(((), hidden_dim))?;
                     // current_hidden_states = expert_layer(current_state, routing_weights[top_x_list, idx_list, None])
-                    let current_hidden_states = expert_layer.forward(&current_state, via_f16)?;
+                    let current_hidden_states = expert_layer.forward(&current_state)?;
                     let current_hidden_states =
                         current_hidden_states.broadcast_mul(&selected_rws)?;
                     ys = ys.index_add(&top_x, &current_hidden_states, 0)?;
@@ -111,7 +103,7 @@ impl MlpOrMoe {
                 let ys = ys.reshape((b_size, seq_len, hidden_dim))?;
                 Ok(ys)
             }
-            Self::Mlp(mlp) => mlp.forward(xs, via_f16),
+            Self::Mlp(mlp) => mlp.forward(xs),
         }
     }
 }
@@ -140,13 +132,12 @@ impl LayerWeights {
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
-        via_f16: bool,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
 
-        let q = quantized_mat_mul(x, &self.attention_wq, via_f16)?;
-        let k = quantized_mat_mul(x, &self.attention_wk, via_f16)?;
-        let v = quantized_mat_mul(x, &self.attention_wv, via_f16)?;
+        let q = MatMul.qmatmul(x, &self.attention_wq)?;
+        let k = MatMul.qmatmul(x, &self.attention_wk)?;
+        let v = MatMul.qmatmul(x, &self.attention_wv)?;
 
         let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
@@ -171,30 +162,19 @@ impl LayerWeights {
 
         let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
-        let att = if via_f16 {
-            let mm = q
-                .to_dtype(DType::F16)?
-                .matmul(&k.to_dtype(DType::F16)?.t()?)?;
-
-            ((mm / (self.head_dim as f64).sqrt())?).to_dtype(DType::F32)?
-        } else {
-            let k = k.contiguous()?;
-            (q.contiguous()?.matmul(&k.t()?.contiguous()?)? / (self.head_dim as f64).sqrt())?
-        };
+        let att = MatMul.matmul_affine_div(
+            &q.contiguous()?,
+            &k.t()?.contiguous()?,
+            (self.head_dim as f64).sqrt(),
+        )?;
 
         let att = CausalMasker.apply_mask(mask, att, &self.neg_inf)?;
         let att = candle_nn::ops::softmax_last_dim(&att)?;
         // Convert to contiguous as matmul doesn't support strided vs for now.
-        let y = if via_f16 {
-            att.to_dtype(DType::F16)?
-                .matmul(&v.to_dtype(DType::F16)?)?
-                .to_dtype(DType::F32)?
-        } else {
-            att.matmul(&v.contiguous()?)?
-        };
+        let y = MatMul.matmul(&att, &v.contiguous()?)?;
 
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
-        let y = quantized_mat_mul(&y, &self.attention_wo, via_f16)?;
+        let y = MatMul.qmatmul(&y, &self.attention_wo)?;
         Ok(y)
     }
 }
@@ -412,16 +392,6 @@ impl ModelWeights {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
-        let d = x.dims();
-        if d.len() < 2 {
-            return Err(candle_core::Error::InvalidIndex {
-                op: "forward",
-                index: 1,
-                size: d.len(),
-            });
-        }
-        let via_f16 = d[1] > 32;
-
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();
         let mask = CausalMasker.make_causal_mask(x, &cache)?;
@@ -438,21 +408,20 @@ impl ModelWeights {
                 start_offsets,
                 start_offsets_kernel.clone(),
                 &mut cache[i],
-                via_f16,
             )?;
             let x = (attn + residual)?;
 
             // MLP
             let residual = &x;
             let x = layer.ffn_norm.forward(&x)?;
-            let x = layer.mlp_or_moe.forward(&x, via_f16)?;
+            let x = layer.mlp_or_moe.forward(&x)?;
             let x = (x + residual)?;
             layer_in = x;
         }
         let layer_in = layer_in.to_device(&self.device)?;
         let x = self.norm.forward(&layer_in)?;
         extract_logits(
-            &quantized_mat_mul(&x.contiguous()?, &self.output, via_f16)?,
+            &MatMul.qmatmul(&x.contiguous()?, &self.output)?,
             context_lens,
         )
     }
