@@ -104,17 +104,49 @@
 <a href="#102" id="102">102</a>
 <a href="#103" id="103">103</a>
 <a href="#104" id="104">104</a>
+<a href="#105" id="105">105</a>
+<a href="#106" id="106">106</a>
+<a href="#107" id="107">107</a>
+<a href="#108" id="108">108</a>
+<a href="#109" id="109">109</a>
+<a href="#110" id="110">110</a>
+<a href="#111" id="111">111</a>
+<a href="#112" id="112">112</a>
+<a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+<a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_core::{
     Constraint, MistralRs, NormalRequest, Request, RequestMessage, Response, SamplingParams,
     TERMINATE_ALL_NEXT_STEP,
 };
+<span class="kw">use </span>once_cell::sync::Lazy;
 <span class="kw">use </span>std::{
     io::{<span class="self">self</span>, Write},
-    sync::{atomic::Ordering, Arc},
+    sync::{atomic::Ordering, Arc, Mutex},
 };
 <span class="kw">use </span>tokio::sync::mpsc::channel;
 <span class="kw">use </span>tracing::{error, info};
+
+<span class="kw">fn </span>exit_handler() {
+    std::process::exit(<span class="number">0</span>);
+}
+
+<span class="kw">fn </span>terminate_handler() {
+    TERMINATE_ALL_NEXT_STEP.store(<span class="bool-val">true</span>, Ordering::SeqCst);
+}
+
+<span class="kw">static </span>CTRLC_HANDLER: Lazy&lt;Mutex&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>(<span class="kw">dyn </span>Fn() + Sync)&gt;&gt; =
+    Lazy::new(|| Mutex::new(<span class="kw-2">&amp;</span>exit_handler));
 
 <span class="kw">pub async fn </span>interactive_mode(mistralrs: Arc&lt;MistralRs&gt;) {
     <span class="kw">let </span>sender = mistralrs.get_sender();
@@ -133,9 +165,17 @@
         n_choices: <span class="number">1</span>,
     };
     <span class="macro">info!</span>(<span class="string">"Starting interactive loop with sampling params: {sampling_params:?}"</span>);
+
+    <span class="comment">// Set the handler to process exit
+    </span><span class="kw-2">*</span>CTRLC_HANDLER.lock().unwrap() = <span class="kw-2">&amp;</span>exit_handler;
+
+    ctrlc::set_handler(<span class="kw">move </span>|| CTRLC_HANDLER.lock().unwrap()())
+        .expect(<span class="string">"Failed to set CTRL-C handler for interactive mode"</span>);
+
     <span class="lifetime">'outer</span>: <span class="kw">loop </span>{
-        ctrlc::set_handler(<span class="kw">move </span>|| std::process::exit(<span class="number">0</span>))
-            .expect(<span class="string">"Failed to set CTRL-C handler for interactive mode"</span>);
+        <span class="comment">// Set the handler to process exit
+        </span><span class="kw-2">*</span>CTRLC_HANDLER.lock().unwrap() = <span class="kw-2">&amp;</span>exit_handler;
+
         <span class="kw">let </span><span class="kw-2">mut </span>prompt = String::new();
         <span class="macro">print!</span>(<span class="string">"&gt; "</span>);
         io::stdout().flush().unwrap();
@@ -145,10 +185,10 @@
         <span class="kw">if </span>prompt.is_empty() {
             <span class="kw">return</span>;
         }
-        ctrlc::set_handler(<span class="kw">move </span>|| {
-            TERMINATE_ALL_NEXT_STEP.store(<span class="bool-val">true</span>, Ordering::SeqCst);
-        })
-        .expect(<span class="string">"Failed to set CTRL-C handler for interactive mode"</span>);
+
+        <span class="comment">// Set the handler to terminate all seqs, so allowing cancelling running
+        </span><span class="kw-2">*</span>CTRLC_HANDLER.lock().unwrap() = <span class="kw-2">&amp;</span>terminate_handler;
+
         <span class="kw">let </span><span class="kw-2">mut </span>user_message = IndexMap::new();
         user_message.insert(<span class="string">"role"</span>.to_string(), <span class="string">"user"</span>.to_string());
         user_message.insert(<span class="string">"content"</span>.to_string(), prompt);

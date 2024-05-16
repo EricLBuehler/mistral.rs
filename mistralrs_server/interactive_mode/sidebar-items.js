@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["interactive_mode"]};
+window.SIDEBAR_ITEMS = {"fn":["exit_handler","interactive_mode","terminate_handler"],"static":["CTRLC_HANDLER"]};
