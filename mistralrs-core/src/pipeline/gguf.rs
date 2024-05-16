@@ -8,7 +8,7 @@ use crate::aici::toktree::TokTrie;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::calculate_eos_tokens;
 use crate::pipeline::Cache;
-use crate::pipeline::{ChatTemplate, SimpleModelPaths};
+use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
@@ -277,7 +277,7 @@ fn parse_gguf_value(value: &GgufValue) -> String {
 
 impl Loader for GGUFLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    fn load_model(
+    fn load_model_from_hf(
         &self,
         revision: Option<String>,
         token_source: TokenSource,
@@ -288,7 +288,7 @@ impl Loader for GGUFLoader {
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
-            SimpleModelPaths,
+            LocalModelPaths,
             &token_source,
             revision,
             self,
@@ -296,8 +296,19 @@ impl Loader for GGUFLoader {
             self.quantized_filename,
             silent
         );
-        let paths = paths?;
+        self.load_model_from_path(&paths?, _dtype, device, silent, mapper, in_situ_quant)
+    }
 
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    fn load_model_from_path(
+        &self,
+        paths: &Box<dyn ModelPaths>,
+        _dtype: Option<DType>,
+        device: &Device,
+        silent: bool,
+        mapper: DeviceMapMetadata,
+        in_situ_quant: Option<GgmlDType>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
             anyhow::bail!(
                 "You are trying to in-situ quantize a GGUF model. This will not do anything."
