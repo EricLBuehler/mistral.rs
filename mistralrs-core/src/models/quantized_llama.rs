@@ -168,6 +168,7 @@ impl LayerWeights {
             &q,
             &k,
             &v,
+            self.n_head,
             self.head_dim,
             mask,
             false,

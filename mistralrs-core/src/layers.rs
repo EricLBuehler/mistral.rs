@@ -465,6 +465,7 @@ impl ScaledDotProductAttention {
         q: &Tensor,
         k: &Tensor,
         v: &Tensor,
+        n_attn_heads: usize,
         head_dim: usize,
         mask: Option<&Tensor>,
         use_flash_attn: bool,
@@ -521,7 +522,7 @@ impl ScaledDotProductAttention {
                 )?;
 
                 // Reshape to dims4
-                context_layer.reshape((b_sz, self.n_head, seq_len, self.head_dim))
+                context_layer.reshape((b_sz, n_head, seq_len, head_dim))
             }
             #[cfg(not(feature = "cuda"))]
             {
