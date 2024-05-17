@@ -21,8 +21,8 @@ use candle_nn::{
 use once_cell::sync::Lazy;
 
 // (bs, tgt_len, past_kv_len)
-static MASKS: Lazy<Mutex<HashMap<(usize, usize, usize), Tensor>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+type MaskKey = (usize, usize, usize);
+static MASKS: Lazy<Mutex<HashMap<MaskKey, Tensor>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 use crate::{cublaslt::CUBLASLT_HANDLE, models::phi3, INHIBIT_GEMM_F16};
 
