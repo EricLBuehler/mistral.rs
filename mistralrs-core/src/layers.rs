@@ -20,7 +20,8 @@ use candle_nn::{
 };
 use once_cell::sync::Lazy;
 
-static MASKS: Lazy<Mutex<HashMap<(usize, usize), Tensor>>> =
+// (bs, tgt_len, past_kv_len)
+static MASKS: Lazy<Mutex<HashMap<(usize, usize, usize), Tensor>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 use crate::{cublaslt::CUBLASLT_HANDLE, models::phi3, INHIBIT_GEMM_F16};
@@ -308,7 +309,11 @@ impl CausalMasker {
         if tgt_len == 1 {
             return Ok(None);
         }
-        let res = MASKS.lock().unwrap().get(&(tgt_len, past_kv_len)).cloned();
+        let res = MASKS
+            .lock()
+            .unwrap()
+            .get(&(b_sz, tgt_len, past_kv_len))
+            .cloned();
         let causal_mask = if let Some(mask) = res {
             return Ok(Some(mask));
         } else {
@@ -321,8 +326,8 @@ impl CausalMasker {
 
         let zero = Tensor::new(0.0f32, input_ids.device())?;
         let causal_mask: Option<Result<Tensor>> = causal_mask.map(|mask| {
-            let mask = mask
-                .broadcast_as((mask.dims()[0], n_attn_heads, mask.dims()[2], mask.dims()[3]))?;
+            let mask =
+                mask.broadcast_as((mask.dims()[0], n_attn_heads, mask.dims()[2], mask.dims()[3]))?;
             // Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
             let mask = masked_fill(
                 &zero.to_dtype(dtype)?.broadcast_as(mask.shape())?,
@@ -333,7 +338,7 @@ impl CausalMasker {
             MASKS
                 .lock()
                 .unwrap()
-                .insert((tgt_len, past_kv_len), mask.clone());
+                .insert((b_sz, tgt_len, past_kv_len), mask.clone());
             Ok(mask)
         });
         let mask: Option<Tensor> = if let Some(mask) = causal_mask {
@@ -354,7 +359,11 @@ impl CausalMasker {
         if tgt_len == 1 {
             return Ok(None);
         }
-        let res = MASKS.lock().unwrap().get(&(tgt_len, past_kv_len)).cloned();
+        let res = MASKS
+            .lock()
+            .unwrap()
+            .get(&(b_sz, tgt_len, past_kv_len))
+            .cloned();
         if let Some(mask) = res {
             Ok(Some(mask))
         } else {
@@ -366,7 +375,7 @@ impl CausalMasker {
             MASKS
                 .lock()
                 .unwrap()
-                .insert((tgt_len, past_kv_len), mask.clone());
+                .insert((b_sz, tgt_len, past_kv_len), mask.clone());
             Ok(Some(mask))
         }
     }
@@ -386,7 +395,11 @@ impl CausalMasker {
         if tgt_len == 1 {
             return Ok(None);
         }
-        let res = MASKS.lock().unwrap().get(&(tgt_len, past_kv_len)).cloned();
+        let res = MASKS
+            .lock()
+            .unwrap()
+            .get(&(b_sz, tgt_len, past_kv_len))
+            .cloned();
         if let Some(mask) = res {
             Ok(Some(mask))
         } else {
@@ -401,7 +414,7 @@ impl CausalMasker {
             MASKS
                 .lock()
                 .unwrap()
-                .insert((tgt_len, past_kv_len), mask.clone());
+                .insert((b_sz, tgt_len, past_kv_len), mask.clone());
             Ok(Some(mask))
         }
     }
