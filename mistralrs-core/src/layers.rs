@@ -522,7 +522,7 @@ impl ScaledDotProductAttention {
                 )?;
 
                 // Reshape to dims4
-                context_layer.reshape((b_sz, n_head, seq_len, head_dim))
+                context_layer.reshape((b_sz, n_attn_heads, seq_len, head_dim))
             }
             #[cfg(not(feature = "cuda"))]
             {
