@@ -310,7 +310,7 @@ impl CausalMasker {
         }
         let res = MASKS.lock().unwrap().get(&(tgt_len, past_kv_len)).cloned();
         let causal_mask = if let Some(mask) = res {
-            Some(mask)
+            return Ok(Some(mask));
         } else {
             let mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
             let mask = mask
@@ -322,8 +322,7 @@ impl CausalMasker {
         let zero = Tensor::new(0.0f32, input_ids.device())?;
         let causal_mask: Option<Result<Tensor>> = causal_mask.map(|mask| {
             let mask = mask
-                .broadcast_as((mask.dims()[0], n_attn_heads, mask.dims()[2], mask.dims()[3]))
-                .expect("Failed to pre broadcast mask");
+                .broadcast_as((mask.dims()[0], n_attn_heads, mask.dims()[2], mask.dims()[3]))?;
             // Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
             let mask = masked_fill(
                 &zero.to_dtype(dtype)?.broadcast_as(mask.shape())?,
