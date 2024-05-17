@@ -4,7 +4,8 @@
 
 use candle_core::{Device, Result, Tensor};
 use candle_nn::Activation as CandleActivation;
-use std::sync::Once;
+use once_cell::sync::Lazy;
+use std::sync::{Mutex, Once};
 
 #[cfg(feature = "cuda")]
 mod api;
@@ -14,8 +15,10 @@ use api::{fused_batch_matmul, fused_matmul, Activation, CublasLt};
 
 static INIT: Once = Once::new();
 static mut CUBLASLT: Option<CublasLtWrapper> = None;
+pub static CUBLASLT_HANDLE: Lazy<Mutex<Option<&'static CublasLtWrapper>>> =
+    Lazy::new(|| Mutex::new(None));
 
-pub fn get_cublas_lt_wrapper() -> Option<&'static CublasLtWrapper> {
+pub fn setup_cublas_lt_wrapper() {
     unsafe {
         INIT.call_once(|| {
             #[cfg(not(feature = "cuda"))]
@@ -41,7 +44,8 @@ pub fn get_cublas_lt_wrapper() -> Option<&'static CublasLtWrapper> {
                 tracing::info!("Initialized cuBLASlt handle");
             }
         });
-        CUBLASLT.as_ref()
+        let cublaslt: Option<&'static CublasLtWrapper> = CUBLASLT.as_ref();
+        *CUBLASLT_HANDLE.lock().unwrap() = cublaslt;
     }
 }
 

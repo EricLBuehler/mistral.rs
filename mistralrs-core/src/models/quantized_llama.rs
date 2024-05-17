@@ -5,7 +5,7 @@ use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 
-use crate::cublaslt::get_cublas_lt_wrapper;
+use crate::cublaslt::CUBLASLT_HANDLE;
 use crate::device_map::DeviceMapper;
 use crate::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm};
 use crate::pipeline::{extract_logits, Cache};
@@ -164,7 +164,9 @@ impl LayerWeights {
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
 
         #[allow(unused_variables)]
-        let y = if let (Device::Cuda(_), Some(cublaslt)) = (x.device(), get_cublas_lt_wrapper()) {
+        let y = if let (Device::Cuda(_), Some(cublaslt)) =
+            (x.device(), *CUBLASLT_HANDLE.lock().unwrap())
+        {
             #[cfg(feature = "cuda")]
             {
                 // cuBLASLt batch matmul implementation requires inputs to be dims3
