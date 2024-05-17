@@ -455,11 +455,11 @@ pub struct ScaledDotProductAttention;
 
 impl ScaledDotProductAttention {
     /// Computes softmax(QK^T*sqrt(d_k))V
-    /// The attention implemention is dispatched as follows:
+    /// The attention implenetation is dispatched as follows:
     /// 1) If `use_flash_attn == true`, use a flash attention V2 kernel
     /// 2) If using CUDA and the cuBLASLt kernel is initialized, then it will use an optimized version.
     /// 3) Otherwise, use the "naive" SDPA implementation.
-    #[allow(unused_variables)]
+    #[allow(unused_variables, clippy::too_many_arguments)]
     pub fn run_attention(
         &self,
         q: &Tensor,
@@ -536,7 +536,7 @@ impl ScaledDotProductAttention {
             )?;
 
             let att = match mask {
-                Some(m) => att.broadcast_add(&m)?,
+                Some(m) => att.broadcast_add(m)?,
                 None => att,
             };
             let att = candle_nn::ops::softmax_last_dim(&att)?;
