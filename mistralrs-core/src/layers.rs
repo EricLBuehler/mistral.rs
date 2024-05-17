@@ -301,26 +301,48 @@ impl CausalMasker {
         input_ids: &Tensor,
         cache: &[Option<(Tensor, Tensor)>],
         dtype: DType,
-        n_head: usize,
+        n_attn_heads: usize,
     ) -> Result<Option<Tensor>> {
-        let zero = Tensor::new(0.0f32, input_ids.device())?;
-        let causal_mask = self.make_causal_mask(input_ids, cache)?;
-        Ok(causal_mask.map(|mask| {
+        let past_kv_len = self.calculate_past_kv_len(cache)?;
+        let (b_sz, tgt_len) = input_ids.dims2()?;
+        if tgt_len == 1 {
+            return Ok(None);
+        }
+        let res = MASKS.lock().unwrap().get(&(tgt_len, past_kv_len)).cloned();
+        let causal_mask = if let Some(mask) = res {
+            Some(mask)
+        } else {
+            let mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
             let mask = mask
-                .broadcast_as((mask.dims()[0], n_head, mask.dims()[2], mask.dims()[3]))
+                .expand((b_sz, 1, tgt_len, tgt_len + past_kv_len))?
+                .to_dtype(DType::U8)?;
+            Some(mask)
+        };
+
+        let zero = Tensor::new(0.0f32, input_ids.device())?;
+        let causal_mask: Option<Result<Tensor>> = causal_mask.map(|mask| {
+            let mask = mask
+                .broadcast_as((mask.dims()[0], n_attn_heads, mask.dims()[2], mask.dims()[3]))
                 .expect("Failed to pre broadcast mask");
             // Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
-            masked_fill(
-                &zero
-                    .to_dtype(dtype)
-                    .expect("Failed to create mask")
-                    .broadcast_as(mask.shape())
-                    .expect("Failed to create mask"),
+            let mask = masked_fill(
+                &zero.to_dtype(dtype)?.broadcast_as(mask.shape())?,
                 &mask,
                 f32::NEG_INFINITY,
-            )
-            .expect("Failed to create mask")
-        }))
+            )?;
+
+            MASKS
+                .lock()
+                .unwrap()
+                .insert((tgt_len, past_kv_len), mask.clone());
+            Ok(mask)
+        });
+        let mask: Option<Tensor> = if let Some(mask) = causal_mask {
+            Some(mask?)
+        } else {
+            None
+        };
+        Ok(mask)
     }
 
     pub fn make_causal_mask(
@@ -455,6 +477,7 @@ pub struct ScaledDotProductAttention;
 
 impl ScaledDotProductAttention {
     /// Computes softmax(QK^T*sqrt(d_k))V
+    ///
     /// The attention implenetation is dispatched as follows:
     /// 1) If `use_flash_attn == true`, use a flash attention V2 kernel
     /// 2) If using CUDA and the cuBLASLt kernel is initialized, then it will use an optimized version.
