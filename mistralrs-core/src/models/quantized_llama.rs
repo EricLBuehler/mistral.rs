@@ -168,7 +168,6 @@ impl LayerWeights {
             #[cfg(feature = "cuda")]
             {
                 // cuBLASLt batch matmul implementation requires inputs to be dims3
-                let (batch_size, _, seq_len, _) = k.shape().dims4()?;
                 let k = k.flatten(0, 1)?;
                 let q = q.flatten(0, 1)?;
                 let v = v.flatten(0, 1)?;
@@ -206,7 +205,7 @@ impl LayerWeights {
                 )?;
 
                 // Reshape to dims4
-                context_layer.reshape((batch_size, self.n_head, seq_len, self.head_dim))?
+                context_layer.reshape((b_sz, self.n_head, seq_len, self.head_dim))?
             }
             #[cfg(not(feature = "cuda"))]
             {
