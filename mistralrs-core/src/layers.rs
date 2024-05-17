@@ -311,7 +311,7 @@ impl CausalMasker {
                     .broadcast_as(mask.shape())
                     .expect("Failed to create mask"),
                 &mask,
-                0.0,
+                0.0f32,
             )
             .expect("Failed to create mask")
         }))
