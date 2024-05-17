@@ -5,9 +5,10 @@ use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 
-use crate::cublaslt::CUBLASLT_HANDLE;
 use crate::device_map::DeviceMapper;
-use crate::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm};
+use crate::layers::{
+    repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention,
+};
 use crate::pipeline::{extract_logits, Cache};
 use crate::DeviceMapMetadata;
 
@@ -163,71 +164,16 @@ impl LayerWeights {
         let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
 
-        #[allow(unused_variables)]
-        let y = if let (Device::Cuda(_), Some(cublaslt)) =
-            (x.device(), *CUBLASLT_HANDLE.lock().unwrap())
-        {
-            #[cfg(feature = "cuda")]
-            {
-                // cuBLASLt batch matmul implementation requires inputs to be dims3
-                let k = k.flatten(0, 1)?;
-                let q = q.flatten(0, 1)?;
-                let v = v.flatten(0, 1)?;
-                let attention_bias = mask.map(|mask| mask.flatten(0, 1)).transpose()?;
-
-                // If attention_bias is set, we fuse the add by giving it as the output matrix
-                // and setting beta to 1.0
-                let beta = match attention_bias.is_some() {
-                    true => Some(1.0),
-                    false => None,
-                };
-
-                // Batch matrix multiplication
-                // Fuse softmax scale and attention_bias add
-                let attention_scores = cublaslt.batch_matmul(
-                    &k,
-                    &q,
-                    attention_bias.as_ref(),
-                    Some((1.0 / (self.head_dim as f64).sqrt()) as f32),
-                    beta,
-                    None,
-                    None,
-                )?;
-                let attention_probs = candle_nn::ops::softmax_last_dim(&attention_scores)?;
-
-                let context_layer = cublaslt.batch_matmul(
-                    &v.t()?.contiguous()?,
-                    &attention_probs,
-                    // We save one allocation
-                    Some(&q),
-                    None,
-                    None,
-                    None,
-                    None,
-                )?;
-
-                // Reshape to dims4
-                context_layer.reshape((b_sz, self.n_head, seq_len, self.head_dim))?
-            }
-            #[cfg(not(feature = "cuda"))]
-            {
-                candle_core::bail!("`cuda` feature is not enabled")
-            }
-        } else {
-            let att = MatMul.matmul_affine_div(
-                &q.contiguous()?,
-                &k.t()?.contiguous()?,
-                (self.head_dim as f64).sqrt(),
-            )?;
-
-            let att = match mask {
-                Some(m) => att.broadcast_add(&m)?,
-                None => att,
-            };
-            let att = candle_nn::ops::softmax_last_dim(&att)?;
-            // Convert to contiguous as matmul doesn't support strided vs for now.
-            MatMul.matmul(&att, &v.contiguous()?)?
-        };
+        let y = ScaledDotProductAttention.run_attention(
+            &q,
+            &k,
+            &v,
+            self.head_dim,
+            mask,
+            false,
+            b_sz,
+            seq_len,
+        )?;
 
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = MatMul.qmatmul(&y, &self.attention_wo)?;
