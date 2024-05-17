@@ -220,7 +220,7 @@ impl LayerWeights {
             )?;
 
             let att = match mask {
-                Some(m) => (att + m)?,
+                Some(m) => att.broadcast_add(&m)?,
                 None => att,
             };
             let att = candle_nn::ops::softmax_last_dim(&att)?;

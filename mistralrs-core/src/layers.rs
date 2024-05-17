@@ -269,8 +269,10 @@ fn apply_tril(xs: &Tensor, diagonal: isize) -> Result<Tensor> {
 fn masked_fill<D: WithDType>(xs: &Tensor, mask: &Tensor, value: D) -> Result<Tensor> {
     let on_true = Tensor::full(value, xs.shape(), xs.device())?;
     let on_false = xs;
-    mask.broadcast_as(xs.shape())?
-        .where_cond(&on_true, on_false)
+    let res = mask
+        .broadcast_as(xs.shape())?
+        .where_cond(&on_true, on_false)?;
+    Ok(res)
 }
 
 impl CausalMasker {
@@ -300,18 +302,18 @@ impl CausalMasker {
         cache: &[Option<(Tensor, Tensor)>],
         dtype: DType,
     ) -> Result<Option<Tensor>> {
-        let neg_inf = Tensor::new(f32::NEG_INFINITY, input_ids.device())?;
+        let zero = Tensor::new(0.0f32, input_ids.device())?;
         let causal_mask = self.make_causal_mask(input_ids, cache)?;
         Ok(causal_mask.map(|mask| {
-            // Mask: 0 means use from x (add 0.0), 1 means mask out (add -inf)
+            // Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
             masked_fill(
-                &neg_inf
+                &zero
                     .to_dtype(dtype)
                     .expect("Failed to create mask")
                     .broadcast_as(mask.shape())
                     .expect("Failed to create mask"),
                 &mask,
-                0.0f32,
+                f32::NEG_INFINITY,
             )
             .expect("Failed to create mask")
         }))
