@@ -206,7 +206,7 @@ impl LayerWeights {
                 )?;
 
                 // Reshape to dims4
-                context_layer.reshape((batch_size, self.n_kv_head, seq_len, self.head_dim))?
+                context_layer.reshape((batch_size, self.n_head, seq_len, self.head_dim))?
             }
             #[cfg(not(feature = "cuda"))]
             {
@@ -445,7 +445,12 @@ impl ModelWeights {
     ) -> Result<Tensor> {
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();
-        let mask = CausalMasker.make_causal_mask_as_attn_bias(x, &cache, DType::F32)?;
+        let mask = CausalMasker.make_causal_mask_as_attn_bias(
+            x,
+            &cache,
+            DType::F32,
+            self.layers[0].n_head,
+        )?;
         for (i, layer) in self.layers.iter_mut().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;

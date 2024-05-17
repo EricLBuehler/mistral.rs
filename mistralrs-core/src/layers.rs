@@ -301,10 +301,14 @@ impl CausalMasker {
         input_ids: &Tensor,
         cache: &[Option<(Tensor, Tensor)>],
         dtype: DType,
+        n_head: usize,
     ) -> Result<Option<Tensor>> {
         let zero = Tensor::new(0.0f32, input_ids.device())?;
         let causal_mask = self.make_causal_mask(input_ids, cache)?;
         Ok(causal_mask.map(|mask| {
+            let mask = mask
+                .broadcast_as((mask.dims()[0], n_head, mask.dims()[2], mask.dims()[3]))
+                .expect("Failed to pre broadcast mask");
             // Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
             masked_fill(
                 &zero
