@@ -22,16 +22,8 @@ pub(crate) fn get_token(source: &TokenSource) -> Result<Option<String>> {
 
     let token = match source {
         TokenSource::Literal(data) => Some(data.clone()),
-        TokenSource::EnvVar(envvar) => {
-            env::var(envvar)
-                .ok()
-                .or_else(|| skip_token(envvar))
-        },
-        TokenSource::Path(path) => {
-            fs::read_to_string(path)
-                .ok()
-                .or_else(|| skip_token(path))
-        },
+        TokenSource::EnvVar(envvar) => env::var(envvar).ok().or_else(|| skip_token(envvar)),
+        TokenSource::Path(path) => fs::read_to_string(path).ok().or_else(|| skip_token(path)),
         TokenSource::CacheToken => {
             let home = format!(
                 "{}/.cache/huggingface/token",
@@ -43,7 +35,7 @@ pub(crate) fn get_token(source: &TokenSource) -> Result<Option<String>> {
             fs::read_to_string(home.clone())
                 .ok()
                 .or_else(|| skip_token(&home))
-        },
+        }
         TokenSource::None => None,
     };
 
