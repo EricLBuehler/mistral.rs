@@ -20,10 +20,11 @@ use candle_nn::{
 };
 use once_cell::sync::Lazy;
 
-static MASKS: Lazy<Mutex<HashMap<(usize, usize), Tensor>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+// (bs, tgt_len, past_kv_len)
+type MaskKey = (usize, usize, usize);
+static MASKS: Lazy<Mutex<HashMap<MaskKey, Tensor>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
-use crate::{models::phi3, INHIBIT_GEMM_F16};
+use crate::{cublaslt::CUBLASLT_HANDLE, models::phi3, INHIBIT_GEMM_F16};
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
@@ -265,11 +266,14 @@ fn apply_tril(xs: &Tensor, diagonal: isize) -> Result<Tensor> {
 }
 
 // https://github.com/mokeyish/candle-ext/blob/main/src/masked_fill.rs
+/// xs are on false (0), value is on true (1)
 fn masked_fill<D: WithDType>(xs: &Tensor, mask: &Tensor, value: D) -> Result<Tensor> {
-    let on_true = Tensor::full(value, xs.shape(), xs.device())?;
+    let on_true = Tensor::full(value, xs.shape(), xs.device())?.to_dtype(xs.dtype())?;
     let on_false = xs;
-    mask.broadcast_as(xs.shape())?
-        .where_cond(&on_true, on_false)
+    let res = mask
+        .broadcast_as(xs.shape())?
+        .where_cond(&on_true, on_false)?;
+    Ok(res)
 }
 
 impl CausalMasker {
@@ -293,6 +297,124 @@ impl CausalMasker {
         return Ok(k_cache_1.dims()[2]);
     }
 
+    pub fn make_causal_mask_as_attn_bias(
+        &self,
+        input_ids: &Tensor,
+        cache: &[Option<(Tensor, Tensor)>],
+        dtype: DType,
+        n_attn_heads: usize,
+    ) -> Result<Option<Tensor>> {
+        let past_kv_len = self.calculate_past_kv_len(cache)?;
+        let (b_sz, tgt_len) = input_ids.dims2()?;
+        if tgt_len == 1 {
+            return Ok(None);
+        }
+        let res = MASKS
+            .lock()
+            .unwrap()
+            .get(&(b_sz, tgt_len, past_kv_len))
+            .cloned();
+        let causal_mask = if let Some(mask) = res {
+            return Ok(Some(mask));
+        } else {
+            let mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
+            let mask = mask
+                .expand((b_sz, 1, tgt_len, tgt_len + past_kv_len))?
+                .to_dtype(DType::U8)?;
+            Some(mask)
+        };
+
+        let zero = Tensor::new(0.0f32, input_ids.device())?;
+        let causal_mask: Option<Result<Tensor>> = causal_mask.map(|mask| {
+            let mask =
+                mask.broadcast_as((mask.dims()[0], n_attn_heads, mask.dims()[2], mask.dims()[3]))?;
+            // Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
+            let mask = masked_fill(
+                &zero.to_dtype(dtype)?.broadcast_as(mask.shape())?,
+                &mask,
+                f32::NEG_INFINITY,
+            )?;
+
+            MASKS
+                .lock()
+                .unwrap()
+                .insert((b_sz, tgt_len, past_kv_len), mask.clone());
+            Ok(mask)
+        });
+        let mask: Option<Tensor> = if let Some(mask) = causal_mask {
+            Some(mask?)
+        } else {
+            None
+        };
+        Ok(mask)
+    }
+
+    pub fn make_causal_mask_with_sliding_window_as_attn_bias(
+        &self,
+        input_ids: &Tensor,
+        cache: &[Option<(Tensor, Tensor)>],
+        sliding_window: Option<usize>,
+        dtype: DType,
+        n_attn_heads: usize,
+    ) -> Result<Option<Tensor>> {
+        if sliding_window.is_none() {
+            return self.make_causal_mask_as_attn_bias(input_ids, cache, dtype, n_attn_heads);
+        }
+        let sliding_window = sliding_window.unwrap();
+        let past_kv_len = self.calculate_past_kv_len(cache)?;
+        let (b_sz, tgt_len) = input_ids.dims2()?;
+        if tgt_len == 1 {
+            return Ok(None);
+        }
+        let res = MASKS
+            .lock()
+            .unwrap()
+            .get(&(b_sz, tgt_len, past_kv_len))
+            .cloned();
+        let causal_mask = if let Some(mask) = res {
+            return Ok(Some(mask));
+        } else {
+            let mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
+            let diagonal = past_kv_len as isize - sliding_window as isize - 1;
+            let context_mask = apply_tril(&mask.ones_like()?, diagonal)?;
+            let mask = masked_fill(&mask.to_dtype(DType::F32)?, &context_mask, f32::MIN)?;
+            let mask = mask
+                .expand((b_sz, 1, tgt_len, tgt_len + past_kv_len))?
+                .to_dtype(DType::U8)?;
+
+            Some(mask)
+        };
+
+        let zero = Tensor::new(0.0f32, input_ids.device())?;
+        let causal_mask: Option<Result<Tensor>> = causal_mask.map(|mask| {
+            let mask =
+                mask.broadcast_as((mask.dims()[0], n_attn_heads, mask.dims()[2], mask.dims()[3]))?;
+            // Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
+            let mask = masked_fill(
+                &zero.to_dtype(dtype)?.broadcast_as(mask.shape())?,
+                &mask,
+                f32::NEG_INFINITY,
+            )?;
+
+            MASKS
+                .lock()
+                .unwrap()
+                .insert((b_sz, tgt_len, past_kv_len), mask.clone());
+            Ok(mask)
+        });
+        let mask: Option<Tensor> = if let Some(mask) = causal_mask {
+            Some(mask?)
+        } else {
+            None
+        };
+        Ok(mask)
+    }
+
+    #[deprecated(
+        since = "0.1.9",
+        note = "use `make_causal_mask_as_attn_bias` instead! \
+        This is *not* compatible with `ScaledDotProductAttention`"
+    )]
     pub fn make_causal_mask(
         &self,
         input_ids: &Tensor,
@@ -303,7 +425,11 @@ impl CausalMasker {
         if tgt_len == 1 {
             return Ok(None);
         }
-        let res = MASKS.lock().unwrap().get(&(tgt_len, past_kv_len)).cloned();
+        let res = MASKS
+            .lock()
+            .unwrap()
+            .get(&(b_sz, tgt_len, past_kv_len))
+            .cloned();
         if let Some(mask) = res {
             Ok(Some(mask))
         } else {
@@ -315,11 +441,16 @@ impl CausalMasker {
             MASKS
                 .lock()
                 .unwrap()
-                .insert((tgt_len, past_kv_len), mask.clone());
+                .insert((b_sz, tgt_len, past_kv_len), mask.clone());
             Ok(Some(mask))
         }
     }
 
+    #[deprecated(
+        since = "0.1.9",
+        note = "use `make_causal_mask_with_sliding_window_as_attn_bias` instead! \
+        This is *not* compatible with `ScaledDotProductAttention`"
+    )]
     pub fn make_causal_mask_with_sliding_window(
         &self,
         input_ids: &Tensor,
@@ -327,6 +458,7 @@ impl CausalMasker {
         sliding_window: Option<usize>,
     ) -> Result<Option<Tensor>> {
         if sliding_window.is_none() {
+            #[allow(deprecated)]
             return self.make_causal_mask(input_ids, cache);
         }
         let sliding_window = sliding_window.unwrap();
@@ -335,7 +467,11 @@ impl CausalMasker {
         if tgt_len == 1 {
             return Ok(None);
         }
-        let res = MASKS.lock().unwrap().get(&(tgt_len, past_kv_len)).cloned();
+        let res = MASKS
+            .lock()
+            .unwrap()
+            .get(&(b_sz, tgt_len, past_kv_len))
+            .cloned();
         if let Some(mask) = res {
             Ok(Some(mask))
         } else {
@@ -350,11 +486,16 @@ impl CausalMasker {
             MASKS
                 .lock()
                 .unwrap()
-                .insert((tgt_len, past_kv_len), mask.clone());
+                .insert((b_sz, tgt_len, past_kv_len), mask.clone());
             Ok(Some(mask))
         }
     }
 
+    #[deprecated(
+        since = "0.1.9",
+        note = "use one of the `*_as_attn_bias` functions\
+                    to create an attention bias which can be added."
+    )]
     pub fn apply_mask(
         &self,
         mask: &Option<Tensor>,
@@ -417,6 +558,102 @@ impl MatMul {
             matmul.forward_via_f16(x)
         } else {
             matmul.forward(x)
+        }
+    }
+}
+
+pub struct ScaledDotProductAttention;
+
+impl ScaledDotProductAttention {
+    /// Computes softmax(QK^T*sqrt(d_k))V
+    ///
+    /// The attention implementation is dispatched as follows:
+    /// 1) If `use_flash_attn == true`, use a flash attention V2 kernel
+    /// 2) If using CUDA and the cuBLASLt kernel is initialized, then it will use an optimized version.
+    /// 3) Otherwise, use the "naive" SDPA implementation.
+    #[allow(unused_variables, clippy::too_many_arguments)]
+    pub fn run_attention(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        n_attn_heads: usize,
+        head_dim: usize,
+        mask: Option<&Tensor>,
+        use_flash_attn: bool,
+        b_sz: usize,
+        seq_len: usize,
+    ) -> Result<Tensor> {
+        if use_flash_attn {
+            // flash-attn expects (b_sz, seq_len, nheads, head_dim)
+            let q = q.transpose(1, 2)?;
+            let k = k.transpose(1, 2)?;
+            let v = v.transpose(1, 2)?;
+            let softmax_scale = 1f32 / (head_dim as f32).sqrt();
+            return flash_attn(&q, &k, &v, softmax_scale, seq_len > 1)?.transpose(1, 2);
+        }
+
+        if let (Device::Cuda(_), Some(cublaslt)) = (q.device(), *CUBLASLT_HANDLE.lock().unwrap()) {
+            #[cfg(feature = "cuda")]
+            {
+                // cuBLASLt batch matmul implementation requires inputs to be dims3
+                let k = k.flatten(0, 1)?;
+                let q = q.flatten(0, 1)?;
+                let v = v.flatten(0, 1)?;
+                let attention_bias = mask.map(|mask| mask.flatten(0, 1)).transpose()?;
+
+                // If attention_bias is set, we fuse the add by giving it as the output matrix
+                // and setting beta to 1.0
+                let beta = match attention_bias.is_some() {
+                    true => Some(1.0),
+                    false => None,
+                };
+
+                // Batch matrix multiplication
+                // Fuse softmax scale and attention_bias add
+                let attention_scores = cublaslt.batch_matmul(
+                    &k,
+                    &q,
+                    attention_bias.as_ref(),
+                    Some((1.0 / (head_dim as f64).sqrt()) as f32),
+                    beta,
+                    None,
+                    None,
+                )?;
+                let attention_probs = candle_nn::ops::softmax_last_dim(&attention_scores)?;
+
+                let context_layer = cublaslt.batch_matmul(
+                    &v.t()?.contiguous()?,
+                    &attention_probs,
+                    // We save one allocation
+                    Some(&q),
+                    None,
+                    None,
+                    None,
+                    None,
+                )?;
+
+                // Reshape to dims4
+                context_layer.reshape((b_sz, n_attn_heads, seq_len, head_dim))
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                candle_core::bail!("`cuda` feature is not enabled")
+            }
+        } else {
+            let att = MatMul.matmul_affine_div(
+                &q.contiguous()?,
+                &k.t()?.contiguous()?,
+                (head_dim as f64).sqrt(),
+            )?;
+
+            let att = match mask {
+                Some(m) => att.broadcast_add(m)?,
+                None => att,
+            };
+            let att = candle_nn::ops::softmax_last_dim(&att)?;
+            // Convert to contiguous as matmul doesn't support strided vs for now.
+            MatMul.matmul(&att, &v.contiguous()?)
         }
     }
 }

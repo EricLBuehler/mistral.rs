@@ -1,5 +1,6 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use cublaslt::setup_cublas_lt_wrapper;
 use std::{
     cell::RefCell,
     error::Error,
@@ -25,6 +26,7 @@ pub use model_loader::{get_tgt_non_granular_index, LoaderBuilder};
 mod model_selected;
 pub use model_selected::ModelSelected;
 
+mod cublaslt;
 pub mod layers;
 mod models;
 mod pipeline;
@@ -196,6 +198,7 @@ impl MistralRs {
         if !gemm_full_precision_f16.unwrap_or(false) {
             set_gemm_reduced_precision_f16();
         }
+        setup_cublas_lt_wrapper();
 
         let truncate_sequence = truncate_sequence.unwrap_or(false);
         let no_kv_cache = no_kv_cache.unwrap_or(false);
