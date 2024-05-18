@@ -268,7 +268,7 @@ fn apply_tril(xs: &Tensor, diagonal: isize) -> Result<Tensor> {
 // https://github.com/mokeyish/candle-ext/blob/main/src/masked_fill.rs
 /// xs are on false (0), value is on true (1)
 fn masked_fill<D: WithDType>(xs: &Tensor, mask: &Tensor, value: D) -> Result<Tensor> {
-    let on_true = Tensor::full(value, xs.shape(), xs.device())?;
+    let on_true = Tensor::full(value, xs.shape(), xs.device())?.to_dtype(xs.dtype())?;
     let on_false = xs;
     let res = mask
         .broadcast_as(xs.shape())?
@@ -410,8 +410,11 @@ impl CausalMasker {
         Ok(mask)
     }
 
-    #[deprecated = "use `make_causal_mask_with_as_attn_bias` instead! \
-        This is *not* compatible with `ScaledDotProductAttention`"]
+    #[deprecated(
+        since = "0.1.9",
+        note = "use `make_causal_mask_as_attn_bias` instead! \
+        This is *not* compatible with `ScaledDotProductAttention`"
+    )]
     pub fn make_causal_mask(
         &self,
         input_ids: &Tensor,
@@ -443,8 +446,11 @@ impl CausalMasker {
         }
     }
 
-    #[deprecated = "use `make_causal_mask_with_sliding_window_as_attn_bias` instead!\
-        This is *not* compatible with `ScaledDotProductAttention`"]
+    #[deprecated(
+        since = "0.1.9",
+        note = "use `make_causal_mask_with_sliding_window_as_attn_bias` instead! \
+        This is *not* compatible with `ScaledDotProductAttention`"
+    )]
     pub fn make_causal_mask_with_sliding_window(
         &self,
         input_ids: &Tensor,
@@ -485,6 +491,11 @@ impl CausalMasker {
         }
     }
 
+    #[deprecated(
+        since = "0.1.9",
+        note = "use one of the `*_as_attn_bias` functions\
+                    to create an attention bias which can be added."
+    )]
     pub fn apply_mask(
         &self,
         mask: &Option<Tensor>,
