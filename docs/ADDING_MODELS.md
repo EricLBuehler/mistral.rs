@@ -80,9 +80,7 @@ if q.rank() == 3 {
 ## 6) Implement a `Pipeline` and `Loader` in mistralrs-core/src/pipeline
 The `Loader` is in charge of downloading and loading the model. The `download_model` method is pretty general and can be copied from an existing implementation
 
-The `_setup_model` method instantiates the `Pipeline`. It handles loading the different model kinds. The `Pipeline` is responsible for running and sampling the model. For example, please see the [`mistral pipeline`](mistralrs-core/src/pipeline/mistral.rs).
-
-A quantized model should be handled by the `quantized_llama.rs` implementation. For example the [`llama pipeline`](mistralrs-core/src/pipeline/llama.rs) loads GGUF and GGML model with `quantized_llama`.rs
+The `_setup_model` method instantiates the `Pipeline`.The `Pipeline` is responsible for running and sampling the model. For example, please see the [`normal model pipeline`](../mistralrs-core/src/pipeline/normal.rs). 
 
 
 ## 7) Adding an X-LoRA counterpart

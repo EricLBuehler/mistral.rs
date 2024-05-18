@@ -13,7 +13,7 @@ For example, to use the `chatml` template, `--chat-template` is specified *befor
 
 ## Tokenizer
 
-Some models do not provide a `tokenizer.json` file although mistral.rs expects one. To solve this, please run [this](scripts/get_tokenizers_json.py) script. It will output the `tokenizer.json` file for your specific model. This may be used by passing the `--tokenizer-json` flag *after* the model architecture. For example:
+Some models do not provide a `tokenizer.json` file although mistral.rs expects one. To solve this, please run [this](../scripts/get_tokenizers_json.py) script. It will output the `tokenizer.json` file for your specific model. This may be used by passing the `--tokenizer-json` flag *after* the model architecture. For example:
 
 ```bash
 $ python3 scripts/get_tokenizers_json.py
