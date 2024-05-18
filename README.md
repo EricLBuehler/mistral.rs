@@ -218,7 +218,7 @@ To install mistral.rs, one should ensure they have Rust installed by following [
 
 7) Installing Python support
 
-    You can install Python support by following the guide [here](/mistralrs-pyo3/README.md).
+    You can install Python support by following the guide [here](mistralrs-pyo3/README.md).
 
 ### Getting models from HF Hub
 
