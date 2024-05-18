@@ -9,7 +9,9 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{flash_attn, repeat_kv, CausalMasker, MatMul, PhiRotaryEmbedding, RmsNorm},
+    layers::{
+        repeat_kv, CausalMasker, MatMul, PhiRotaryEmbedding, RmsNorm, ScaledDotProductAttention,
+    },
     pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };
@@ -52,7 +54,6 @@ struct Attention {
     rotary_emb: Arc<PhiRotaryEmbedding>,
     use_flash_attn: bool,
     sliding_window: Option<usize>,
-    neg_inf: Tensor,
 }
 
 impl Attention {
@@ -73,7 +74,6 @@ impl Attention {
             head_dim,
             use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
-            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())?.to_dtype(vb.dtype())?,
         })
     }
 
@@ -131,24 +131,18 @@ impl Attention {
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        let mut attn_output = if self.use_flash_attn {
-            // flash-attn expects (b_sz, seq_len, nheads, head_dim)
-            let q = q.transpose(1, 2)?;
-            let k = k.transpose(1, 2)?;
-            let v = v.transpose(1, 2)?;
-            let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
-            flash_attn(&q, &k, &v, softmax_scale, q_len > 1)?.transpose(1, 2)?
-        } else {
-            let attn_weights = MatMul.matmul_affine_div(
-                &q,
-                &k.transpose(2, 3)?,
-                f64::sqrt(self.head_dim as f64),
-            )?;
+        let mut attn_output = ScaledDotProductAttention.run_attention(
+            &q,
+            &k,
+            &v,
+            self.num_heads,
+            self.head_dim,
+            attn_mask.as_ref(),
+            self.use_flash_attn,
+            b_sz,
+            q_len,
+        )?;
 
-            let attn_weights = CausalMasker.apply_mask(&attn_mask, attn_weights, &self.neg_inf)?;
-            let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-            MatMul.matmul(&attn_weights, &v)?
-        };
         if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
             attn_output = attn_output.to_dtype(DType::F32)?;
         }
@@ -345,10 +339,12 @@ impl Model {
     ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let mut cache = self.cache.lock();
-        let attention_mask = CausalMasker.make_causal_mask_with_sliding_window(
+        let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
             &cache,
             self.sliding_window,
+            xs.dtype(),
+            self.layers[0].self_attn.num_heads,
         )?;
         let past_key_values_length = CausalMasker.calculate_past_kv_len(&cache)?;
         let position_ids = position_ids

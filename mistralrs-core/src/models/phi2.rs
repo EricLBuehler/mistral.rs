@@ -13,7 +13,7 @@ use serde::Deserialize;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{flash_attn, repeat_kv, CausalMasker, MatMul, QLinear},
+    layers::{repeat_kv, CausalMasker, QLinear, ScaledDotProductAttention},
     pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };
@@ -93,12 +93,10 @@ struct Attention {
     q_layernorm: Option<LayerNorm>,
     k_layernorm: Option<LayerNorm>,
     rotary_emb: RotaryEmbedding,
-    softmax_scale: f64,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
     use_flash_attn: bool,
-    neg_inf: Tensor,
 }
 
 impl Attention {
@@ -117,7 +115,6 @@ impl Attention {
         } else {
             (None, None)
         };
-        let softmax_scale = (head_dim as f64).sqrt();
         Ok(Self {
             q_proj: QLinear::from_linear(q_proj),
             k_proj: QLinear::from_linear(k_proj),
@@ -126,12 +123,10 @@ impl Attention {
             q_layernorm,
             k_layernorm,
             rotary_emb: rope,
-            softmax_scale,
             num_heads,
             num_kv_heads,
             head_dim,
             use_flash_attn: cfg.use_flash_attn,
-            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())?.to_dtype(vb.dtype())?,
         })
     }
 
@@ -198,21 +193,18 @@ impl Attention {
         let k = repeat_kv(k, self.num_heads / self.num_kv_heads)?.contiguous()?;
         let v = repeat_kv(v, self.num_heads / self.num_kv_heads)?.contiguous()?;
 
-        let mut attn_output = if self.use_flash_attn {
-            // flash-attn expects (b_sz, seq_len, nheads, head_dim)
-            let q = q.transpose(1, 2)?;
-            let k = k.transpose(1, 2)?;
-            let v = v.transpose(1, 2)?;
-            flash_attn(&q, &k, &v, self.softmax_scale as f32, seq_len > 1)?.transpose(1, 2)?
-        } else {
-            let attn_weights =
-                MatMul.matmul_affine_div(&q.contiguous()?, &k.t()?, self.softmax_scale)?;
-            let attn_weights =
-                CausalMasker.apply_mask(&mask.cloned(), attn_weights, &self.neg_inf)?;
-            let attn_weights =
-                candle_nn::ops::softmax_last_dim(&attn_weights)?.to_dtype(v.dtype())?;
-            MatMul.matmul(&attn_weights, &v)?
-        };
+        let mut attn_output = ScaledDotProductAttention.run_attention(
+            &q,
+            &k,
+            &v,
+            self.num_heads,
+            self.head_dim,
+            mask,
+            self.use_flash_attn,
+            b_size,
+            seq_len,
+        )?;
+
         if self.q_proj.is_quant() {
             attn_output = attn_output.to_dtype(DType::F32)?;
         }
@@ -360,7 +352,12 @@ impl Model {
     ) -> Result<Tensor> {
         let mut xs = input_ids.apply(&self.embed_tokens)?;
         let mut cache = self.cache.lock();
-        let mask = CausalMasker.make_causal_mask(input_ids, &cache)?;
+        let mask = CausalMasker.make_causal_mask_as_attn_bias(
+            input_ids,
+            &cache,
+            xs.dtype(),
+            self.layers[0].self_attn.num_heads,
+        )?;
         for (i, layer) in self.layers.iter_mut().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
