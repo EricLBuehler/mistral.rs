@@ -426,10 +426,6 @@
 <a href="#424" id="424">424</a>
 <a href="#425" id="425">425</a>
 <a href="#426" id="426">426</a>
-<a href="#427" id="427">427</a>
-<a href="#428" id="428">428</a>
-<a href="#429" id="429">429</a>
-<a href="#430" id="430">430</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
@@ -441,7 +437,9 @@
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    layers::{flash_attn, repeat_kv, CausalMasker, MatMul, PhiRotaryEmbedding, RmsNorm},
+    layers::{
+        repeat_kv, CausalMasker, MatMul, PhiRotaryEmbedding, RmsNorm, ScaledDotProductAttention,
+    },
     pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };
@@ -484,7 +482,6 @@
     rotary_emb: Arc&lt;PhiRotaryEmbedding&gt;,
     use_flash_attn: bool,
     sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-    neg_inf: Tensor,
 }
 
 <span class="kw">impl </span>Attention {
@@ -505,7 +502,6 @@
             head_dim,
             use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
-            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())<span class="question-mark">?</span>.to_dtype(vb.dtype())<span class="question-mark">?</span>,
         })
     }
 
@@ -563,24 +559,18 @@
         <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span><span class="kw-2">mut </span>attn_output = <span class="kw">if </span><span class="self">self</span>.use_flash_attn {
-            <span class="comment">// flash-attn expects (b_sz, seq_len, nheads, head_dim)
-            </span><span class="kw">let </span>q = q.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>k = k.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>v = v.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>softmax_scale = <span class="number">1f32 </span>/ (<span class="self">self</span>.head_dim <span class="kw">as </span>f32).sqrt();
-            flash_attn(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, softmax_scale, q_len &gt; <span class="number">1</span>)<span class="question-mark">?</span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-        </span>} <span class="kw">else </span>{
-            <span class="kw">let </span>attn_weights = MatMul.matmul_affine_div(
-                <span class="kw-2">&amp;</span>q,
-                <span class="kw-2">&amp;</span>k.transpose(<span class="number">2</span>, <span class="number">3</span>)<span class="question-mark">?</span>,
-                f64::sqrt(<span class="self">self</span>.head_dim <span class="kw">as </span>f64),
-            )<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>attn_output = ScaledDotProductAttention.run_attention(
+            <span class="kw-2">&amp;</span>q,
+            <span class="kw-2">&amp;</span>k,
+            <span class="kw-2">&amp;</span>v,
+            <span class="self">self</span>.num_heads,
+            <span class="self">self</span>.head_dim,
+            attn_mask.as_ref(),
+            <span class="self">self</span>.use_flash_attn,
+            b_sz,
+            q_len,
+        )<span class="question-mark">?</span>;
 
-            <span class="kw">let </span>attn_weights = CausalMasker.apply_mask(<span class="kw-2">&amp;</span>attn_mask, attn_weights, <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf)<span class="question-mark">?</span>;
-            <span class="kw">let </span>attn_weights = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>;
-            MatMul.matmul(<span class="kw-2">&amp;</span>attn_weights, <span class="kw-2">&amp;</span>v)<span class="question-mark">?
-        </span>};
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.qkv_proj, QMatMul::QTensor(<span class="kw">_</span>)) {
             attn_output = attn_output.to_dtype(DType::F32)<span class="question-mark">?</span>;
         }
@@ -777,10 +767,12 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
-        <span class="kw">let </span>attention_mask = CausalMasker.make_causal_mask_with_sliding_window(
+        <span class="kw">let </span>attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
             <span class="kw-2">&amp;</span>cache,
             <span class="self">self</span>.sliding_window,
+            xs.dtype(),
+            <span class="self">self</span>.layers[<span class="number">0</span>].self_attn.num_heads,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>past_key_values_length = CausalMasker.calculate_past_kv_len(<span class="kw-2">&amp;</span>cache)<span class="question-mark">?</span>;
         <span class="kw">let </span>position_ids = position_ids

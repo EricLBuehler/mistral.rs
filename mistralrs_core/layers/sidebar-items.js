@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["flash_attn","get_use_matmul_via_f16","repeat_kv","verify_sanity_gguf"],"struct":["CausalMasker","MatMul","PhiRotaryEmbedding","QLinear","QRmsNorm","RmsNorm"]};
+window.SIDEBAR_ITEMS = {"fn":["flash_attn","get_use_matmul_via_f16","repeat_kv","verify_sanity_gguf"],"struct":["CausalMasker","MatMul","PhiRotaryEmbedding","QLinear","QRmsNorm","RmsNorm","ScaledDotProductAttention"]};

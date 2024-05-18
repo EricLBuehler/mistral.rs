@@ -428,6 +428,12 @@
 <a href="#426" id="426">426</a>
 <a href="#427" id="427">427</a>
 <a href="#428" id="428">428</a>
+<a href="#429" id="429">429</a>
+<a href="#430" id="430">430</a>
+<a href="#431" id="431">431</a>
+<a href="#432" id="432">432</a>
+<a href="#433" id="433">433</a>
+<a href="#434" id="434">434</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::quantized::QMatMul;
@@ -436,7 +442,9 @@
 <span class="kw">use </span>candle_nn::{Embedding, Module, RotaryEmbedding};
 
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
-<span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm};
+<span class="kw">use </span><span class="kw">crate</span>::layers::{
+    repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention,
+};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, Cache};
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
 
@@ -551,14 +559,13 @@
     n_kv_head: usize,
     head_dim: usize,
     rotary: RotaryEmbedding,
-    neg_inf: Tensor,
 }
 
 <span class="kw">impl </span>LayerWeights {
     <span class="kw">fn </span>forward_attn(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         x: <span class="kw-2">&amp;</span>Tensor,
-        mask: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+        mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         start_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
         kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
@@ -592,16 +599,18 @@
 
         <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
-        <span class="kw">let </span>att = MatMul.matmul_affine_div(
-            <span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>,
-            <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>,
-            (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt(),
-        )<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>att = CausalMasker.apply_mask(mask, att, <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf)<span class="question-mark">?</span>;
-        <span class="kw">let </span>att = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>att)<span class="question-mark">?</span>;
-        <span class="comment">// Convert to contiguous as matmul doesn't support strided vs for now.
-        </span><span class="kw">let </span>y = MatMul.matmul(<span class="kw-2">&amp;</span>att, <span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>y = ScaledDotProductAttention.run_attention(
+            <span class="kw-2">&amp;</span>q,
+            <span class="kw-2">&amp;</span>k,
+            <span class="kw-2">&amp;</span>v,
+            <span class="self">self</span>.n_head,
+            <span class="self">self</span>.head_dim,
+            mask,
+            <span class="bool-val">false</span>,
+            b_sz,
+            seq_len,
+        )<span class="question-mark">?</span>;
 
         <span class="kw">let </span>y = y.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>.reshape(<span class="kw-2">&amp;</span>[b_sz, seq_len, n_embd])<span class="question-mark">?</span>;
         <span class="kw">let </span>y = MatMul.qmatmul(<span class="kw-2">&amp;</span>y, <span class="kw-2">&amp;</span><span class="self">self</span>.attention_wo)<span class="question-mark">?</span>;
@@ -633,7 +642,6 @@
             <span class="bool-val">false</span>,
             DType::F32,
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>neg_inf = Tensor::new(f32::NEG_INFINITY, <span class="kw-2">&amp;</span>ct.device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = ct.remove(<span class="string">"tok_embeddings.weight"</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(<span class="kw-2">&amp;</span>ct.device)<span class="question-mark">?</span>;
         <span class="kw">let </span>norm = QRmsNorm::new(ct.remove(<span class="string">"norm.weight"</span>)<span class="question-mark">?</span>, <span class="number">1e-5</span>)<span class="question-mark">?</span>;
@@ -669,7 +677,6 @@
                 n_kv_head: ct.hparams.n_head <span class="kw">as </span>usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) <span class="kw">as </span>usize,
                 rotary: rotary.clone(),
-                neg_inf: neg_inf.clone(),
             })
         }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
@@ -743,7 +750,6 @@
                 <span class="bool-val">false</span>,
                 DType::F32,
             )<span class="question-mark">?</span>;
-            <span class="kw">let </span>neg_inf = Tensor::new(f32::NEG_INFINITY, device)<span class="question-mark">?</span>;
 
             <span class="kw">let </span>attention_wq = ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_q.weight"</span>), device)<span class="question-mark">?</span>;
             <span class="kw">let </span>attention_wk = ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_k.weight"</span>), device)<span class="question-mark">?</span>;
@@ -800,7 +806,6 @@
                 n_kv_head: head_count_kv,
                 head_dim,
                 rotary: rotary.clone(),
-                neg_inf: neg_inf.clone(),
             })
         }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
@@ -824,7 +829,12 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>layer_in = <span class="self">self</span>.tok_embeddings.forward(x)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
-        <span class="kw">let </span>mask = CausalMasker.make_causal_mask(x, <span class="kw-2">&amp;</span>cache)<span class="question-mark">?</span>;
+        <span class="kw">let </span>mask = CausalMasker.make_causal_mask_as_attn_bias(
+            x,
+            <span class="kw-2">&amp;</span>cache,
+            DType::F32,
+            <span class="self">self</span>.layers[<span class="number">0</span>].n_head,
+        )<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
             <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>mapper) = <span class="self">self</span>.mapper {
                 layer_in = mapper.map(layer_in, i)<span class="question-mark">?</span>;
@@ -834,7 +844,9 @@
             <span class="kw">let </span>x = layer.attention_norm.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>;
             <span class="kw">let </span>attn = layer.forward_attn(
                 <span class="kw-2">&amp;</span>x,
-                <span class="kw-2">&amp;</span>mask.as_ref().map(|m| m.to_device(x.device()).unwrap()),
+                mask.as_ref()
+                    .map(|m| m.to_device(x.device()).unwrap())
+                    .as_ref(),
                 start_offsets,
                 start_offsets_kernel.clone(),
                 <span class="kw-2">&amp;mut </span>cache[i],

@@ -780,16 +780,12 @@
 <a href="#778" id="778">778</a>
 <a href="#779" id="779">779</a>
 <a href="#780" id="780">780</a>
-<a href="#781" id="781">781</a>
-<a href="#782" id="782">782</a>
-<a href="#783" id="783">783</a>
-<a href="#784" id="784">784</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
 <span class="kw">use crate</span>::{
-    layers::MatMul,
+    layers::ScaledDotProductAttention,
     lora::{linear, LinearLayerLike, LoraConfig, Ordering},
 };
 <span class="doccomment">/// Phi model.
@@ -806,7 +802,7 @@
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    layers::{flash_attn, repeat_kv, CausalMasker, QLinear},
+    layers::{repeat_kv, CausalMasker, QLinear},
     models::phi2::Config,
     pipeline::{extract_logits, NormalModel},
     DeviceMapMetadata,
@@ -906,12 +902,10 @@
     q_layernorm: <span class="prelude-ty">Option</span>&lt;LayerNorm&gt;,
     k_layernorm: <span class="prelude-ty">Option</span>&lt;LayerNorm&gt;,
     rotary_emb: RotaryEmbedding,
-    softmax_scale: f64,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
     use_flash_attn: bool,
-    neg_inf: Tensor,
 }
 
 <span class="kw">impl </span>Attention {
@@ -978,7 +972,6 @@
         } <span class="kw">else </span>{
             (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
         };
-        <span class="kw">let </span>softmax_scale = (head_dim <span class="kw">as </span>f64).sqrt();
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             q_proj,
             k_proj,
@@ -987,12 +980,10 @@
             q_layernorm,
             k_layernorm,
             rotary_emb: rope,
-            softmax_scale,
             num_heads,
             num_kv_heads,
             head_dim,
             use_flash_attn: cfg.use_flash_attn,
-            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())<span class="question-mark">?</span>.to_dtype(vb.dtype())<span class="question-mark">?</span>,
         })
     }
 
@@ -1077,21 +1068,17 @@
         <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_heads / <span class="self">self</span>.num_kv_heads)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_heads / <span class="self">self</span>.num_kv_heads)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>attn_output = <span class="kw">if </span><span class="self">self</span>.use_flash_attn {
-            <span class="comment">// flash-attn expects (b_sz, seq_len, nheads, head_dim)
-            </span><span class="kw">let </span>q = q.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>k = k.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>v = v.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-            flash_attn(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, <span class="self">self</span>.softmax_scale <span class="kw">as </span>f32, seq_len &gt; <span class="number">1</span>)<span class="question-mark">?</span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-        </span>} <span class="kw">else </span>{
-            <span class="kw">let </span>attn_weights =
-                MatMul.matmul_affine_div(<span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>, <span class="self">self</span>.softmax_scale)<span class="question-mark">?</span>;
-            <span class="kw">let </span>attn_weights =
-                CausalMasker.apply_mask(<span class="kw-2">&amp;</span>mask.cloned(), attn_weights, <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf)<span class="question-mark">?</span>;
-            <span class="kw">let </span>attn_weights =
-                candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>.to_dtype(v.dtype())<span class="question-mark">?</span>;
-            MatMul.matmul(<span class="kw-2">&amp;</span>attn_weights, <span class="kw-2">&amp;</span>v)<span class="question-mark">?
-        </span>};
+        <span class="kw">let </span>attn_output = ScaledDotProductAttention.run_attention(
+            <span class="kw-2">&amp;</span>q,
+            <span class="kw-2">&amp;</span>k,
+            <span class="kw-2">&amp;</span>v,
+            <span class="self">self</span>.num_heads,
+            <span class="self">self</span>.head_dim,
+            mask,
+            <span class="self">self</span>.use_flash_attn,
+            b_size,
+            seq_len,
+        )<span class="question-mark">?</span>;
 
         <span class="kw">let </span><span class="kw-2">mut </span>attn_output = attn_output
             .transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
@@ -1333,7 +1320,12 @@
         } <span class="kw">else </span>{
             <span class="self">self</span>.cache.lock()
         };
-        <span class="kw">let </span>mask = CausalMasker.make_causal_mask(input_ids, <span class="kw-2">&amp;</span>cache)<span class="question-mark">?</span>;
+        <span class="kw">let </span>mask = CausalMasker.make_causal_mask_as_attn_bias(
+            input_ids,
+            <span class="kw-2">&amp;</span>cache,
+            xs.dtype(),
+            <span class="self">self</span>.layers[<span class="number">0</span>].self_attn.num_heads,
+        )<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
             xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
             xs = layer.forward(

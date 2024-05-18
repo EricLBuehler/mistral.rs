@@ -297,9 +297,13 @@
 <a href="#295" id="295">295</a>
 <a href="#296" id="296">296</a>
 <a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-</span><span class="kw">use </span>std::{
+</span><span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
+<span class="kw">use </span>std::{
     cell::RefCell,
     error::Error,
     fs::OpenOptions,
@@ -324,6 +328,7 @@
 <span class="kw">mod </span>model_selected;
 <span class="kw">pub use </span>model_selected::ModelSelected;
 
+<span class="kw">mod </span>cublaslt;
 <span class="kw">pub mod </span>layers;
 <span class="kw">mod </span>models;
 <span class="kw">mod </span>pipeline;
@@ -495,6 +500,7 @@
         <span class="kw">if </span>!gemm_full_precision_f16.unwrap_or(<span class="bool-val">false</span>) {
             set_gemm_reduced_precision_f16();
         }
+        setup_cublas_lt_wrapper();
 
         <span class="kw">let </span>truncate_sequence = truncate_sequence.unwrap_or(<span class="bool-val">false</span>);
         <span class="kw">let </span>no_kv_cache = no_kv_cache.unwrap_or(<span class="bool-val">false</span>);

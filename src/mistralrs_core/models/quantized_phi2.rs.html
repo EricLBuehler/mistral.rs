@@ -239,6 +239,15 @@
 <a href="#237" id="237">237</a>
 <a href="#238" id="238">238</a>
 <a href="#239" id="239">239</a>
+<a href="#240" id="240">240</a>
+<a href="#241" id="241">241</a>
+<a href="#242" id="242">242</a>
+<a href="#243" id="243">243</a>
+<a href="#244" id="244">244</a>
+<a href="#245" id="245">245</a>
+<a href="#246" id="246">246</a>
+<a href="#247" id="247">247</a>
+<a href="#248" id="248">248</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::quantized::gguf_file;
@@ -247,7 +256,7 @@
 <span class="kw">use </span>candle_nn::{Embedding, LayerNorm};
 
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
-<span class="kw">use </span><span class="kw">crate</span>::layers::MatMul;
+<span class="kw">use </span><span class="kw">crate</span>::layers::ScaledDotProductAttention;
 <span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, CausalMasker, QLinear};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, Cache};
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
@@ -278,7 +287,6 @@
     cos: Tensor,
     sin: Tensor,
     rope_dim: usize,
-    neg_inf: Tensor,
 }
 
 <span class="kw">impl </span>LayerWeights {
@@ -326,11 +334,18 @@
         <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>att = MatMul.matmul_affine_div(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>, (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
-        <span class="kw">let </span>att = CausalMasker.apply_mask(<span class="kw-2">&amp;</span>mask.cloned(), att, <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf)<span class="question-mark">?</span>;
-        <span class="kw">let </span>att = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>att)<span class="question-mark">?</span>;
-        <span class="comment">// Convert to contiguous as matmul doesn't support strided vs for now.
-        </span><span class="kw">let </span>y = MatMul.matmul(<span class="kw-2">&amp;</span>att, <span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>y = ScaledDotProductAttention.run_attention(
+            <span class="kw-2">&amp;</span>q,
+            <span class="kw-2">&amp;</span>k,
+            <span class="kw-2">&amp;</span>v,
+            <span class="self">self</span>.n_head,
+            <span class="self">self</span>.head_dim,
+            mask,
+            <span class="bool-val">false</span>,
+            b_sz,
+            seq_len,
+        )<span class="question-mark">?</span>;
+
         <span class="kw">let </span>y = y.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>.reshape(<span class="kw-2">&amp;</span>[b_sz, seq_len, n_embd])<span class="question-mark">?</span>;
         <span class="kw">let </span>y = <span class="self">self</span>.attn_output.forward(<span class="kw-2">&amp;</span>y)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(y)
@@ -399,7 +414,6 @@
             .and_then(|m| m.to_u64())
             .unwrap_or(MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize;
         <span class="kw">let </span>(cos, sin) = precomput_freqs_cis(rope_dim, <span class="number">10_000.</span>, device, max_seq_len)<span class="question-mark">?</span>;
-        <span class="kw">let </span>neg_inf = Tensor::new(f32::NEG_INFINITY, device)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>tok_embeddings = ct.tensor(reader, <span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(device)<span class="question-mark">?</span>;
@@ -434,7 +448,6 @@
                 cos: cos.clone().to_device(device)<span class="question-mark">?</span>,
                 sin: sin.clone().to_device(device)<span class="question-mark">?</span>,
                 rope_dim,
-                neg_inf: neg_inf.clone(),
             })
         }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
@@ -457,7 +470,12 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.tok_embeddings.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
-        <span class="kw">let </span>mask = CausalMasker.make_causal_mask(input_ids, <span class="kw-2">&amp;</span>cache)<span class="question-mark">?</span>;
+        <span class="kw">let </span>mask = CausalMasker.make_causal_mask_as_attn_bias(
+            input_ids,
+            <span class="kw-2">&amp;</span>cache,
+            xs.dtype(),
+            <span class="self">self</span>.layers[<span class="number">0</span>].n_head,
+        )<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
             xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
             <span class="kw">let </span>residual = <span class="kw-2">&amp;</span>xs;

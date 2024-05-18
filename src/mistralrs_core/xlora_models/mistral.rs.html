@@ -813,16 +813,10 @@
 <a href="#811" id="811">811</a>
 <a href="#812" id="812">812</a>
 <a href="#813" id="813">813</a>
-<a href="#814" id="814">814</a>
-<a href="#815" id="815">815</a>
-<a href="#816" id="816">816</a>
-<a href="#817" id="817">817</a>
-<a href="#818" id="818">818</a>
-<a href="#819" id="819">819</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
-    layers::MatMul,
+    layers::ScaledDotProductAttention,
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
 };
 <span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -834,7 +828,7 @@
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    layers::{flash_attn, repeat_kv, CausalMasker, QLinear, RmsNorm},
+    layers::{repeat_kv, CausalMasker, QLinear, RmsNorm},
     models::mistral::Config,
     pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
@@ -957,7 +951,6 @@
     rotary_emb: Arc&lt;RotaryEmbedding&gt;,
     use_flash_attn: bool,
     sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-    neg_inf: Tensor,
 }
 
 <span class="kw">impl </span>Attention {
@@ -1031,7 +1024,6 @@
             rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
-            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())<span class="question-mark">?</span>.to_dtype(vb.dtype())<span class="question-mark">?</span>,
         })
     }
 
@@ -1110,24 +1102,18 @@
         <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span><span class="kw-2">mut </span>attn_output = <span class="kw">if </span><span class="self">self</span>.use_flash_attn {
-            <span class="comment">// flash-attn expects (b_sz, seq_len, nheads, head_dim)
-            </span><span class="kw">let </span>q = q.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>k = k.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>v = v.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>softmax_scale = <span class="number">1f32 </span>/ (<span class="self">self</span>.head_dim <span class="kw">as </span>f32).sqrt();
-            flash_attn(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, softmax_scale, q_len &gt; <span class="number">1</span>)<span class="question-mark">?</span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-        </span>} <span class="kw">else </span>{
-            <span class="kw">let </span>attn_weights = MatMul.matmul_affine_div(
-                <span class="kw-2">&amp;</span>q,
-                <span class="kw-2">&amp;</span>k.transpose(<span class="number">2</span>, <span class="number">3</span>)<span class="question-mark">?</span>,
-                f64::sqrt(<span class="self">self</span>.head_dim <span class="kw">as </span>f64),
-            )<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>attn_output = ScaledDotProductAttention.run_attention(
+            <span class="kw-2">&amp;</span>q,
+            <span class="kw-2">&amp;</span>k,
+            <span class="kw-2">&amp;</span>v,
+            <span class="self">self</span>.num_heads,
+            <span class="self">self</span>.head_dim,
+            attn_mask.as_ref(),
+            <span class="self">self</span>.use_flash_attn,
+            b_sz,
+            q_len,
+        )<span class="question-mark">?</span>;
 
-            <span class="kw">let </span>attn_weights = CausalMasker.apply_mask(<span class="kw-2">&amp;</span>attn_mask, attn_weights, <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf)<span class="question-mark">?</span>;
-            <span class="kw">let </span>attn_weights = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>;
-            MatMul.matmul(<span class="kw-2">&amp;</span>attn_weights, <span class="kw-2">&amp;</span>v)<span class="question-mark">?
-        </span>};
         <span class="kw">if </span><span class="self">self</span>.q_proj.is_quant() {
             attn_output = attn_output.to_dtype(DType::F32)<span class="question-mark">?</span>;
         }
@@ -1384,12 +1370,14 @@
         } <span class="kw">else </span>{
             <span class="self">self</span>.cache.lock()
         };
-        <span class="kw">let </span>attention_mask = CausalMasker.make_causal_mask_with_sliding_window(
+        <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
+        <span class="kw">let </span>attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
             <span class="kw-2">&amp;</span>cache,
             <span class="self">self</span>.sliding_window,
+            xs.dtype(),
+            <span class="self">self</span>.layers[<span class="number">0</span>].self_attn.num_heads,
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
             xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
             xs = layer.forward(
