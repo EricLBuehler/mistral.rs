@@ -1,7 +1,9 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::device_map::DeviceMapper;
-use crate::layers::{repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, RmsNorm};
+use crate::layers::{
+    repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention,
+};
 use crate::pipeline::Cache;
 use crate::DeviceMapMetadata;
 use candle_core::quantized::gguf_file;
@@ -45,7 +47,6 @@ struct LayerWeights {
     head_dim: usize,
     cos: Tensor,
     sin: Tensor,
-    neg_inf: Tensor,
     sliding_window: usize,
 }
 
@@ -108,11 +109,18 @@ impl LayerWeights {
         let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
 
-        let att = MatMul.matmul_affine_div(&q, &k.t()?, (self.head_dim as f64).sqrt())?;
-        let att = CausalMasker.apply_mask(&attn_mask, att, &self.neg_inf)?;
-        let att = candle_nn::ops::softmax_last_dim(&att)?;
-        // Convert to contiguous as matmul doesn't support strided vs for now.
-        let y = MatMul.matmul(&att, &v.contiguous()?)?;
+        let y = ScaledDotProductAttention.run_attention(
+            &q,
+            &k,
+            &v,
+            self.n_head,
+            self.head_dim,
+            attn_mask.as_ref(),
+            false,
+            b_sz,
+            seq_len,
+        )?;
+
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = MatMul.qmatmul(&y, &self.attn_output)?;
         Ok(y)
@@ -174,7 +182,6 @@ impl ModelWeights {
         let rms_eps = md_get("phi3.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
         let context_window = md_get("phi3.context_length")?.to_u32()? as usize;
         let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, context_window)?;
-        let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
@@ -227,7 +234,6 @@ impl ModelWeights {
                 head_dim: embedding_length / head_count,
                 cos: cos.clone(),
                 sin: sin.clone(),
-                neg_inf: neg_inf.clone(),
                 sliding_window: context_window,
             })
         }
@@ -247,10 +253,12 @@ impl ModelWeights {
         let (_b_sz, seq_len) = input_ids.dims2()?;
         let mut xs = self.tok_embeddings.forward(input_ids)?;
         let mut cache = self.cache.lock();
-        let mask = CausalMasker.make_causal_mask_with_sliding_window(
+        let mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
             &cache,
             Some(self.max_seq_len),
+            xs.dtype(),
+            self.layers[0].n_head,
         )?;
         for (i, layer) in self.layers.iter_mut().enumerate() {
             if let Some(ref mapper) = self.mapper {

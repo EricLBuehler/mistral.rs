@@ -1,10 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::{
-    layers::MatMul,
+    layers::ScaledDotProductAttention,
     lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering},
 };
-use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor, D};
+use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
 use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
@@ -12,7 +12,7 @@ use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{flash_attn, repeat_kv, CausalMasker, QLinear, RmsNorm},
+    layers::{repeat_kv, CausalMasker, QLinear, RmsNorm},
     models::llama::Config,
     pipeline::{self, extract_logits, LayerCaches, NormalModel},
     DeviceMapMetadata,
@@ -32,7 +32,6 @@ struct CausalSelfAttention {
     use_flash_attn: bool,
     rotary_emb: Arc<RotaryEmbedding>,
     max_seq_len: usize,
-    neg_inf: Tensor,
 }
 
 impl CausalSelfAttention {
@@ -106,20 +105,18 @@ impl CausalSelfAttention {
         let k = repeat_kv(k, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
         let v = repeat_kv(v, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
 
-        let y = if self.use_flash_attn {
-            // flash-attn expects (b_sz, seq_len, nheads, head_dim)
-            let q = q.transpose(1, 2)?;
-            let k = k.transpose(1, 2)?;
-            let v = v.transpose(1, 2)?;
-            let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
-            flash_attn(&q, &k, &v, softmax_scale, seq_len > 1)?.transpose(1, 2)?
-        } else {
-            let att = MatMul.matmul_affine_div(&q, &k.t()?, (self.head_dim as f64).sqrt())?;
-            let att = CausalMasker.apply_mask(mask, att, &self.neg_inf)?;
-            let att = candle_nn::ops::softmax(&att, D::Minus1)?;
-            // Convert to contiguous as matmul doesn't support strided vs for now.
-            MatMul.matmul(&att, &v.contiguous()?)?
-        };
+        let y = ScaledDotProductAttention.run_attention(
+            &q,
+            &k,
+            &v,
+            self.num_attention_heads,
+            self.head_dim,
+            mask.clone().as_ref(),
+            self.use_flash_attn,
+            b_sz,
+            seq_len,
+        )?;
+
         let mut y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
         if self.q_proj.is_quant() {
             y = y.to_dtype(DType::F32)?;
@@ -203,7 +200,6 @@ impl CausalSelfAttention {
             use_flash_attn: cfg.use_flash_attn,
             rotary_emb: rope,
             max_seq_len: cfg.max_position_embeddings,
-            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())?.to_dtype(vb.dtype())?,
         })
     }
 }
@@ -441,7 +437,12 @@ impl XLoraLlama {
         } else {
             self.kv_cache.lock()
         };
-        let mask = CausalMasker.make_causal_mask(input_ids, &cache)?;
+        let mask = CausalMasker.make_causal_mask_as_attn_bias(
+            input_ids,
+            &cache,
+            x.dtype(),
+            self.blocks[0].attn.num_attention_heads,
+        )?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
             x = block.forward(

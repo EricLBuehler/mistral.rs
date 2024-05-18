@@ -6,7 +6,7 @@ use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Embedding, LayerNorm};
 
 use crate::device_map::DeviceMapper;
-use crate::layers::MatMul;
+use crate::layers::ScaledDotProductAttention;
 use crate::layers::{repeat_kv, CausalMasker, QLinear};
 use crate::pipeline::{extract_logits, Cache};
 use crate::DeviceMapMetadata;
@@ -37,7 +37,6 @@ struct LayerWeights {
     cos: Tensor,
     sin: Tensor,
     rope_dim: usize,
-    neg_inf: Tensor,
 }
 
 impl LayerWeights {
@@ -85,11 +84,18 @@ impl LayerWeights {
         let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
 
-        let att = MatMul.matmul_affine_div(&q, &k.t()?, (self.head_dim as f64).sqrt())?;
-        let att = CausalMasker.apply_mask(&mask.cloned(), att, &self.neg_inf)?;
-        let att = candle_nn::ops::softmax_last_dim(&att)?;
-        // Convert to contiguous as matmul doesn't support strided vs for now.
-        let y = MatMul.matmul(&att, &v.contiguous()?)?;
+        let y = ScaledDotProductAttention.run_attention(
+            &q,
+            &k,
+            &v,
+            self.n_head,
+            self.head_dim,
+            mask,
+            false,
+            b_sz,
+            seq_len,
+        )?;
+
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = self.attn_output.forward(&y)?;
         Ok(y)
@@ -158,7 +164,6 @@ impl ModelWeights {
             .and_then(|m| m.to_u64())
             .unwrap_or(MAX_SEQ_LEN as u64) as usize;
         let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, max_seq_len)?;
-        let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
@@ -193,7 +198,6 @@ impl ModelWeights {
                 cos: cos.clone().to_device(device)?,
                 sin: sin.clone().to_device(device)?,
                 rope_dim,
-                neg_inf: neg_inf.clone(),
             })
         }
         Ok(Self {
@@ -216,7 +220,12 @@ impl ModelWeights {
     ) -> Result<Tensor> {
         let mut xs = self.tok_embeddings.forward(input_ids)?;
         let mut cache = self.cache.lock();
-        let mask = CausalMasker.make_causal_mask(input_ids, &cache)?;
+        let mask = CausalMasker.make_causal_mask_as_attn_bias(
+            input_ids,
+            &cache,
+            xs.dtype(),
+            self.layers[0].n_head,
+        )?;
         for (i, layer) in self.layers.iter_mut().enumerate() {
             xs = self.mapper.map(xs, i)?;
             let residual = &xs;
