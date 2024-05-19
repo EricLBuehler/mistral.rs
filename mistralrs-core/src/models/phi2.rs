@@ -6,14 +6,12 @@
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor};
-use candle_nn::{
-    embedding, layer_norm, linear, Activation, Embedding, LayerNorm, RotaryEmbedding, VarBuilder,
-};
+use candle_nn::{embedding, layer_norm, linear, Activation, Embedding, LayerNorm, VarBuilder};
 use serde::Deserialize;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, QLinear, ScaledDotProductAttention},
+    layers::{repeat_kv, CausalMasker, QLinear, RotaryEmbedding, ScaledDotProductAttention},
     pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };

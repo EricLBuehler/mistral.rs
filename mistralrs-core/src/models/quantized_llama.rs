@@ -3,11 +3,12 @@
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module, RotaryEmbedding};
+use candle_nn::{Embedding, Module};
 
 use crate::device_map::DeviceMapper;
 use crate::layers::{
-    repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention,
+    repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm, RotaryEmbedding,
+    ScaledDotProductAttention,
 };
 use crate::pipeline::{extract_logits, Cache};
 use crate::DeviceMapMetadata;

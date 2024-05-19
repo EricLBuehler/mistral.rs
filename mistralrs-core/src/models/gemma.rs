@@ -3,11 +3,13 @@
 use std::sync::Arc;
 
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
-use candle_nn::{linear_b as linear, Activation, RotaryEmbedding, VarBuilder};
+use candle_nn::{linear_b as linear, Activation, VarBuilder};
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, MatMul, QLinear, ScaledDotProductAttention},
+    layers::{
+        repeat_kv, CausalMasker, MatMul, QLinear, RotaryEmbedding, ScaledDotProductAttention,
+    },
     pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };

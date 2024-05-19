@@ -2,12 +2,14 @@
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor};
-use candle_nn::{linear_no_bias, Activation, RotaryEmbedding, VarBuilder};
+use candle_nn::{linear_no_bias, Activation, VarBuilder};
 use std::sync::Arc;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
+    layers::{
+        repeat_kv, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, ScaledDotProductAttention,
+    },
     pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };

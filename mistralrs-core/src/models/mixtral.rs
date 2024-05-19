@@ -4,13 +4,15 @@
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor};
-use candle_nn::{linear_no_bias, Activation, RotaryEmbedding, VarBuilder};
+use candle_nn::{linear_no_bias, Activation, VarBuilder};
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
+    layers::{
+        repeat_kv, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, ScaledDotProductAttention,
+    },
     pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };

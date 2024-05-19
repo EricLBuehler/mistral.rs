@@ -7,13 +7,13 @@ use crate::{
     lora::{linear_b as linear, LinearLayerLike, LoraConfig, Ordering},
 };
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
-use candle_nn::{RotaryEmbedding, VarBuilder};
+use candle_nn::VarBuilder;
 use tqdm::Iter;
 use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, QLinear},
+    layers::{repeat_kv, CausalMasker, QLinear, RotaryEmbedding},
     models::gemma::Config,
     pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,

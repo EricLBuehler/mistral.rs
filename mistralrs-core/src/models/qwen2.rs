@@ -1,12 +1,15 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor};
-use candle_nn::{linear, linear_no_bias, Activation, RotaryEmbedding, VarBuilder};
+use candle_nn::{linear, linear_no_bias, Activation, VarBuilder};
 use std::sync::Arc;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, MatMul, QLinear, RmsNorm, ScaledDotProductAttention},
+    layers::{
+        repeat_kv, CausalMasker, MatMul, QLinear, RmsNorm, RotaryEmbedding,
+        ScaledDotProductAttention,
+    },
     pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
 };

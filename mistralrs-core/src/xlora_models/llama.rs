@@ -5,14 +5,14 @@ use crate::{
     lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering},
 };
 use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
-use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
+use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
 use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, QLinear, RmsNorm},
+    layers::{repeat_kv, CausalMasker, QLinear, RmsNorm, RotaryEmbedding},
     models::llama::Config,
     pipeline::{self, extract_logits, LayerCaches, NormalModel},
     DeviceMapMetadata,

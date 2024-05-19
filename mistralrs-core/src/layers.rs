@@ -67,6 +67,127 @@ impl QRmsNorm {
     }
 }
 
+/// Normal RoPE
+#[derive(Debug, Clone)]
+pub struct RotaryEmbedding {
+    sin: Tensor,
+    cos: Tensor,
+    batch_1_function: fn(&Tensor, &Tensor, &Tensor) -> Result<Tensor>,
+    rot_emb: candle_nn::RotaryEmbedding,
+}
+
+impl RotaryEmbedding {
+    pub fn new(
+        base: f32,
+        head_dim: usize,
+        max_position_embeddings: usize,
+        device: &Device,
+        is_gpt_neox: bool,
+        dtype: DType,
+    ) -> Result<Self> {
+        let theta: Vec<_> = (0..head_dim)
+            .step_by(2)
+            .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
+            .collect();
+        let theta_len = theta.len();
+        let theta = Tensor::from_vec(theta, (1, theta_len), device)?.to_dtype(DType::F32)?;
+        let idx_theta = Tensor::arange(0, max_position_embeddings as u32, device)?
+            .to_dtype(DType::F32)?
+            .reshape((max_position_embeddings, 1))?
+            .matmul(&theta)?;
+        let cos = idx_theta.cos()?.to_dtype(dtype)?;
+        let sin = idx_theta.sin()?.to_dtype(dtype)?;
+        Ok(Self {
+            sin,
+            cos,
+            batch_1_function: if is_gpt_neox {
+                candle_nn::rotary_emb::rope_i
+            } else {
+                candle_nn::rotary_emb::rope
+            },
+            rot_emb: candle_nn::RotaryEmbedding::new(
+                base,
+                head_dim,
+                max_position_embeddings,
+                device,
+                is_gpt_neox,
+                dtype,
+            )?,
+        })
+    }
+
+    pub fn new_partial(
+        base: f32,
+        head_dim: usize,
+        rot_dim: usize,
+        max_position_embeddings: usize,
+        device: &Device,
+        is_gpt_neox: bool,
+        dtype: DType,
+    ) -> Result<Self> {
+        let theta: Vec<_> = (0..rot_dim)
+            .step_by(2)
+            .map(|i| 1f32 / base.powf(i as f32 / rot_dim as f32))
+            .collect();
+        let theta_len = theta.len();
+        let theta = Tensor::from_vec(theta, (1, theta_len), device)?.to_dtype(DType::F32)?;
+        let idx_theta = Tensor::arange(0, max_position_embeddings as u32, device)?
+            .to_dtype(DType::F32)?
+            .reshape((max_position_embeddings, 1))?
+            .matmul(&theta)?;
+        let cos = idx_theta.cos()?.to_dtype(dtype)?;
+        let sin = idx_theta.sin()?.to_dtype(dtype)?;
+        Ok(Self {
+            sin,
+            cos,
+            batch_1_function: if is_gpt_neox {
+                candle_nn::rotary_emb::rope_i
+            } else {
+                candle_nn::rotary_emb::rope
+            },
+            rot_emb: candle_nn::RotaryEmbedding::new(
+                base,
+                head_dim,
+                max_position_embeddings,
+                device,
+                is_gpt_neox,
+                dtype,
+            )?,
+        })
+    }
+
+    pub fn forward(
+        &self,
+        positions: &[usize],
+        positions_kernel: &Tensor,
+        q: &mut Tensor,
+        k: &mut Tensor,
+        b_sz: usize,
+    ) -> Result<()> {
+        if b_sz == 1 {
+            let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
+            let mut q_embeds = Vec::new();
+            let mut k_embeds = Vec::new();
+            for (i, offset) in positions.iter().enumerate() {
+                let cos = self.cos.narrow(0, *offset, seq_len)?;
+                let sin = self.sin.narrow(0, *offset, seq_len)?;
+                let q_embed =
+                    (self.batch_1_function)(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                let k_embed =
+                    (self.batch_1_function)(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                q_embeds.push(q_embed);
+                k_embeds.push(k_embed);
+            }
+            *q = Tensor::cat(&q_embeds, 0)?;
+            *k = Tensor::cat(&k_embeds, 0)?;
+        } else {
+            self.rot_emb
+                .forward(positions, positions_kernel, q, k, b_sz)?;
+        }
+        Ok(())
+    }
+}
+
 /// RoPE supporting LongRope
 #[derive(Debug, Clone)]
 pub struct PhiRotaryEmbedding {

@@ -8,14 +8,14 @@ use crate::{
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor};
-use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
+use candle_nn::{Activation, VarBuilder};
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
 use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, RmsNorm},
+    layers::{repeat_kv, CausalMasker, RmsNorm, RotaryEmbedding},
     models::mixtral::Config,
     pipeline::{extract_logits, Cache, NormalModel},
     DeviceMapMetadata,
