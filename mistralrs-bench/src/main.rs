@@ -310,7 +310,6 @@ fn main() -> anyhow::Result<()> {
         candle_core::utils::with_f16c()
     );
     info!("Sampling method: penalties -> temperature -> topk -> topp -> multinomial");
-    info!("Loading model `{}` on {device:?}...", loader.get_id());
     if use_flash_attn {
         info!("Using flash attention.");
     }

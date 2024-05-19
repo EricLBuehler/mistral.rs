@@ -41,11 +41,15 @@ impl DeviceMapMetadata {
             }));
         };
         // How many host (cpu) layers, defaulting to automatically filling the rest.
-        let n_host_layers = self.host_layers.unwrap_or(model_layers - n_device_layers);
+        // If n_device_layers > model_layers, n_host_layers = 0
+        let n_host_layers = self
+            .host_layers
+            .unwrap_or(model_layers.saturating_sub(n_device_layers));
         if n_device_layers + n_host_layers != model_layers {
-            candle_core::bail!("Expected the number of device ({n_device_layers}) and host layers ({n_host_layers}) to sum to the number of model hidden layers ({model_layers})");
+            candle_core::bail!("Expected the number of GPU ({n_device_layers}) and host layers ({n_host_layers}) to sum to the number of model hidden layers ({model_layers})");
         }
-        info!("Using {n_device_layers} layers on device and {n_host_layers} on host.");
+        info!("Model has {model_layers} repeating layers.");
+        info!("Using {n_device_layers} repeating layers on GPU and {n_host_layers} repeating layers on host.");
         let mut combined = vec![device.clone(); n_device_layers];
         // Always put the CPU layers at the end so that we reduce dtoh and htod copies
         combined.extend(vec![Device::Cpu; n_host_layers]);
