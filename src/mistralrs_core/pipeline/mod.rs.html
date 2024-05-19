@@ -1288,7 +1288,7 @@
 <span class="kw">pub use </span><span class="self">self</span>::cache_manager::{Cache, CacheManager, LayerCaches};
 
 <span class="doccomment">/// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
-/// example `SimpleModelPaths` implements `ModelPaths` when all files are in the local file system.
+/// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
 </span><span class="kw">pub trait </span>ModelPaths {
     <span class="doccomment">/// Model weights files (multiple files supported).
     </span><span class="kw">fn </span>get_weight_filenames(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[PathBuf];
