@@ -773,20 +773,6 @@
 <a href="#771" id="771">771</a>
 <a href="#772" id="772">772</a>
 <a href="#773" id="773">773</a>
-<a href="#774" id="774">774</a>
-<a href="#775" id="775">775</a>
-<a href="#776" id="776">776</a>
-<a href="#777" id="777">777</a>
-<a href="#778" id="778">778</a>
-<a href="#779" id="779">779</a>
-<a href="#780" id="780">780</a>
-<a href="#781" id="781">781</a>
-<a href="#782" id="782">782</a>
-<a href="#783" id="783">783</a>
-<a href="#784" id="784">784</a>
-<a href="#785" id="785">785</a>
-<a href="#786" id="786">786</a>
-<a href="#787" id="787">787</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -803,10 +789,7 @@
     quantized::{gguf_file, QMatMul, QTensor},
     DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, WithDType,
 };
-<span class="kw">use </span>candle_nn::{
-    layer_norm::{RmsNormNonQuantized, RmsNormQuantized},
-    Linear, Module, VarBuilder,
-};
+<span class="kw">use </span>candle_nn::{Linear, Module, VarBuilder};
 <span class="kw">use </span>once_cell::sync::Lazy;
 
 <span class="comment">// (bs, tgt_len, past_kv_len)
@@ -817,7 +800,6 @@
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">pub struct </span>RmsNorm {
-    inner: candle_nn::RmsNorm&lt;RmsNormNonQuantized&gt;,
     eps: f64,
     weight: Tensor,
 }
@@ -826,47 +808,37 @@
     <span class="kw">pub fn </span>new(size: usize, eps: f64, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>inner = candle_nn::rms_norm_non_quant(size, eps, vb)<span class="question-mark">?</span>;
         <span class="kw">let </span>w = inner.inner().weight().clone();
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-            inner,
-            eps,
-            weight: w,
-        })
+        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ eps, weight: w })
     }
 
     <span class="kw">pub fn </span>from_w(w: Tensor, eps: f64) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>inner = candle_nn::RmsNorm::&lt;RmsNormNonQuantized&gt;::new(w.clone(), eps);
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-            inner,
-            eps,
-            weight: w,
-        })
+        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ eps, weight: w })
     }
 }
 
 <span class="kw">impl </span>Module <span class="kw">for </span>RmsNorm {
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">if </span>x.device().is_cpu() {
-            <span class="comment">// Handle device mapping case
-            </span><span class="kw">return </span>candle_nn::ops::rms_norm(<span class="kw-2">&amp;</span>x.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.weight, <span class="self">self</span>.eps <span class="kw">as </span>f32);
-        }
-        <span class="self">self</span>.inner.forward(x)
+        candle_nn::ops::rms_norm(<span class="kw-2">&amp;</span>x.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.weight, <span class="self">self</span>.eps <span class="kw">as </span>f32)
     }
 }
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">pub struct </span>QRmsNorm {
-    inner: candle_nn::RmsNorm&lt;RmsNormQuantized&gt;,
+    eps: f64,
+    weight: Tensor,
 }
 
 <span class="kw">impl </span>QRmsNorm {
     <span class="kw">pub fn </span>new(scale: QTensor, eps: f32) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>scale = scale.dequantize(<span class="kw-2">&amp;</span>scale.device())<span class="question-mark">?</span>;
-        <span class="kw">let </span>inner = candle_nn::RmsNorm::&lt;RmsNormQuantized&gt;::new(scale, eps <span class="kw">as </span>f64);
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ inner })
+        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+            eps: eps <span class="kw">as </span>f64,
+            weight: scale,
+        })
     }
 
     <span class="kw">pub fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="self">self</span>.inner.forward(x)
+        candle_nn::ops::rms_norm(<span class="kw-2">&amp;</span>x.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.weight, <span class="self">self</span>.eps <span class="kw">as </span>f32)
     }
 }
 
