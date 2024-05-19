@@ -14,10 +14,7 @@ use candle_core::{
     quantized::{gguf_file, QMatMul, QTensor},
     DType, Device, IndexOp, Result, Tensor, WithDType,
 };
-use candle_nn::{
-    layer_norm::{RmsNormNonQuantized, RmsNormQuantized},
-    Linear, Module, VarBuilder,
-};
+use candle_nn::{Linear, Module, VarBuilder};
 use once_cell::sync::Lazy;
 
 // (bs, tgt_len, past_kv_len)
@@ -28,7 +25,6 @@ use crate::{cublaslt::CUBLASLT_HANDLE, models::phi3, INHIBIT_GEMM_F16};
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
-    inner: candle_nn::RmsNorm<RmsNormNonQuantized>,
     eps: f64,
     weight: Tensor,
 }
@@ -37,47 +33,37 @@ impl RmsNorm {
     pub fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
         let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
         let w = inner.inner().weight().clone();
-        Ok(Self {
-            inner,
-            eps,
-            weight: w,
-        })
+        Ok(Self { eps, weight: w })
     }
 
     pub fn from_w(w: Tensor, eps: f64) -> Result<Self> {
-        let inner = candle_nn::RmsNorm::<RmsNormNonQuantized>::new(w.clone(), eps);
-        Ok(Self {
-            inner,
-            eps,
-            weight: w,
-        })
+        Ok(Self { eps, weight: w })
     }
 }
 
 impl Module for RmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        if x.device().is_cpu() {
-            // Handle device mapping case
-            return candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32);
-        }
-        self.inner.forward(x)
+        candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct QRmsNorm {
-    inner: candle_nn::RmsNorm<RmsNormQuantized>,
+    eps: f64,
+    weight: Tensor,
 }
 
 impl QRmsNorm {
     pub fn new(scale: QTensor, eps: f32) -> Result<Self> {
         let scale = scale.dequantize(&scale.device())?;
-        let inner = candle_nn::RmsNorm::<RmsNormQuantized>::new(scale, eps as f64);
-        Ok(Self { inner })
+        Ok(Self {
+            eps: eps as f64,
+            weight: scale,
+        })
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.inner.forward(x)
+        candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
     }
 }
 
