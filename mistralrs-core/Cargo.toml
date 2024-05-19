@@ -54,6 +54,7 @@ async-trait = "0.1.80"
 once_cell.workspace = true
 toml = "0.8.12"
 strum = { version = "0.26", features = ["derive"] }
+derive_more = { version = "0.99.17", default-features = false, features = ["from"] }
 
 [features]
 pyo3_macros = ["pyo3"]
