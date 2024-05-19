@@ -411,7 +411,7 @@
         <span class="kw">let </span>(k, v) = <span class="kw">match </span><span class="kw-2">&amp;*</span>cache {
             <span class="prelude-val">None </span>=&gt; (k, v),
             <span class="prelude-val">Some</span>((k_cache, v_cache)) =&gt; {
-                <span class="kw">if </span>slow_cat {
+                <span class="kw">if </span>!slow_cat {
                     <span class="kw">let </span>k = candle_nn::ops::kvconcat(k_cache, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
                     <span class="kw">let </span>v = candle_nn::ops::kvconcat(v_cache, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
                     (k, v)
