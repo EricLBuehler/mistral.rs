@@ -56,7 +56,7 @@ use crate::{
 pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
 
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
-/// example `SimpleModelPaths` implements `ModelPaths` when all files are in the local file system.
+/// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
 pub trait ModelPaths {
     /// Model weights files (multiple files supported).
     fn get_weight_filenames(&self) -> &[PathBuf];
