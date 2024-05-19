@@ -211,6 +211,10 @@ impl Loader for NormalLoader {
         } else {
             DType::F32
         };
+        // Otherwise, the device mapper will print it
+        if mapper.is_dummy() {
+            info!("Loading model `{}` on {device:?}...", self.get_id());
+        }
 
         info!(
             "Model config: {:?}",

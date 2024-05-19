@@ -228,6 +228,7 @@ impl Loader for GGMLLoader {
         if !mapper.is_dummy() {
             warn!("GGML models do not support device mapping. Device mapping will not work. Please consider using a GGUF model.");
         }
+        info!("Loading model `{}` on {device:?}...", self.get_id());
 
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
         let model = ggml_file::Content::read(&mut file, device)
