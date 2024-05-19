@@ -428,6 +428,10 @@
 <a href="#426" id="426">426</a>
 <a href="#427" id="427">427</a>
 <a href="#428" id="428">428</a>
+<a href="#429" id="429">429</a>
+<a href="#430" id="430">430</a>
+<a href="#431" id="431">431</a>
+<a href="#432" id="432">432</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
@@ -641,6 +645,10 @@
         } <span class="kw">else </span>{
             DType::F32
         };
+        <span class="comment">// Otherwise, the device mapper will print it
+        </span><span class="kw">if </span>mapper.is_dummy() {
+            <span class="macro">info!</span>(<span class="string">"Loading model `{}` on {device:?}..."</span>, <span class="self">self</span>.get_id());
+        }
 
         <span class="macro">info!</span>(
             <span class="string">"Model config: {:?}"</span>,

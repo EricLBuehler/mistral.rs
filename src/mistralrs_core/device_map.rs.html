@@ -146,6 +146,10 @@
 <a href="#144" id="144">144</a>
 <a href="#145" id="145">145</a>
 <a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::fmt::Debug;
 
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
@@ -189,11 +193,15 @@
             }));
         };
         <span class="comment">// How many host (cpu) layers, defaulting to automatically filling the rest.
-        </span><span class="kw">let </span>n_host_layers = <span class="self">self</span>.host_layers.unwrap_or(model_layers - n_device_layers);
+        // If n_device_layers &gt; model_layers, n_host_layers = 0
+        </span><span class="kw">let </span>n_host_layers = <span class="self">self
+            </span>.host_layers
+            .unwrap_or(model_layers.saturating_sub(n_device_layers));
         <span class="kw">if </span>n_device_layers + n_host_layers != model_layers {
-            <span class="macro">candle_core::bail!</span>(<span class="string">"Expected the number of device ({n_device_layers}) and host layers ({n_host_layers}) to sum to the number of model hidden layers ({model_layers})"</span>);
+            <span class="macro">candle_core::bail!</span>(<span class="string">"Expected the number of GPU ({n_device_layers}) and host layers ({n_host_layers}) to sum to the number of model hidden layers ({model_layers})"</span>);
         }
-        <span class="macro">info!</span>(<span class="string">"Using {n_device_layers} layers on device and {n_host_layers} on host."</span>);
+        <span class="macro">info!</span>(<span class="string">"Model has {model_layers} repeating layers."</span>);
+        <span class="macro">info!</span>(<span class="string">"Using {n_device_layers} repeating layers on GPU and {n_host_layers} repeating layers on host."</span>);
         <span class="kw">let </span><span class="kw-2">mut </span>combined = <span class="macro">vec!</span>[device.clone(); n_device_layers];
         <span class="comment">// Always put the CPU layers at the end so that we reduce dtoh and htod copies
         </span>combined.extend(<span class="macro">vec!</span>[Device::Cpu; n_host_layers]);

@@ -394,7 +394,6 @@
 <a href="#392" id="392">392</a>
 <a href="#393" id="393">393</a>
 <a href="#394" id="394">394</a>
-<a href="#395" id="395">395</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
@@ -707,7 +706,6 @@
         candle_core::utils::with_f16c()
     );
     <span class="macro">info!</span>(<span class="string">"Sampling method: penalties -&gt; temperature -&gt; topk -&gt; topp -&gt; multinomial"</span>);
-    <span class="macro">info!</span>(<span class="string">"Loading model `{}` on {device:?}..."</span>, loader.get_id());
     <span class="kw">if </span>use_flash_attn {
         <span class="macro">info!</span>(<span class="string">"Using flash attention."</span>);
     }
