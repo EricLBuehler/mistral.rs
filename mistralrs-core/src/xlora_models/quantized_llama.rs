@@ -21,6 +21,7 @@ use crate::DeviceMapMetadata;
 
 use super::classifier::XLoraClassifier;
 use super::{verify_sanity_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
+use crate::utils::model_config as ModelConfig;
 
 const MAX_SEQ_LEN: u32 = 4096;
 const SUPPORTED_LAYERS: [&str; 7] = [
@@ -267,6 +268,37 @@ pub struct ModelWeights {
     xlora_classifier: Option<XLoraClassifier>,
     pub max_seq_len: usize,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
+}
+
+// TODO: This method variant is a workaround to proxy to existing API method it would intend to replace.
+impl ModelWeights {
+    pub fn from_ggufb(params: (ModelConfig::File, ModelConfig::Device, ModelConfig::Adapter)) -> Result<Self> {
+        // Destructure props:
+        let (
+            ModelConfig::File { ct, reader },
+            ModelConfig::Device { device, mapper },
+            ModelConfig::Adapter {
+                xlora_config,
+                lora_config,
+                vb,
+                ordering,
+                preload_adapters,
+            },
+        ) = params;
+
+        // Forwards all structured fields above into the required flattened param sequence:
+        Self::from_gguf(
+            ct,
+            reader,
+            device,
+            lora_config,
+            vb,
+            ordering,
+            xlora_config,
+            mapper,
+            preload_adapters,
+        )
+    }
 }
 
 impl ModelWeights {

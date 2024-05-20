@@ -40,6 +40,7 @@ use tokio::sync::Mutex;
 use tracing::info;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
+use crate::utils::model_config as ModelConfig;
 
 enum Model {
     Llama(QLlama),
@@ -377,8 +378,17 @@ impl Loader for GGUFLoader {
             ModelKind::XLoraGGUF => {
                 let xlora_paths = vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()];
                 let xlora_config = Some(paths.get_classifier_config().as_ref().unwrap().clone());
+                // Common:
+                let lora_config = paths.get_adapter_configs().as_ref().unwrap();
+                let ordering = paths.get_ordering().as_ref().unwrap();
+                let preload_adapters = &load_preload_adapters(
+                    paths.get_lora_preload_adapter_info(),
+                    DType::F32,
+                    device,
+                    silent,
+                )?;
 
-                let vb = from_mmaped_safetensors(
+                let vb = &from_mmaped_safetensors(
                     xlora_paths,
                     paths
                         .get_adapter_filenames()
@@ -392,39 +402,21 @@ impl Loader for GGUFLoader {
                     silent,
                 )?;
 
+                let model_config = (
+                    ModelConfig::File { ct: model, reader: &mut file },
+                    ModelConfig::Device { device, mapper },
+                    ModelConfig::Adapter {
+                        lora_config,
+                        xlora_config,
+                        vb,
+                        ordering,
+                        preload_adapters,
+                    },
+                );
+
                 match arch {
-                    GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::from_gguf(
-                        model,
-                        &mut file,
-                        device,
-                        paths.get_adapter_configs().as_ref().unwrap(),
-                        &vb,
-                        paths.get_ordering().as_ref().unwrap(),
-                        xlora_config,
-                        mapper,
-                        &load_preload_adapters(
-                            paths.get_lora_preload_adapter_info(),
-                            DType::F32,
-                            device,
-                            silent,
-                        )?,
-                    )?),
-                    GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::from_gguf(
-                        model,
-                        &mut file,
-                        device,
-                        paths.get_adapter_configs().as_ref().unwrap(),
-                        &vb,
-                        paths.get_ordering().as_ref().unwrap(),
-                        xlora_config,
-                        mapper,
-                        &load_preload_adapters(
-                            paths.get_lora_preload_adapter_info(),
-                            DType::F32,
-                            device,
-                            silent,
-                        )?,
-                    )?),
+                    GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::from_ggufb(model_config)?),
+                    GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::from_ggufb(model_config)?),
                     a => bail!("Unsupported architecture for GGUF X-LoRA `{a:?}`"),
                 }
             }
@@ -432,8 +424,17 @@ impl Loader for GGUFLoader {
                 is_lora = true;
                 let xlora_paths = vec![];
                 let xlora_config = None;
+                // Common:
+                let lora_config = paths.get_adapter_configs().as_ref().unwrap();
+                let ordering = paths.get_ordering().as_ref().unwrap();
+                let preload_adapters = &load_preload_adapters(
+                    paths.get_lora_preload_adapter_info(),
+                    DType::F32,
+                    device,
+                    silent,
+                )?;
 
-                let vb = from_mmaped_safetensors(
+                let vb = &from_mmaped_safetensors(
                     xlora_paths,
                     paths
                         .get_adapter_filenames()
@@ -447,39 +448,21 @@ impl Loader for GGUFLoader {
                     silent,
                 )?;
 
+                let model_config = (
+                    ModelConfig::File { ct: model, reader: &mut file },
+                    ModelConfig::Device { device, mapper },
+                    ModelConfig::Adapter {
+                        lora_config,
+                        xlora_config,
+                        vb,
+                        ordering,
+                        preload_adapters,
+                    },
+                );
+
                 match arch {
-                    GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::from_gguf(
-                        model,
-                        &mut file,
-                        device,
-                        paths.get_adapter_configs().as_ref().unwrap(),
-                        &vb,
-                        paths.get_ordering().as_ref().unwrap(),
-                        xlora_config,
-                        mapper,
-                        &load_preload_adapters(
-                            paths.get_lora_preload_adapter_info(),
-                            DType::F32,
-                            device,
-                            silent,
-                        )?,
-                    )?),
-                    GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::from_gguf(
-                        model,
-                        &mut file,
-                        device,
-                        paths.get_adapter_configs().as_ref().unwrap(),
-                        &vb,
-                        paths.get_ordering().as_ref().unwrap(),
-                        xlora_config,
-                        mapper,
-                        &load_preload_adapters(
-                            paths.get_lora_preload_adapter_info(),
-                            DType::F32,
-                            device,
-                            silent,
-                        )?,
-                    )?),
+                    GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::from_ggufb(model_config)?),
+                    GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::from_ggufb(model_config)?),
                     a => bail!("Unsupported architecture for GGUF LoRA `{a:?}`"),
                 }
             }
