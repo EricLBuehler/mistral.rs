@@ -271,8 +271,11 @@ impl Loader for GGMLLoader {
         let model = match self.kind {
             ModelKind::QuantizedGGML => Model::Llama(QLlama::from_ggml(model, self.config.gqa)?),
             ModelKind::XLoraGGML => {
+                let xlora_paths = vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()];
+                let xlora_config = Some(paths.get_classifier_config().as_ref().unwrap().clone());
+
                 let vb = from_mmaped_safetensors(
-                    vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()],
+                    xlora_paths,
                     paths
                         .get_adapter_filenames()
                         .as_ref()
@@ -291,7 +294,7 @@ impl Loader for GGMLLoader {
                     paths.get_adapter_configs().as_ref().unwrap(),
                     &vb,
                     paths.get_ordering().as_ref().unwrap(),
-                    Some(paths.get_classifier_config().as_ref().unwrap().clone()),
+                    xlora_config,
                     &load_preload_adapters(
                         paths.get_lora_preload_adapter_info(),
                         DType::F32,
@@ -302,8 +305,11 @@ impl Loader for GGMLLoader {
             }
             ModelKind::LoraGGML => {
                 is_lora = true;
+                let xlora_paths = vec![];
+                let xlora_config = None;
+
                 let vb = from_mmaped_safetensors(
-                    vec![],
+                    xlora_paths,
                     paths
                         .get_adapter_filenames()
                         .as_ref()
@@ -322,7 +328,7 @@ impl Loader for GGMLLoader {
                     paths.get_adapter_configs().as_ref().unwrap(),
                     &vb,
                     paths.get_ordering().as_ref().unwrap(),
-                    None,
+                    xlora_config,
                     &load_preload_adapters(
                         paths.get_lora_preload_adapter_info(),
                         DType::F32,

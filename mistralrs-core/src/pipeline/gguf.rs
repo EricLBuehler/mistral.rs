@@ -375,8 +375,11 @@ impl Loader for GGUFLoader {
                 a => bail!("Unsupported architecture `{a:?}`"),
             },
             ModelKind::XLoraGGUF => {
+                let xlora_paths = vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()];
+                let xlora_config = Some(paths.get_classifier_config().as_ref().unwrap().clone());
+
                 let vb = from_mmaped_safetensors(
-                    vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()],
+                    xlora_paths,
                     paths
                         .get_adapter_filenames()
                         .as_ref()
@@ -397,7 +400,7 @@ impl Loader for GGUFLoader {
                         paths.get_adapter_configs().as_ref().unwrap(),
                         &vb,
                         paths.get_ordering().as_ref().unwrap(),
-                        Some(paths.get_classifier_config().as_ref().unwrap().clone()),
+                        xlora_config,
                         mapper,
                         &load_preload_adapters(
                             paths.get_lora_preload_adapter_info(),
@@ -413,7 +416,7 @@ impl Loader for GGUFLoader {
                         paths.get_adapter_configs().as_ref().unwrap(),
                         &vb,
                         paths.get_ordering().as_ref().unwrap(),
-                        Some(paths.get_classifier_config().as_ref().unwrap().clone()),
+                        xlora_config,
                         mapper,
                         &load_preload_adapters(
                             paths.get_lora_preload_adapter_info(),
@@ -427,8 +430,11 @@ impl Loader for GGUFLoader {
             }
             ModelKind::LoraGGUF => {
                 is_lora = true;
+                let xlora_paths = vec![];
+                let xlora_config = None;
+
                 let vb = from_mmaped_safetensors(
-                    vec![],
+                    xlora_paths,
                     paths
                         .get_adapter_filenames()
                         .as_ref()
@@ -449,7 +455,7 @@ impl Loader for GGUFLoader {
                         paths.get_adapter_configs().as_ref().unwrap(),
                         &vb,
                         paths.get_ordering().as_ref().unwrap(),
-                        None,
+                        xlora_config,
                         mapper,
                         &load_preload_adapters(
                             paths.get_lora_preload_adapter_info(),
@@ -465,7 +471,7 @@ impl Loader for GGUFLoader {
                         paths.get_adapter_configs().as_ref().unwrap(),
                         &vb,
                         paths.get_ordering().as_ref().unwrap(),
-                        None,
+                        xlora_config,
                         mapper,
                         &load_preload_adapters(
                             paths.get_lora_preload_adapter_info(),
