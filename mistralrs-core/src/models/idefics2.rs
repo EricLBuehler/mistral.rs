@@ -3,7 +3,9 @@ use candle_nn::{
     conv2d, embedding, layer_norm, linear_no_bias, Activation, Conv2d, Conv2dConfig, Embedding,
     LayerNorm, Linear, Module, VarBuilder,
 };
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::Deserialize;
+use std::ops::Mul;
 
 use crate::{
     layers::{repeat_kv, CausalMasker, RmsNorm},
@@ -206,6 +208,24 @@ struct VisionEmbeddings {
     position_embedding: Embedding,
 }
 
+/// torch.bucketize with right=True
+/// Returns a 1d tensor of shape (xs.len(),) on the CPU
+fn bucketize_right(xs: &[f64], boundaries: &[f64], device: &Device) -> Result<Tensor> {
+    let accum = xs
+        .par_iter()
+        .map(|x| {
+            for (i, bounds) in boundaries.windows(2).enumerate() {
+                let (l, r) = (bounds[0], bounds[1]);
+                if x > &l && x <= &r {
+                    return i as u32;
+                }
+            }
+            (boundaries.len() - 1) as u32
+        })
+        .collect::<Vec<_>>();
+    Tensor::from_vec(accum, (xs.len(),), &Device::Cpu)
+}
+
 impl VisionEmbeddings {
     fn new(config: &VisionConfig, vb: VarBuilder) -> Result<Self> {
         let mut conv_config = Conv2dConfig::default();
@@ -248,13 +268,16 @@ impl VisionEmbeddings {
             1.0,
             1.0 / self.num_patches_per_side as f64,
             pixel_values.device(),
-        )?;
+        )?
+        .to_vec1::<f64>()?;
         let position_ids = Tensor::full(
             0u32,
             (bs, max_nb_patches_h * max_nb_patches_w),
             pixel_values.device(),
         )?;
+        let p_attn_mask = patch_attention_mask.flatten_all()?.to_vec1::<u8>()?;
 
+        let mut new_position_ids = Vec::new();
         for (b_idx, p_attn_mask) in patch_attention_mask.chunk(bs, 0)?.iter().enumerate() {
             let nb_patches_h = p_attn_mask.i((.., 0))?.sum_all()?;
             let nb_patches_w = p_attn_mask.i((0,))?.sum_all()?;
@@ -264,13 +287,15 @@ impl VisionEmbeddings {
                 1.0 - 1e-6,
                 1.0 / nb_patches_h.to_dtype(DType::F32)?.to_scalar::<f32>()?,
                 pixel_values.device(),
-            )?;
+            )?
+            .to_vec1::<f64>()?;
             let fractional_coords_w = Tensor::arange_step(
                 0.0,
                 1.0 - 1e-6,
                 1.0 / nb_patches_w.to_dtype(DType::F32)?.to_scalar::<f32>()?,
                 pixel_values.device(),
-            )?;
+            )?
+            .to_vec1::<f64>()?;
 
             // TODO(EricLBuehler): https://github.com/huggingface/candle/issues/2185
             /*
@@ -280,6 +305,21 @@ impl VisionEmbeddings {
             pos_ids = (bucket_coords_h[:, None] * self.num_patches_per_side + bucket_coords_w).flatten()
             position_ids[batch_idx][p_attn_mask.view(-1).cpu()] = pos_ids
             */
+
+            let bucket_coords_h =
+                bucketize_right(&fractional_coords_h, &boundaries, pixel_values.device())?;
+            let bucket_coords_w =
+                bucketize_right(&fractional_coords_w, &boundaries, pixel_values.device())?;
+            let pos_ids = (bucket_coords_h
+                .unsqueeze(D::Minus1)?
+                .mul(self.num_patches_per_side as f64)?
+                + &bucket_coords_w)?
+                .flatten_all()?;
+
+            let position_ids_b = position_ids.i(b_idx)?;
+            // TODO this is almost certainly not correct
+            // position_ids[batch_idx][p_attn_mask.view(-1).cpu()] = pos_ids
+            new_position_ids.push(position_ids_b.where_cond(&pos_ids, &position_ids_b));
         }
         let position_ids = position_ids.to_device(self.position_embedding.embeddings().device())?;
         embeddings + self.position_embedding.forward(&position_ids)?
