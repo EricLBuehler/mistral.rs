@@ -1,0 +1,29 @@
+[package]
+name = "mistralrs-ffi"
+readme = "README.md"
+authors = ["Eric Buehler"]
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+homepage.workspace = true
+
+[dependencies]
+mistralrs = { version = "0.1.9", path = "../mistralrs" }
+once_cell.workspace = true
+candle-core.workspace = true
+
+[features]
+cuda = ["mistralrs/cuda"]
+cudnn = ["mistralrs/cudnn"]
+metal = ["mistralrs/metal"]
+flash-attn = ["mistralrs/flash-attn"]
+accelerate = ["mistralrs/accelerate"]
+mkl = ["mistralrs/mkl"]
+profile = []
+
+[lib]
+crate-type = ["cdylib"]

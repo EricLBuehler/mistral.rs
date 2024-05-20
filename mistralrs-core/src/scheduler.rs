@@ -49,6 +49,12 @@ pub enum SchedulerMethod {
     Fixed(UsizeBounded<1, { usize::MAX }, false>),
 }
 
+impl Default for SchedulerMethod {
+    fn default() -> Self {
+        Self::Fixed(16.try_into().unwrap())
+    }
+}
+
 pub struct BucketedSeqs<Backer: FcfsBacker> {
     running: Vec<Sequence>,
     waiting: Backer,
