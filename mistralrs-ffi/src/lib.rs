@@ -156,7 +156,7 @@ pub unsafe extern "C" fn create_mistralrs_plain_model(
         .expect("Failed to load model.");
     let mistralrs = MistralRsBuilder::new(
         pipeline,
-        SchedulerMethod::Fixed(max_seqs.try_into().expect("Faile to parse max seqs")),
+        SchedulerMethod::Fixed(max_seqs.try_into().expect("Failed to parse max seqs")),
     )
     .with_no_kv_cache(no_kv_cache)
     .with_prefix_cache_n(prefix_cache_n)
