@@ -274,39 +274,10 @@ impl Loader for GGMLLoader {
             ModelKind::XLoraGGML => {
                 let xlora_paths = vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()];
                 let xlora_config = Some(paths.get_classifier_config().as_ref().unwrap().clone());
-                // Common:
-                let lora_config = paths.get_adapter_configs().as_ref().unwrap();
-                let ordering = paths.get_ordering().as_ref().unwrap();
-                let preload_adapters = &load_preload_adapters(
-                    paths.get_lora_preload_adapter_info(),
-                    DType::F32,
-                    device,
-                    silent,
-                )?;
-
-                let vb = &from_mmaped_safetensors(
-                    xlora_paths,
-                    paths
-                        .get_adapter_filenames()
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(|(_, x)| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    DType::F32,
-                    device,
-                    silent,
-                )?;
 
                 let model_config = (
                     ModelConfig::FileGGML { ct: model, gqa: self.config.gqa },
-                    ModelConfig::Adapter {
-                        lora_config,
-                        xlora_config,
-                        vb,
-                        ordering,
-                        preload_adapters,
-                    },
+                    ModelConfig::Adapter::try_new(paths, device, silent, xlora_paths, xlora_config)?,
                 );
 
                 Model::XLoraLlama(XLoraQLlama::from_ggmlb(model_config)?)
@@ -315,39 +286,10 @@ impl Loader for GGMLLoader {
                 is_lora = true;
                 let xlora_paths = vec![];
                 let xlora_config = None;
-                // Common:
-                let lora_config = paths.get_adapter_configs().as_ref().unwrap();
-                let ordering = paths.get_ordering().as_ref().unwrap();
-                let preload_adapters = &load_preload_adapters(
-                    paths.get_lora_preload_adapter_info(),
-                    DType::F32,
-                    device,
-                    silent,
-                )?;
-
-                let vb = &from_mmaped_safetensors(
-                    xlora_paths,
-                    paths
-                        .get_adapter_filenames()
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(|(_, x)| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    DType::F32,
-                    device,
-                    silent,
-                )?;
 
                 let model_config = (
                     ModelConfig::FileGGML { ct: model, gqa: self.config.gqa },
-                    ModelConfig::Adapter {
-                        lora_config,
-                        xlora_config,
-                        vb,
-                        ordering,
-                        preload_adapters,
-                    },
+                    ModelConfig::Adapter::try_new(paths, device, silent, xlora_paths, xlora_config)?,
                 );
 
                 Model::XLoraLlama(XLoraQLlama::from_ggmlb(model_config)?)

@@ -235,11 +235,11 @@ impl ModelWeights {
             reader,
             device,
             lora_config,
-            vb,
+            &vb,
             ordering,
             xlora_config,
             mapper,
-            preload_adapters,
+            &preload_adapters,
         )
     }
 }
