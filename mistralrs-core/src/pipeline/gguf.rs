@@ -403,7 +403,7 @@ impl Loader for GGUFLoader {
                 )?;
 
                 let model_config = (
-                    ModelConfig::File { ct: model, reader: &mut file },
+                    ModelConfig::FileGGUF { ct: model, reader: &mut file },
                     ModelConfig::Device { device, mapper },
                     ModelConfig::Adapter {
                         lora_config,
@@ -449,7 +449,7 @@ impl Loader for GGUFLoader {
                 )?;
 
                 let model_config = (
-                    ModelConfig::File { ct: model, reader: &mut file },
+                    ModelConfig::FileGGUF { ct: model, reader: &mut file },
                     ModelConfig::Device { device, mapper },
                     ModelConfig::Adapter {
                         lora_config,

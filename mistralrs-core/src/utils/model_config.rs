@@ -1,4 +1,4 @@
-use candle_core::quantized::gguf_file;
+use candle_core::quantized::{gguf_file, ggml_file};
 use candle_nn::VarBuilder;
 use std::collections::HashMap;
 
@@ -8,9 +8,14 @@ use crate::{
     xlora_models::XLoraConfig,
 };
 
-pub struct File<'a> {
+pub struct FileGGUF<'a> {
     pub ct: gguf_file::Content,
     pub reader: &'a mut std::fs::File,
+}
+
+pub struct FileGGML {
+    pub ct: ggml_file::Content,
+    pub gqa: usize,
 }
 
 pub struct Device<'a> {
