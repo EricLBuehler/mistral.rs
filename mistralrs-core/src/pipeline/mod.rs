@@ -912,7 +912,7 @@ fn get_xlora_paths(
     Ok(if let Some(ref xlora_id) = xlora_model_id {
         let api = ApiBuilder::new()
             .with_progress(true)
-            .with_token(Some(get_token(token_source)?))
+            .with_token(get_token(token_source)?)
             .build()?;
         let api = api.repo(Repo::with_revision(
             xlora_id.clone(),
@@ -1134,7 +1134,7 @@ fn get_model_paths(
             id => {
                 let qapi = ApiBuilder::new()
                     .with_progress(true)
-                    .with_token(Some(get_token(token_source)?))
+                    .with_token(get_token(token_source)?)
                     .build()?;
                 let qapi = qapi.repo(Repo::with_revision(
                     id.to_string(),
