@@ -236,7 +236,7 @@ impl Loader for GGMLLoader {
 
         if in_situ_quant.is_some() {
             anyhow::bail!(
-                "You are trying to in-situ quantize a GGUF model. This will not do anything."
+                "You are trying to in-situ quantize a GGML model. This will not do anything."
             );
         }
         if !mapper.is_dummy() {
