@@ -80,6 +80,9 @@ impl<'a> Adapter<'a> {
     }
 }
 
+pub struct AdapterGGUF<'a>(pub FileGGUF<'a>, pub Device<'a>, pub Adapter<'a>);
+pub struct AdapterGGML<'a>(pub FileGGML, pub Adapter<'a>);
+
 // Traits for the existing methods used across various model types to impl `from_ggml()` / `from_gguf()`
 // Basic:
 pub trait FromGGML {
@@ -120,4 +123,73 @@ pub trait FromAdapterGGUF {
         mapper: DeviceMapMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self, candle_core::Error> where Self: Sized;
+}
+
+// TODO: This trait is a workaround to proxy params to the existing API methods `get_gguf()` / `get_gmml()` it intends to replace.
+pub trait MapParamsToModel<T> {
+    type Error;
+
+    fn try_from(self) -> Result<T, Self::Error>;
+}
+
+impl<T: FromAdapterGGUF> MapParamsToModel<T> for AdapterGGUF<'_> {
+    type Error = candle_core::Error;
+
+    // Technically mirrors the signature of `TryInto`
+    fn try_from(self) -> Result<T, Self::Error> {
+        // Destructure props:
+        let AdapterGGUF(
+            FileGGUF { ct, reader },
+            Device { device, mapper },
+            Adapter {
+                xlora_config,
+                lora_config,
+                vb,
+                ordering,
+                preload_adapters,
+            },
+        ) = self;
+
+        // Forwards all structured fields above into the required flattened param sequence:
+        T::from_gguf(
+            ct,
+            reader,
+            device,
+            lora_config,
+            &vb,
+            ordering,
+            xlora_config,
+            mapper,
+            &preload_adapters,
+        )
+    }
+}
+
+impl<T: FromAdapterGGML> MapParamsToModel<T> for AdapterGGML<'_> {
+    type Error = candle_core::Error;
+
+    fn try_from(self) -> Result<T, Self::Error> {
+        // Destructure props:
+        let AdapterGGML(
+            FileGGML { ct, gqa },
+            Adapter {
+                xlora_config,
+                lora_config,
+                vb,
+                ordering,
+                preload_adapters,
+            },
+        ) = self;
+
+        // Forwards all structured fields above into the required flattened param sequence:
+        T::from_ggml(
+            ct,
+            gqa,
+            lora_config,
+            &vb,
+            ordering,
+            xlora_config,
+            &preload_adapters,
+        )
+    }
 }

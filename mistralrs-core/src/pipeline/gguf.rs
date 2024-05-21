@@ -12,7 +12,6 @@ use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
-use crate::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 use crate::xlora_models::NonGranularState;
 use crate::{do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, DEBUG};
 use crate::{
@@ -362,6 +361,7 @@ impl Loader for GGUFLoader {
         }
 
         use crate::utils::model_config::FromGGUF;
+        use crate::utils::model_config::MapParamsToModel;
         let mut is_lora = false;
         let model = match self.kind {
             ModelKind::QuantizedGGUF => match arch {
@@ -380,15 +380,15 @@ impl Loader for GGUFLoader {
                 let xlora_paths = vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()];
                 let xlora_config = Some(paths.get_classifier_config().as_ref().unwrap().clone());
 
-                let model_config = (
+                let model_config = ModelConfig::AdapterGGUF(
                     ModelConfig::FileGGUF { ct: model, reader: &mut file },
                     ModelConfig::Device { device, mapper },
                     ModelConfig::Adapter::try_new(paths, device, silent, xlora_paths, xlora_config)?,
                 );
 
                 match arch {
-                    GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::from_ggufb(model_config)?),
-                    GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::from_ggufb(model_config)?),
+                    GGUFArchitecture::Llama => Model::XLoraLlama(MapParamsToModel::<XLoraQLlama>::try_from(model_config)?),
+                    GGUFArchitecture::Phi3 => Model::XLoraPhi3(MapParamsToModel::<XLoraQPhi3>::try_from(model_config)?),
                     a => bail!("Unsupported architecture for GGUF X-LoRA `{a:?}`"),
                 }
             }
@@ -397,15 +397,15 @@ impl Loader for GGUFLoader {
                 let xlora_paths = vec![];
                 let xlora_config = None;
 
-                let model_config = (
+                let model_config = ModelConfig::AdapterGGUF(
                     ModelConfig::FileGGUF { ct: model, reader: &mut file },
                     ModelConfig::Device { device, mapper },
                     ModelConfig::Adapter::try_new(paths, device, silent, xlora_paths, xlora_config)?,
                 );
 
                 match arch {
-                    GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::from_ggufb(model_config)?),
-                    GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::from_ggufb(model_config)?),
+                    GGUFArchitecture::Llama => Model::XLoraLlama(MapParamsToModel::<XLoraQLlama>::try_from(model_config)?),
+                    GGUFArchitecture::Phi3 => Model::XLoraPhi3(MapParamsToModel::<XLoraQPhi3>::try_from(model_config)?),
                     a => bail!("Unsupported architecture for GGUF LoRA `{a:?}`"),
                 }
             }

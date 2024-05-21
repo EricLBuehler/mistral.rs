@@ -12,7 +12,6 @@ use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
-use crate::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 use crate::xlora_models::NonGranularState;
 use crate::{do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, DEBUG};
 use crate::{
@@ -269,6 +268,7 @@ impl Loader for GGMLLoader {
         }
 
         use crate::utils::model_config::FromGGML;
+        use crate::utils::model_config::MapParamsToModel;
         let mut is_lora = false;
         let model = match self.kind {
             ModelKind::QuantizedGGML => Model::Llama(QLlama::from_ggml(model, self.config.gqa)?),
@@ -276,24 +276,24 @@ impl Loader for GGMLLoader {
                 let xlora_paths = vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()];
                 let xlora_config = Some(paths.get_classifier_config().as_ref().unwrap().clone());
 
-                let model_config = (
+                let model_config = ModelConfig::AdapterGGML(
                     ModelConfig::FileGGML { ct: model, gqa: self.config.gqa },
                     ModelConfig::Adapter::try_new(paths, device, silent, xlora_paths, xlora_config)?,
                 );
 
-                Model::XLoraLlama(XLoraQLlama::from_ggmlb(model_config)?)
+                Model::XLoraLlama(MapParamsToModel::<XLoraQLlama>::try_from(model_config)?)
             }
             ModelKind::LoraGGML => {
                 is_lora = true;
                 let xlora_paths = vec![];
                 let xlora_config = None;
 
-                let model_config = (
+                let model_config = ModelConfig::AdapterGGML(
                     ModelConfig::FileGGML { ct: model, gqa: self.config.gqa },
                     ModelConfig::Adapter::try_new(paths, device, silent, xlora_paths, xlora_config)?,
                 );
 
-                Model::XLoraLlama(XLoraQLlama::from_ggmlb(model_config)?)
+                Model::XLoraLlama(MapParamsToModel::<XLoraQLlama>::try_from(model_config)?)
             }
             _ => unreachable!(),
         };
