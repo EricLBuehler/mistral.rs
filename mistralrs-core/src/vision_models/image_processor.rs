@@ -1,14 +1,37 @@
 use candle_core::{Result, Tensor};
-use image::DynamicImage;
+use either::Either;
+use image::{DynamicImage, GenericImageView, ImageBuffer, Pixel, Rgb};
 
 pub struct NormalizationMetadata {
-    image_mean: Vec<f32>,
-    image_std: Vec<f32>,
+    image_mean: [f32; 3],
+    image_std: [f32; 3],
 }
 
 pub struct PreprocessedImages {
     pixel_values: Tensor,
     pixel_attention_mask: Tensor,
+}
+
+fn get_pixel_data(image: &DynamicImage, h: usize, w: usize) -> Vec<Vec<Rgb<u8>>> {
+    let mut pixel_data = vec![vec![Rgb::from([0u8, 0, 0]); w]; h];
+    image
+        .pixels()
+        .for_each(|(x, y, pixel)| pixel_data[y as usize][x as usize] = pixel.to_rgb());
+    pixel_data
+}
+
+fn from_pixel_data(data: Vec<Vec<Rgb<u8>>>, h: usize, w: usize) -> DynamicImage {
+    let mut flat_data: Vec<u8> = Vec::with_capacity(w * h * 4);
+    for row in data {
+        for pixel in row {
+            flat_data.extend_from_slice(&pixel.0);
+        }
+    }
+
+    let img_buffer =
+        ImageBuffer::from_vec(w as u32, h as u32, flat_data).expect("Unable to create ImageBuffer");
+
+    DynamicImage::ImageRgb8(img_buffer)
 }
 
 pub trait ImagePreProcessor {
@@ -22,4 +45,86 @@ pub trait ImagePreProcessor {
         do_pad: bool,
         do_image_splitting: bool,
     ) -> Result<PreprocessedImages>;
+
+    /// Crops the image to the given size using a center crop. Note that if the image is too small, it will be padded.
+    /// The returned image is always of size (height, width)
+    fn center_crop(&self, image: &DynamicImage, height: u32, width: u32) -> DynamicImage {
+        let (orig_height, orig_width) = image.dimensions();
+        let top = (orig_height as i32 - height as i32) / 2;
+        let bottom = top + height as i32;
+        let left = (orig_width as i32 - width as i32) / 2;
+        let right = left + width as i32;
+
+        // Check if cropped area is within image boundaries
+        if top >= 0 && bottom <= height as i32 && left >= 0 && right <= width as i32 {
+            return image.crop_imm(left as u32, top as u32, width, height);
+        }
+
+        let new_height = height.max(orig_height);
+        let new_width = width.max(orig_width);
+
+        // Pad the image...
+        let top_pad = (new_height - orig_height) / 2;
+        let bottom_pad = top_pad + orig_height;
+        let left_pad = (new_width - orig_width) / 2;
+        let right_pad = left_pad + orig_width;
+
+        let (new_width, new_height) = (new_width as usize, new_height as usize);
+        let mut pixel_data = get_pixel_data(image, new_height, new_width);
+
+        let y_range = ((top + top_pad as i32).max(0) as usize)
+            ..((new_height as i32).min(bottom + bottom_pad as i32) as usize);
+        let x_range = ((left + left_pad as i32).max(0) as usize)
+            ..((new_width as i32).min(right + right_pad as i32) as usize);
+        pixel_data = pixel_data[y_range][x_range].to_vec();
+
+        from_pixel_data(pixel_data, new_height, new_width)
+    }
+
+    /// Map an image's pixel channels.
+    fn map_image<F>(&self, image: &DynamicImage, mut f: F) -> DynamicImage
+    where
+        F: FnMut(u8) -> u8,
+    {
+        let (h, w) = image.dimensions();
+        let mut data = get_pixel_data(image, h as usize, w as usize);
+        data.iter_mut().for_each(|row| {
+            for c in row {
+                c.apply_without_alpha(|x| f(x));
+            }
+        });
+        from_pixel_data(data, h as usize, w as usize)
+    }
+
+    /// Map an image's pixel channels and while providing the image channel
+    fn map_image_channels<F>(&self, image: &DynamicImage, mut f: F) -> DynamicImage
+    where
+        F: FnMut(u8, usize) -> u8,
+    {
+        let (h, w) = image.dimensions();
+        let mut data = get_pixel_data(image, h as usize, w as usize);
+        data.iter_mut().for_each(|row| {
+            for c in row {
+                for (channel, x) in c.channels_mut().iter_mut().enumerate() {
+                    *x = f(*x, channel);
+                }
+            }
+        });
+        from_pixel_data(data, h as usize, w as usize)
+    }
+
+    /// Rescale image by `scale`
+    fn rescale(&self, image: &DynamicImage, scale: f32) -> DynamicImage {
+        self.map_image(image, |x| (x as f32 * scale) as u8)
+    }
+
+    /// Normalizes the image using the standard distribution specified by `mean` and `std`
+    /// for each channel.
+    ///
+    /// (image-mean)/std
+    fn normalize(&self, image: &DynamicImage, mean: [f32; 3], std: [f32; 3]) -> DynamicImage {
+        self.map_image_channels(image, |x, channel| {
+            ((x as f32 - mean[channel]) / std[channel] as f32) as u8
+        })
+    }
 }

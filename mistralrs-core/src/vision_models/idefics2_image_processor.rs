@@ -1,4 +1,4 @@
-use candle_core::{Result, Tensor};
+use candle_core::Result;
 use image::DynamicImage;
 
 use super::image_processor::{ImagePreProcessor, NormalizationMetadata, PreprocessedImages};
