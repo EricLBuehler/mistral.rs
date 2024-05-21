@@ -1,26 +1,29 @@
-use candle_core::{Result, Tensor};
-use either::Either;
-use image::{DynamicImage, GenericImageView, ImageBuffer, Pixel, Rgb};
+use candle_core::{Device, Result, Tensor};
+use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageBuffer, Pixel, Rgb};
 
-pub struct NormalizationMetadata {
-    image_mean: [f32; 3],
-    image_std: [f32; 3],
+pub(crate) struct NormalizationMetadata {
+    pub(crate) image_mean: [f32; 3],
+    pub(crate) image_std: [f32; 3],
 }
 
-pub struct PreprocessedImages {
-    pixel_values: Tensor,
-    pixel_attention_mask: Tensor,
+pub(crate) struct PreprocessedImages {
+    pub(crate) pixel_values: Tensor,
+    pub(crate) pixel_attention_mask: Tensor,
 }
 
-fn get_pixel_data(image: &DynamicImage, h: usize, w: usize) -> Vec<Vec<Rgb<u8>>> {
-    let mut pixel_data = vec![vec![Rgb::from([0u8, 0, 0]); w]; h];
+pub(crate) fn empty_image(h: usize, w: usize) -> Vec<Vec<Rgb<u8>>> {
+    vec![vec![Rgb::from([0u8, 0, 0]); w]; h]
+}
+
+pub(crate) fn get_pixel_data(image: &DynamicImage, h: usize, w: usize) -> Vec<Vec<Rgb<u8>>> {
+    let mut pixel_data = empty_image(h, w);
     image
         .pixels()
         .for_each(|(x, y, pixel)| pixel_data[y as usize][x as usize] = pixel.to_rgb());
     pixel_data
 }
 
-fn from_pixel_data(data: Vec<Vec<Rgb<u8>>>, h: usize, w: usize) -> DynamicImage {
+pub(crate) fn from_pixel_data(data: Vec<Vec<Rgb<u8>>>, h: usize, w: usize) -> DynamicImage {
     let mut flat_data: Vec<u8> = Vec::with_capacity(w * h * 4);
     for row in data {
         for pixel in row {
@@ -34,22 +37,26 @@ fn from_pixel_data(data: Vec<Vec<Rgb<u8>>>, h: usize, w: usize) -> DynamicImage 
     DynamicImage::ImageRgb8(img_buffer)
 }
 
+pub(crate) fn resize(image: &DynamicImage, w: u32, h: u32, filter: FilterType) -> DynamicImage {
+    image.resize(w, h, filter)
+}
+
 pub trait ImagePreProcessor {
     fn preprocess(
         &self,
-        images: &[DynamicImage],
-        do_convert_rgb: bool,
+        images: Vec<DynamicImage>,
         do_resize: bool,
         rescale: Option<f32>,
         normalize: Option<NormalizationMetadata>,
         do_pad: bool,
-        do_image_splitting: bool,
+        filter: FilterType,
+        device: &Device,
     ) -> Result<PreprocessedImages>;
 
     /// Crops the image to the given size using a center crop. Note that if the image is too small, it will be padded.
     /// The returned image is always of size (height, width)
     fn center_crop(&self, image: &DynamicImage, height: u32, width: u32) -> DynamicImage {
-        let (orig_height, orig_width) = image.dimensions();
+        let (orig_width, orig_height) = image.dimensions();
         let top = (orig_height as i32 - height as i32) / 2;
         let bottom = top + height as i32;
         let left = (orig_width as i32 - width as i32) / 2;
@@ -86,7 +93,7 @@ pub trait ImagePreProcessor {
     where
         F: FnMut(u8) -> u8,
     {
-        let (h, w) = image.dimensions();
+        let (w, h) = image.dimensions();
         let mut data = get_pixel_data(image, h as usize, w as usize);
         data.iter_mut().for_each(|row| {
             for c in row {
@@ -101,7 +108,7 @@ pub trait ImagePreProcessor {
     where
         F: FnMut(u8, usize) -> u8,
     {
-        let (h, w) = image.dimensions();
+        let (w, h) = image.dimensions();
         let mut data = get_pixel_data(image, h as usize, w as usize);
         data.iter_mut().for_each(|row| {
             for c in row {
