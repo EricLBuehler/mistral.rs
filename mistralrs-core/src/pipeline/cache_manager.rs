@@ -85,7 +85,7 @@ impl Cache {
         let (k, v) = match &*cache {
             None => (k, v),
             Some((k_cache, v_cache)) => {
-                if slow_cat {
+                if !slow_cat {
                     let k = candle_nn::ops::kvconcat(k_cache, &k, 2)?.contiguous()?;
                     let v = candle_nn::ops::kvconcat(v_cache, &v, 2)?.contiguous()?;
                     (k, v)

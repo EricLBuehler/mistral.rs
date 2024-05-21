@@ -314,6 +314,11 @@ impl Loader for GGUFLoader {
                 "You are trying to in-situ quantize a GGUF model. This will not do anything."
             );
         }
+        // Otherwise, the device mapper will print it
+        if mapper.is_dummy() {
+            info!("Loading model `{}` on {device:?}...", self.get_id());
+        }
+
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
         let model = gguf_file::Content::read(&mut file)
             .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
