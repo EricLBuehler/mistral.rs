@@ -300,6 +300,8 @@
 <a href="#298" id="298">298</a>
 <a href="#299" id="299">299</a>
 <a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
@@ -330,6 +332,8 @@
 
 <span class="kw">mod </span>cublaslt;
 <span class="kw">pub mod </span>layers;
+<span class="kw">mod </span>layers_masker;
+<span class="kw">mod </span>layers_utils;
 <span class="kw">mod </span>models;
 <span class="kw">mod </span>pipeline;
 <span class="kw">mod </span>prefix_cacher;
