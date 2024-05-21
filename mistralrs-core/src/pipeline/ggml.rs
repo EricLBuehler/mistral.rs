@@ -267,19 +267,20 @@ impl Loader for GGMLLoader {
             info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_ggml_tensors.txt`.");
         }
 
-        use crate::utils::model_config::FromGGML;
         use crate::utils::model_config::MapParamsToModel;
+        let model_config = ModelConfig::GGML(
+            ModelConfig::FileGGML { ct: model, gqa: self.config.gqa },
+        );
+
         let mut is_lora = false;
         let model = match self.kind {
-            ModelKind::QuantizedGGML => Model::Llama(QLlama::from_ggml(model, self.config.gqa)?),
+            ModelKind::QuantizedGGML => Model::Llama(MapParamsToModel::<QLlama>::try_from(model_config)?),
             ModelKind::XLoraGGML => {
                 let xlora_paths = vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()];
                 let xlora_config = Some(paths.get_classifier_config().as_ref().unwrap().clone());
 
-                let model_config = ModelConfig::AdapterGGML(
-                    ModelConfig::FileGGML { ct: model, gqa: self.config.gqa },
-                    ModelConfig::Adapter::try_new(paths, device, silent, xlora_paths, xlora_config)?,
-                );
+                let adapter = ModelConfig::Adapter::try_new(paths, device, silent, xlora_paths, xlora_config)?;
+                let model_config = model_config.with_adapter(adapter);
 
                 Model::XLoraLlama(MapParamsToModel::<XLoraQLlama>::try_from(model_config)?)
             }
@@ -288,10 +289,8 @@ impl Loader for GGMLLoader {
                 let xlora_paths = vec![];
                 let xlora_config = None;
 
-                let model_config = ModelConfig::AdapterGGML(
-                    ModelConfig::FileGGML { ct: model, gqa: self.config.gqa },
-                    ModelConfig::Adapter::try_new(paths, device, silent, xlora_paths, xlora_config)?,
-                );
+                let adapter = ModelConfig::Adapter::try_new(paths, device, silent, xlora_paths, xlora_config)?;
+                let model_config = model_config.with_adapter(adapter);
 
                 Model::XLoraLlama(MapParamsToModel::<XLoraQLlama>::try_from(model_config)?)
             }

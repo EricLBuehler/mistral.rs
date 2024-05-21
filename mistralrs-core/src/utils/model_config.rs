@@ -80,8 +80,30 @@ impl<'a> Adapter<'a> {
     }
 }
 
+// New type wrappers that segment the distinct parameter sets used by `from_ggml()` + `from_gguf()` methods:
+pub struct GGML(pub FileGGML);
+pub struct GGUF<'a>(pub FileGGUF<'a>, pub Device<'a>);
 pub struct AdapterGGUF<'a>(pub FileGGUF<'a>, pub Device<'a>, pub Adapter<'a>);
 pub struct AdapterGGML<'a>(pub FileGGML, pub Adapter<'a>);
+
+impl GGML {
+    pub fn with_adapter<'b>(self, adapter: Adapter<'b>) -> AdapterGGML<'b> {
+        AdapterGGML(
+            self.0,
+            adapter,
+        )
+    }
+}
+
+impl<'a> GGUF<'a> {
+    pub fn with_adapter<'b: 'a>(self, adapter: Adapter<'b>) -> AdapterGGUF<'a> {
+        AdapterGGUF(
+            self.0,
+            self.1,
+            adapter,
+        )
+    }
+}
 
 // Traits for the existing methods used across various model types to impl `from_ggml()` / `from_gguf()`
 // Basic:
@@ -130,6 +152,43 @@ pub trait MapParamsToModel<T> {
     type Error;
 
     fn try_from(self) -> Result<T, Self::Error>;
+}
+
+impl<T: FromGGML> MapParamsToModel<T> for GGML {
+    type Error = candle_core::Error;
+
+    fn try_from(self) -> Result<T, Self::Error> {
+        // Destructure props:
+        let GGML(
+            FileGGML { ct, gqa },
+        ) = self;
+
+        // Forwards all structured fields above into the required flattened param sequence:
+        T::from_ggml(
+            ct,
+            gqa,
+        )
+    }
+}
+
+impl<T: FromGGUF> MapParamsToModel<T> for GGUF<'_> {
+    type Error = candle_core::Error;
+
+    fn try_from(self) -> Result<T, Self::Error> {
+        // Destructure props:
+        let GGUF(
+            FileGGUF { ct, reader },
+            Device { device, mapper },
+        ) = self;
+
+        // Forwards all structured fields above into the required flattened param sequence:
+        T::from_gguf(
+            ct,
+            reader,
+            device,
+            mapper,
+        )
+    }
 }
 
 // Without sharing a common trait among other wrapper types, this could be used instead:

@@ -360,19 +360,23 @@ impl Loader for GGUFLoader {
             info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_gguf_tensors.txt`.");
         }
 
-        use crate::utils::model_config::FromGGUF;
         use crate::utils::model_config::MapParamsToModel;
+        let model_config = ModelConfig::GGUF(
+            ModelConfig::FileGGUF { ct: model, reader: &mut file },
+            ModelConfig::Device { device, mapper },
+        );
+
         let mut is_lora = false;
         let model = match self.kind {
             ModelKind::QuantizedGGUF => match arch {
                 GGUFArchitecture::Llama => {
-                    Model::Llama(QLlama::from_gguf(model, &mut file, device, mapper)?)
+                    Model::Llama(MapParamsToModel::<QLlama>::try_from(model_config)?)
                 }
                 GGUFArchitecture::Phi2 => {
-                    Model::Phi2(QPhi::from_gguf(model, &mut file, device, mapper)?)
+                    Model::Phi2(MapParamsToModel::<QPhi>::try_from(model_config)?)
                 }
                 GGUFArchitecture::Phi3 => {
-                    Model::Phi3(QPhi3::from_gguf(model, &mut file, device, mapper)?)
+                    Model::Phi3(MapParamsToModel::<QPhi3>::try_from(model_config)?)
                 }
                 a => bail!("Unsupported architecture `{a:?}`"),
             },
@@ -380,11 +384,8 @@ impl Loader for GGUFLoader {
                 let xlora_paths = vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()];
                 let xlora_config = Some(paths.get_classifier_config().as_ref().unwrap().clone());
 
-                let model_config = ModelConfig::AdapterGGUF(
-                    ModelConfig::FileGGUF { ct: model, reader: &mut file },
-                    ModelConfig::Device { device, mapper },
-                    ModelConfig::Adapter::try_new(paths, device, silent, xlora_paths, xlora_config)?,
-                );
+                let adapter = ModelConfig::Adapter::try_new(paths, device, silent, xlora_paths, xlora_config)?;
+                let model_config = model_config.with_adapter(adapter);
 
                 match arch {
                     GGUFArchitecture::Llama => Model::XLoraLlama(MapParamsToModel::<XLoraQLlama>::try_from(model_config)?),
@@ -397,11 +398,8 @@ impl Loader for GGUFLoader {
                 let xlora_paths = vec![];
                 let xlora_config = None;
 
-                let model_config = ModelConfig::AdapterGGUF(
-                    ModelConfig::FileGGUF { ct: model, reader: &mut file },
-                    ModelConfig::Device { device, mapper },
-                    ModelConfig::Adapter::try_new(paths, device, silent, xlora_paths, xlora_config)?,
-                );
+                let adapter = ModelConfig::Adapter::try_new(paths, device, silent, xlora_paths, xlora_config)?;
+                let model_config = model_config.with_adapter(adapter);
 
                 match arch {
                     GGUFArchitecture::Llama => Model::XLoraLlama(MapParamsToModel::<XLoraQLlama>::try_from(model_config)?),
