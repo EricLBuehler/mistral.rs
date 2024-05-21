@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
     conv2d, embedding, layer_norm, linear_no_bias, Activation, Conv2d, Conv2dConfig, Embedding,
@@ -165,21 +167,21 @@ struct TextConfig {
     model_type: String, // Must be mistral for now
 }
 
-impl Into<mistral::Config> for TextConfig {
-    fn into(self) -> mistral::Config {
+impl From<TextConfig> for mistral::Config {
+    fn from(val: TextConfig) -> Self {
         mistral::Config {
-            vocab_size: self.vocab_size,
-            hidden_act: self.hidden_act,
-            hidden_size: self.hidden_size,
-            intermediate_size: self.intermediate_size,
-            num_hidden_layers: self.num_hidden_layers,
-            num_attention_heads: self.num_attention_heads,
-            num_key_value_heads: self.num_key_value_heads,
-            max_position_embeddings: self.max_position_embeddings,
-            rms_norm_eps: self.rms_norm_eps,
-            rope_theta: self.rope_theta,
-            sliding_window: self.sliding_window,
-            use_flash_attn: self.use_flash_attn,
+            vocab_size: val.vocab_size,
+            hidden_act: val.hidden_act,
+            hidden_size: val.hidden_size,
+            intermediate_size: val.intermediate_size,
+            num_hidden_layers: val.num_hidden_layers,
+            num_attention_heads: val.num_attention_heads,
+            num_key_value_heads: val.num_key_value_heads,
+            max_position_embeddings: val.max_position_embeddings,
+            rms_norm_eps: val.rms_norm_eps,
+            rope_theta: val.rope_theta,
+            sliding_window: val.sliding_window,
+            use_flash_attn: val.use_flash_attn,
         }
     }
 }
@@ -248,8 +250,10 @@ fn unfold_dim4_in_2(xs: &Tensor, size: usize, step: usize) -> Result<Tensor> {
 
 impl VisionEmbeddings {
     fn new(config: &VisionConfig, vb: VarBuilder) -> Result<Self> {
-        let mut conv_config = Conv2dConfig::default();
-        conv_config.stride = config.patch_size;
+        let conv_config = Conv2dConfig {
+            stride: config.patch_size,
+            ..Default::default()
+        };
         let patch_embedding = conv2d(
             config.num_channels,
             config.hidden_size,
@@ -389,9 +393,9 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let q = self.q_proj.forward(&xs)?;
-        let k = self.k_proj.forward(&xs)?;
-        let v = self.v_proj.forward(&xs)?;
+        let q = self.q_proj.forward(xs)?;
+        let k = self.k_proj.forward(xs)?;
+        let v = self.v_proj.forward(xs)?;
 
         let q = q
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -585,14 +589,14 @@ impl VisionTransformer {
 // == END VISION MODEL ==
 
 // == START CONNECTOR ==
-struct MLP {
+struct Mlp {
     gate_proj: Linear,
     up_proj: Linear,
     down_proj: Linear,
     activation: Activation,
 }
 
-impl MLP {
+impl Mlp {
     fn new(
         hidden_size: usize,
         intermediate_size: usize,
@@ -667,7 +671,7 @@ impl PerceiverAttention {
 
         let hidden_states = Tensor::cat(&[context, latents], D::Minus2)?;
 
-        let q = self.q_proj.forward(&latents)?;
+        let q = self.q_proj.forward(latents)?;
         let k = self.k_proj.forward(&hidden_states)?;
         let v = self.v_proj.forward(&hidden_states)?;
 
@@ -708,7 +712,7 @@ struct PerceiverLayer {
     input_context_norm: RmsNorm,
     self_attn: PerceiverAttention,
     post_attn_norm: RmsNorm,
-    mlp: MLP,
+    mlp: Mlp,
 }
 
 impl PerceiverLayer {
@@ -722,7 +726,7 @@ impl PerceiverLayer {
             input_context_norm: RmsNorm::new(hidden_size, rms_eps, vb.pp("input_context_norm"))?,
             self_attn: PerceiverAttention::new(config, vb.pp("self_attn"))?,
             post_attn_norm: RmsNorm::new(hidden_size, rms_eps, vb.pp("post_attention_layernorm"))?,
-            mlp: MLP::new(
+            mlp: Mlp::new(
                 hidden_size,
                 hidden_size * 4,
                 hidden_size,
@@ -816,13 +820,13 @@ impl PerceiverResampler {
 }
 
 struct Connector {
-    modality_projection: MLP,
+    modality_projection: Mlp,
     perceiver_resampler: PerceiverResampler,
 }
 
 impl Connector {
     fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
-        let modality_projection = MLP::new(
+        let modality_projection = Mlp::new(
             config.vision_config.hidden_size,
             config.text_config.intermediate_size,
             config.text_config.hidden_size,
@@ -971,7 +975,7 @@ impl Idefics2 {
         // TODO: cache `image_hidden_states`?
 
         let mut input_embeds = self.text_model.get_input_embeddings(input_ids)?;
-        if CausalMasker.calculate_past_kv_len(&*self.text_model.cache.lock())? == 0 {
+        if CausalMasker.calculate_past_kv_len(&self.text_model.cache.lock())? == 0 {
             input_embeds = self.inputs_merger(input_ids, &input_embeds, &image_hidden_states)?;
         }
 
