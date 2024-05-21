@@ -406,6 +406,9 @@ impl Loader for GGUFLoader {
                 match arch {
                     GGUFArchitecture::Llama => Model::XLoraLlama(MapParamsToModel::<XLoraQLlama>::try_from(model_config)?),
                     GGUFArchitecture::Phi3 => Model::XLoraPhi3(MapParamsToModel::<XLoraQPhi3>::try_from(model_config)?),
+                    // TODO: Alternatives to consider (A: No shared trait, B: Needs macro):
+                    // A: GGUFArchitecture::Phi3 => Model::XLoraPhi3(model_config.try_into::<XLoraQPhi3>()?),
+                    // B: GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::try_from(model_config)?),
                     a => bail!("Unsupported architecture for GGUF LoRA `{a:?}`"),
                 }
             }

@@ -132,6 +132,10 @@ pub trait MapParamsToModel<T> {
     fn try_from(self) -> Result<T, Self::Error>;
 }
 
+// Without sharing a common trait among other wrapper types, this could be used instead:
+// (`try_into` reads more naturally during usage due to different syntax order for calling)
+// impl AdapterGGUF<'_> {
+    // pub fn try_into<T: FromAdapterGGUF>(self) -> Result<T, candle_core::Error> {
 impl<T: FromAdapterGGUF> MapParamsToModel<T> for AdapterGGUF<'_> {
     type Error = candle_core::Error;
 
@@ -193,3 +197,47 @@ impl<T: FromAdapterGGML> MapParamsToModel<T> for AdapterGGML<'_> {
         )
     }
 }
+
+/*
+
+// `TryFrom` has a blanket implementation that prevents this type of generics solution:
+// `impl<T: FromAdapterGGUF> TryFrom<AdapterGGUF<'_>> for T {`
+//
+// This approach would need to copy/paste this impl for `XLoraQPhi3`
+// (or use a macro like `akin` to generate a copy for each variant)
+// Caveat: Requires importing each model explicitly:
+// `use crate::xlora_models::{XLoraQLlama, XLoraQPhi3};`
+//
+impl TryFrom<AdapterGGUF<'_>> for XLoraQLlama {
+    type Error = candle_core::Error;
+
+    fn try_from(value: AdapterGGUF<'_>) -> Result<Self, Self::Error> {
+        // Destructure props:
+        let AdapterGGUF(
+            FileGGUF { ct, reader },
+            Device { device, mapper },
+            Adapter {
+                xlora_config,
+                lora_config,
+                vb,
+                ordering,
+                preload_adapters,
+            },
+        ) = value;
+
+        // Forwards all structured fields above into the required flattened param sequence:
+        Self::from_gguf(
+            ct,
+            reader,
+            device,
+            lora_config,
+            &vb,
+            ordering,
+            xlora_config,
+            mapper,
+            &preload_adapters,
+        )
+    }
+}
+
+*/
