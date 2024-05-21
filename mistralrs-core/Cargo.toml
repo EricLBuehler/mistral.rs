@@ -53,6 +53,7 @@ indicatif = { version = "0.17.8", features = ["rayon"] }
 async-trait = "0.1.80"
 once_cell.workspace = true
 toml = "0.8.12"
+image = "0.25.1"
 
 [features]
 pyo3_macros = ["pyo3"]

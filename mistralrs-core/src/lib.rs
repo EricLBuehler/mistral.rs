@@ -40,6 +40,7 @@ mod scheduler;
 mod sequence;
 mod toml_selector;
 mod utils;
+mod vision_models;
 mod xlora_models;
 
 pub use device_map::{DeviceMapMetadata, LayerDeviceMapper};

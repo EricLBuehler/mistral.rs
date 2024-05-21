@@ -1,5 +1,4 @@
 pub(crate) mod gemma;
-pub(crate) mod idefics2;
 pub(crate) mod llama;
 pub(crate) mod mistral;
 pub(crate) mod mixtral;

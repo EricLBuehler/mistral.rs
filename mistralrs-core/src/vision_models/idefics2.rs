@@ -16,7 +16,7 @@ use crate::{
     DeviceMapMetadata,
 };
 
-use super::mistral;
+use crate::models::mistral;
 
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/idefics2/modeling_idefics2.py
 
