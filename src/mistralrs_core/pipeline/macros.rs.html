@@ -450,7 +450,7 @@
     (<span class="macro-nonterminal">$path_name</span>:ident, <span class="macro-nonterminal">$token_source</span>:expr, <span class="macro-nonterminal">$revision</span>:expr, <span class="macro-nonterminal">$this</span>:expr, <span class="macro-nonterminal">$quantized_model_id</span>:expr, <span class="macro-nonterminal">$quantized_filename</span>:expr, <span class="macro-nonterminal">$silent</span>:expr) =&gt; {{
         <span class="kw">let </span>api = ApiBuilder::new()
             .with_progress(!<span class="macro-nonterminal">$silent</span>)
-            .with_token(<span class="prelude-val">Some</span>(get_token(<span class="macro-nonterminal">$token_source</span>)<span class="question-mark">?</span>))
+            .with_token(get_token(<span class="macro-nonterminal">$token_source</span>)<span class="question-mark">?</span>)
             .build()<span class="question-mark">?</span>;
         <span class="kw">let </span>revision = <span class="macro-nonterminal">$revision</span>.unwrap_or(<span class="string">"main"</span>.to_string());
         <span class="kw">let </span>api = api.repo(Repo::with_revision(

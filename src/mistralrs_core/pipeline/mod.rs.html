@@ -2144,7 +2144,7 @@
     <span class="prelude-val">Ok</span>(<span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>xlora_id) = xlora_model_id {
         <span class="kw">let </span>api = ApiBuilder::new()
             .with_progress(<span class="bool-val">true</span>)
-            .with_token(<span class="prelude-val">Some</span>(get_token(token_source)<span class="question-mark">?</span>))
+            .with_token(get_token(token_source)<span class="question-mark">?</span>)
             .build()<span class="question-mark">?</span>;
         <span class="kw">let </span>api = api.repo(Repo::with_revision(
             xlora_id.clone(),
@@ -2366,7 +2366,7 @@
             id =&gt; {
                 <span class="kw">let </span>qapi = ApiBuilder::new()
                     .with_progress(<span class="bool-val">true</span>)
-                    .with_token(<span class="prelude-val">Some</span>(get_token(token_source)<span class="question-mark">?</span>))
+                    .with_token(get_token(token_source)<span class="question-mark">?</span>)
                     .build()<span class="question-mark">?</span>;
                 <span class="kw">let </span>qapi = qapi.repo(Repo::with_revision(
                     id.to_string(),
