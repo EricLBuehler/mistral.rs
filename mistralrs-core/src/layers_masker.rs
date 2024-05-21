@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{collections::HashMap, sync::Mutex};
+use std::{collections::HashMap, ops::Add, sync::Mutex};
 
 use candle_core::{DType, Device, Result, Tensor, WithDType};
 use once_cell::sync::Lazy;
@@ -44,6 +44,29 @@ impl CausalMasker {
             .flat_map(|i| (0..offset).map(move |j| u8::from(j + tgt_len > i + offset)))
             .collect();
         Tensor::from_slice(&mask, (tgt_len, offset), device)
+    }
+
+    /// Expands a mask from (bs, seq_len) to (bs, 1, tgt_len, seq_len)
+    /// If tgt_len is None, use seq_len
+    pub fn expand_mask(
+        &self,
+        mask: &Tensor,
+        dtype: DType,
+        tgt_len: Option<usize>,
+    ) -> Result<Tensor> {
+        let (bs, src_len) = mask.dims2()?;
+
+        let expanded_mask = mask.unsqueeze(1)?.unsqueeze(1)?;
+        let expanded_mask = expanded_mask
+            .expand((bs, 1, tgt_len.unwrap_or(src_len), src_len))?
+            .to_dtype(dtype)?;
+
+        let inverted_mask = expanded_mask.neg()?.add(1.0f64)?;
+        masked_fill(
+            &inverted_mask,
+            &inverted_mask.to_dtype(DType::U8)?,
+            f32::MIN,
+        )
     }
 
     pub fn calculate_past_kv_len(
@@ -252,12 +275,7 @@ impl CausalMasker {
         }
     }
 
-    #[deprecated(
-        since = "0.1.9",
-        note = "use one of the `*_as_attn_bias` functions\
-                    to create an attention bias which can be added."
-    )]
-    pub fn apply_mask(
+    pub fn apply_mask_one_and_zero(
         &self,
         mask: &Option<Tensor>,
         att: Tensor,
