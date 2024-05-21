@@ -514,12 +514,7 @@ impl CausalMasker {
         }
     }
 
-    #[deprecated(
-        since = "0.1.9",
-        note = "use one of the `*_as_attn_bias` functions\
-                    to create an attention bias which can be added."
-    )]
-    pub fn apply_mask(
+    pub fn apply_mask_one_and_zero(
         &self,
         mask: &Option<Tensor>,
         att: Tensor,

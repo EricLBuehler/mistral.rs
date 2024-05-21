@@ -223,7 +223,27 @@ fn bucketize_right(xs: &[f64], boundaries: &[f64], device: &Device) -> Result<Te
             (boundaries.len() - 1) as u32
         })
         .collect::<Vec<_>>();
-    Tensor::from_vec(accum, (xs.len(),), &Device::Cpu)
+    Tensor::from_vec(accum, (xs.len(),), device)
+}
+
+fn unfold_inner(xs: &Tensor, size: usize, step: usize) -> Result<Tensor> {
+    let num_windows = (xs.dim(1)? - size) / step + 1;
+    let mut windows = Vec::new();
+    for i in 0..num_windows {
+        let start = i * step;
+        windows.push(xs.narrow(1, start, size)?);
+    }
+    Tensor::stack(&windows, 1)
+}
+
+/// Pytorch equiv: x.unfold(dim=1, ...) where len(x)==3
+fn unfold_dim3_in_1(xs: &Tensor, size: usize, step: usize) -> Result<Tensor> {
+    unfold_inner(xs, size, step)?.permute((0, 1, 3, 2))
+}
+
+/// Pytorch equiv: x.unfold(dim=2, ...) where len(x)==4
+fn unfold_dim4_in_2(xs: &Tensor, size: usize, step: usize) -> Result<Tensor> {
+    unfold_inner(xs, size, step)?.permute((0, 1, 2, 4, 3))
 }
 
 impl VisionEmbeddings {
@@ -275,7 +295,12 @@ impl VisionEmbeddings {
             (bs, max_nb_patches_h * max_nb_patches_w),
             pixel_values.device(),
         )?;
-        let p_attn_mask = patch_attention_mask.flatten_all()?.to_vec1::<u8>()?;
+        let p_attn_mask = patch_attention_mask.flatten_all()?;
+        let mask_true = p_attn_mask.eq(&Tensor::arange(
+            0u32,
+            p_attn_mask.dims()[0] as u32,
+            p_attn_mask.device(),
+        )?)?;
 
         let mut new_position_ids = Vec::new();
         for (b_idx, p_attn_mask) in patch_attention_mask.chunk(bs, 0)?.iter().enumerate() {
@@ -298,13 +323,6 @@ impl VisionEmbeddings {
             .to_vec1::<f64>()?;
 
             // TODO(EricLBuehler): https://github.com/huggingface/candle/issues/2185
-            /*
-            bucket_coords_h = torch.bucketize(fractional_coords_h, boundaries, right=True)
-            bucket_coords_w = torch.bucketize(fractional_coords_w, boundaries, right=True)
-
-            pos_ids = (bucket_coords_h[:, None] * self.num_patches_per_side + bucket_coords_w).flatten()
-            position_ids[batch_idx][p_attn_mask.view(-1).cpu()] = pos_ids
-            */
 
             let bucket_coords_h =
                 bucketize_right(&fractional_coords_h, &boundaries, pixel_values.device())?;
@@ -317,10 +335,10 @@ impl VisionEmbeddings {
                 .flatten_all()?;
 
             let position_ids_b = position_ids.i(b_idx)?;
-            // TODO this is almost certainly not correct
             // position_ids[batch_idx][p_attn_mask.view(-1).cpu()] = pos_ids
-            new_position_ids.push(position_ids_b.where_cond(&pos_ids, &position_ids_b));
+            new_position_ids.push(mask_true.where_cond(&pos_ids, &position_ids_b)?);
         }
+        let position_ids = Tensor::cat(&new_position_ids, 0)?;
         let position_ids = position_ids.to_device(self.position_embedding.embeddings().device())?;
         embeddings + self.position_embedding.forward(&position_ids)?
     }
@@ -389,8 +407,11 @@ impl Attention {
 
         let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * self.scale)?;
 
-        let attn_weights =
-            CausalMasker.apply_mask(&attention_mask.cloned(), attn_weights, &self.neg_inf)?;
+        let attn_weights = CausalMasker.apply_mask_one_and_zero(
+            &attention_mask.cloned(),
+            attn_weights,
+            &self.neg_inf,
+        )?;
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
         let attn_output = attn_weights.matmul(&v)?;
 
@@ -667,8 +688,11 @@ impl PerceiverAttention {
 
         let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * (self.head_dim as f64).sqrt())?;
 
-        let attn_weights =
-            CausalMasker.apply_mask(&Some(attention_mask.clone()), attn_weights, &self.neg_inf)?;
+        let attn_weights = CausalMasker.apply_mask_one_and_zero(
+            &Some(attention_mask.clone()),
+            attn_weights,
+            &self.neg_inf,
+        )?;
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
         let attn_output = attn_weights.matmul(&v)?;
 
@@ -828,6 +852,7 @@ struct Idefics2 {
     connector: Connector,
     text_model: Mistral,
     dtype: DType,
+    config: Config,
 }
 
 impl Idefics2 {
@@ -856,11 +881,41 @@ impl Idefics2 {
             connector,
             text_model,
             dtype: vb.dtype(),
+            config: config.clone(),
         })
     }
 
-    fn forward(
+    fn inputs_merger(
         &self,
+        input_ids: &Tensor,
+        input_embeds: &Tensor,
+        image_hidden_states: &Tensor,
+    ) -> Result<Tensor> {
+        // Docs copied from Transformers impl
+        /*
+        This method aims at merging the token embeddings with the image hidden states into one single sequence of vectors that are fed to the transformer LM.
+        The merging happens as follows:
+        - The text token sequence is: `tok_1 tok_2 tok_3 <fake_token_around_image> <image> <image> ... <image> <fake_token_around_image> tok_4`.
+        - We get the image hidden states for the image through the vision encoder (and potentially the perceiver), and that hidden state is then projected into the text embedding space.
+        We thus have a sequence of image hidden states of size (1, image_seq_len, hidden_dim), where 1 is for batch_size of 1 image and hidden_dim is the hidden_dim of the LM transformer.
+        - The merging happens so that we obtain the following sequence: `vector_tok_1 vector_tok_2 vector_tok_3 vector_fake_tok_around_image {sequence of image_seq_len image hidden states} vector_fake_toke_around_image vector_tok_4`. That sequence is fed to the LM.
+        - To fit the format of that sequence, `input_ids`, `input_embeds`, `attention_mask` are all 3 adapted to insert the image hidden states.
+        */
+        let (_, _, vision_hidden_size) = image_hidden_states.dims3()?;
+        let special_image_token_mask = input_ids.eq(self.config.image_token_id as f64)?;
+        let new_inputs_embeds = input_embeds.clone();
+        let reshaped_image_hidden_states = image_hidden_states.reshape(((), vision_hidden_size))?;
+        special_image_token_mask
+            .eq(&Tensor::arange(
+                0u32,
+                new_inputs_embeds.dim(0)? as u32,
+                new_inputs_embeds.device(),
+            )?)?
+            .where_cond(&reshaped_image_hidden_states, &new_inputs_embeds)
+    }
+
+    fn forward(
+        &mut self,
         input_ids: &Tensor,
         pixel_values: &Tensor,
         seqlen_offsets: &[usize],
@@ -883,6 +938,7 @@ impl Idefics2 {
         let pixel_values = pixel_values.gather(&real_images_inds, 0)?;
 
         // Vision attention mask
+        // TODO: Assume we don't have it specified...
         let pixel_attention_mask = Tensor::ones(
             (
                 pixel_values.dims()[0],
@@ -893,7 +949,38 @@ impl Idefics2 {
             pixel_values.device(),
         )?;
 
-        // todo line: https://github.com/huggingface/transformers/blob/4b3eb19fa7f359d25f62ca9108479f71de912ebc/src/transformers/models/idefics2/modeling_idefics2.py#L1633
-        todo!()
+        let patch_size = self.config.vision_config.patch_size;
+        let patches_subgrid = unfold_dim3_in_1(&pixel_attention_mask, patch_size, patch_size)?;
+        let patches_subgrid = unfold_dim4_in_2(&patches_subgrid, patch_size, patch_size)?;
+        let patch_attention_mask = patches_subgrid
+            .flatten(D::Minus2, D::Minus1)?
+            .sum(D::Minus1)?
+            .ge(0.0)?
+            .to_dtype(DType::U8)?;
+
+        // Get seq from vision encoder
+        let image_hidden_states = self
+            .vision_model
+            .forward(&pixel_values, Some(&patch_attention_mask))?;
+
+        // Modality proj and perceiver resampling
+        let image_hidden_states = self.connector.forward(
+            &image_hidden_states,
+            &patch_attention_mask.reshape((pixel_values.dim(0)?, ()))?,
+        )?;
+        // TODO: cache `image_hidden_states`?
+
+        let mut input_embeds = self.text_model.get_input_embeddings(input_ids)?;
+        if CausalMasker.calculate_past_kv_len(&*self.text_model.cache.lock())? == 0 {
+            input_embeds = self.inputs_merger(input_ids, &input_embeds, &image_hidden_states)?;
+        }
+
+        self.text_model.forward_embeds(
+            input_ids,
+            input_embeds,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+        )
     }
 }

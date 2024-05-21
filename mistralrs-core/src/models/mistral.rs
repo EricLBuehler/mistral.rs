@@ -356,6 +356,10 @@ impl Model {
         })
     }
 
+    pub fn get_input_embeddings(&self, input_ids: &Tensor) -> Result<Tensor> {
+        self.embed_tokens.forward(input_ids)
+    }
+
     pub fn forward(
         &mut self,
         input_ids: &Tensor,
@@ -363,7 +367,24 @@ impl Model {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
-        let mut xs = self.embed_tokens.forward(input_ids)?;
+        self.forward_embeds(
+            input_ids,
+            self.embed_tokens.forward(input_ids)?,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+        )
+    }
+
+    pub fn forward_embeds(
+        &mut self,
+        input_ids: &Tensor,
+        input_embeds: Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+    ) -> Result<Tensor> {
+        let mut xs = input_embeds;
         let mut cache = self.cache.lock();
         let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
