@@ -22,7 +22,7 @@ use crate::{
     utils::tokens::get_token,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use candle_core::quantized::{
     gguf_file::{self, Value as GgufValue},
     GgmlDType,
@@ -316,6 +316,7 @@ impl Loader for GGUFLoader {
             .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
         let arch = model.metadata["general.architecture"]
             .to_string()
+            .context("Model metadata should have declared an architecture")
             .and_then(GGUFArchitecture::from_value)?;
 
         info!("Model config:");
