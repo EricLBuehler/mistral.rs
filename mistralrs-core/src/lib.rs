@@ -28,6 +28,8 @@ pub use model_selected::ModelSelected;
 
 mod cublaslt;
 pub mod layers;
+mod layers_masker;
+mod layers_utils;
 mod models;
 mod pipeline;
 mod prefix_cacher;
