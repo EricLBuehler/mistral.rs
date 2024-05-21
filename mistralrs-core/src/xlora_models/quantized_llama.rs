@@ -22,6 +22,7 @@ use crate::DeviceMapMetadata;
 use super::classifier::XLoraClassifier;
 use super::{verify_sanity_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
 use crate::utils::model_config as ModelConfig;
+use crate::utils::model_config::{FromAdapterGGML, FromAdapterGGUF};
 
 const MAX_SEQ_LEN: u32 = 4096;
 const SUPPORTED_LAYERS: [&str; 7] = [
@@ -326,8 +327,8 @@ impl ModelWeights {
     }
 }
 
-impl ModelWeights {
-    pub fn from_ggml(
+impl ModelConfig::FromAdapterGGML for ModelWeights {
+    fn from_ggml(
         mut ct: ggml_file::Content,
         gqa: usize,
         lora_config: &[((String, String), LoraConfig)],
@@ -497,9 +498,11 @@ impl ModelWeights {
             mapper: None,
         })
     }
+}
 
+impl ModelConfig::FromAdapterGGUF for ModelWeights {
     #[allow(clippy::too_many_arguments)]
-    pub fn from_gguf<R: std::io::Seek + std::io::Read>(
+    fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
@@ -767,7 +770,9 @@ impl ModelWeights {
             mapper: Some(mapper),
         })
     }
+}
 
+impl ModelWeights {
     pub fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
         let mut sum = 0;
         for layer in self.layers.iter_mut() {

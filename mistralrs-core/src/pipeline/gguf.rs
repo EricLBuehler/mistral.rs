@@ -361,6 +361,7 @@ impl Loader for GGUFLoader {
             info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_gguf_tensors.txt`.");
         }
 
+        use crate::utils::model_config::FromGGUF;
         let mut is_lora = false;
         let model = match self.kind {
             ModelKind::QuantizedGGUF => match arch {

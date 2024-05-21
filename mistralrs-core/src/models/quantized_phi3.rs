@@ -11,6 +11,7 @@ use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Embedding;
+use crate::utils::model_config as ModelConfig;
 
 #[derive(Debug, Clone)]
 struct Mlp {
@@ -159,8 +160,8 @@ fn precomput_freqs_cis(
     Ok((cos, sin))
 }
 
-impl ModelWeights {
-    pub fn from_gguf<R: std::io::Seek + std::io::Read>(
+impl ModelConfig::FromGGUF for ModelWeights {
+    fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
@@ -248,7 +249,9 @@ impl ModelWeights {
             max_seq_len: context_window,
         })
     }
+}
 
+impl ModelWeights {
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
         let (_b_sz, seq_len) = input_ids.dims2()?;
         let mut xs = self.tok_embeddings.forward(input_ids)?;

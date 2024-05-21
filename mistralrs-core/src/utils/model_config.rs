@@ -55,6 +55,7 @@ impl<'a> Adapter<'a> {
             silent,
         )?;
 
+        // Create VarBuilder:
         let vb = from_mmaped_safetensors(
             xlora_paths,
             paths
@@ -77,4 +78,46 @@ impl<'a> Adapter<'a> {
             preload_adapters,
         })
     }
+}
+
+// Traits for the existing methods used across various model types to impl `from_ggml()` / `from_gguf()`
+// Basic:
+pub trait FromGGML {
+    fn from_ggml(ct: ggml_file::Content, gqa: usize) -> Result<Self, candle_core::Error> where Self: Sized;
+}
+
+pub trait FromGGUF {
+    fn from_gguf<R: std::io::Seek + std::io::Read>(
+        ct: gguf_file::Content,
+        reader: &mut R,
+        device: &candle_core::Device,
+        mapper: DeviceMapMetadata,
+    ) -> Result<Self, candle_core::Error> where Self: Sized;
+}
+
+// Extended variants:
+pub trait FromAdapterGGML {
+    fn from_ggml(
+        ct: ggml_file::Content,
+        gqa: usize,
+        lora_config: &[((String, String), LoraConfig)],
+        vb: &VarBuilder,
+        ordering: &Ordering,
+        xlora_config: Option<XLoraConfig>,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+    ) -> Result<Self, candle_core::Error> where Self: Sized;
+}
+pub trait FromAdapterGGUF {
+    #[allow(clippy::too_many_arguments)]
+    fn from_gguf<R: std::io::Seek + std::io::Read>(
+        ct: gguf_file::Content,
+        reader: &mut R,
+        device: &candle_core::Device,
+        lora_config: &[((String, String), LoraConfig)],
+        vb: &VarBuilder,
+        ordering: &Ordering,
+        xlora_config: Option<XLoraConfig>,
+        mapper: DeviceMapMetadata,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+    ) -> Result<Self, candle_core::Error> where Self: Sized;
 }

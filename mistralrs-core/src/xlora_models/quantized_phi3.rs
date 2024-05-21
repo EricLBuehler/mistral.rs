@@ -34,6 +34,7 @@ use super::NonGranularState;
 use super::ScalingsMaker;
 use super::XLoraConfig;
 use crate::utils::model_config as ModelConfig;
+use crate::utils::model_config::FromAdapterGGUF;
 
 const SUPPORTED_LAYERS: [&str; 4] = [
     "self_attn.qkv_proj",
@@ -244,9 +245,9 @@ impl ModelWeights {
     }
 }
 
-impl ModelWeights {
+impl ModelConfig::FromAdapterGGUF for ModelWeights {
     #[allow(clippy::too_many_arguments)]
-    pub fn from_gguf<R: std::io::Seek + std::io::Read>(
+    fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
@@ -381,7 +382,9 @@ impl ModelWeights {
             }),
         })
     }
+}
 
+impl ModelWeights {
     pub fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
         let mut sum = 0;
         for layer in self.layers.iter_mut() {

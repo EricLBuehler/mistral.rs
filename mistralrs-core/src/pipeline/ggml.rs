@@ -268,6 +268,7 @@ impl Loader for GGMLLoader {
             info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_ggml_tensors.txt`.");
         }
 
+        use crate::utils::model_config::FromGGML;
         let mut is_lora = false;
         let model = match self.kind {
             ModelKind::QuantizedGGML => Model::Llama(QLlama::from_ggml(model, self.config.gqa)?),
