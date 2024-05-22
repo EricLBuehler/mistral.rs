@@ -167,6 +167,7 @@ impl Attention {
         )?;
 
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
+        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
         let mut attn_output = ScaledDotProductAttention.run_attention(
             &q,
