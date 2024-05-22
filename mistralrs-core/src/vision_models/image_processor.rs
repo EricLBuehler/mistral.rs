@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use candle_core::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageBuffer, Pixel, Rgb};
 
@@ -42,6 +44,7 @@ pub(crate) fn resize(image: &DynamicImage, w: u32, h: u32, filter: FilterType) -
 }
 
 pub trait ImagePreProcessor {
+    #[allow(clippy::too_many_arguments)]
     fn preprocess(
         &self,
         images: Vec<DynamicImage>,
@@ -97,6 +100,7 @@ pub trait ImagePreProcessor {
         let mut data = get_pixel_data(image, h as usize, w as usize);
         data.iter_mut().for_each(|row| {
             for c in row {
+                #[allow(clippy::redundant_closure)]
                 c.apply_without_alpha(|x| f(x));
             }
         });
@@ -131,7 +135,7 @@ pub trait ImagePreProcessor {
     /// (image-mean)/std
     fn normalize(&self, image: &DynamicImage, mean: [f32; 3], std: [f32; 3]) -> DynamicImage {
         self.map_image_channels(image, |x, channel| {
-            ((x as f32 - mean[channel]) / std[channel] as f32) as u8
+            ((x as f32 - mean[channel]) / std[channel]) as u8
         })
     }
 }

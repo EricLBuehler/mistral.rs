@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use candle_core::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 
@@ -7,7 +9,9 @@ use super::image_processor::{ImagePreProcessor, NormalizationMetadata, Preproces
 
 pub struct Idefics2ImageProcessor;
 
+#[allow(clippy::excessive_precision)]
 const IDEFICS_STANDARD_MEAN: [f32; 3] = [0.48145466, 0.4578275, 0.40821073];
+#[allow(clippy::excessive_precision)]
 const IDEFICS_STANDARD_STD: [f32; 3] = [0.26862954, 0.26130258, 0.27577711];
 
 /// Generate pixel mask. 1 indicates valid pixel, 0 indicates padding
@@ -41,7 +45,7 @@ fn pad(
     device: &Device,
 ) -> Result<(DynamicImage, Tensor)> {
     let new_image = from_pixel_data(get_pixel_data(image, max_h, max_w), max_h, max_w);
-    Ok((new_image, make_pixel_mask(&image, max_h, max_w, device)?))
+    Ok((new_image, make_pixel_mask(image, max_h, max_w, device)?))
 }
 
 impl ImagePreProcessor for Idefics2ImageProcessor {
@@ -76,7 +80,7 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
 
             // Resize
             if do_resize {
-                *image = resize(&image, image.dimensions().0, image.dimensions().1, filter);
+                *image = resize(image, image.dimensions().0, image.dimensions().1, filter);
             }
 
             // Rescale
