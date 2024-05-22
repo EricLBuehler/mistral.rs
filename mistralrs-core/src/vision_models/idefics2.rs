@@ -925,6 +925,7 @@ impl Idefics2 {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
+        pixel_attention_mask: Option<Tensor>,
     ) -> Result<Tensor> {
         // == START VISUAL INPUTS INTEGRATION ==
         let (batch_size, num_images, num_channels, height, width) = pixel_values.dims5()?;
@@ -942,16 +943,19 @@ impl Idefics2 {
         let pixel_values = pixel_values.gather(&real_images_inds, 0)?;
 
         // Vision attention mask
-        // TODO: Assume we don't have it specified...
-        let pixel_attention_mask = Tensor::ones(
-            (
-                pixel_values.dims()[0],
-                pixel_values.dims()[2],
-                pixel_values.dims()[3],
-            ),
-            DType::U8,
-            pixel_values.device(),
-        )?;
+        let pixel_attention_mask = if let Some(pixel_attention_mask) = pixel_attention_mask {
+            pixel_attention_mask
+        } else {
+            Tensor::ones(
+                (
+                    pixel_values.dims()[0],
+                    pixel_values.dims()[2],
+                    pixel_values.dims()[3],
+                ),
+                DType::U8,
+                pixel_values.device(),
+            )?
+        };
 
         let patch_size = self.config.vision_config.patch_size;
         let patches_subgrid = unfold_dim3_in_1(&pixel_attention_mask, patch_size, patch_size)?;
