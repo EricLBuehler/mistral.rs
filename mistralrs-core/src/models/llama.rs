@@ -88,8 +88,13 @@ impl CausalSelfAttention {
                 .contiguous()?;
         }
 
-        let (k, v) =
-            crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v, false)?;
+        let (k, v) = crate::pipeline::Cache::update_kv_cache_cache_shifting(
+            &mut kv_cache[block_idx],
+            k,
+            v,
+            false,
+            self.max_seq_len,
+        )?;
 
         let k = repeat_kv(k, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
         let v = repeat_kv(v, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;

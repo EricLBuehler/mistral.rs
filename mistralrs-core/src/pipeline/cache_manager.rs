@@ -100,7 +100,42 @@ impl Cache {
         Ok((k, v))
     }
 
-    /// Update the KV cache and return (k,v,attn_mask)
+    /// Update the KV cache taking into account token shifting and return (k,v)
+    pub(crate) fn update_kv_cache_cache_shifting(
+        cache: &mut Option<(Tensor, Tensor)>,
+        k: Tensor,
+        v: Tensor,
+        slow_cat: bool,
+        max_len: usize,
+    ) -> Result<(Tensor, Tensor), candle_core::Error> {
+        let (k, v) = match &*cache {
+            None => (k, v),
+            Some((k_cache, v_cache)) => {
+                let (k, v) = if !slow_cat {
+                    let k = candle_nn::ops::kvconcat(k_cache, &k, 2)?.contiguous()?;
+                    let v = candle_nn::ops::kvconcat(v_cache, &v, 2)?.contiguous()?;
+                    (k, v)
+                } else {
+                    let k = Tensor::cat(&[k_cache, &k], 2)?.contiguous()?;
+                    let v = Tensor::cat(&[v_cache, &v], 2)?.contiguous()?;
+                    (k, v)
+                };
+                let cache_seq_len = k.dims()[2];
+                if cache_seq_len > max_len {
+                    (
+                        k.narrow(2, cache_seq_len - max_len, max_len)?,
+                        v.narrow(2, cache_seq_len - max_len, max_len)?,
+                    )
+                } else {
+                    (k, v)
+                }
+            }
+        };
+        *cache = Some((k.clone(), v.clone()));
+        Ok((k, v))
+    }
+
+    /// Update the KV cache taking into account sliding window and return (k,v,attn_mask)
     pub(crate) fn update_kv_cache_sliding_window(
         cache: &mut Option<(Tensor, Tensor)>,
         k: Tensor,
