@@ -15,6 +15,9 @@ homepage.workspace = true
 mistralrs = { version = "0.1.9", path = "../mistralrs" }
 once_cell.workspace = true
 candle-core.workspace = true
+indexmap.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
 
 [features]
 cuda = ["mistralrs/cuda"]

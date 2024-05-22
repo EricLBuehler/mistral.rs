@@ -3,20 +3,24 @@ use std::{
     ffi::CStr,
     str::FromStr,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU32, AtomicUsize, Ordering},
         Arc,
     },
 };
 
 use candle_core::{quantized::GgmlDType, Device, Result};
+use indexmap::IndexMap;
 use mistralrs::{
-    DeviceMapMetadata, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, SchedulerMethod, TokenSource,
+    Constraint, DeviceMapMetadata, MistralRs, MistralRsBuilder, NormalLoaderBuilder,
+    NormalLoaderType, NormalRequest, NormalSpecificConfig, Request, RequestMessage, SamplingParams,
+    SchedulerMethod, TokenSource,
 };
 use once_cell::sync::Lazy;
+use tokio::sync::mpsc::channel;
 
-static HANDLE_N: AtomicUsize = AtomicUsize::new(0);
-static mut TABLE: Lazy<HashMap<usize, Arc<MistralRs>>> = Lazy::new(HashMap::new);
+static HANDLE_N: AtomicU32 = AtomicU32::new(0);
+static REQUEST_N: AtomicUsize = AtomicUsize::new(0);
+static mut TABLE: Lazy<HashMap<u32, Arc<MistralRs>>> = Lazy::new(HashMap::new);
 
 #[cfg(not(feature = "metal"))]
 static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
@@ -82,21 +86,38 @@ unsafe fn from_const_ptr(ptr: *const i8) -> Option<String> {
 /// Return None if `ptr.is_null()`
 /// # Safety
 /// Expects a valid pointer.
-/// # Panics
-/// On invalid UTF-8.
-unsafe fn from_const_ptr_usize(ptr: *const usize) -> Option<usize> {
+unsafe fn from_const_ptr_scalar<I: Copy, O: From<I>>(ptr: *const I) -> Option<O> {
     if ptr.is_null() {
         return None;
     }
-    Some(*ptr)
+    Some((*ptr).into())
 }
 
 #[repr(C)]
-pub struct MistralRsHandle(usize);
+pub struct MistralRsHandle(u32);
+
+#[repr(C)]
+pub struct Message {
+    pub content: *const i8,
+    pub role: *const i8,
+    pub name: *const i8, // may be null
+}
+
+#[repr(C)]
+pub struct ChatCompletionRequest {
+    pub messages: *const Message,
+    pub n_messages: u32,
+    pub max_tokens: *const u32, // may be null
+    pub n: u32,
+    pub temperature: *const f32,      // may be null
+    pub top_p: *const f32,            // may be null
+    pub top_k: *const u32,            // may be null
+    pub freq_penalty: *const f32,     // may be null
+    pub presence_penalty: *const f32, // may be null
+}
 
 /// # Safety
-/// If the user is calling from C (which is inherently unsafe), and they provide
-/// corrupt, or corrupting information, there is nothing we can do
+/// C is unsafe.
 #[no_mangle]
 pub unsafe extern "C" fn create_mistralrs_plain_model(
     // Metadata
@@ -107,14 +128,14 @@ pub unsafe extern "C" fn create_mistralrs_plain_model(
     prefix_cache_n: usize,
     disable_eos_stop: bool,
     gemm_full_precision_f16: bool,
-    max_seqs: usize,
-    chat_template: *const i8,        // may be null
-    num_device_layers: *const usize, // may be null
-    token_source: *const i8,         // may be null
+    max_seqs: u32,
+    chat_template: *const i8,      // may be null
+    num_device_layers: *const u32, // may be null
+    token_source: *const i8,       // may be null
     // Model loading things
     model_id: *const i8,
     tokenizer_json: *const i8, // may be null
-    repeat_last_n: usize,      // may be null
+    repeat_last_n: u32,        // may be null
     arch: *const i8,
     isq: *const i8, // may be null
     use_flash_attn: bool,
@@ -126,7 +147,8 @@ pub unsafe extern "C" fn create_mistralrs_plain_model(
     let isq = from_const_ptr(isq);
     let chat_template = from_const_ptr(chat_template);
     let token_source = from_const_ptr(token_source).unwrap_or("none".to_string());
-    let num_device_layers = from_const_ptr_usize(num_device_layers);
+    let num_device_layers =
+        from_const_ptr_scalar::<u32, u32>(num_device_layers).map(|x| x as usize);
 
     let arch = NormalLoaderType::from_str(&arch).expect("Invalid architecture");
     let device = get_device().expect("Failed to get device");
@@ -134,7 +156,7 @@ pub unsafe extern "C" fn create_mistralrs_plain_model(
     let loader = NormalLoaderBuilder::new(
         NormalSpecificConfig {
             use_flash_attn,
-            repeat_last_n,
+            repeat_last_n: repeat_last_n as usize,
         },
         chat_template,
         tokenizer_json,
@@ -156,7 +178,11 @@ pub unsafe extern "C" fn create_mistralrs_plain_model(
         .expect("Failed to load model.");
     let mistralrs = MistralRsBuilder::new(
         pipeline,
-        SchedulerMethod::Fixed(max_seqs.try_into().expect("Failed to parse max seqs")),
+        SchedulerMethod::Fixed(
+            (max_seqs as usize)
+                .try_into()
+                .expect("Failed to parse max seqs"),
+        ),
     )
     .with_no_kv_cache(no_kv_cache)
     .with_prefix_cache_n(prefix_cache_n)
@@ -167,7 +193,72 @@ pub unsafe extern "C" fn create_mistralrs_plain_model(
     .with_no_kv_cache(no_kv_cache)
     .with_no_prefix_cache(no_prefix_cache)
     .build();
-    let handle = HANDLE_N.fetch_add(0, Ordering::Relaxed);
+    let handle = HANDLE_N.fetch_add(1, Ordering::Relaxed);
     TABLE.insert(handle, mistralrs);
     MistralRsHandle(handle)
+}
+
+/// # Safety
+/// C is unsafe.
+#[no_mangle]
+pub unsafe extern "C" fn send_chat_completion(
+    chat_completion: ChatCompletionRequest,
+    handle: MistralRsHandle,
+) {
+    if !TABLE.contains_key(&handle.0) {
+        panic!("Unknown handle {}", handle.0);
+    }
+    let mut messages = Vec::new();
+    for i in 0..chat_completion.n_messages {
+        let message_obj = chat_completion.messages.add(i as usize);
+        let role = from_const_ptr((*message_obj).role).expect("Message role");
+        let content = from_const_ptr((*message_obj).content).expect("Message content");
+        let mut message_map = IndexMap::new();
+        message_map.insert("role".to_string(), role);
+        message_map.insert("content".to_string(), content);
+        messages.push(message_map);
+    }
+
+    let (tx, mut rx) = channel(10_000);
+    let request = Request::Normal(NormalRequest {
+        id: REQUEST_N.fetch_add(1, Ordering::Relaxed),
+        messages: RequestMessage::Chat(messages),
+        sampling_params: SamplingParams {
+            temperature: from_const_ptr_scalar(chat_completion.temperature),
+            top_k: from_const_ptr_scalar::<u32, u32>(chat_completion.top_k).map(|x| x as usize),
+            top_p: from_const_ptr_scalar(chat_completion.top_p),
+            top_n_logprobs: 1,
+            frequency_penalty: from_const_ptr_scalar(chat_completion.freq_penalty),
+            presence_penalty: from_const_ptr_scalar(chat_completion.presence_penalty),
+            max_len: from_const_ptr_scalar::<u32, u32>(chat_completion.max_tokens)
+                .map(|x| x as usize),
+            stop_toks: None,
+            logits_bias: None,
+            n_choices: chat_completion.n as usize,
+        },
+        response: tx,
+        return_logprobs: false,
+        is_streaming: false,
+        suffix: None,
+        constraint: Constraint::None,
+        adapters: None,
+    });
+
+    let state = TABLE.get(&handle.0).unwrap().clone();
+    let sender = state.get_sender();
+
+    if let Err(e) = sender.blocking_send(request) {
+        let e = anyhow::Error::msg(e.to_string());
+        MistralRs::maybe_log_error(state, &*e);
+        panic!("Failed with error: {e}");
+    }
+
+    let _response = match rx.blocking_recv() {
+        Some(response) => response,
+        None => {
+            let e = anyhow::Error::msg("No response received from the model.");
+            MistralRs::maybe_log_error(state, &*e);
+            panic!("Failed with error: {e}");
+        }
+    };
 }
