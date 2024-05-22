@@ -96,6 +96,9 @@ unsafe fn from_const_ptr_scalar<I: Copy, O: From<I>>(ptr: *const I) -> Option<O>
 #[repr(C)]
 pub struct MistralRsHandle(u32);
 
+/// An object representing an input message.
+/// The following arguments are optional and may be null:
+/// - name
 #[repr(C)]
 pub struct Message {
     pub content: *const i8,
@@ -103,6 +106,14 @@ pub struct Message {
     pub name: *const i8, // may be null
 }
 
+/// An object representing a chat completion request
+/// The following arguments are optional and may be null:
+/// - max_tokens
+/// - temperature
+/// - top_p
+/// - top_k
+/// - freq_penalty
+/// - presence_penalty
 #[repr(C)]
 pub struct ChatCompletionRequest {
     pub messages: *const Message,
@@ -154,6 +165,14 @@ pub struct ChatCompletionResponse {
     pub usage: Usage,
 }
 
+/// Construct a MistralRS instance. See the other API docs.
+/// The following arguments are optional and may be null:
+/// - chat_template
+/// - num_device_layers
+/// - token_source
+/// - tokenizer_json
+/// - repeat_last_n
+///
 /// # Safety
 /// C is unsafe.
 #[no_mangle]
@@ -236,6 +255,10 @@ pub unsafe extern "C" fn create_mistralrs_plain_model(
     MistralRsHandle(handle)
 }
 
+/// Make a chat completion request.
+///
+/// The user *must* call `drop_chat_completion_response` or memory will leak.
+/// Do not deallocate returned pointers with C `free`, that is unsound.
 /// # Safety
 /// C is unsafe.
 #[no_mangle]
@@ -366,6 +389,10 @@ pub unsafe extern "C" fn send_chat_completion(
     }
 }
 
+/// Free the chat completion response object properly.
+///
+/// This function *must* be called on all chat completion response objects before they go out of scope.
+/// Otherwise, memory will leak. Do not deallocate pointers with C `free`, that is unsound.
 /// # Safety
 /// C is unsafe.
 #[no_mangle]
