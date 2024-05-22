@@ -3,16 +3,13 @@
 use candle_core::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 
-use crate::vision_models::image_processor::{from_pixel_data, get_pixel_data, resize};
+use crate::vision_models::image_processor::{
+    from_pixel_data, get_pixel_data, make_pixel_values, resize,
+};
 
 use super::image_processor::{ImagePreProcessor, NormalizationMetadata, PreprocessedImages};
 
 pub struct Idefics2ImageProcessor;
-
-#[allow(clippy::excessive_precision)]
-const IDEFICS_STANDARD_MEAN: [f32; 3] = [0.48145466, 0.4578275, 0.40821073];
-#[allow(clippy::excessive_precision)]
-const IDEFICS_STANDARD_STD: [f32; 3] = [0.26862954, 0.26130258, 0.27577711];
 
 /// Generate pixel mask. 1 indicates valid pixel, 0 indicates padding
 fn make_pixel_mask(
@@ -49,6 +46,11 @@ fn pad(
 }
 
 impl ImagePreProcessor for Idefics2ImageProcessor {
+    #[allow(clippy::excessive_precision)]
+    const DEFAULT_MEAN: [f32; 3] = [0.48145466, 0.4578275, 0.40821073];
+    #[allow(clippy::excessive_precision)]
+    const DEFAULT_STD: [f32; 3] = [0.26862954, 0.26130258, 0.27577711];
+
     fn preprocess(
         &self,
         mut images: Vec<DynamicImage>,
@@ -71,6 +73,7 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
             }
         }
         let mut patch_masks = Vec::new();
+        let mut pixel_values = Vec::new();
         for image in images.iter_mut() {
             // Convert image to rgb8 always
             // TODO configurable? Will need to update the image_processor.rs functions
@@ -101,9 +104,16 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
             if do_pad {
                 let (new_image, mask) = pad(image, max_h as usize, max_w as usize, device)?;
                 *image = new_image;
-                patch_masks.push(mask);
+                patch_masks.push(mask.unsqueeze(0)?);
             }
+
+            // Get pixel values
+            pixel_values.push(make_pixel_values(image, device)?.unsqueeze(0)?)
         }
-        todo!()
+
+        Ok(PreprocessedImages {
+            pixel_values: Tensor::cat(&pixel_values, 0)?,
+            pixel_attention_mask: Tensor::cat(&patch_masks, 0)?,
+        })
     }
 }
