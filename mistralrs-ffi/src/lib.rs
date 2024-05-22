@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    ffi::CStr,
+    ffi::{CStr, CString},
     str::FromStr,
     sync::{
         atomic::{AtomicU32, AtomicUsize, Ordering},
@@ -12,8 +12,8 @@ use candle_core::{quantized::GgmlDType, Device, Result};
 use indexmap::IndexMap;
 use mistralrs::{
     Constraint, DeviceMapMetadata, MistralRs, MistralRsBuilder, NormalLoaderBuilder,
-    NormalLoaderType, NormalRequest, NormalSpecificConfig, Request, RequestMessage, SamplingParams,
-    SchedulerMethod, TokenSource,
+    NormalLoaderType, NormalRequest, NormalSpecificConfig, Request, RequestMessage, Response,
+    SamplingParams, SchedulerMethod, TokenSource,
 };
 use once_cell::sync::Lazy;
 use tokio::sync::mpsc::channel;
@@ -116,6 +116,44 @@ pub struct ChatCompletionRequest {
     pub presence_penalty: *const f32, // may be null
 }
 
+#[repr(C)]
+pub struct Usage {
+    pub completion_tokens: u32,
+    pub prompt_tokens: u32,
+    pub total_tokens: u32,
+    pub avg_tok_per_sec: f32,
+    pub avg_prompt_tok_per_sec: f32,
+    pub avg_compl_tok_per_sec: f32,
+    pub total_time_sec: f32,
+    pub total_prompt_time_sec: f32,
+    pub total_completion_time_sec: f32,
+}
+
+#[repr(C)]
+pub struct ResponseMessage {
+    pub content: *const i8,
+    pub role: *const i8,
+}
+
+#[repr(C)]
+pub struct Choice {
+    pub finish_reason: *const i8,
+    pub index: u32,
+    pub message: ResponseMessage,
+}
+
+#[repr(C)]
+pub struct ChatCompletionResponse {
+    pub id: *const i8,
+    pub choices: *const Choice,
+    pub n_choices: u32,
+    pub created: u64,
+    pub model: *const i8,
+    pub system_fingerprint: *const i8,
+    pub object: *const i8,
+    pub usage: Usage,
+}
+
 /// # Safety
 /// C is unsafe.
 #[no_mangle]
@@ -204,7 +242,7 @@ pub unsafe extern "C" fn create_mistralrs_plain_model(
 pub unsafe extern "C" fn send_chat_completion(
     chat_completion: ChatCompletionRequest,
     handle: MistralRsHandle,
-) {
+) -> ChatCompletionResponse {
     if !TABLE.contains_key(&handle.0) {
         panic!("Unknown handle {}", handle.0);
     }
@@ -253,7 +291,7 @@ pub unsafe extern "C" fn send_chat_completion(
         panic!("Failed with error: {e}");
     }
 
-    let _response = match rx.blocking_recv() {
+    let response = match rx.blocking_recv() {
         Some(response) => response,
         None => {
             let e = anyhow::Error::msg("No response received from the model.");
@@ -261,4 +299,89 @@ pub unsafe extern "C" fn send_chat_completion(
             panic!("Failed with error: {e}");
         }
     };
+    match response {
+        Response::Done(resp) => {
+            let id = CString::new(resp.id.as_bytes())
+                .expect("Failed to convert to cstring")
+                .into_raw() as *const i8;
+            let mut choices = Vec::with_capacity(resp.choices.len());
+            for choice in resp.choices {
+                choices.push(Choice {
+                    finish_reason: CString::new(choice.finish_reason.as_bytes())
+                        .expect("Failed to convert to cstring")
+                        .into_raw() as *const i8,
+                    index: choice.index as u32,
+                    message: ResponseMessage {
+                        content: CString::new(choice.message.content.as_bytes())
+                            .expect("Failed to convert to cstring")
+                            .into_raw() as *const i8,
+                        role: CString::new(choice.message.role.as_bytes())
+                            .expect("Failed to convert to cstring")
+                            .into_raw() as *const i8,
+                    },
+                })
+            }
+            let choices_ptr = choices.as_ptr();
+            let model = CString::new(resp.model.as_bytes())
+                .expect("Failed to convert to cstring")
+                .into_raw() as *const i8;
+            let system_fingerprint = CString::new(resp.system_fingerprint.as_bytes())
+                .expect("Failed to convert to cstring")
+                .into_raw() as *const i8;
+            let object = CString::new(resp.object.as_bytes())
+                .expect("Failed to convert to cstring")
+                .into_raw() as *const i8;
+
+            ChatCompletionResponse {
+                id,
+                choices: choices_ptr,
+                n_choices: choices.len() as u32,
+                created: resp.created,
+                model,
+                system_fingerprint,
+                object,
+                usage: Usage {
+                    completion_tokens: resp.usage.completion_tokens as u32,
+                    prompt_tokens: resp.usage.prompt_tokens as u32,
+                    total_tokens: resp.usage.total_tokens as u32,
+                    avg_tok_per_sec: resp.usage.avg_tok_per_sec,
+                    avg_prompt_tok_per_sec: resp.usage.avg_prompt_tok_per_sec,
+                    avg_compl_tok_per_sec: resp.usage.avg_compl_tok_per_sec,
+                    total_time_sec: resp.usage.total_time_sec,
+                    total_prompt_time_sec: resp.usage.total_prompt_time_sec,
+                    total_completion_time_sec: resp.usage.total_completion_time_sec,
+                },
+            }
+        }
+        Response::InternalError(e) => {
+            panic!("Internal error: {e}");
+        }
+        Response::ModelError(e, resp) => {
+            panic!("Model error: {e}, response: {resp:?}");
+        }
+        Response::ValidationError(e) => {
+            panic!("Validation error: {e}");
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// # Safety
+/// C is unsafe.
+#[no_mangle]
+pub unsafe extern "C" fn drop_chat_completion_response(object: ChatCompletionResponse) {
+    let _ = unsafe { CString::from_raw(object.id as *mut i8) };
+    let _ = unsafe { CString::from_raw(object.model as *mut i8) };
+    let _ = unsafe { CString::from_raw(object.object as *mut i8) };
+    let _ = unsafe { CString::from_raw(object.system_fingerprint as *mut i8) };
+    let choices = Vec::from_raw_parts(
+        object.choices as *mut Choice,
+        object.n_choices as usize,
+        object.n_choices as usize,
+    );
+    for choice in choices {
+        let _ = unsafe { CString::from_raw(choice.finish_reason as *mut i8) };
+        let _ = unsafe { CString::from_raw(choice.message.content as *mut i8) };
+        let _ = unsafe { CString::from_raw(choice.message.role as *mut i8) };
+    }
 }
