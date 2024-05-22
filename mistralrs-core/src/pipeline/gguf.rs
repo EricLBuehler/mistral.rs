@@ -22,7 +22,7 @@ use crate::{
     utils::tokens::get_token,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use candle_core::quantized::{
     gguf_file::{self, Value as GgufValue},
     GgmlDType,
@@ -36,6 +36,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
+use strum::EnumString;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::info;
@@ -73,7 +74,8 @@ pub struct GGUFLoader {
     tgt_non_granular_index: Option<usize>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, EnumString)]
+#[strum(serialize_all = "kebab-case")]
 enum GGUFArchitecture {
     Llama,
     Mpt,
@@ -88,24 +90,14 @@ enum GGUFArchitecture {
     Phi3,
 }
 
-impl FromStr for GGUFArchitecture {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "llama" => Ok(GGUFArchitecture::Llama),
-            "mpt" => Ok(GGUFArchitecture::Mpt),
-            "gptneox" => Ok(GGUFArchitecture::Gptneox),
-            "gptj" => Ok(GGUFArchitecture::Gptj),
-            "gpt2" => Ok(GGUFArchitecture::Gpt2),
-            "bloom" => Ok(GGUFArchitecture::Bloom),
-            "falcon" => Ok(GGUFArchitecture::Falcon),
-            "mamba" => Ok(GGUFArchitecture::Mamba),
-            "rwkv" => Ok(GGUFArchitecture::Rwkv),
-            "phi2" => Ok(GGUFArchitecture::Phi2),
-            "phi3" => Ok(GGUFArchitecture::Phi3),
-            a => Err(format!("Unknown GGUF architecture `{a}`")),
-        }
+// Wraps from_str() for some convenience:
+// - Case-insensitive variant matching (TODO: is this desirable?)
+// - Customized error until potential upstream support: https://github.com/Peternator7/strum/issues/332
+impl GGUFArchitecture {
+    fn from_value<T: AsRef<str> + std::fmt::Display>(value: T) -> Result<Self> {
+        Self::from_str(&value.as_ref().to_ascii_lowercase())
+            .with_context(|| format!("Unknown GGUF architecture `{value}`"))
+            .map_err(anyhow::Error::msg)
     }
 }
 
@@ -322,11 +314,10 @@ impl Loader for GGUFLoader {
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
         let model = gguf_file::Content::read(&mut file)
             .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
-        let arch: GGUFArchitecture = model.metadata["general.architecture"]
+        let arch = model.metadata["general.architecture"]
             .to_string()
-            .unwrap()
-            .parse()
-            .map_err(anyhow::Error::msg)?;
+            .context("Model metadata should have declared an architecture")
+            .and_then(GGUFArchitecture::from_value)?;
 
         info!("Model config:");
         let mut sorted_keys = model.metadata.keys().collect::<Vec<_>>();
