@@ -12,7 +12,7 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
-mistralrs-core = { version = "0.1.9", path = "../mistralrs-core" }
+mistralrs-core = { version = "0.1.10", path = "../mistralrs-core" }
 anyhow.workspace = true
 tokio.workspace = true
 candle-core.workspace = true
