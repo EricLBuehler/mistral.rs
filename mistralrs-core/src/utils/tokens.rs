@@ -14,27 +14,16 @@ enum TokenRetrievalError {
 
 /// This reads a token from a specified source. If the token cannot be read, a warning is logged with `tracing`
 /// and *no token is used*.
-pub(crate) fn get_token(source: &TokenSource) -> Result<String> {
-    Ok(match source {
-        TokenSource::Literal(data) => data.clone(),
-        TokenSource::EnvVar(envvar) => {
-            let tok = env::var(envvar);
-            if let Ok(tok) = tok {
-                tok
-            } else {
-                info!("Could not load token at {envvar:?}, using no HF token.");
-                "".to_string()
-            }
-        }
-        TokenSource::Path(path) => {
-            let tok = fs::read_to_string(path);
-            if let Ok(tok) = tok {
-                tok
-            } else {
-                info!("Could not load token at {path:?}, using no HF token.");
-                "".to_string()
-            }
-        }
+pub(crate) fn get_token(source: &TokenSource) -> Result<Option<String>> {
+    fn skip_token(input: &str) -> Option<String> {
+        info!("Could not load token at {input:?}, using no HF token.");
+        None
+    }
+
+    let token = match source {
+        TokenSource::Literal(data) => Some(data.clone()),
+        TokenSource::EnvVar(envvar) => env::var(envvar).ok().or_else(|| skip_token(envvar)),
+        TokenSource::Path(path) => fs::read_to_string(path).ok().or_else(|| skip_token(path)),
         TokenSource::CacheToken => {
             let home = format!(
                 "{}/.cache/huggingface/token",
@@ -42,16 +31,13 @@ pub(crate) fn get_token(source: &TokenSource) -> Result<String> {
                     .ok_or(TokenRetrievalError::HomeDirectoryMissing)?
                     .display()
             );
-            let tok = fs::read_to_string(home.clone());
-            if let Ok(tok) = tok {
-                tok
-            } else {
-                info!("Could not load token at {home:?}, using no HF token.");
-                "".to_string()
-            }
+
+            fs::read_to_string(home.clone())
+                .ok()
+                .or_else(|| skip_token(&home))
         }
-        TokenSource::None => "".to_string(),
-    }
-    .trim()
-    .to_string())
+        TokenSource::None => None,
+    };
+
+    Ok(token.map(|s| s.trim().to_string()))
 }
