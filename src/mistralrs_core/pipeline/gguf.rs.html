@@ -641,15 +641,6 @@
 <a href="#639" id="639">639</a>
 <a href="#640" id="640">640</a>
 <a href="#641" id="641">641</a>
-<a href="#642" id="642">642</a>
-<a href="#643" id="643">643</a>
-<a href="#644" id="644">644</a>
-<a href="#645" id="645">645</a>
-<a href="#646" id="646">646</a>
-<a href="#647" id="647">647</a>
-<a href="#648" id="648">648</a>
-<a href="#649" id="649">649</a>
-<a href="#650" id="650">650</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
@@ -674,7 +665,7 @@
     utils::tokens::get_token,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
-<span class="kw">use </span>anyhow::{bail, <span class="prelude-ty">Result</span>};
+<span class="kw">use </span>anyhow::{bail, Context, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>candle_core::quantized::{
     gguf_file::{<span class="self">self</span>, Value <span class="kw">as </span>GgufValue},
     GgmlDType,
@@ -688,6 +679,7 @@
 <span class="kw">use </span>std::path::PathBuf;
 <span class="kw">use </span>std::str::FromStr;
 <span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>strum::EnumString;
 <span class="kw">use </span>tokenizers::Tokenizer;
 <span class="kw">use </span>tokio::sync::Mutex;
 <span class="kw">use </span>tracing::info;
@@ -725,7 +717,8 @@
     tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
-<span class="attr">#[derive(Debug)]
+<span class="attr">#[derive(Debug, EnumString)]
+#[strum(serialize_all = <span class="string">"kebab-case"</span>)]
 </span><span class="kw">enum </span>GGUFArchitecture {
     Llama,
     Mpt,
@@ -740,24 +733,14 @@
     Phi3,
 }
 
-<span class="kw">impl </span>FromStr <span class="kw">for </span>GGUFArchitecture {
-    <span class="kw">type </span><span class="prelude-val">Err </span>= String;
-
-    <span class="kw">fn </span>from_str(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Err&gt; {
-        <span class="kw">match </span>s {
-            <span class="string">"llama" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Llama),
-            <span class="string">"mpt" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Mpt),
-            <span class="string">"gptneox" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Gptneox),
-            <span class="string">"gptj" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Gptj),
-            <span class="string">"gpt2" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Gpt2),
-            <span class="string">"bloom" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Bloom),
-            <span class="string">"falcon" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Falcon),
-            <span class="string">"mamba" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Mamba),
-            <span class="string">"rwkv" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Rwkv),
-            <span class="string">"phi2" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Phi2),
-            <span class="string">"phi3" </span>=&gt; <span class="prelude-val">Ok</span>(GGUFArchitecture::Phi3),
-            a =&gt; <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Unknown GGUF architecture `{a}`"</span>)),
-        }
+<span class="comment">// Wraps from_str() for some convenience:
+// - Case-insensitive variant matching (TODO: is this desirable?)
+// - Customized error until potential upstream support: https://github.com/Peternator7/strum/issues/332
+</span><span class="kw">impl </span>GGUFArchitecture {
+    <span class="kw">fn </span>from_value&lt;T: AsRef&lt;str&gt; + std::fmt::Display&gt;(value: T) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="self">Self</span>::from_str(<span class="kw-2">&amp;</span>value.as_ref().to_ascii_lowercase())
+            .with_context(|| <span class="macro">format!</span>(<span class="string">"Unknown GGUF architecture `{value}`"</span>))
+            .map_err(anyhow::Error::msg)
     }
 }
 
@@ -974,11 +957,10 @@
         <span class="kw">let </span><span class="kw-2">mut </span>file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())<span class="question-mark">?</span>;
         <span class="kw">let </span>model = gguf_file::Content::read(<span class="kw-2">&amp;mut </span>file)
             .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))<span class="question-mark">?</span>;
-        <span class="kw">let </span>arch: GGUFArchitecture = model.metadata[<span class="string">"general.architecture"</span>]
+        <span class="kw">let </span>arch = model.metadata[<span class="string">"general.architecture"</span>]
             .to_string()
-            .unwrap()
-            .parse()
-            .map_err(anyhow::Error::msg)<span class="question-mark">?</span>;
+            .context(<span class="string">"Model metadata should have declared an architecture"</span>)
+            .and_then(GGUFArchitecture::from_value)<span class="question-mark">?</span>;
 
         <span class="macro">info!</span>(<span class="string">"Model config:"</span>);
         <span class="kw">let </span><span class="kw-2">mut </span>sorted_keys = model.metadata.keys().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
