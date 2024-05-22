@@ -30,3 +30,6 @@ profile = []
 
 [lib]
 crate-type = ["cdylib"]
+
+[build-dependencies]
+cbindgen = "0.26.0"
