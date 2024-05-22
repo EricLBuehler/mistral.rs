@@ -360,55 +360,33 @@ impl Loader for GGUFLoader {
             info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_gguf_tensors.txt`.");
         }
 
-        use crate::utils::model_config::MapParamsToModel;
-        let model_config = ModelConfig::GGUF(
+        // Base config (quantization only):
+        let quant = ModelConfig::GGUF(
             ModelConfig::FileGGUF { ct: model, reader: &mut file },
             ModelConfig::Device { device, mapper },
         );
+        let mut model_config = ModelConfig::ModelParams::new(quant);
 
-        let mut is_lora = false;
+        // Adapter specific config:
+        let is_lora = self.kind.is_adapted_and(|a| a.is_lora());
+        let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
+        if self.kind.is_adapted() {
+            let adapter = ModelConfig::Adapter::try_new(paths, device, silent, is_xlora)?;
+            model_config = model_config.with_adapter(adapter);
+        }
+
+        // Config into model:
         let model = match self.kind {
             ModelKind::QuantizedGGUF => match arch {
-                GGUFArchitecture::Llama => {
-                    Model::Llama(MapParamsToModel::<QLlama>::try_from(model_config)?)
-                }
-                GGUFArchitecture::Phi2 => {
-                    Model::Phi2(MapParamsToModel::<QPhi>::try_from(model_config)?)
-                }
-                GGUFArchitecture::Phi3 => {
-                    Model::Phi3(MapParamsToModel::<QPhi3>::try_from(model_config)?)
-                }
+                GGUFArchitecture::Llama => Model::Llama(QLlama::try_from(model_config)?),
+                GGUFArchitecture::Phi2 => Model::Phi2(QPhi::try_from(model_config)?),
+                GGUFArchitecture::Phi3 => Model::Phi3(QPhi3::try_from(model_config)?),
                 a => bail!("Unsupported architecture `{a:?}`"),
             },
-            ModelKind::XLoraGGUF => {
-                let xlora_paths = vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()];
-                let xlora_config = Some(paths.get_classifier_config().as_ref().unwrap().clone());
-
-                let adapter = ModelConfig::Adapter::try_new(paths, device, silent, xlora_paths, xlora_config)?;
-                let model_config = model_config.with_adapter(adapter);
-
-                match arch {
-                    GGUFArchitecture::Llama => Model::XLoraLlama(MapParamsToModel::<XLoraQLlama>::try_from(model_config)?),
-                    GGUFArchitecture::Phi3 => Model::XLoraPhi3(MapParamsToModel::<XLoraQPhi3>::try_from(model_config)?),
-                    a => bail!("Unsupported architecture for GGUF X-LoRA `{a:?}`"),
-                }
-            }
-            ModelKind::LoraGGUF => {
-                is_lora = true;
-                let xlora_paths = vec![];
-                let xlora_config = None;
-
-                let adapter = ModelConfig::Adapter::try_new(paths, device, silent, xlora_paths, xlora_config)?;
-                let model_config = model_config.with_adapter(adapter);
-
-                match arch {
-                    GGUFArchitecture::Llama => Model::XLoraLlama(MapParamsToModel::<XLoraQLlama>::try_from(model_config)?),
-                    GGUFArchitecture::Phi3 => Model::XLoraPhi3(MapParamsToModel::<XLoraQPhi3>::try_from(model_config)?),
-                    // TODO: Alternatives to consider (A: No shared trait, B: Needs macro):
-                    // A: GGUFArchitecture::Phi3 => Model::XLoraPhi3(model_config.try_into::<XLoraQPhi3>()?),
-                    // B: GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::try_from(model_config)?),
-                    a => bail!("Unsupported architecture for GGUF LoRA `{a:?}`"),
-                }
+            ModelKind::LoraGGUF | ModelKind::XLoraGGUF => match arch {
+                GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::try_from(model_config)?),
+                GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::try_from(model_config)?),
+                a => bail!("Unsupported architecture for {kind} `{a:?}`", kind = self.kind),
             }
             _ => unreachable!(),
         };
@@ -428,10 +406,6 @@ impl Loader for GGUFLoader {
             Model::XLoraPhi3(ref p) => p.max_seq_len,
         };
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
-        let is_xlora = match &model {
-            Model::Llama(_) | Model::Phi2(_) | Model::Phi3(_) => false,
-            Model::XLoraLlama(_) | Model::XLoraPhi3(_) => !is_lora,
-        };
         let num_hidden_layers = match model {
             Model::Llama(ref model) => model.cache.lock().len(),
             Model::Phi2(ref model) => model.cache.lock().len(),

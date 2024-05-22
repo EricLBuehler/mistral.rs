@@ -267,33 +267,25 @@ impl Loader for GGMLLoader {
             info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_ggml_tensors.txt`.");
         }
 
-        use crate::utils::model_config::MapParamsToModel;
-        let model_config = ModelConfig::GGML(
+        // Base config (quantization only):
+        let quant = ModelConfig::GGML(
             ModelConfig::FileGGML { ct: model, gqa: self.config.gqa },
         );
+        let mut model_config = ModelConfig::ModelParams::new(quant);
 
-        let mut is_lora = false;
+        // Adapter specific config:
+        let is_lora = self.kind.is_adapted_and(|a| a.is_lora());
+        let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
+        if self.kind.is_adapted() {
+            let adapter = ModelConfig::Adapter::try_new(paths, device, silent, is_xlora)?;
+            model_config = model_config.with_adapter(adapter);
+        }
+
+        // Config into model:
         let model = match self.kind {
-            ModelKind::QuantizedGGML => Model::Llama(MapParamsToModel::<QLlama>::try_from(model_config)?),
-            ModelKind::XLoraGGML => {
-                let xlora_paths = vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()];
-                let xlora_config = Some(paths.get_classifier_config().as_ref().unwrap().clone());
-
-                let adapter = ModelConfig::Adapter::try_new(paths, device, silent, xlora_paths, xlora_config)?;
-                let model_config = model_config.with_adapter(adapter);
-
-                Model::XLoraLlama(MapParamsToModel::<XLoraQLlama>::try_from(model_config)?)
-            }
-            ModelKind::LoraGGML => {
-                is_lora = true;
-                let xlora_paths = vec![];
-                let xlora_config = None;
-
-                let adapter = ModelConfig::Adapter::try_new(paths, device, silent, xlora_paths, xlora_config)?;
-                let model_config = model_config.with_adapter(adapter);
-
-                Model::XLoraLlama(MapParamsToModel::<XLoraQLlama>::try_from(model_config)?)
-            }
+            ModelKind::QuantizedGGML => Model::Llama(QLlama::try_from(model_config)?),
+            ModelKind::LoraGGML
+            | ModelKind::XLoraGGML => Model::XLoraLlama(XLoraQLlama::try_from(model_config)?),
             _ => unreachable!(),
         };
 
@@ -308,10 +300,6 @@ impl Loader for GGMLLoader {
             Model::XLoraLlama(ref xl) => xl.max_seq_len,
         };
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
-        let is_xlora = match &model {
-            Model::Llama(_) => false,
-            Model::XLoraLlama(_) => !is_lora,
-        };
         let num_hidden_layers = match model {
             Model::Llama(ref model) => model.cache.lock().len(),
             Model::XLoraLlama(ref model) => model.cache.lock().len(),

@@ -11,14 +11,14 @@ use crate::{
     pipeline::ModelPaths,
 };
 
-pub struct FileGGUF<'a> {
-    pub ct: gguf_file::Content,
-    pub reader: &'a mut std::fs::File,
-}
-
 pub struct FileGGML {
     pub ct: ggml_file::Content,
     pub gqa: usize,
+}
+
+pub struct FileGGUF<'a> {
+    pub ct: gguf_file::Content,
+    pub reader: &'a mut std::fs::File,
 }
 
 pub struct Device<'a> {
@@ -43,8 +43,7 @@ impl<'a> Adapter<'a> {
         paths: &'b Box<dyn ModelPaths>,
         device: &'b candle_core::Device,
         silent: bool,
-        xlora_paths: Vec<PathBuf>,
-        xlora_config: Option<XLoraConfig>,
+        is_xlora: bool,
     ) -> Result<Self> {
         let lora_config = paths.get_adapter_configs().as_ref().unwrap();
         let ordering = paths.get_ordering().as_ref().unwrap();
@@ -54,6 +53,14 @@ impl<'a> Adapter<'a> {
             device,
             silent,
         )?;
+
+        // X-LoRA support:
+        let mut xlora_paths: Vec<PathBuf> = vec![];
+        let mut xlora_config: Option<XLoraConfig> = None;
+        if is_xlora {
+            xlora_paths = vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()];
+            xlora_config = Some(paths.get_classifier_config().as_ref().unwrap().clone());
+        }
 
         // Create VarBuilder:
         let vb = from_mmaped_safetensors(
@@ -83,25 +90,31 @@ impl<'a> Adapter<'a> {
 // New type wrappers that segment the distinct parameter sets used by `from_ggml()` + `from_gguf()` methods:
 pub struct GGML(pub FileGGML);
 pub struct GGUF<'a>(pub FileGGUF<'a>, pub Device<'a>);
-pub struct AdapterGGUF<'a>(pub FileGGUF<'a>, pub Device<'a>, pub Adapter<'a>);
-pub struct AdapterGGML<'a>(pub FileGGML, pub Adapter<'a>);
 
-impl GGML {
-    pub fn with_adapter<'b>(self, adapter: Adapter<'b>) -> AdapterGGML<'b> {
-        AdapterGGML(
-            self.0,
-            adapter,
-        )
-    }
+// Marker traits to restrict type input:
+// (required workaround to support impl on subtypes, otherwise would use an enum)
+pub trait QuantParams {}
+impl QuantParams for GGML {}
+impl QuantParams for GGUF<'_> {}
+
+pub struct ModelParams<'a, Q: QuantParams> {
+    pub quant: Q,
+    pub adapter: Option<Adapter<'a>>,
 }
 
-impl<'a> GGUF<'a> {
-    pub fn with_adapter<'b: 'a>(self, adapter: Adapter<'b>) -> AdapterGGUF<'a> {
-        AdapterGGUF(
-            self.0,
-            self.1,
-            adapter,
-        )
+impl<'a, Q: QuantParams> ModelParams<'a, Q> {
+    pub fn new(quant: Q) -> Self {
+        Self {
+            quant,
+            adapter: None,
+        }
+    }
+
+    pub fn with_adapter<'b: 'a>(self, adapter: Adapter<'b>) -> ModelParams<'a, Q> {
+        Self {
+            adapter: Some(adapter),
+            ..self
+        }
     }
 }
 
@@ -147,21 +160,13 @@ pub trait FromAdapterGGUF {
     ) -> Result<Self, candle_core::Error> where Self: Sized;
 }
 
-// TODO: This trait is a workaround to proxy params to the existing API methods `get_gguf()` / `get_gmml()` it intends to replace.
-pub trait MapParamsToModel<T> {
-    type Error;
-
-    fn try_from(self) -> Result<T, Self::Error>;
-}
-
-impl<T: FromGGML> MapParamsToModel<T> for GGML {
-    type Error = candle_core::Error;
-
-    fn try_from(self) -> Result<T, Self::Error> {
+// NOTE: Below is a workaround to proxy params to the existing API methods `get_gguf()` / `get_gmml()` traits covered above.
+impl ModelParams<'_, GGML> {
+    pub fn try_into_model<T: FromGGML>(self) -> Result<T, candle_core::Error> {
         // Destructure props:
         let GGML(
             FileGGML { ct, gqa },
-        ) = self;
+        ) = self.quant;
 
         // Forwards all structured fields above into the required flattened param sequence:
         T::from_ggml(
@@ -169,17 +174,41 @@ impl<T: FromGGML> MapParamsToModel<T> for GGML {
             gqa,
         )
     }
+
+    pub fn try_into_model_with_adapter<T: FromAdapterGGML>(self) -> Result<T, candle_core::Error> {
+        // Destructure props:
+        let GGML(
+            FileGGML { ct, gqa },
+        ) = self.quant;
+
+        let Adapter {
+            xlora_config,
+            lora_config,
+            vb,
+            ordering,
+            preload_adapters,
+        } = self.adapter.expect("should have adapter");
+
+        // Forwards all structured fields above into the required flattened param sequence:
+        T::from_ggml(
+            ct,
+            gqa,
+            lora_config,
+            &vb,
+            ordering,
+            xlora_config,
+            &preload_adapters,
+        )
+    }
 }
 
-impl<T: FromGGUF> MapParamsToModel<T> for GGUF<'_> {
-    type Error = candle_core::Error;
-
-    fn try_from(self) -> Result<T, Self::Error> {
+impl ModelParams<'_, GGUF<'_>> {
+    pub fn try_into_model<T: FromGGUF>(self) -> Result<T, candle_core::Error> {
         // Destructure props:
         let GGUF(
             FileGGUF { ct, reader },
             Device { device, mapper },
-        ) = self;
+        ) = self.quant;
 
         // Forwards all structured fields above into the required flattened param sequence:
         T::from_gguf(
@@ -189,29 +218,21 @@ impl<T: FromGGUF> MapParamsToModel<T> for GGUF<'_> {
             mapper,
         )
     }
-}
 
-// Without sharing a common trait among other wrapper types, this could be used instead:
-// (`try_into` reads more naturally during usage due to different syntax order for calling)
-// impl AdapterGGUF<'_> {
-    // pub fn try_into<T: FromAdapterGGUF>(self) -> Result<T, candle_core::Error> {
-impl<T: FromAdapterGGUF> MapParamsToModel<T> for AdapterGGUF<'_> {
-    type Error = candle_core::Error;
-
-    // Technically mirrors the signature of `TryInto`
-    fn try_from(self) -> Result<T, Self::Error> {
+    pub fn try_into_model_with_adapter<T: FromAdapterGGUF>(self) -> Result<T, candle_core::Error> {
         // Destructure props:
-        let AdapterGGUF(
+        let GGUF(
             FileGGUF { ct, reader },
             Device { device, mapper },
-            Adapter {
-                xlora_config,
-                lora_config,
-                vb,
-                ordering,
-                preload_adapters,
-            },
-        ) = self;
+        ) = self.quant;
+
+        let Adapter {
+            xlora_config,
+            lora_config,
+            vb,
+            ordering,
+            preload_adapters,
+        } = self.adapter.expect("should have adapter");
 
         // Forwards all structured fields above into the required flattened param sequence:
         T::from_gguf(
@@ -228,75 +249,50 @@ impl<T: FromAdapterGGUF> MapParamsToModel<T> for AdapterGGUF<'_> {
     }
 }
 
-impl<T: FromAdapterGGML> MapParamsToModel<T> for AdapterGGML<'_> {
+use akin::akin;
+use crate::{
+    models::quantized_llama::ModelWeights as QLlama,
+    models::quantized_phi2::ModelWeights as QPhi,
+    models::quantized_phi3::ModelWeights as QPhi3,
+    xlora_models::{XLoraQLlama, XLoraQPhi3},
+};
+
+impl TryFrom<ModelParams<'_, GGML>> for QLlama {
     type Error = candle_core::Error;
 
-    fn try_from(self) -> Result<T, Self::Error> {
-        // Destructure props:
-        let AdapterGGML(
-            FileGGML { ct, gqa },
-            Adapter {
-                xlora_config,
-                lora_config,
-                vb,
-                ordering,
-                preload_adapters,
-            },
-        ) = self;
-
-        // Forwards all structured fields above into the required flattened param sequence:
-        T::from_ggml(
-            ct,
-            gqa,
-            lora_config,
-            &vb,
-            ordering,
-            xlora_config,
-            &preload_adapters,
-        )
+    fn try_from(config: ModelParams<'_, GGML>) -> Result<Self, Self::Error> {
+        config.try_into_model::<Self>()
     }
 }
 
-/*
-
-// `TryFrom` has a blanket implementation that prevents this type of generics solution:
-// `impl<T: FromAdapterGGUF> TryFrom<AdapterGGUF<'_>> for T {`
-//
-// This approach would need to copy/paste this impl for `XLoraQPhi3`
-// (or use a macro like `akin` to generate a copy for each variant)
-// Caveat: Requires importing each model explicitly:
-// `use crate::xlora_models::{XLoraQLlama, XLoraQPhi3};`
-//
-impl TryFrom<AdapterGGUF<'_>> for XLoraQLlama {
+impl TryFrom<ModelParams<'_, GGML>> for XLoraQLlama {
     type Error = candle_core::Error;
 
-    fn try_from(value: AdapterGGUF<'_>) -> Result<Self, Self::Error> {
-        // Destructure props:
-        let AdapterGGUF(
-            FileGGUF { ct, reader },
-            Device { device, mapper },
-            Adapter {
-                xlora_config,
-                lora_config,
-                vb,
-                ordering,
-                preload_adapters,
-            },
-        ) = value;
-
-        // Forwards all structured fields above into the required flattened param sequence:
-        Self::from_gguf(
-            ct,
-            reader,
-            device,
-            lora_config,
-            &vb,
-            ordering,
-            xlora_config,
-            mapper,
-            &preload_adapters,
-        )
+    fn try_from(config: ModelParams<'_, GGML>) -> Result<Self, Self::Error> {
+        config.try_into_model_with_adapter::<Self>()
     }
 }
 
-*/
+akin! {
+    let &models_gguf = [QLlama, QPhi, QPhi3];
+
+    impl TryFrom<ModelParams<'_, GGUF<'_>>> for *models_gguf {
+        type Error = candle_core::Error;
+
+        fn try_from(config: ModelParams<'_, GGUF<'_>>) -> Result<Self, Self::Error> {
+            config.try_into_model::<Self>()
+        }
+    }
+}
+
+akin! {
+    let &models_gguf_a = [XLoraQLlama, XLoraQPhi3];
+
+    impl TryFrom<ModelParams<'_, GGUF<'_>>> for *models_gguf_a {
+        type Error = candle_core::Error;
+
+        fn try_from(config: ModelParams<'_, GGUF<'_>>) -> Result<Self, Self::Error> {
+            config.try_into_model_with_adapter::<Self>()
+        }
+    }
+}
