@@ -10,7 +10,7 @@ use crate::{
     },
     sequence::Sequence,
     vision_models::{
-        image_processor::{from_pixel_data, get_pixel_data, make_pixel_values, resize},
+        image_processor::{from_pixel_data, get_pixel_data, make_pixel_values},
         ModelInputs,
     },
 };
@@ -96,11 +96,11 @@ impl InputsProcessor for Idefics2ImageProcessor {
                 } = self.preprocess(
                     seq.take_images()
                         .expect("Need to have images by this point."),
-                    true,
+                    None,
+                    None,
                     None,
                     None,
                     true,
-                    FilterType::Triangle,
                     device,
                 )?;
                 pixel_values_accum.push(pixel_values.unsqueeze(0)?);
@@ -135,11 +135,11 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
     fn preprocess(
         &self,
         mut images: Vec<DynamicImage>,
-        do_resize: bool,
+        filter: Option<FilterType>,
+        resize: Option<(usize, usize)>,
         rescale: Option<f32>,
         normalize: Option<NormalizationMetadata>,
         do_pad: bool,
-        filter: FilterType,
         device: &Device,
     ) -> Result<PreprocessedImages> {
         let mut max_h = 0;
@@ -163,8 +163,13 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
             // TODO: implement image splitting?
 
             // Resize
-            if do_resize {
-                *image = resize(image, image.dimensions().0, image.dimensions().1, filter);
+            if let Some((w, h)) = resize {
+                *image = super::image_processor::resize(
+                    image,
+                    w as u32,
+                    h as u32,
+                    filter.expect("Need filter if resizing."),
+                );
             }
 
             // Rescale

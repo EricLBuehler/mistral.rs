@@ -68,15 +68,23 @@ pub trait ImagePreProcessor: InputsProcessor {
     const DEFAULT_MEAN: [f32; 3];
     const DEFAULT_STD: [f32; 3];
 
+    /// Preprocess the images.
+    ///
+    /// - `resize` specifies the (w,h) of the target and should be paired with `filter`.
+    /// - `filter` filter type for resizing.
+    /// - `rescale` multiplies by the scale.
+    /// - `normalize` normalizes the image by the mean and std dev (if none, uses default mean/std).
+    /// - `do_pad` pads the images to the one with the highest dimensions and will create a pixel attention mask.
+    ///   Be sure to set this to `true` if the images differ in dimensions
     #[allow(clippy::too_many_arguments)]
     fn preprocess(
         &self,
         images: Vec<DynamicImage>,
-        do_resize: bool,
+        filter: Option<FilterType>,
+        resize: Option<(usize, usize)>,
         rescale: Option<f32>,
         normalize: Option<NormalizationMetadata>,
         do_pad: bool,
-        filter: FilterType,
         device: &Device,
     ) -> Result<PreprocessedImages>;
 

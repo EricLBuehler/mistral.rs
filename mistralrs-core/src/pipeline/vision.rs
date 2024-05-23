@@ -15,7 +15,7 @@ use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
-use crate::vision_models::idefics2_image_processor::Idefics2ImageProcessor;
+use crate::vision_models::idefics2_input_processor::Idefics2ImageProcessor;
 use crate::vision_models::ModelInputs;
 use crate::{
     deserialize_chat_template, do_sample, get_paths, vision_normal_model_loader, DeviceMapMetadata,

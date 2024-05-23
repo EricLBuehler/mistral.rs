@@ -1,7 +1,7 @@
 use candle_core::Tensor;
 
 pub(crate) mod idefics2;
-pub(crate) mod idefics2_image_processor;
+pub(crate) mod idefics2_input_processor;
 pub(crate) mod image_processor;
 
 #[derive(Clone)]
