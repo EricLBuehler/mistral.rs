@@ -8,6 +8,7 @@ use crate::sequence::Sequence;
 #[derive(PartialEq)]
 pub enum InputsProcessorType {
     Text,
+    Vision,
 }
 
 pub trait InputsProcessor {

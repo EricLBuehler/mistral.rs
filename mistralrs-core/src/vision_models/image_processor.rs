@@ -3,6 +3,8 @@
 use candle_core::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageBuffer, Pixel, Rgb};
 
+use crate::pipeline::InputsProcessor;
+
 pub(crate) struct NormalizationMetadata {
     pub(crate) image_mean: [f32; 3],
     pub(crate) image_std: [f32; 3],
@@ -61,7 +63,7 @@ pub(crate) fn make_pixel_values(image: &DynamicImage, device: &Device) -> Result
     Tensor::cat(&accum, 0)
 }
 
-pub trait ImagePreProcessor {
+pub trait ImagePreProcessor: InputsProcessor {
     const DEFAULT_MEAN: [f32; 3];
     const DEFAULT_STD: [f32; 3];
 

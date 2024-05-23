@@ -1,9 +1,11 @@
+use super::cache_manager::DefaultCacheManager;
 use super::inputs_processor::InputsProcessor;
 use super::vision_loaders::{Idefics2Loader, VisionLoaderType};
 use super::{
-    get_model_paths, get_xlora_paths, AdapterActivationMixin, CacheManagerMixin, GeneralMetadata,
-    IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
-    PreProcessingMixin, TokenSource, VisionModel, VisionModelLoader, XLoraPaths,
+    get_model_paths, get_xlora_paths, AdapterActivationMixin, Cache, CacheManager,
+    CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory,
+    ModelKind, ModelPaths, PreProcessingMixin, TokenSource, VisionModel, VisionModelLoader,
+    XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -13,6 +15,7 @@ use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
+use crate::vision_models::idefics2_image_processor::Idefics2ImageProcessor;
 use crate::xlora_models::NonGranularState;
 use crate::{
     deserialize_chat_template, get_paths, vision_normal_model_loader, DeviceMapMetadata, Ordering,
@@ -245,55 +248,59 @@ impl Loader for VisionLoader {
 
 impl PreProcessingMixin for VisionPipeline {
     fn get_chat_template(&self) -> Arc<ChatTemplate> {
-        todo!()
+        self.chat_template.clone()
     }
     fn get_input_processor(&self) -> Box<dyn InputsProcessor> {
-        todo!()
+        Box::new(Idefics2ImageProcessor)
     }
 }
 
 impl IsqPipelineMixin for VisionPipeline {
-    fn re_isq_model(&mut self, _dtype: GgmlDType) -> Result<()> {
-        todo!()
+    fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()> {
+        let device = self.device().clone();
+        self.model
+            .quantize(dtype, device)
+            .map_err(anyhow::Error::msg)
     }
 }
 
 impl CacheManagerMixin for VisionPipeline {
-    fn cache(&self) -> &super::Cache {
-        todo!()
+    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
     }
-    fn clone_in_cache(&mut self, _seqs: &mut [&mut Sequence], _modify_draft_cache: bool) {
-        todo!()
+    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
     }
-    fn clone_out_cache(&mut self, _seqs: &mut [&mut Sequence], _modify_draft_cache: bool) {
-        todo!()
+    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
+        DefaultCacheManager.set_none_cache(self, modify_draft_cache);
+        if reset_non_granular {
+            self.reset_non_granular_state()
+        }
     }
-    fn set_none_cache(&mut self, _reset_non_granular: bool, _modify_draft_cache: bool) {
-        todo!()
+    fn cache(&self) -> &Cache {
+        self.model.cache()
     }
 }
 
 impl AdapterActivationMixin for VisionPipeline {
     fn activate_adapters(&mut self, _adapters: Vec<String>) -> Result<usize> {
-        todo!()
+        anyhow::bail!("Vision models do not support adapter activation.");
     }
 }
 
 impl MetadataMixin for VisionPipeline {
     fn device(&self) -> Device {
-        todo!()
+        self.model.device().clone()
     }
     fn get_metadata(&self) -> &GeneralMetadata {
-        todo!()
+        &self.metadata
     }
     fn name(&self) -> String {
-        todo!()
+        self.model_id.clone()
     }
-    fn reset_non_granular_state(&self) {
-        todo!()
-    }
+    fn reset_non_granular_state(&self) {}
     fn tokenizer(&self) -> Arc<Tokenizer> {
-        todo!()
+        self.tokenizer.clone()
     }
 }
 

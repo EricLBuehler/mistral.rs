@@ -665,7 +665,6 @@ impl PerceiverAttention {
         latents: &Tensor,
         context: &Tensor,
         attention_mask: &Tensor,
-        perceiver_kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = latents.dims3()?;
 
@@ -684,8 +683,6 @@ impl PerceiverAttention {
         let v = v
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
-
-        let (k, v) = Cache::update_kv_cache(perceiver_kv_cache, k, v, false)?;
 
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
@@ -741,16 +738,13 @@ impl PerceiverLayer {
         latents: &Tensor,
         context: &Tensor,
         attention_mask: &Tensor,
-        perceiver_kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let residual = latents;
 
         let latents = self.input_latents_norm.forward(latents)?;
         let context = self.input_latents_norm.forward(context)?;
 
-        let latents =
-            self.self_attn
-                .forward(&latents, &context, attention_mask, perceiver_kv_cache)?;
+        let latents = self.self_attn.forward(&latents, &context, attention_mask)?;
         let latents = (residual + latents)?;
         let residual = &latents;
 
@@ -765,7 +759,6 @@ struct PerceiverResampler {
     layers: Vec<PerceiverLayer>,
     norm: RmsNorm,
     n_latents: usize,
-    cache: Cache,
 }
 
 impl PerceiverResampler {
@@ -786,7 +779,6 @@ impl PerceiverResampler {
             layers,
             norm,
             n_latents,
-            cache: Cache::new(depth, false),
         })
     }
 
@@ -806,14 +798,9 @@ impl PerceiverResampler {
             CausalMasker.expand_mask(&attention_mask, latents.dtype(), Some(self.n_latents))?;
 
         let mut compressed_context = latents;
-        let mut cache = self.cache.lock();
-        for (i, perceiver_layer) in self.layers.iter().enumerate() {
-            compressed_context = perceiver_layer.forward(
-                &compressed_context,
-                context,
-                &attention_mask,
-                &mut cache[i],
-            )?;
+        for perceiver_layer in &self.layers {
+            compressed_context =
+                perceiver_layer.forward(&compressed_context, context, &attention_mask)?;
         }
         self.norm.forward(&compressed_context)
     }
