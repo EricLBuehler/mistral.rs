@@ -54,7 +54,7 @@ async-trait = "0.1.80"
 once_cell.workspace = true
 toml = "0.8.12"
 strum = { version = "0.26", features = ["derive"] }
-image = "0.25.1"
+image.workspace = true
 derive_more = { version = "0.99.17", default-features = false, features = ["from"] }
 
 [features]

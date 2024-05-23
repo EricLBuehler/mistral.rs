@@ -298,7 +298,9 @@ impl Engine {
 
         let best_of = match request.messages {
             RequestMessage::Completion { best_of, .. } => best_of,
-            RequestMessage::Chat(_) | RequestMessage::CompletionTokens(_) => 1,
+            RequestMessage::Chat(_)
+            | RequestMessage::CompletionTokens(_)
+            | RequestMessage::VisionChat { .. } => 1,
         };
         if is_chat
             && !get_mut_arcmutex!(self.pipeline)
@@ -328,6 +330,7 @@ impl Engine {
                 force_tokens = Some(it);
                 res
             }
+            RequestMessage::VisionChat { images, messages } => todo!(),
         };
         if formatted_prompt.is_empty() {
             request

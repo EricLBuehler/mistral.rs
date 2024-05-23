@@ -491,6 +491,10 @@ impl Sequence {
     pub fn take_images(&mut self) -> Option<Vec<image::DynamicImage>> {
         self.input_images.take()
     }
+
+    pub fn images(&self) -> Option<&[image::DynamicImage]> {
+        self.input_images.as_deref()
+    }
 }
 
 pub struct SequenceGroup {

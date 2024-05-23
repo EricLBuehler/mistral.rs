@@ -23,6 +23,10 @@ pub enum RequestMessage {
         best_of: usize,
     },
     CompletionTokens(Vec<u32>),
+    VisionChat {
+        images: Vec<image::DynamicImage>,
+        messages: Vec<IndexMap<String, String>>,
+    },
 }
 
 #[derive(Clone)]
