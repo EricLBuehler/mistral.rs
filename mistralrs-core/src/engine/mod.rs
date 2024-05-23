@@ -527,6 +527,7 @@ impl Engine {
                     None
                 },
                 request.adapters.clone(),
+                None,
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(

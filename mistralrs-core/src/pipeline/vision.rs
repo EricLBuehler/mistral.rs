@@ -15,7 +15,7 @@ use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
-use crate::vision_models::idefics2_image_processor::Idefics2ImageProcessor;
+use crate::vision_models::VisionInputsProcessor;
 use crate::xlora_models::NonGranularState;
 use crate::{
     deserialize_chat_template, get_paths, vision_normal_model_loader, DeviceMapMetadata, Ordering,
@@ -251,7 +251,7 @@ impl PreProcessingMixin for VisionPipeline {
         self.chat_template.clone()
     }
     fn get_input_processor(&self) -> Box<dyn InputsProcessor> {
-        Box::new(Idefics2ImageProcessor)
+        Box::new(VisionInputsProcessor)
     }
 }
 

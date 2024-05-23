@@ -3,10 +3,8 @@
 use candle_core::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 
-use crate::{
-    pipeline::{InputsProcessor, InputsProcessorType},
-    sequence::Sequence,
-    vision_models::image_processor::{from_pixel_data, get_pixel_data, make_pixel_values, resize},
+use crate::vision_models::image_processor::{
+    from_pixel_data, get_pixel_data, make_pixel_values, resize,
 };
 
 use super::image_processor::{ImagePreProcessor, NormalizationMetadata, PreprocessedImages};
@@ -45,23 +43,6 @@ fn pad(
 ) -> Result<(DynamicImage, Tensor)> {
     let new_image = from_pixel_data(get_pixel_data(image, max_h, max_w), max_h, max_w);
     Ok((new_image, make_pixel_mask(image, max_h, max_w, device)?))
-}
-
-impl InputsProcessor for Idefics2ImageProcessor {
-    fn get_type(&self) -> InputsProcessorType {
-        InputsProcessorType::Vision
-    }
-    fn process_inputs(
-        &self,
-        input_seqs: &[&mut Sequence],
-        is_prompt: bool,
-        is_xlora: bool,
-        device: &Device,
-        no_kv_cache: bool,
-        last_n_context_len: Option<(usize, usize)>,
-    ) -> anyhow::Result<Box<dyn std::any::Any>> {
-        todo!()
-    }
 }
 
 impl ImagePreProcessor for Idefics2ImageProcessor {

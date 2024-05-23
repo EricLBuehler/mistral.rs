@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
     conv2d, embedding, layer_norm, linear_no_bias, Activation, Conv2d, Conv2dConfig, Embedding,
     LayerNorm, Linear, Module, VarBuilder,
@@ -10,9 +10,10 @@ use serde::Deserialize;
 use std::ops::Mul;
 
 use crate::{
+    device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, RmsNorm},
     models::mistral::Model as Mistral,
-    pipeline::Cache,
+    pipeline::{Cache, IsqModel, NormalModel, VisionModel},
     DeviceMapMetadata,
 };
 
@@ -905,7 +906,7 @@ impl Idefics2 {
             .where_cond(&reshaped_image_hidden_states, &new_inputs_embeds)
     }
 
-    fn forward(
+    fn forward_inner(
         &mut self,
         input_ids: &Tensor,
         pixel_values: &Tensor,
@@ -977,5 +978,41 @@ impl Idefics2 {
             start_offsets_kernel,
             context_lens,
         )
+    }
+}
+
+impl IsqModel for Idefics2 {
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+        todo!()
+    }
+}
+
+impl VisionModel for Idefics2 {
+    fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        pixel_values: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+        pixel_attention_mask: Option<Tensor>,
+    ) -> candle_core::Result<Tensor> {
+        self.forward_inner(
+            input_ids,
+            pixel_values,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+            pixel_attention_mask,
+        )
+    }
+    fn cache(&self) -> &Cache {
+        self.text_model.cache()
+    }
+    fn device(&self) -> &Device {
+        self.text_model.device()
+    }
+    fn max_seq_len(&self) -> usize {
+        self.text_model.max_seq_len() // Is this correct?
     }
 }

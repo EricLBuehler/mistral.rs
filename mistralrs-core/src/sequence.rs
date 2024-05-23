@@ -63,6 +63,10 @@ pub enum SequenceRecognizer {
     None,
 }
 
+pub enum SequenceInner {
+    Text {},
+}
+
 pub struct Sequence {
     // Metadata, const
     id: usize,
@@ -99,6 +103,7 @@ pub struct Sequence {
     stream_idx: usize,
     pub recognizer: SequenceRecognizer,
     scheduling_urgency: usize, // The number of passes since scheduling
+    input_images: Option<Vec<image::DynamicImage>>,
 
     // GPU things
     pub prompt_tok_per_sec: f32,
@@ -128,6 +133,7 @@ impl Sequence {
         suffix: Option<String>,
         prefix: Option<String>,
         adapters: Option<Vec<String>>,
+        input_images: Option<Vec<image::DynamicImage>>,
     ) -> Self {
         let prompt_len = tokens.len();
         Self {
@@ -169,6 +175,7 @@ impl Sequence {
             is_tmp: false,
             scheduling_urgency: 0,
             adapters,
+            input_images,
         }
     }
 
