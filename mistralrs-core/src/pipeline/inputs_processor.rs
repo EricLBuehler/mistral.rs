@@ -5,6 +5,11 @@ use candle_core::Device;
 
 use crate::sequence::Sequence;
 
+#[derive(PartialEq)]
+pub enum InputsProcessorType {
+    Text,
+}
+
 pub trait InputsProcessor {
     /// This should also enable matmul via f16 if prompt and the sequence length is greater than 32.
     /// Otherwise, matmul via f16 is disabled.
@@ -19,6 +24,8 @@ pub trait InputsProcessor {
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
     ) -> Result<Box<dyn Any>>;
+
+    fn get_type(&self) -> InputsProcessorType;
 }
 
 // ========================= Test models input processor
@@ -31,7 +38,7 @@ pub mod text_models_inputs_processor {
 
     use crate::{layers::set_use_matmul_via_f16, sequence::Sequence};
 
-    use super::InputsProcessor;
+    use super::{InputsProcessor, InputsProcessorType};
 
     pub struct InputMetadata {
         pub input: Tensor,
@@ -258,6 +265,10 @@ pub mod text_models_inputs_processor {
                     position_ids,
                 }))
             }
+        }
+
+        fn get_type(&self) -> InputsProcessorType {
+            InputsProcessorType::Text
         }
     }
 }

@@ -247,7 +247,7 @@ impl PreProcessingMixin for VisionPipeline {
     fn get_chat_template(&self) -> Arc<ChatTemplate> {
         todo!()
     }
-    fn get_input_processor(&self) -> &dyn InputsProcessor {
+    fn get_input_processor(&self) -> Box<dyn InputsProcessor> {
         todo!()
     }
 }

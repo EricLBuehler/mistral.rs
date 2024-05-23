@@ -379,7 +379,7 @@ pub trait PreProcessingMixin: MetadataMixin {
         )
     }
     fn get_chat_template(&self) -> Arc<ChatTemplate>;
-    fn get_input_processor(&self) -> &dyn InputsProcessor;
+    fn get_input_processor(&self) -> Box<dyn InputsProcessor>;
     fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
         let encoding = self
             .tokenizer()

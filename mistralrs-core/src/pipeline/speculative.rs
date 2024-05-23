@@ -158,6 +158,11 @@ impl SpeculativePipeline {
         if get_mut_arcmutex!(target).category() != get_mut_arcmutex!(draft).category() {
             candle_core::bail!("Target and draft models' category do not match. This is required for speculative decoding.");
         }
+        if get_mut_arcmutex!(target).get_input_processor().get_type()
+            != get_mut_arcmutex!(draft).get_input_processor().get_type()
+        {
+            candle_core::bail!("Target and draft models' input processors do not match. This is required for speculative decoding.");
+        }
         let metadata = get_mut_arcmutex!(target).get_metadata().clone();
         let category = get_mut_arcmutex!(target).category();
         // TODO: some checks or relaxation here?
@@ -176,8 +181,8 @@ impl PreProcessingMixin for SpeculativePipeline {
     fn get_chat_template(&self) -> Arc<ChatTemplate> {
         get_mut_arcmutex!(self.target).get_chat_template()
     }
-    fn get_input_processor(&self) -> &dyn InputsProcessor {
-        todo!()
+    fn get_input_processor(&self) -> Box<dyn InputsProcessor> {
+        get_mut_arcmutex!(self.target).get_input_processor()
     }
 }
 
