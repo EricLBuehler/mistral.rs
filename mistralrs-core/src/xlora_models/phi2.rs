@@ -5,6 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     layers::ScaledDotProductAttention,
     lora::{linear, LinearLayerLike, LoraConfig, Ordering},
+    pipeline::IsqModel,
 };
 /// Phi model.
 /// https://huggingface.co/microsoft/phi-2
@@ -646,6 +647,34 @@ impl Model {
     }
 }
 
+impl IsqModel for Model {
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+        let mut tensors = Vec::new();
+        tensors.push((self.lm_head.inner(), None));
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.v_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.dense).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((Arc::get_mut(&mut layer.mlp.fc1).unwrap().inner(), Some(i)));
+            tensors.push((Arc::get_mut(&mut layer.mlp.fc2).unwrap().inner(), Some(i)));
+        }
+        (tensors, &*self.mapper)
+    }
+}
+
 impl NormalModel for Model {
     fn forward(
         &mut self,
@@ -693,31 +722,6 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
-    }
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
-        let mut tensors = Vec::new();
-        tensors.push((self.lm_head.inner(), None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.v_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.dense).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((Arc::get_mut(&mut layer.mlp.fc1).unwrap().inner(), Some(i)));
-            tensors.push((Arc::get_mut(&mut layer.mlp.fc2).unwrap().inner(), Some(i)));
-        }
-        (tensors, &*self.mapper)
     }
     fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
         let mut sum = 0;

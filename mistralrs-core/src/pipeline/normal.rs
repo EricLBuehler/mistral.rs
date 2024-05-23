@@ -1,11 +1,16 @@
 use super::cache_manager::DefaultCacheManager;
-use super::loaders::{
+use super::inputs_processor::InputsProcessor;
+use super::normal_loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
     Phi3Loader, Qwen2Loader,
 };
 use super::{
-    get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
-    ModelKind, ModelPaths, NormalModel, NormalModelLoader, Pipeline, TokenSource, XLoraPaths,
+    get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, CacheManager,
+    GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader, TokenSource,
+    XLoraPaths,
+};
+use super::{
+    AdapterActivationMixin, CacheManagerMixin, IsqPipelineMixin, MetadataMixin, PreProcessingMixin,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -20,7 +25,7 @@ use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors}
 use crate::xlora_models::NonGranularState;
 use crate::{
     deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, lora_model_loader,
-    normal_model_loader, xlora_model_loader, DeviceMapMetadata,
+    normal_model_loader, xlora_model_loader, DeviceMapMetadata, Pipeline,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
@@ -28,6 +33,7 @@ use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
 use serde_json::Value;
+use std::any::Any;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -335,11 +341,75 @@ impl Loader for NormalLoader {
     }
 }
 
+impl PreProcessingMixin for NormalPipeline {
+    fn get_chat_template(&self) -> Arc<ChatTemplate> {
+        self.chat_template.clone()
+    }
+    fn get_input_processor(&self) -> &dyn InputsProcessor {
+        todo!()
+    }
+}
+
+impl IsqPipelineMixin for NormalPipeline {
+    fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()> {
+        let device = self.device().clone();
+        self.model
+            .quantize(dtype, device)
+            .map_err(anyhow::Error::msg)
+    }
+}
+
+impl CacheManagerMixin for NormalPipeline {
+    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+    }
+    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+    }
+    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
+        DefaultCacheManager.set_none_cache(self, modify_draft_cache);
+        if reset_non_granular {
+            self.reset_non_granular_state()
+        }
+    }
+    fn cache(&self) -> &Cache {
+        self.model.cache()
+    }
+}
+
+impl AdapterActivationMixin for NormalPipeline {
+    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
+        self.model
+            .activate_adapters(adapter_names)
+            .map_err(anyhow::Error::msg)
+    }
+}
+
+impl MetadataMixin for NormalPipeline {
+    fn device(&self) -> Device {
+        self.model.device().clone()
+    }
+    fn tokenizer(&self) -> Arc<Tokenizer> {
+        self.tokenizer.clone()
+    }
+    fn name(&self) -> String {
+        self.model_id.clone()
+    }
+    fn reset_non_granular_state(&self) {
+        if let Some(s) = self.non_granular_state.as_ref() {
+            *self.cache().get_scalings_cache() = None;
+            *get_mut_arcmutex!(s.non_granular_index) = 0;
+        }
+    }
+    fn get_metadata(&self) -> &GeneralMetadata {
+        &self.metadata
+    }
+}
+
 #[async_trait::async_trait]
 impl Pipeline for NormalPipeline {
-    fn forward_inputs(
-        &mut self,
-        ModelInputs {
+    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+        let ModelInputs {
             input_ids,
             input_ids_full,
             seqlen_offsets,
@@ -348,8 +418,7 @@ impl Pipeline for NormalPipeline {
             seqlen_offsets_kernel_full,
             context_lens,
             position_ids,
-        }: ModelInputs,
-    ) -> Result<Tensor, candle_core::Error> {
+        } = *inputs.downcast().expect("Downcast failed.");
         match self.model.is_xlora() {
             false => self.model.forward(
                 &input_ids,
@@ -381,52 +450,5 @@ impl Pipeline for NormalPipeline {
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
         do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
-    }
-    fn device(&self) -> Device {
-        self.model.device().clone()
-    }
-    fn tokenizer(&self) -> Arc<Tokenizer> {
-        self.tokenizer.clone()
-    }
-    fn name(&self) -> String {
-        self.model_id.clone()
-    }
-    fn get_chat_template(&self) -> Arc<ChatTemplate> {
-        self.chat_template.clone()
-    }
-    fn reset_non_granular_state(&self) {
-        if let Some(s) = self.non_granular_state.as_ref() {
-            *self.cache().get_scalings_cache() = None;
-            *get_mut_arcmutex!(s.non_granular_index) = 0;
-        }
-    }
-    fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()> {
-        let device = self.device().clone();
-        self.model
-            .quantize(dtype, device)
-            .map_err(anyhow::Error::msg)
-    }
-    fn get_metadata(&self) -> &GeneralMetadata {
-        &self.metadata
-    }
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
-    }
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
-    }
-    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(self, modify_draft_cache);
-        if reset_non_granular {
-            self.reset_non_granular_state()
-        }
-    }
-    fn cache(&self) -> &Cache {
-        self.model.cache()
-    }
-    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
-        self.model
-            .activate_adapters(adapter_names)
-            .map_err(anyhow::Error::msg)
     }
 }

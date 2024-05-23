@@ -1,7 +1,11 @@
 use super::cache_manager::DefaultCacheManager;
+use super::inputs_processor::InputsProcessor;
 use super::{
-    get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
-    ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
+    get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, CacheManager,
+    GeneralMetadata, Loader, ModelKind, ModelPaths, TokenSource, XLoraPaths,
+};
+use super::{
+    AdapterActivationMixin, CacheManagerMixin, IsqPipelineMixin, MetadataMixin, PreProcessingMixin,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -14,7 +18,9 @@ use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 use crate::xlora_models::NonGranularState;
-use crate::{deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata};
+use crate::{
+    deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, Pipeline,
+};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama, utils::tokens::get_token,
     xlora_models::XLoraQLlama,
@@ -25,6 +31,7 @@ use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
 use serde_json::Value;
+use std::any::Any;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -382,11 +389,86 @@ impl Loader for GGMLLoader {
     }
 }
 
+impl PreProcessingMixin for GGMLPipeline {
+    fn get_chat_template(&self) -> Arc<ChatTemplate> {
+        self.chat_template.clone()
+    }
+    fn get_input_processor(&self) -> &dyn InputsProcessor {
+        todo!()
+    }
+}
+
+impl IsqPipelineMixin for GGMLPipeline {
+    fn re_isq_model(&mut self, _dtype: GgmlDType) -> Result<()> {
+        anyhow::bail!(
+            "You are trying to in-situ requantize a GGML model. This will not do anything."
+        )
+    }
+}
+
+impl CacheManagerMixin for GGMLPipeline {
+    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+    }
+    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+    }
+    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
+        DefaultCacheManager.set_none_cache(self, modify_draft_cache);
+        if reset_non_granular {
+            self.reset_non_granular_state()
+        }
+    }
+    fn cache(&self) -> &Cache {
+        match self.model {
+            Model::Llama(ref model) => &model.cache,
+            Model::XLoraLlama(ref model) => &model.cache,
+        }
+    }
+}
+
+impl AdapterActivationMixin for GGMLPipeline {
+    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
+        if !self.metadata.is_lora {
+            anyhow::bail!("Cannot activate adapters non-LoRA models.")
+        }
+        match self.model {
+            Model::Llama(_) => unreachable!(),
+            Model::XLoraLlama(ref mut model) => model
+                .activate_adapters(adapter_names)
+                .map_err(anyhow::Error::msg),
+        }
+    }
+}
+
+impl MetadataMixin for GGMLPipeline {
+    fn device(&self) -> Device {
+        match self.model {
+            Model::Llama(ref model) => model.device.clone(),
+            Model::XLoraLlama(ref model) => model.device.clone(),
+        }
+    }
+    fn tokenizer(&self) -> Arc<Tokenizer> {
+        self.tokenizer.clone()
+    }
+    fn name(&self) -> String {
+        self.model_id.clone()
+    }
+    fn reset_non_granular_state(&self) {
+        if let Some(s) = self.non_granular_state.as_ref() {
+            *self.cache().get_scalings_cache() = None;
+            *get_mut_arcmutex!(s.non_granular_index) = 0;
+        }
+    }
+    fn get_metadata(&self) -> &GeneralMetadata {
+        &self.metadata
+    }
+}
+
 #[async_trait::async_trait]
 impl Pipeline for GGMLPipeline {
-    fn forward_inputs(
-        &mut self,
-        ModelInputs {
+    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+        let ModelInputs {
             input_ids,
             input_ids_full,
             seqlen_offsets,
@@ -395,8 +477,7 @@ impl Pipeline for GGMLPipeline {
             seqlen_offsets_kernel_full,
             context_lens,
             position_ids: _, // NOTE(EricLBuehler): ignore, it is for phi3
-        }: ModelInputs,
-    ) -> Result<Tensor, candle_core::Error> {
+        } = *inputs.downcast().expect("Downcast failed.");
         match self.model {
             Model::Llama(ref mut model) => model.forward(
                 &input_ids,
@@ -426,63 +507,5 @@ impl Pipeline for GGMLPipeline {
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
         do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
-    }
-    fn device(&self) -> Device {
-        match self.model {
-            Model::Llama(ref model) => model.device.clone(),
-            Model::XLoraLlama(ref model) => model.device.clone(),
-        }
-    }
-    fn tokenizer(&self) -> Arc<Tokenizer> {
-        self.tokenizer.clone()
-    }
-    fn name(&self) -> String {
-        self.model_id.clone()
-    }
-    fn get_chat_template(&self) -> Arc<ChatTemplate> {
-        self.chat_template.clone()
-    }
-    fn reset_non_granular_state(&self) {
-        if let Some(s) = self.non_granular_state.as_ref() {
-            *self.cache().get_scalings_cache() = None;
-            *get_mut_arcmutex!(s.non_granular_index) = 0;
-        }
-    }
-    fn re_isq_model(&mut self, _dtype: GgmlDType) -> Result<()> {
-        anyhow::bail!(
-            "You are trying to in-situ requantize a GGML model. This will not do anything."
-        )
-    }
-    fn get_metadata(&self) -> &GeneralMetadata {
-        &self.metadata
-    }
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
-    }
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
-    }
-    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(self, modify_draft_cache);
-        if reset_non_granular {
-            self.reset_non_granular_state()
-        }
-    }
-    fn cache(&self) -> &Cache {
-        match self.model {
-            Model::Llama(ref model) => &model.cache,
-            Model::XLoraLlama(ref model) => &model.cache,
-        }
-    }
-    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
-        if !self.metadata.is_lora {
-            anyhow::bail!("Cannot activate adapters non-LoRA models.")
-        }
-        match self.model {
-            Model::Llama(_) => unreachable!(),
-            Model::XLoraLlama(ref mut model) => model
-                .activate_adapters(adapter_names)
-                .map_err(anyhow::Error::msg),
-        }
     }
 }
