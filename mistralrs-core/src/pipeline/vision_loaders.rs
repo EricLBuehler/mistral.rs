@@ -10,6 +10,7 @@ use pyo3::pyclass;
 use serde::Deserialize;
 
 use super::VisionModel;
+use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::DeviceMapMetadata;
 
 pub trait VisionModelLoader {
@@ -51,19 +52,30 @@ pub struct Idefics2Loader;
 impl VisionModelLoader for Idefics2Loader {
     fn load(
         &self,
-        _config: &str,
-        _use_flash_attn: bool,
-        _vb: VarBuilder,
-        _mapper: DeviceMapMetadata,
-        _loading_isq: bool,
-        _device: Device,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        device: Device,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        todo!()
+        let mut config: Idefics2Config = serde_json::from_str(config)?;
+        config.text_config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(Idefics2::new(
+            &config,
+            vb,
+            self.is_gptx(),
+            mapper,
+            loading_isq,
+            device,
+        )?))
     }
     fn is_gptx(&self) -> bool {
         true
     }
-    fn get_config_repr(&self, _config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        todo!()
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        let mut config: Idefics2Config = serde_json::from_str(config)?;
+        config.text_config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(config))
     }
 }

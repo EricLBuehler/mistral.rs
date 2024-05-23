@@ -17,10 +17,9 @@ use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::vision_models::idefics2_image_processor::Idefics2ImageProcessor;
 use crate::vision_models::ModelInputs;
-use crate::xlora_models::NonGranularState;
 use crate::{
-    deserialize_chat_template, get_paths, vision_normal_model_loader, DeviceMapMetadata, Ordering,
-    Pipeline,
+    deserialize_chat_template, do_sample, get_paths, vision_normal_model_loader, DeviceMapMetadata,
+    Ordering, Pipeline,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
@@ -43,7 +42,6 @@ pub struct VisionPipeline {
     tokenizer: Arc<Tokenizer>,
     tok_trie: Arc<TokTrie>,
     chat_template: Arc<ChatTemplate>,
-    non_granular_state: Option<NonGranularState>,
     model_id: String,
     metadata: GeneralMetadata,
 }
@@ -56,7 +54,6 @@ pub struct VisionLoader {
     kind: ModelKind,
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
-    tgt_non_granular_index: Option<usize>,
     xlora_model_id: Option<String>,
     xlora_order: Option<Ordering>,
 }
@@ -69,7 +66,6 @@ pub struct VisionLoaderBuilder {
     kind: ModelKind,
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
-    tgt_non_granular_index: Option<usize>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -92,7 +88,6 @@ impl VisionLoaderBuilder {
             tokenizer_json,
             model_id,
             kind: ModelKind::Normal,
-            ..Default::default()
         }
     }
 
@@ -107,7 +102,6 @@ impl VisionLoaderBuilder {
             kind: self.kind,
             chat_template: self.chat_template,
             tokenizer_json: self.tokenizer_json,
-            tgt_non_granular_index: self.tgt_non_granular_index,
             xlora_model_id: None,
             xlora_order: None,
         })
@@ -218,12 +212,6 @@ impl Loader for VisionLoader {
             tok_trie: tok_trie.clone(),
             tokenizer: tokenizer.into(),
             chat_template: Arc::new(chat_template),
-            non_granular_state: self.tgt_non_granular_index.map(|tgt_non_granular_index| {
-                NonGranularState {
-                    non_granular_index: Arc::new(Mutex::new(0)),
-                    tgt_non_granular_index,
-                }
-            }),
             model_id: self.model_id.clone(),
             metadata: GeneralMetadata {
                 max_seq_len,
@@ -317,17 +305,25 @@ impl Pipeline for VisionPipeline {
             pixel_values,
             pixel_attention_mask,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
-        todo!()
+        self.model.forward(
+            &input_ids,
+            pixel_values,
+            &seqlen_offsets,
+            seqlen_offsets_kernel,
+            context_lens,
+            position_ids,
+            pixel_attention_mask,
+        )
     }
     async fn sample(
         &self,
-        _seqs: &mut [&mut Sequence],
-        _logits: Tensor,
-        _prefix_cacher: &mut PrefixCacheManager,
-        _disable_eos_stop: bool,
-        _rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+        seqs: &mut [&mut Sequence],
+        logits: Tensor,
+        prefix_cacher: &mut PrefixCacheManager,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
-        todo!()
+        do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
     }
     fn category(&self) -> ModelCategory {
         ModelCategory::Vision

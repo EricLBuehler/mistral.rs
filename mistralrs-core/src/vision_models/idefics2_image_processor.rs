@@ -89,6 +89,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
             let mut pixel_values_accum = Vec::new();
             let mut pixel_attention_mask_accum = Vec::new();
             for seq in input_seqs.iter_mut() {
+                // TODO: Properly pass params here?
                 let PreprocessedImages {
                     pixel_values,
                     pixel_attention_mask,

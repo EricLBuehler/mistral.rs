@@ -139,7 +139,7 @@ struct VisionConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-struct TextConfig {
+pub(crate) struct TextConfig {
     #[serde(default = "default_32000")]
     vocab_size: usize,
     #[serde(default = "default_4096")]
@@ -164,7 +164,7 @@ struct TextConfig {
     sliding_window: Option<usize>,
 
     #[serde(default = "default_false")]
-    use_flash_attn: bool,
+    pub(crate) use_flash_attn: bool,
     model_type: String, // Must be mistral for now
 }
 
@@ -188,10 +188,10 @@ impl From<TextConfig> for mistral::Config {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-struct Config {
+pub(crate) struct Config {
     perceiver_config: PerceiverConfig,
     vision_config: VisionConfig,
-    text_config: TextConfig,
+    pub(crate) text_config: TextConfig,
     #[serde(default = "default_32001")]
     image_token_id: usize,
     #[serde(default = "default_false")]
@@ -201,13 +201,9 @@ struct Config {
 // == START VISION MODEL ==
 
 struct VisionEmbeddings {
-    embed_dim: usize,
-    image_size: usize,
     patch_size: usize,
     patch_embedding: Conv2d,
     num_patches_per_side: usize,
-    num_patches: usize,
-    num_positions: usize,
     position_embedding: Embedding,
 }
 
@@ -265,13 +261,9 @@ impl VisionEmbeddings {
         let num_patches_per_side = config.image_size / config.patch_size;
         let num_patches = num_patches_per_side.pow(2);
         Ok(Self {
-            embed_dim: config.hidden_size,
-            image_size: config.image_size,
             patch_size: config.patch_size,
             patch_embedding,
             num_patches_per_side,
-            num_patches,
-            num_positions: num_patches,
             position_embedding: embedding(
                 num_patches,
                 config.hidden_size,
@@ -743,7 +735,7 @@ impl PerceiverLayer {
         let residual = latents;
 
         let latents = self.input_latents_norm.forward(latents)?;
-        let context = self.input_latents_norm.forward(context)?;
+        let context = self.input_context_norm.forward(context)?;
 
         let latents = self.self_attn.forward(&latents, &context, attention_mask)?;
         let latents = (residual + latents)?;
@@ -839,7 +831,7 @@ impl Connector {
 
 // == START MODEL ==
 
-struct Idefics2 {
+pub struct Idefics2 {
     vision_model: VisionTransformer,
     connector: Connector,
     text_model: Mistral,
@@ -1003,6 +995,7 @@ impl VisionModel for Idefics2 {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
+        _: Vec<usize>, // Ignore, it is for phi3
         pixel_attention_mask: Option<Tensor>,
     ) -> candle_core::Result<Tensor> {
         self.forward_inner(

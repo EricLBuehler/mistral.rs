@@ -39,6 +39,7 @@ use std::sync::Arc;
 use std::{collections::HashMap, path::PathBuf, str::FromStr};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
+pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
 pub use vision_loaders::VisionModelLoader;
 
 use anyhow::Result;
@@ -703,6 +704,7 @@ pub trait NormalModel: IsqModel {
 
 pub trait VisionModel: IsqModel {
     // pixel_values and pixel_attention_mask only specified for prompt seqs
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &mut self,
         input_ids: &Tensor,
@@ -710,6 +712,7 @@ pub trait VisionModel: IsqModel {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
         pixel_attention_mask: Option<Tensor>,
     ) -> candle_core::Result<Tensor>;
     fn device(&self) -> &Device;

@@ -82,6 +82,7 @@ pub trait ImagePreProcessor: InputsProcessor {
 
     /// Crops the image to the given size using a center crop. Note that if the image is too small, it will be padded.
     /// The returned image is always of size (height, width)
+    #[allow(dead_code)]
     fn center_crop(&self, image: &DynamicImage, height: u32, width: u32) -> DynamicImage {
         let (orig_width, orig_height) = image.dimensions();
         let top = (orig_height as i32 - height as i32) / 2;
