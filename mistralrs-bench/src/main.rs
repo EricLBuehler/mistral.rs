@@ -2,7 +2,7 @@ use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
-    Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelKind,
+    Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder,
     ModelSelected, NormalRequest, Request, RequestMessage, Response, SamplingParams,
     SchedulerMethod, TokenSource, Usage,
 };
@@ -313,15 +313,7 @@ fn main() -> anyhow::Result<()> {
     if use_flash_attn {
         info!("Using flash attention.");
     }
-    if use_flash_attn
-        && matches!(
-            loader.get_kind(),
-            ModelKind::QuantizedGGML
-                | ModelKind::QuantizedGGUF
-                | ModelKind::XLoraGGML
-                | ModelKind::XLoraGGUF
-        )
-    {
+    if use_flash_attn && loader.get_kind().is_quantized() {
         warn!("Using flash attention with a quantized model has no effect!")
     }
     info!("Model kind is: {}", loader.get_kind().to_string());
