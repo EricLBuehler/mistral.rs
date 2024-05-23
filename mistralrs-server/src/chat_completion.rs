@@ -202,10 +202,10 @@ async fn parse_request(
                             url_idx: usize,
                             image_messages: Vec<HashMap<String, MessageContent>>,
                         ) -> Result<(String, String)> {
-                            if image_messages[text_idx]["type"].is_right() {
+                            if image_messages[text_idx]["text"].is_right() {
                                 anyhow::bail!("Expected string value in `text`.");
                             }
-                            let content = image_messages[text_idx]["type"]
+                            let content = image_messages[text_idx]["text"]
                                 .as_ref()
                                 .unwrap_left()
                                 .clone();
@@ -226,7 +226,7 @@ async fn parse_request(
                         }
                         let mut message_map = IndexMap::new();
                         message_map.insert("role".to_string(), message.role);
-                        let (content, url) = if items[0] == "type" {
+                        let (content, url) = if items[0] == "text" {
                             get_content_and_url(0, 1, image_messages)?
                         } else {
                             get_content_and_url(1, 0, image_messages)?
