@@ -315,9 +315,21 @@ impl Engine {
             return;
         }
 
+        let images = match request.messages {
+            RequestMessage::VisionChat {
+                ref images,
+                messages: _,
+            } => Some(images.clone()),
+            _ => None,
+        };
+
         let mut force_tokens = None;
         let formatted_prompt = match request.messages {
-            RequestMessage::Chat(messages) => {
+            RequestMessage::Chat(messages)
+            | RequestMessage::VisionChat {
+                images: _,
+                messages,
+            } => {
                 let template = get_mut_arcmutex!(self.pipeline).apply_chat_template(messages, true);
                 handle_seq_error!(template, request.response)
             }
@@ -330,7 +342,6 @@ impl Engine {
                 force_tokens = Some(it);
                 res
             }
-            RequestMessage::VisionChat { images, messages } => todo!(),
         };
         if formatted_prompt.is_empty() {
             request
@@ -530,7 +541,7 @@ impl Engine {
                     None
                 },
                 request.adapters.clone(),
-                None,
+                images.clone(),
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(
