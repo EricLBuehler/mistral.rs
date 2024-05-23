@@ -3,6 +3,8 @@
 use candle_core::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageBuffer, Pixel, Rgb};
 
+use crate::pipeline::InputsProcessor;
+
 pub(crate) struct NormalizationMetadata {
     pub(crate) image_mean: [f32; 3],
     pub(crate) image_std: [f32; 3],
@@ -43,6 +45,7 @@ pub(crate) fn resize(image: &DynamicImage, w: u32, h: u32, filter: FilterType) -
     image.resize(w, h, filter)
 }
 
+/// Output is: (3, height, width)
 pub(crate) fn make_pixel_values(image: &DynamicImage, device: &Device) -> Result<Tensor> {
     let data = get_pixel_data(
         image,
@@ -56,12 +59,12 @@ pub(crate) fn make_pixel_values(image: &DynamicImage, device: &Device) -> Result
             let [r, g, b] = item.0;
             row_accum.push(Tensor::from_slice(&[r, g, b], (1, 3), device)?)
         }
-        accum.push(Tensor::cat(&row_accum, 0)?.unsqueeze(0)?);
+        accum.push(Tensor::cat(&row_accum, 0)?.reshape((3, ()))?.unsqueeze(0)?);
     }
     Tensor::cat(&accum, 0)
 }
 
-pub trait ImagePreProcessor {
+pub trait ImagePreProcessor: InputsProcessor {
     const DEFAULT_MEAN: [f32; 3];
     const DEFAULT_STD: [f32; 3];
 

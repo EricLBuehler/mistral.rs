@@ -3,8 +3,16 @@
 use candle_core::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 
-use crate::vision_models::image_processor::{
-    from_pixel_data, get_pixel_data, make_pixel_values, resize,
+use crate::{
+    pipeline::{
+        text_models_inputs_processor::{self, get_completion_input, get_prompt_input},
+        InputsProcessor, InputsProcessorType,
+    },
+    sequence::Sequence,
+    vision_models::{
+        image_processor::{from_pixel_data, get_pixel_data, make_pixel_values, resize},
+        ModelInputs,
+    },
 };
 
 use super::image_processor::{ImagePreProcessor, NormalizationMetadata, PreprocessedImages};
@@ -12,6 +20,7 @@ use super::image_processor::{ImagePreProcessor, NormalizationMetadata, Preproces
 pub struct Idefics2ImageProcessor;
 
 /// Generate pixel mask. 1 indicates valid pixel, 0 indicates padding
+/// Shape is (h,w)
 fn make_pixel_mask(
     image: &DynamicImage,
     max_h: usize,
@@ -43,6 +52,77 @@ fn pad(
 ) -> Result<(DynamicImage, Tensor)> {
     let new_image = from_pixel_data(get_pixel_data(image, max_h, max_w), max_h, max_w);
     Ok((new_image, make_pixel_mask(image, max_h, max_w, device)?))
+}
+
+impl InputsProcessor for Idefics2ImageProcessor {
+    fn get_type(&self) -> InputsProcessorType {
+        InputsProcessorType::Vision
+    }
+    fn process_inputs(
+        &self,
+        input_seqs: &mut [&mut Sequence],
+        is_prompt: bool,
+        is_xlora: bool,
+        device: &Device,
+        no_kv_cache: bool,
+        last_n_context_len: Option<(usize, usize)>,
+    ) -> anyhow::Result<Box<dyn std::any::Any>> {
+        if is_xlora {
+            anyhow::bail!("Cannot make inputs for X-LoRA vision model.");
+        }
+        if no_kv_cache {
+            anyhow::bail!("Vision model must have kv cache.");
+        }
+        let text_models_inputs_processor::InputMetadata {
+            input,
+            positions,
+            positions_kernel,
+            context_lens,
+            position_ids,
+        } = if is_prompt {
+            get_prompt_input(input_seqs, device, last_n_context_len)?
+        } else {
+            get_completion_input(input_seqs, device, no_kv_cache, last_n_context_len)?
+        };
+
+        let (pixel_values, pixel_attention_mask) = if is_prompt {
+            let mut pixel_values_accum = Vec::new();
+            let mut pixel_attention_mask_accum = Vec::new();
+            for seq in input_seqs.iter_mut() {
+                let PreprocessedImages {
+                    pixel_values,
+                    pixel_attention_mask,
+                } = self.preprocess(
+                    seq.take_images()
+                        .expect("Need to have images by this point."),
+                    true,
+                    None,
+                    None,
+                    true,
+                    FilterType::Triangle,
+                    device,
+                )?;
+                pixel_values_accum.push(pixel_values.unsqueeze(0)?);
+                pixel_attention_mask_accum.push(pixel_attention_mask.unsqueeze(0)?);
+            }
+            (
+                Some(Tensor::cat(&pixel_values_accum, 0)?),
+                Some(Tensor::cat(&pixel_attention_mask_accum, 0)?),
+            )
+        } else {
+            (None, None)
+        };
+
+        Ok(Box::new(ModelInputs {
+            input_ids: input,
+            seqlen_offsets: positions,
+            seqlen_offsets_kernel: positions_kernel,
+            context_lens,
+            position_ids,
+            pixel_values,
+            pixel_attention_mask,
+        }))
+    }
 }
 
 impl ImagePreProcessor for Idefics2ImageProcessor {

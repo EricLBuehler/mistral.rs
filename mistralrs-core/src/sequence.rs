@@ -63,10 +63,6 @@ pub enum SequenceRecognizer {
     None,
 }
 
-pub enum SequenceInner {
-    Text {},
-}
-
 pub struct Sequence {
     // Metadata, const
     id: usize,
@@ -490,6 +486,10 @@ impl Sequence {
 
     pub fn get_adapters(&self) -> Option<Vec<String>> {
         self.adapters.clone()
+    }
+
+    pub fn take_images(&mut self) -> Option<Vec<image::DynamicImage>> {
+        self.input_images.take()
     }
 }
 

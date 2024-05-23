@@ -342,7 +342,7 @@ impl Pipeline for SpeculativePipeline {
             let inputs = self
                 .get_input_processor()
                 .process_inputs(
-                    &[seq],
+                    &mut [seq],
                     is_prompt && i == 0, // Only prompt (no kv cache) if first
                     is_xlora,
                     &device,
@@ -405,7 +405,7 @@ impl Pipeline for SpeculativePipeline {
         let inputs = self
             .get_input_processor()
             .process_inputs(
-                &[seq],
+                &mut [seq],
                 true, // use the "prefill" tokens
                 is_xlora,
                 &device,

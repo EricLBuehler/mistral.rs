@@ -702,10 +702,11 @@ pub trait NormalModel: IsqModel {
 }
 
 pub trait VisionModel: IsqModel {
+    // pixel_values and pixel_attention_mask only specified for prompt seqs
     fn forward(
         &mut self,
         input_ids: &Tensor,
-        pixel_values: &Tensor,
+        pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,

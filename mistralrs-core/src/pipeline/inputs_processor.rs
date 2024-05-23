@@ -18,7 +18,7 @@ pub trait InputsProcessor {
     /// This should return a type which can be downcasted to the proper type as used in `forward_inputs``
     fn process_inputs(
         &self,
-        input_seqs: &[&mut Sequence],
+        input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,
         device: &Device,
@@ -49,7 +49,7 @@ pub mod text_models_inputs_processor {
         pub position_ids: Vec<usize>,
     }
 
-    fn get_prompt_input(
+    pub(crate) fn get_prompt_input(
         input_seqs: &[&mut Sequence],
         device: &Device,
         last_n_context_len: Option<(usize, usize)>,
@@ -121,7 +121,7 @@ pub mod text_models_inputs_processor {
         })
     }
 
-    fn get_completion_input(
+    pub(crate) fn get_completion_input(
         input_seqs: &[&mut Sequence],
         device: &Device,
         no_kv_cache: bool,
@@ -179,7 +179,7 @@ pub mod text_models_inputs_processor {
     impl InputsProcessor for TextInputsProcessor {
         fn process_inputs(
             &self,
-            input_seqs: &[&mut Sequence],
+            input_seqs: &mut [&mut Sequence],
             is_prompt: bool,
             is_xlora: bool,
             device: &Device,

@@ -909,67 +909,75 @@ impl Idefics2 {
     fn forward_inner(
         &mut self,
         input_ids: &Tensor,
-        pixel_values: &Tensor,
+        pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         pixel_attention_mask: Option<Tensor>,
     ) -> Result<Tensor> {
-        // == START VISUAL INPUTS INTEGRATION ==
-        let (batch_size, num_images, num_channels, height, width) = pixel_values.dims5()?;
-        let pixel_values = pixel_values.to_dtype(self.dtype)?;
-        let pixel_values = pixel_values
-            .reshape(vec![batch_size * num_images].extend(pixel_values.dims()[2..].to_vec()))?;
+        let input_embeds = if let Some(pixel_values) = pixel_values {
+            // == START VISUAL INPUTS INTEGRATION ==
+            let (batch_size, num_images, num_channels, height, width) = pixel_values.dims5()?;
+            let pixel_values = pixel_values.to_dtype(self.dtype)?;
+            let pixel_values = pixel_values
+                .reshape(vec![batch_size * num_images].extend(pixel_values.dims()[2..].to_vec()))?;
 
-        // Remove padding images which are full of 0s
-        let nb_values_per_image = pixel_values.dims()[1..].iter().product::<usize>();
-        let real_images_inds = pixel_values
-            .eq(0.0f64)?
-            .reshape((batch_size * num_images, num_channels * height * width))?
-            .sum(D::Minus1)?
-            .ne(nb_values_per_image as f64)?;
-        let pixel_values = pixel_values.gather(&real_images_inds, 0)?;
+            // Remove padding images which are full of 0s
+            let nb_values_per_image = pixel_values.dims()[1..].iter().product::<usize>();
+            let real_images_inds = pixel_values
+                .eq(0.0f64)?
+                .reshape((batch_size * num_images, num_channels * height * width))?
+                .sum(D::Minus1)?
+                .ne(nb_values_per_image as f64)?;
+            let pixel_values = pixel_values.gather(&real_images_inds, 0)?;
 
-        // Vision attention mask
-        let pixel_attention_mask = if let Some(pixel_attention_mask) = pixel_attention_mask {
-            pixel_attention_mask
+            // Vision attention mask
+            let pixel_attention_mask = if let Some(pixel_attention_mask) = pixel_attention_mask {
+                pixel_attention_mask
+            } else {
+                Tensor::ones(
+                    (
+                        pixel_values.dims()[0],
+                        pixel_values.dims()[2],
+                        pixel_values.dims()[3],
+                    ),
+                    DType::U8,
+                    pixel_values.device(),
+                )?
+            };
+
+            let patch_size = self.config.vision_config.patch_size;
+            let patches_subgrid = unfold_dim3_in_1(&pixel_attention_mask, patch_size, patch_size)?;
+            let patches_subgrid = unfold_dim4_in_2(&patches_subgrid, patch_size, patch_size)?;
+            let patch_attention_mask = patches_subgrid
+                .flatten(D::Minus2, D::Minus1)?
+                .sum(D::Minus1)?
+                .ge(0.0)?
+                .to_dtype(DType::U8)?;
+
+            // Get seq from vision encoder
+            let image_hidden_states = self
+                .vision_model
+                .forward(&pixel_values, Some(&patch_attention_mask))?;
+
+            // Modality proj and perceiver resampling
+            let image_hidden_states = self.connector.forward(
+                &image_hidden_states,
+                &patch_attention_mask.reshape((pixel_values.dim(0)?, ()))?,
+            )?;
+
+            if CausalMasker.calculate_past_kv_len(&self.text_model.cache.lock())? == 0 {
+                self.inputs_merger(
+                    input_ids,
+                    &self.text_model.get_input_embeddings(input_ids)?,
+                    &image_hidden_states,
+                )?
+            } else {
+                candle_core::bail!("Pixel values were specified for a non-prompt.")
+            }
         } else {
-            Tensor::ones(
-                (
-                    pixel_values.dims()[0],
-                    pixel_values.dims()[2],
-                    pixel_values.dims()[3],
-                ),
-                DType::U8,
-                pixel_values.device(),
-            )?
+            self.text_model.get_input_embeddings(input_ids)?
         };
-
-        let patch_size = self.config.vision_config.patch_size;
-        let patches_subgrid = unfold_dim3_in_1(&pixel_attention_mask, patch_size, patch_size)?;
-        let patches_subgrid = unfold_dim4_in_2(&patches_subgrid, patch_size, patch_size)?;
-        let patch_attention_mask = patches_subgrid
-            .flatten(D::Minus2, D::Minus1)?
-            .sum(D::Minus1)?
-            .ge(0.0)?
-            .to_dtype(DType::U8)?;
-
-        // Get seq from vision encoder
-        let image_hidden_states = self
-            .vision_model
-            .forward(&pixel_values, Some(&patch_attention_mask))?;
-
-        // Modality proj and perceiver resampling
-        let image_hidden_states = self.connector.forward(
-            &image_hidden_states,
-            &patch_attention_mask.reshape((pixel_values.dim(0)?, ()))?,
-        )?;
-        // TODO: cache `image_hidden_states`?
-
-        let mut input_embeds = self.text_model.get_input_embeddings(input_ids)?;
-        if CausalMasker.calculate_past_kv_len(&self.text_model.cache.lock())? == 0 {
-            input_embeds = self.inputs_merger(input_ids, &input_embeds, &image_hidden_states)?;
-        }
 
         self.text_model.forward_embeds(
             input_ids,
@@ -991,7 +999,7 @@ impl VisionModel for Idefics2 {
     fn forward(
         &mut self,
         input_ids: &Tensor,
-        pixel_values: &Tensor,
+        pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
