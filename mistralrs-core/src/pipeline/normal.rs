@@ -228,10 +228,9 @@ impl Loader for NormalLoader {
             Device::Cpu
         };
 
-        let mut is_lora = false;
+        let is_lora = self.kind.is_adapted_and(|a| a.is_lora());
+
         let mut model = match self.kind {
-            ModelKind::QuantizedGGUF => unreachable!(),
-            ModelKind::QuantizedGGML => unreachable!(),
             ModelKind::Normal => normal_model_loader!(
                 paths,
                 dtype,
@@ -258,30 +257,26 @@ impl Loader for NormalLoader {
                 in_situ_quant.is_some(),
                 device.clone()
             ),
-            ModelKind::LoraNormal => {
-                is_lora = true;
-                lora_model_loader!(
-                    paths,
-                    dtype,
-                    default_dtype,
-                    &load_device,
-                    config,
-                    self.inner,
-                    self.config.use_flash_attn,
-                    silent,
-                    mapper,
-                    in_situ_quant.is_some(),
-                    device.clone()
-                )
-            }
-            ModelKind::XLoraGGUF => unreachable!(),
-            ModelKind::XLoraGGML => unreachable!(),
-            ModelKind::LoraGGUF => unreachable!(),
-            ModelKind::LoraGGML => unreachable!(),
-            ModelKind::Speculative {
-                target: _,
-                draft: _,
-            } => unreachable!(),
+            ModelKind::LoraNormal => lora_model_loader!(
+                paths,
+                dtype,
+                default_dtype,
+                &load_device,
+                config,
+                self.inner,
+                self.config.use_flash_attn,
+                silent,
+                mapper,
+                in_situ_quant.is_some(),
+                device.clone()
+            ),
+            ModelKind::QuantizedGGUF
+            | ModelKind::QuantizedGGML
+            | ModelKind::XLoraGGUF
+            | ModelKind::XLoraGGML
+            | ModelKind::LoraGGUF
+            | ModelKind::LoraGGML
+            | ModelKind::Speculative { .. } => unreachable!(),
         };
 
         let tokenizer = get_tokenizer(paths.get_tokenizer_filename())?;
