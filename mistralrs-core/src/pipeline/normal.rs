@@ -10,7 +10,8 @@ use super::{
     XLoraPaths,
 };
 use super::{
-    AdapterActivationMixin, CacheManagerMixin, IsqPipelineMixin, MetadataMixin, PreProcessingMixin,
+    AdapterActivationMixin, CacheManagerMixin, IsqPipelineMixin, MetadataMixin, ModelCategory,
+    PreProcessingMixin,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -450,5 +451,8 @@ impl Pipeline for NormalPipeline {
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
         do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
+    }
+    fn category(&self) -> ModelCategory {
+        ModelCategory::Text
     }
 }

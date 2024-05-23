@@ -2,8 +2,8 @@ use super::inputs_processor::InputsProcessor;
 use super::vision_loaders::{Idefics2Loader, VisionLoaderType};
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, CacheManagerMixin, GeneralMetadata,
-    IsqPipelineMixin, Loader, MetadataMixin, ModelKind, ModelPaths, PreProcessingMixin,
-    TokenSource, VisionModel, VisionModelLoader, XLoraPaths,
+    IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
+    PreProcessingMixin, TokenSource, VisionModel, VisionModelLoader, XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -311,5 +311,8 @@ impl Pipeline for VisionPipeline {
         _rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
         todo!()
+    }
+    fn category(&self) -> ModelCategory {
+        ModelCategory::Vision
     }
 }

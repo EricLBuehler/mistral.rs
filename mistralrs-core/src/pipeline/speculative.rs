@@ -24,7 +24,7 @@ use super::{
     cache_manager::DefaultCacheManager, chat_template::ChatTemplate,
     inputs_processor::InputsProcessor, sampling::SpeculativeSample, AdapterActivationMixin,
     CacheInstruction, CacheManager, CacheManagerMixin, GeneralMetadata, IsqPipelineMixin,
-    MetadataMixin, ModelPaths, PreProcessingMixin,
+    MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
 };
 
 pub struct SpeculativeLoader {
@@ -135,6 +135,7 @@ pub struct SpeculativePipeline {
     gamma: usize,
     metadata: GeneralMetadata,
     latest_logit_cache: Option<Tensor>,
+    category: ModelCategory,
 }
 
 #[derive(Copy, Clone)]
@@ -154,7 +155,11 @@ impl SpeculativePipeline {
         {
             candle_core::bail!("Target and draft models' tokenzier vocab do not match. This is required for speculative decoding.");
         }
+        if get_mut_arcmutex!(target).category() != get_mut_arcmutex!(draft).category() {
+            candle_core::bail!("Target and draft models' category do not match. This is required for speculative decoding.");
+        }
         let metadata = get_mut_arcmutex!(target).get_metadata().clone();
+        let category = get_mut_arcmutex!(target).category();
         // TODO: some checks or relaxation here?
         Ok(Self {
             target,
@@ -162,6 +167,7 @@ impl SpeculativePipeline {
             gamma: config.gamma,
             metadata,
             latest_logit_cache: None,
+            category,
         })
     }
 }
@@ -548,5 +554,8 @@ impl Pipeline for SpeculativePipeline {
         // - Maybe fixed up cache of base model based on accepted tokens.
 
         Ok(())
+    }
+    fn category(&self) -> ModelCategory {
+        self.category
     }
 }

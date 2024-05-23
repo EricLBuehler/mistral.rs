@@ -420,6 +420,12 @@ pub trait MetadataMixin {
     fn get_metadata(&self) -> &GeneralMetadata;
 }
 
+#[derive(PartialEq, Copy, Clone)]
+pub enum ModelCategory {
+    Text,
+    Vision,
+}
+
 #[async_trait::async_trait]
 pub trait Pipeline:
     Send
@@ -525,6 +531,8 @@ pub trait Pipeline:
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error>;
+
+    fn category(&self) -> ModelCategory;
 }
 
 pub trait NormalModel: IsqModel {
