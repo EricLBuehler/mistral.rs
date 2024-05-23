@@ -9,7 +9,7 @@ use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
 use mistralrs_core::{
     get_tgt_non_granular_index, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs,
-    MistralRsBuilder, ModelKind, ModelSelected, Request, SchedulerMethod, TokenSource,
+    MistralRsBuilder, ModelSelected, Request, SchedulerMethod, TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use serde::{Deserialize, Serialize};
@@ -269,15 +269,7 @@ async fn main() -> Result<()> {
     if use_flash_attn {
         info!("Using flash attention.");
     }
-    if use_flash_attn
-        && matches!(
-            loader.get_kind(),
-            ModelKind::QuantizedGGML
-                | ModelKind::QuantizedGGUF
-                | ModelKind::XLoraGGML
-                | ModelKind::XLoraGGUF
-        )
-    {
+    if use_flash_attn && loader.get_kind().is_quantized() {
         warn!("Using flash attention with a quantized model has no effect!")
     }
     info!("Model kind is: {}", loader.get_kind().to_string());
