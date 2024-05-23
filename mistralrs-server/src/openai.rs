@@ -3,9 +3,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
 
+pub type MessageContent = Either<String, HashMap<String, String>>;
+
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct Message {
-    pub content: String,
+    pub content: Either<String, Vec<HashMap<String, MessageContent>>>,
     pub role: String,
     pub name: Option<String>,
 }
