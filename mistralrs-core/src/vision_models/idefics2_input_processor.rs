@@ -140,6 +140,7 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
         rescale: Option<f32>,
         normalize: Option<NormalizationMetadata>,
         do_pad: bool,
+        pad_to: Option<(u32,u32)>,
         device: &Device,
     ) -> Result<PreprocessedImages> {
         let mut max_h = 0;
@@ -151,6 +152,14 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
             }
             if h > max_h {
                 max_h = h;
+            }
+        }
+        if let Some((h,w)) = pad_to {
+            if h < max_h {
+                candle_core::bail!("`pad_to` height ({h}) less than maximum height of specified images ({max_h}).");
+            }
+            if w < max_w {
+                candle_core::bail!("`pad_to` width ({w}) less than maximum width of specified images ({max_w}).");
             }
         }
         let mut patch_masks = Vec::new();
@@ -183,7 +192,7 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
                 image_std,
             }) = normalize
             {
-                *image = self.normalize(image, image_mean, image_std);
+                *image = self.normalize(image, image_mean.unwrap_or(Self::DEFAULT_MEAN), image_std.unwrap_or(Self::DEFAULT_STD));
             }
 
             // Pad images, calculating attention mask.
