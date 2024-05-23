@@ -77,7 +77,7 @@ pub trait ImagePreProcessor: InputsProcessor {
     /// - `do_pad` pads the images to the one with the highest dimensions and will create a pixel attention mask.
     ///   Be sure to set this to `true` if the images differ in dimensions
     /// - `pad_to` pads the images to the specified dimension. This must be greater than or equal to the maximum
-    ///   size of a specified image. 
+    ///   size of a specified image.
     #[allow(clippy::too_many_arguments)]
     fn preprocess(
         &self,
@@ -87,7 +87,7 @@ pub trait ImagePreProcessor: InputsProcessor {
         rescale: Option<f32>,
         normalize: Option<NormalizationMetadata>,
         do_pad: bool,
-        pad_to: Option<(u32,u32)>,
+        pad_to: Option<(u32, u32)>,
         device: &Device,
     ) -> Result<PreprocessedImages>;
 

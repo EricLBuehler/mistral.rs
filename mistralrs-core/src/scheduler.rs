@@ -7,7 +7,6 @@ use crate::{
     engine::TERMINATE_ALL_NEXT_STEP,
     sequence::{Sequence, SequenceState, StopReason},
 };
-use image::GenericImageView;
 use range_checked::UsizeBounded;
 
 pub trait FcfsBacker: Default {
@@ -65,8 +64,8 @@ pub trait BucketingManager<Backer: FcfsBacker> {
     ) -> BucketedSeqs<Backer>;
 }
 
-// (adapters, cache length, image dims)
-type BucketKey = (Option<Vec<String>>, usize, Option<Vec<(u32, u32)>>);
+// (adapters, cache length)
+type BucketKey = (Option<Vec<String>>, usize);
 
 struct FixedBucketingManager;
 
@@ -85,29 +84,19 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
         let mut seq_priorities: HashMap<BucketKey, f64> = HashMap::new();
         for seq in running {
             let len = seq.len();
-            let image_dims = seq.images().map(|images| {
-                images
-                    .iter()
-                    .map(|image| image.dimensions())
-                    .collect::<Vec<_>>()
-            });
-            match seq_buckets.get_mut(&(seq.get_adapters(), len, image_dims.clone())) {
+            match seq_buckets.get_mut(&(seq.get_adapters(), len)) {
                 Some(bucket) => {
                     if !discrete {
-                        *seq_priorities
-                            .get_mut(&(seq.get_adapters(), len, image_dims.clone()))
-                            .unwrap() += seq.compute_priority();
+                        *seq_priorities.get_mut(&(seq.get_adapters(), len)).unwrap() +=
+                            seq.compute_priority();
                     }
                     bucket.push(seq);
                 }
                 None => {
                     if !discrete {
-                        seq_priorities.insert(
-                            (seq.get_adapters(), len, image_dims.clone()),
-                            seq.compute_priority(),
-                        );
+                        seq_priorities.insert((seq.get_adapters(), len), seq.compute_priority());
                     }
-                    seq_buckets.insert((seq.get_adapters(), len, image_dims.clone()), vec![seq]);
+                    seq_buckets.insert((seq.get_adapters(), len), vec![seq]);
                 }
             }
         }
@@ -123,7 +112,7 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
             // Allow the min seqs to catch up.
             let min = seq_buckets
                 .keys()
-                .min_by_key(|(_, x, _)| *x)
+                .min_by_key(|(_, x)| *x)
                 .expect("No sequence buckets.")
                 .clone();
             let len = if !discrete {

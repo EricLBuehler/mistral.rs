@@ -88,6 +88,19 @@ impl InputsProcessor for Idefics2ImageProcessor {
         let (pixel_values, pixel_attention_mask) = if is_prompt {
             let mut pixel_values_accum = Vec::new();
             let mut pixel_attention_mask_accum = Vec::new();
+            let mut max_h = 0;
+            let mut max_w = 0;
+            for seq in input_seqs.iter() {
+                for image in seq.images().expect("Need to have images by this point.") {
+                    let (w, h) = image.dimensions();
+                    if w > max_w {
+                        max_w = w;
+                    }
+                    if h > max_h {
+                        max_h = h;
+                    }
+                }
+            }
             for seq in input_seqs.iter_mut() {
                 // TODO: Properly pass params here?
                 let PreprocessedImages {
@@ -101,6 +114,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
                     None,
                     None,
                     true,
+                    Some((max_w, max_h)),
                     device,
                 )?;
                 pixel_values_accum.push(pixel_values.unsqueeze(0)?);
@@ -140,7 +154,7 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
         rescale: Option<f32>,
         normalize: Option<NormalizationMetadata>,
         do_pad: bool,
-        pad_to: Option<(u32,u32)>,
+        pad_to: Option<(u32, u32)>,
         device: &Device,
     ) -> Result<PreprocessedImages> {
         let mut max_h = 0;
@@ -154,13 +168,19 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
                 max_h = h;
             }
         }
-        if let Some((h,w)) = pad_to {
+        if let Some((h, w)) = pad_to {
             if h < max_h {
-                candle_core::bail!("`pad_to` height ({h}) less than maximum height of specified images ({max_h}).");
+                candle_core::bail!(
+                    "`pad_to` height ({h}) less than maximum height of specified images ({max_h})."
+                );
             }
             if w < max_w {
-                candle_core::bail!("`pad_to` width ({w}) less than maximum width of specified images ({max_w}).");
+                candle_core::bail!(
+                    "`pad_to` width ({w}) less than maximum width of specified images ({max_w})."
+                );
             }
+            max_h = h;
+            max_w = w;
         }
         let mut patch_masks = Vec::new();
         let mut pixel_values = Vec::new();
@@ -192,7 +212,11 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
                 image_std,
             }) = normalize
             {
-                *image = self.normalize(image, image_mean.unwrap_or(Self::DEFAULT_MEAN), image_std.unwrap_or(Self::DEFAULT_STD));
+                *image = self.normalize(
+                    image,
+                    image_mean.unwrap_or(Self::DEFAULT_MEAN),
+                    image_std.unwrap_or(Self::DEFAULT_STD),
+                );
             }
 
             // Pad images, calculating attention mask.
