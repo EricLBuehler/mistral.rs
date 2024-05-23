@@ -386,19 +386,11 @@
 <a href="#384" id="384">384</a>
 <a href="#385" id="385">385</a>
 <a href="#386" id="386">386</a>
-<a href="#387" id="387">387</a>
-<a href="#388" id="388">388</a>
-<a href="#389" id="389">389</a>
-<a href="#390" id="390">390</a>
-<a href="#391" id="391">391</a>
-<a href="#392" id="392">392</a>
-<a href="#393" id="393">393</a>
-<a href="#394" id="394">394</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 <span class="kw">use </span>mistralrs_core::{
-    Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelKind,
+    Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder,
     ModelSelected, NormalRequest, Request, RequestMessage, Response, SamplingParams,
     SchedulerMethod, TokenSource, Usage,
 };
@@ -709,15 +701,7 @@
     <span class="kw">if </span>use_flash_attn {
         <span class="macro">info!</span>(<span class="string">"Using flash attention."</span>);
     }
-    <span class="kw">if </span>use_flash_attn
-        &amp;&amp; <span class="macro">matches!</span>(
-            loader.get_kind(),
-            ModelKind::QuantizedGGML
-                | ModelKind::QuantizedGGUF
-                | ModelKind::XLoraGGML
-                | ModelKind::XLoraGGUF
-        )
-    {
+    <span class="kw">if </span>use_flash_attn &amp;&amp; loader.get_kind().is_quantized() {
         <span class="macro">warn!</span>(<span class="string">"Using flash attention with a quantized model has no effect!"</span>)
     }
     <span class="macro">info!</span>(<span class="string">"Model kind is: {}"</span>, loader.get_kind().to_string());

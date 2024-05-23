@@ -427,11 +427,6 @@
 <a href="#425" id="425">425</a>
 <a href="#426" id="426">426</a>
 <a href="#427" id="427">427</a>
-<a href="#428" id="428">428</a>
-<a href="#429" id="429">429</a>
-<a href="#430" id="430">430</a>
-<a href="#431" id="431">431</a>
-<a href="#432" id="432">432</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
@@ -662,10 +657,9 @@
             Device::Cpu
         };
 
-        <span class="kw">let </span><span class="kw-2">mut </span>is_lora = <span class="bool-val">false</span>;
+        <span class="kw">let </span>is_lora = <span class="self">self</span>.kind.is_adapted_and(|a| a.is_lora());
+
         <span class="kw">let </span><span class="kw-2">mut </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
-            ModelKind::QuantizedGGUF =&gt; <span class="macro">unreachable!</span>(),
-            ModelKind::QuantizedGGML =&gt; <span class="macro">unreachable!</span>(),
             ModelKind::Normal =&gt; <span class="macro">normal_model_loader!</span>(
                 paths,
                 dtype,
@@ -692,30 +686,26 @@
                 in_situ_quant.is_some(),
                 device.clone()
             ),
-            ModelKind::LoraNormal =&gt; {
-                is_lora = <span class="bool-val">true</span>;
-                <span class="macro">lora_model_loader!</span>(
-                    paths,
-                    dtype,
-                    default_dtype,
-                    <span class="kw-2">&amp;</span>load_device,
-                    config,
-                    <span class="self">self</span>.inner,
-                    <span class="self">self</span>.config.use_flash_attn,
-                    silent,
-                    mapper,
-                    in_situ_quant.is_some(),
-                    device.clone()
-                )
-            }
-            ModelKind::XLoraGGUF =&gt; <span class="macro">unreachable!</span>(),
-            ModelKind::XLoraGGML =&gt; <span class="macro">unreachable!</span>(),
-            ModelKind::LoraGGUF =&gt; <span class="macro">unreachable!</span>(),
-            ModelKind::LoraGGML =&gt; <span class="macro">unreachable!</span>(),
-            ModelKind::Speculative {
-                target: <span class="kw">_</span>,
-                draft: <span class="kw">_</span>,
-            } =&gt; <span class="macro">unreachable!</span>(),
+            ModelKind::LoraNormal =&gt; <span class="macro">lora_model_loader!</span>(
+                paths,
+                dtype,
+                default_dtype,
+                <span class="kw-2">&amp;</span>load_device,
+                config,
+                <span class="self">self</span>.inner,
+                <span class="self">self</span>.config.use_flash_attn,
+                silent,
+                mapper,
+                in_situ_quant.is_some(),
+                device.clone()
+            ),
+            ModelKind::QuantizedGGUF
+            | ModelKind::QuantizedGGML
+            | ModelKind::XLoraGGUF
+            | ModelKind::XLoraGGML
+            | ModelKind::LoraGGUF
+            | ModelKind::LoraGGML
+            | ModelKind::Speculative { .. } =&gt; <span class="macro">unreachable!</span>(),
         };
 
         <span class="kw">let </span>tokenizer = get_tokenizer(paths.get_tokenizer_filename())<span class="question-mark">?</span>;
