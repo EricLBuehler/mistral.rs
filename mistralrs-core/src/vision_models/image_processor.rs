@@ -44,7 +44,7 @@ pub(crate) fn from_pixel_data(data: Vec<Vec<Vec<u8>>>, h: usize, w: usize) -> Dy
 pub(crate) fn resize(
     image: &DynamicImage,
     size: &HashMap<String, u32>,
-    resample: usize,
+    resample: Option<usize>,
 ) -> Result<DynamicImage> {
     let (h, w) = if size.contains_key("shortest_edge") && size.contains_key("longest_edge") {
         let (mut w, mut h) = image.dimensions();

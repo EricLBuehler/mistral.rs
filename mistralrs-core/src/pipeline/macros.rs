@@ -76,7 +76,9 @@ macro_rules! deserialize_chat_template {
                 f
             ).unwrap()).unwrap());
         if let Some(processor_conf) = processor_conf {
-            template.chat_template = Some(processor_conf.chat_template);
+            if processor_conf.chat_template.is_some() {
+                template.chat_template = processor_conf.chat_template;
+            }
         }
         #[derive(Debug, serde::Deserialize)]
         struct SpecifiedTemplate {

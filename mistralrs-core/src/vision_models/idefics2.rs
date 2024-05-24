@@ -361,7 +361,7 @@ impl Attention {
         let q_proj = linear_no_bias(embed_dim, embed_dim, vb.pp("q_proj"))?;
         let k_proj = linear_no_bias(embed_dim, embed_dim, vb.pp("k_proj"))?;
         let v_proj = linear_no_bias(embed_dim, embed_dim, vb.pp("v_proj"))?;
-        let o_proj = linear_no_bias(embed_dim, embed_dim, vb.pp("o_proj"))?;
+        let o_proj = linear_no_bias(embed_dim, embed_dim, vb.pp("out_proj"))?;
 
         Ok(Self {
             embed_dim,
