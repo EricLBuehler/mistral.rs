@@ -319,8 +319,6 @@ impl VisionEmbeddings {
             )?
             .to_vec1::<f64>()?;
 
-            // TODO(EricLBuehler): https://github.com/huggingface/candle/issues/2185
-
             let bucket_coords_h =
                 bucketize_right(&fractional_coords_h, &boundaries, pixel_values.device())?;
             let bucket_coords_w =

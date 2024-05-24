@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::{fmt::Debug, str::FromStr};
 
 use anyhow::Result;
@@ -9,8 +10,11 @@ use pyo3::pyclass;
 
 use serde::Deserialize;
 
-use super::VisionModel;
+use super::{Processor, VisionModel};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
+use crate::vision_models::idefics2_input_processor::Idefics2Processor;
+use crate::vision_models::preprocessor_config::PreProcessorConfig;
+use crate::vision_models::processor_config::ProcessorConfig;
 use crate::DeviceMapMetadata;
 
 pub trait VisionModelLoader {
@@ -25,6 +29,11 @@ pub trait VisionModelLoader {
     ) -> Result<Box<dyn VisionModel + Send + Sync>>;
     fn is_gptx(&self) -> bool;
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
+    fn get_processor(
+        &self,
+        processor_config: ProcessorConfig,
+        preprocessor_config: PreProcessorConfig,
+    ) -> Arc<dyn Processor + Send + Sync>;
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
@@ -77,5 +86,15 @@ impl VisionModelLoader for Idefics2Loader {
         let mut config: Idefics2Config = serde_json::from_str(config)?;
         config.text_config.use_flash_attn = use_flash_attn;
         Ok(Box::new(config))
+    }
+    fn get_processor(
+        &self,
+        processor_config: ProcessorConfig,
+        preprocessor_config: PreProcessorConfig,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        Arc::new(Idefics2Processor::new(
+            processor_config,
+            preprocessor_config,
+        ))
     }
 }

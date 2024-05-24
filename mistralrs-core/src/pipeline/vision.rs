@@ -14,7 +14,6 @@ use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
-use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
@@ -222,8 +221,10 @@ impl Loader for VisionLoader {
             .unwrap(),
         )
         .unwrap();
-        // TODO: This needs to be configured
-        let processor = Idefics2Processor::new(processor_config, preprocessor_config.clone());
+
+        let processor = self
+            .inner
+            .get_processor(processor_config, preprocessor_config.clone());
 
         if let Some(in_situ_quant) = in_situ_quant {
             model.quantize(in_situ_quant, device.clone())?;
@@ -249,7 +250,7 @@ impl Loader for VisionLoader {
                 is_lora: false,
                 has_no_kv_cache: false,
             },
-            processor: Arc::new(processor),
+            processor,
             preprocessor_config: Arc::new(preprocessor_config),
         })))
     }
