@@ -3,6 +3,7 @@ use std::{
     collections::HashMap,
     env,
     error::Error,
+    ops::Deref,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -10,7 +11,7 @@ use std::{
 };
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
-use crate::openai::{ChatCompletionRequest, Grammar, MessageContent, StopTokens};
+use crate::openai::{ChatCompletionRequest, Grammar, MessageInnerContent, StopTokens};
 use anyhow::Result;
 use axum::{
     extract::{Json, State},
@@ -163,14 +164,15 @@ async fn parse_request(
             let mut messages = Vec::new();
             let mut image_urls = Vec::new();
             for message in req_messages {
-                match message.content {
+                match message.content.deref() {
                     Either::Left(content) => {
                         let mut message_map: IndexMap<
                             String,
                             Either<String, Vec<IndexMap<String, String>>>,
                         > = IndexMap::new();
                         message_map.insert("role".to_string(), Either::Left(message.role));
-                        message_map.insert("content".to_string(), Either::Left(content));
+                        message_map
+                            .insert("content".to_string(), Either::Left(content.to_string()));
                         messages.push(message_map);
                     }
                     Either::Right(image_messages) => {
@@ -187,7 +189,7 @@ async fn parse_request(
                         }
 
                         let mut items = Vec::new();
-                        for image_message in &image_messages {
+                        for image_message in image_messages {
                             if image_message.len() != 2 {
                                 anyhow::bail!("Expected 2 items for the sub-content of a message with an image.");
                             }
@@ -203,7 +205,7 @@ async fn parse_request(
                         fn get_content_and_url(
                             text_idx: usize,
                             url_idx: usize,
-                            image_messages: Vec<HashMap<String, MessageContent>>,
+                            image_messages: &[HashMap<String, MessageInnerContent>],
                         ) -> Result<(String, String)> {
                             if image_messages[text_idx]["text"].is_right() {
                                 anyhow::bail!("Expected string value in `text`.");
@@ -231,9 +233,9 @@ async fn parse_request(
                         > = IndexMap::new();
                         message_map.insert("role".to_string(), Either::Left(message.role));
                         let (content, url) = if items[0] == "text" {
-                            get_content_and_url(0, 1, image_messages)?
+                            get_content_and_url(0, 1, &image_messages)?
                         } else {
-                            get_content_and_url(1, 0, image_messages)?
+                            get_content_and_url(1, 0, &image_messages)?
                         };
 
                         let mut content_map = Vec::new();
@@ -254,7 +256,7 @@ async fn parse_request(
             if !image_urls.is_empty() {
                 let mut images = Vec::new();
                 for url in image_urls {
-                    let bytes = match reqwest::get("...").await {
+                    let bytes = match reqwest::get(url.clone()).await {
                         Ok(http_resp) => http_resp.bytes().await?.to_vec(),
                         Err(e) => {
                             if e.status().is_some_and(|code| code == StatusCode::NOT_FOUND) {

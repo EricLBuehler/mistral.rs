@@ -1,13 +1,36 @@
 use either::Either;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Deref};
 use utoipa::ToSchema;
 
-pub type MessageContent = Either<String, HashMap<String, String>>;
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct MessageInnerContent(
+    #[serde(with = "either::serde_untagged")] Either<String, HashMap<String, String>>,
+);
+
+impl Deref for MessageInnerContent {
+    type Target = Either<String, HashMap<String, String>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct MessageContent(
+    #[serde(with = "either::serde_untagged")]
+    Either<String, Vec<HashMap<String, MessageInnerContent>>>,
+);
+
+impl Deref for MessageContent {
+    type Target = Either<String, Vec<HashMap<String, MessageInnerContent>>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct Message {
-    pub content: Either<String, Vec<HashMap<String, MessageContent>>>,
+    pub content: MessageContent,
     pub role: String,
     pub name: Option<String>,
 }
