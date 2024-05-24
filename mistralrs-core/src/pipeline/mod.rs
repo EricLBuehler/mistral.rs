@@ -747,7 +747,7 @@ mod tests {
         let mut failed = Vec::new();
         let n_templates = templates.len();
         for ((has_system, bos, eos, unk, template), expected) in
-            templates.into_iter().zip(expected_outputs)
+            templates.iter().zip(expected_outputs)
         {
             let output = match apply_chat_template_to(
                 if !has_system {
@@ -770,8 +770,8 @@ mod tests {
             if output != *expected {
                 failed.push(format!(
                     "Expected: `{}` \n\nGot:      `{}`",
-                    expected.replace("\n", "\\n"),
-                    output.replace("\n", "\\n")
+                    expected.replace('\n', "\\n"),
+                    output.replace('\n', "\\n")
                 ));
             }
         }
