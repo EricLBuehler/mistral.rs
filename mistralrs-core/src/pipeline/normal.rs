@@ -285,7 +285,7 @@ impl Loader for NormalLoader {
             | ModelKind::Speculative { .. } => unreachable!(),
         };
 
-        let tokenizer = get_tokenizer(paths.get_tokenizer_filename())?;
+        let tokenizer = get_tokenizer(paths.get_tokenizer_filename(), None)?;
 
         let (chat_template, gen_conf) = deserialize_chat_template!(paths, self);
 

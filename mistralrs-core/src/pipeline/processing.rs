@@ -16,7 +16,7 @@ pub trait Processor {
         add_generation_prompt: bool,
     ) -> Result<Vec<u32>>;
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor>;
-    fn add_special_tokens(&self, _: &dyn Pipeline) {}
+    fn get_special_tokens(&self) -> &[&'static str];
 }
 
 pub(crate) fn apply_chat_template(
@@ -74,5 +74,8 @@ impl Processor for BasicProcessor {
     }
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
         Arc::new(text_models_inputs_processor::TextInputsProcessor)
+    }
+    fn get_special_tokens(&self) -> &[&'static str] {
+        &[]
     }
 }

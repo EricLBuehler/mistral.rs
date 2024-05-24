@@ -57,13 +57,6 @@ impl Engine {
         prefix_cache_n: usize,
         disable_eos_stop: bool,
     ) -> Self {
-        {
-            let pipeline_deref = &*get_mut_arcmutex!(pipeline);
-            // Add any special tokens the processor needs
-            pipeline_deref
-                .get_processor()
-                .add_special_tokens(pipeline_deref);
-        }
         let device = get_mut_arcmutex!(pipeline).device().clone();
         let is_xlora = get_mut_arcmutex!(pipeline).get_metadata().is_xlora;
         Self {

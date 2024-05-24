@@ -5,7 +5,6 @@ use std::{any::Any, sync::Arc};
 use candle_core::{Device, Result, Tensor};
 use image::{DynamicImage, GenericImageView};
 use indexmap::IndexMap;
-use tokenizers::AddedToken;
 
 use crate::{
     pipeline::{
@@ -86,14 +85,8 @@ impl Processor for Idefics2Processor {
         Arc::new(Idefics2ImageProcessor)
     }
 
-    fn add_special_tokens(&self, pipeline: &dyn Pipeline) {
-        Arc::get_mut(&mut pipeline.tokenizer())
-            .expect("Tokenizer has multiple Arc owners, we cannot add the required special tokens.")
-            .add_special_tokens(&[
-                AddedToken::from("<fake_token_around_image>", true),
-                AddedToken::from("<image>", true),
-                AddedToken::from("<end_of_utterance>", true),
-            ]);
+    fn get_special_tokens(&self) -> &[&'static str] {
+        &["<fake_token_around_image>", "<image>", "<end_of_utterance>"]
     }
 }
 

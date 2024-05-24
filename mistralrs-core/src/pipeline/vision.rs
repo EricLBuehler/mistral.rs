@@ -197,10 +197,6 @@ impl Loader for VisionLoader {
             } => unreachable!(),
         };
 
-        let tokenizer = get_tokenizer(paths.get_tokenizer_filename())?;
-
-        let (chat_template, gen_conf) = deserialize_chat_template!(paths, self);
-
         let preprocessor_config: PreProcessorConfig = serde_json::from_str(
             &fs::read_to_string(
                 paths
@@ -225,6 +221,13 @@ impl Loader for VisionLoader {
         let processor = self
             .inner
             .get_processor(processor_config, preprocessor_config.clone());
+
+        let tokenizer = get_tokenizer(
+            paths.get_tokenizer_filename(),
+            Some(processor.get_special_tokens()),
+        )?;
+
+        let (chat_template, gen_conf) = deserialize_chat_template!(paths, self);
 
         if let Some(in_situ_quant) = in_situ_quant {
             model.quantize(in_situ_quant, device.clone())?;
