@@ -40,7 +40,7 @@ use std::{collections::HashMap, path::PathBuf, str::FromStr};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
-pub use vision_loaders::VisionModelLoader;
+pub use vision_loaders::{VisionLoaderType, VisionModelLoader};
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
