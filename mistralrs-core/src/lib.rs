@@ -52,7 +52,7 @@ pub use pipeline::{
     SpeculativeLoader, SpeculativePipeline, TokenSource, VisionLoader, VisionLoaderBuilder,
     VisionModelLoader, VisionSpecificConfig,
 };
-pub use request::{Constraint, NormalRequest, Request, RequestMessage};
+pub use request::{Constraint, Content, NormalRequest, Request, RequestMessage};
 pub use response::Response;
 pub use response::*;
 pub use sampler::{SamplingParams, StopTokens, TopLogprob};

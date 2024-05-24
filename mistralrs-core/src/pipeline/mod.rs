@@ -16,7 +16,7 @@ use crate::aici::toktree::TokTrie;
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
 use crate::lora::{LoraConfig, Ordering};
-use crate::DeviceMapMetadata;
+use crate::{Content, DeviceMapMetadata};
 use candle_core::quantized::GgmlDType;
 use chat_template::{apply_chat_template_to, ChatTemplate};
 use core::fmt;
@@ -498,7 +498,7 @@ pub enum CacheInstruction {
 pub trait PreProcessingMixin: MetadataMixin {
     fn apply_chat_template(
         &self,
-        messages: Vec<IndexMap<String, String>>,
+        messages: Vec<IndexMap<String, Content>>,
         add_generation_prompt: bool,
     ) -> Result<String> {
         let chat_template = self.get_chat_template();
@@ -763,6 +763,7 @@ mod tests {
     /// >>> t.apply_chat_template([{"role":"system","content":"You are a helpful assistant"},{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi there"},{"role":"user","content":"Who are you"},{"role":"assistant","content":"   I am an assistant   "},{"role":"user","content":"Another question"}], add_generation_prompt=True, tokenize=False)
     /// ```
     fn test_chat_templates() {
+        use either::Either;
         use indexmap::IndexMap;
 
         use crate::pipeline::apply_chat_template_to;
@@ -800,9 +801,10 @@ mod tests {
         ];
         let mut inputs = Vec::new();
         for [role, content] in messages {
-            let mut message = IndexMap::new();
-            message.insert("role".to_string(), role.to_string());
-            message.insert("content".to_string(), content.to_string());
+            let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+                IndexMap::new();
+            message.insert("role".to_string(), Either::Left(role.to_string()));
+            message.insert("content".to_string(), Either::Left(content.to_string()));
             inputs.push(message);
         }
         for ((i, (has_system, bos, eos, unk, template)), expected) in

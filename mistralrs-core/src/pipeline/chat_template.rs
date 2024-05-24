@@ -8,6 +8,8 @@ use serde::Deserialize;
 use tokenizers::Tokenizer;
 use tracing::info;
 
+use crate::Content;
+
 const SUPPORTED_ALTERNATE_EOS: [&str; 2] = [
     "<|eot_id|>", // Handle Llama3 chat case
     "<|im_end|>", // Handle ChatML case
@@ -166,7 +168,7 @@ pub struct GenerationConfig {
 }
 
 pub fn apply_chat_template_to(
-    messages: Vec<IndexMap<String, String>>,
+    messages: Vec<IndexMap<String, Content>>,
     add_generation_prompt: bool,
     template: &str,
     bos_tok: Option<String>,

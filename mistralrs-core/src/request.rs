@@ -1,4 +1,5 @@
 use candle_core::quantized::GgmlDType;
+use either::Either;
 use indexmap::IndexMap;
 
 use crate::{response::Response, sampler::SamplingParams};
@@ -13,10 +14,12 @@ pub enum Constraint {
     None,
 }
 
+pub type Content = Either<String, Vec<IndexMap<String, String>>>;
+
 #[derive(Clone, Debug)]
 /// Message or messages for a [`Request`].
 pub enum RequestMessage {
-    Chat(Vec<IndexMap<String, String>>),
+    Chat(Vec<IndexMap<String, Content>>),
     Completion {
         text: String,
         echo_prompt: bool,
@@ -25,7 +28,7 @@ pub enum RequestMessage {
     CompletionTokens(Vec<u32>),
     VisionChat {
         images: Vec<image::DynamicImage>,
-        messages: Vec<IndexMap<String, String>>,
+        messages: Vec<IndexMap<String, Content>>,
     },
 }
 

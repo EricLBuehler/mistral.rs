@@ -165,9 +165,12 @@ async fn parse_request(
             for message in req_messages {
                 match message.content {
                     Either::Left(content) => {
-                        let mut message_map = IndexMap::new();
-                        message_map.insert("role".to_string(), message.role);
-                        message_map.insert("content".to_string(), content);
+                        let mut message_map: IndexMap<
+                            String,
+                            Either<String, Vec<IndexMap<String, String>>>,
+                        > = IndexMap::new();
+                        message_map.insert("role".to_string(), Either::Left(message.role));
+                        message_map.insert("content".to_string(), Either::Left(content));
                         messages.push(message_map);
                     }
                     Either::Right(image_messages) => {
@@ -215,23 +218,34 @@ async fn parse_request(
                                     .unwrap_right()
                                     .contains_key("url")
                             {
-                                anyhow::bail!(
-                                    "Expected mapping `{{ \"url\": ... }}` value in `image_url`."
-                                );
+                                anyhow::bail!("Expected content of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}")
                             }
                             let url = image_messages[url_idx]["image_url"].as_ref().unwrap_right()
                                 ["url"]
                                 .clone();
                             Ok((content, url))
                         }
-                        let mut message_map = IndexMap::new();
-                        message_map.insert("role".to_string(), message.role);
+                        let mut message_map: IndexMap<
+                            String,
+                            Either<String, Vec<IndexMap<String, String>>>,
+                        > = IndexMap::new();
+                        message_map.insert("role".to_string(), Either::Left(message.role));
                         let (content, url) = if items[0] == "text" {
                             get_content_and_url(0, 1, image_messages)?
                         } else {
                             get_content_and_url(1, 0, image_messages)?
                         };
-                        message_map.insert("content".to_string(), content);
+
+                        let mut content_map = Vec::new();
+                        let mut content_image_map = IndexMap::new();
+                        content_image_map.insert("type".to_string(), "image".to_string());
+                        content_map.push(content_image_map);
+                        let mut content_text_map = IndexMap::new();
+                        content_text_map.insert("type".to_string(), "text".to_string());
+                        content_text_map.insert("text".to_string(), content);
+                        content_map.push(content_text_map);
+
+                        message_map.insert("content".to_string(), Either::Right(content_map));
                         messages.push(message_map);
                         image_urls.push(url);
                     }
@@ -259,9 +273,10 @@ async fn parse_request(
         }
         Either::Right(prompt) => {
             let mut messages = Vec::new();
-            let mut message_map = IndexMap::new();
-            message_map.insert("role".to_string(), "user".to_string());
-            message_map.insert("content".to_string(), prompt);
+            let mut message_map: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+                IndexMap::new();
+            message_map.insert("role".to_string(), Either::Left("user".to_string()));
+            message_map.insert("content".to_string(), Either::Left(prompt));
             messages.push(message_map);
             RequestMessage::Chat(messages)
         }
