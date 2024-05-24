@@ -1,4 +1,4 @@
-use std::any::Any;
+use std::{any::Any, sync::Arc};
 
 use anyhow::Result;
 use candle_core::Device;
@@ -15,7 +15,8 @@ pub trait InputsProcessor {
     /// This should also enable matmul via f16 if prompt and the sequence length is greater than 32.
     /// Otherwise, matmul via f16 is disabled.
     ///
-    /// This should return a type which can be downcasted to the proper type as used in `forward_inputs``
+    /// This should return a type which can be downcasted to the proper type as used in `forward_inputs`
+    #[allow(clippy::too_many_arguments)]
     fn process_inputs(
         &self,
         input_seqs: &mut [&mut Sequence],
@@ -24,6 +25,7 @@ pub trait InputsProcessor {
         device: &Device,
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
+        other_config: Option<Arc<dyn Any>>,
     ) -> Result<Box<dyn Any>>;
 
     fn get_type(&self) -> InputsProcessorType;
@@ -32,7 +34,7 @@ pub trait InputsProcessor {
 // ========================= Test models input processor
 
 pub mod text_models_inputs_processor {
-    use std::{any::Any, iter::repeat};
+    use std::{any::Any, iter::repeat, sync::Arc};
 
     use anyhow::Result;
     use candle_core::{Device, Tensor};
@@ -185,6 +187,7 @@ pub mod text_models_inputs_processor {
             device: &Device,
             no_kv_cache: bool,
             last_n_context_len: Option<(usize, usize)>,
+            _: Option<Arc<dyn Any>>,
         ) -> Result<Box<dyn Any>> {
             if is_xlora && !is_prompt {
                 let InputMetadata {

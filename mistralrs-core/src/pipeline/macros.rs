@@ -64,13 +64,20 @@ macro_rules! deserialize_chat_template {
     ($paths:expr, $this:ident) => {{
         use tracing::info;
 
-        let template: ChatTemplate = serde_json::from_str(&fs::read_to_string(
+        let mut template: ChatTemplate = serde_json::from_str(&fs::read_to_string(
             $paths.get_template_filename(),
         )?).unwrap();
         let gen_conf: Option<$crate::pipeline::chat_template::GenerationConfig> = $paths.get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(
                 f
             ).unwrap()).unwrap());
+        let processor_conf: Option<$crate::vision_models::processor_config::ProcessorConfig> = $paths.get_processor_config().as_ref()
+            .map(|f| serde_json::from_str(&fs::read_to_string(
+                f
+            ).unwrap()).unwrap());
+        if let Some(processor_conf) = processor_conf {
+            template.chat_template = Some(processor_conf.chat_template);
+        }
         #[derive(Debug, serde::Deserialize)]
         struct SpecifiedTemplate {
             chat_template: String,
@@ -190,6 +197,32 @@ macro_rules! get_paths {
             None
         };
 
+        let preprocessor_config = if $crate::api_dir_list!(api, model_id)
+            .collect::<Vec<_>>()
+            .contains(&"preprocessor_config.json".to_string())
+        {
+            Some($crate::api_get_file!(
+                api,
+                "preprocessor_config.json",
+                model_id
+            ))
+        } else {
+            None
+        };
+
+        let processor_config = if $crate::api_dir_list!(api, model_id)
+            .collect::<Vec<_>>()
+            .contains(&"processor_config.json".to_string())
+        {
+            Some($crate::api_get_file!(
+                api,
+                "processor_config.json",
+                model_id
+            ))
+        } else {
+            None
+        };
+
         let template_filename = $crate::api_get_file!(api, "tokenizer_config.json", model_id);
 
         Ok(Box::new($path_name {
@@ -204,6 +237,8 @@ macro_rules! get_paths {
             template_filename,
             gen_conf,
             lora_preload_adapter_info,
+            preprocessor_config,
+            processor_config,
         }))
     }};
 }

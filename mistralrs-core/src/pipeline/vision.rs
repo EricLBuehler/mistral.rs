@@ -16,6 +16,7 @@ use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::vision_models::idefics2_input_processor::Idefics2ImageProcessor;
+use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
     deserialize_chat_template, do_sample, get_paths, vision_normal_model_loader, DeviceMapMetadata,
@@ -44,6 +45,7 @@ pub struct VisionPipeline {
     chat_template: Arc<ChatTemplate>,
     model_id: String,
     metadata: GeneralMetadata,
+    preprocessor_config: Arc<PreProcessorConfig>,
 }
 
 /// A loader for a vision (non-quantized) model.
@@ -199,6 +201,17 @@ impl Loader for VisionLoader {
 
         let (chat_template, gen_conf) = deserialize_chat_template!(paths, self);
 
+        let preprocessor_config: PreProcessorConfig = serde_json::from_str(
+            &fs::read_to_string(
+                paths
+                    .get_preprocessor_config()
+                    .as_ref()
+                    .expect("Need preprocessor config"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
         if let Some(in_situ_quant) = in_situ_quant {
             model.quantize(in_situ_quant, device.clone())?;
         }
@@ -223,6 +236,7 @@ impl Loader for VisionLoader {
                 is_lora: false,
                 has_no_kv_cache: false,
             },
+            preprocessor_config: Arc::new(preprocessor_config),
         })))
     }
 
@@ -241,6 +255,9 @@ impl PreProcessingMixin for VisionPipeline {
     }
     fn get_input_processor(&self) -> Box<dyn InputsProcessor> {
         Box::new(Idefics2ImageProcessor)
+    }
+    fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
+        Some(self.preprocessor_config.clone())
     }
 }
 

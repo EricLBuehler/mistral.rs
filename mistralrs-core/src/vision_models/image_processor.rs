@@ -1,37 +1,37 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use std::collections::HashMap;
+
 use candle_core::{Device, Result, Tensor};
-use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageBuffer, Pixel, Rgb};
+use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageBuffer, Pixel};
 
 use crate::pipeline::InputsProcessor;
 
-pub(crate) struct NormalizationMetadata {
-    pub(crate) image_mean: Option<[f32; 3]>,
-    pub(crate) image_std: Option<[f32; 3]>,
-}
+use super::preprocessor_config::{PreProcessorConfig, ToFilter};
 
 pub(crate) struct PreprocessedImages {
     pub(crate) pixel_values: Tensor,
     pub(crate) pixel_attention_mask: Tensor,
 }
 
-pub(crate) fn empty_image(h: usize, w: usize) -> Vec<Vec<Rgb<u8>>> {
-    vec![vec![Rgb::from([0u8, 0, 0]); w]; h]
+pub(crate) fn empty_image(h: usize, w: usize) -> Vec<Vec<Vec<u8>>> {
+    vec![vec![vec![]; w]; h]
 }
 
-pub(crate) fn get_pixel_data(image: &DynamicImage, h: usize, w: usize) -> Vec<Vec<Rgb<u8>>> {
+pub(crate) fn get_pixel_data(image: &DynamicImage, h: usize, w: usize) -> Vec<Vec<Vec<u8>>> {
     let mut pixel_data = empty_image(h, w);
     image
         .pixels()
-        .for_each(|(x, y, pixel)| pixel_data[y as usize][x as usize] = pixel.to_rgb());
+        .for_each(|(x, y, pixel)| pixel_data[y as usize][x as usize] = pixel.channels().to_vec());
     pixel_data
 }
 
-pub(crate) fn from_pixel_data(data: Vec<Vec<Rgb<u8>>>, h: usize, w: usize) -> DynamicImage {
-    let mut flat_data: Vec<u8> = Vec::with_capacity(w * h * 4);
+pub(crate) fn from_pixel_data(data: Vec<Vec<Vec<u8>>>, h: usize, w: usize) -> DynamicImage {
+    let channels = data[0][0].len();
+    let mut flat_data: Vec<u8> = Vec::with_capacity(w * h * channels);
     for row in data {
         for pixel in row {
-            flat_data.extend_from_slice(&pixel.0);
+            flat_data.extend_from_slice(&pixel);
         }
     }
 
@@ -41,8 +41,35 @@ pub(crate) fn from_pixel_data(data: Vec<Vec<Rgb<u8>>>, h: usize, w: usize) -> Dy
     DynamicImage::ImageRgb8(img_buffer)
 }
 
-pub(crate) fn resize(image: &DynamicImage, w: u32, h: u32, filter: FilterType) -> DynamicImage {
-    image.resize(w, h, filter)
+pub(crate) fn resize(
+    image: &DynamicImage,
+    size: &HashMap<String, u32>,
+    resample: usize,
+) -> Result<DynamicImage> {
+    let (h, w) = if size.contains_key("shortest_edge") && size.contains_key("longest_edge") {
+        let (mut w, mut h) = image.dimensions();
+
+        let min_len = size["shortest_edge"];
+        let max_len = size["longest_edge"];
+        let aspect_ratio = w as f32 / h as f32;
+
+        if w >= h && w > max_len {
+            w = max_len;
+            h = (w as f32 / aspect_ratio) as u32;
+        } else if h > w && h > max_len {
+            h = max_len;
+            w = (h as f32 * aspect_ratio) as u32;
+        }
+        h = h.max(min_len);
+        w = w.max(min_len);
+        (h, w)
+    } else if size.contains_key("height") && size.contains_key("width") {
+        (size["height"], size["width"])
+    } else {
+        candle_core::bail!("Size must contain either both keys `shortest_edge` and `longest_edge` or `height` and `width`")
+    };
+    let filter: FilterType = resample.to_filter()?;
+    Ok(image.resize(w, h, filter))
 }
 
 /// Output is: (3, height, width)
@@ -56,8 +83,7 @@ pub(crate) fn make_pixel_values(image: &DynamicImage, device: &Device) -> Result
     for row in data {
         let mut row_accum = Vec::new();
         for item in row {
-            let [r, g, b] = item.0;
-            row_accum.push(Tensor::from_slice(&[r, g, b], (1, 3), device)?)
+            row_accum.push(Tensor::from_slice(&item, (1, item.len()), device)?)
         }
         accum.push(Tensor::cat(&row_accum, 0)?.reshape((3, ()))?.unsqueeze(0)?);
     }
@@ -65,8 +91,8 @@ pub(crate) fn make_pixel_values(image: &DynamicImage, device: &Device) -> Result
 }
 
 pub trait ImagePreProcessor: InputsProcessor {
-    const DEFAULT_MEAN: [f32; 3];
-    const DEFAULT_STD: [f32; 3];
+    const DEFAULT_MEAN: [f64; 3];
+    const DEFAULT_STD: [f64; 3];
 
     /// Preprocess the images.
     ///
@@ -82,11 +108,7 @@ pub trait ImagePreProcessor: InputsProcessor {
     fn preprocess(
         &self,
         images: Vec<DynamicImage>,
-        filter: Option<FilterType>,
-        resize: Option<(usize, usize)>,
-        rescale: Option<f32>,
-        normalize: Option<NormalizationMetadata>,
-        do_pad: bool,
+        config: &PreProcessorConfig,
         pad_to: Option<(u32, u32)>,
         device: &Device,
     ) -> Result<PreprocessedImages>;
@@ -136,8 +158,9 @@ pub trait ImagePreProcessor: InputsProcessor {
         let mut data = get_pixel_data(image, h as usize, w as usize);
         data.iter_mut().for_each(|row| {
             for c in row {
-                #[allow(clippy::redundant_closure)]
-                c.apply_without_alpha(|x| f(x));
+                c.iter_mut().for_each(|x| {
+                    *x = f(*x);
+                });
             }
         });
         from_pixel_data(data, h as usize, w as usize)
@@ -152,7 +175,7 @@ pub trait ImagePreProcessor: InputsProcessor {
         let mut data = get_pixel_data(image, h as usize, w as usize);
         data.iter_mut().for_each(|row| {
             for c in row {
-                for (channel, x) in c.channels_mut().iter_mut().enumerate() {
+                for (channel, x) in c.iter_mut().enumerate() {
                     *x = f(*x, channel);
                 }
             }
@@ -161,17 +184,17 @@ pub trait ImagePreProcessor: InputsProcessor {
     }
 
     /// Rescale image by `scale`
-    fn rescale(&self, image: &DynamicImage, scale: f32) -> DynamicImage {
-        self.map_image(image, |x| (x as f32 * scale) as u8)
+    fn rescale(&self, image: &DynamicImage, scale: f64) -> DynamicImage {
+        self.map_image(image, |x| (x as f64 * scale) as u8)
     }
 
     /// Normalizes the image using the standard distribution specified by `mean` and `std`
     /// for each channel.
     ///
     /// (image-mean)/std
-    fn normalize(&self, image: &DynamicImage, mean: [f32; 3], std: [f32; 3]) -> DynamicImage {
+    fn normalize(&self, image: &DynamicImage, mean: [f64; 3], std: [f64; 3]) -> DynamicImage {
         self.map_image_channels(image, |x, channel| {
-            ((x as f32 - mean[channel]) / std[channel]) as u8
+            ((x as f64 - mean[channel]) / std[channel]) as u8
         })
     }
 }

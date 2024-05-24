@@ -91,7 +91,14 @@ pub trait ModelPaths {
     /// Filepath for general model configuration.
     fn get_gen_conf_filename(&self) -> Option<&PathBuf>;
 
+    /// Information for preloading LoRA adapters (adapter name, the weight file, and the config).
     fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>>;
+
+    /// Get the preprocessor config (for the vision models). This is used to pre process images.
+    fn get_preprocessor_config(&self) -> &Option<PathBuf>;
+
+    /// Get the processor config (for the vision models). This is primarily used for the chat template.
+    fn get_processor_config(&self) -> &Option<PathBuf>;
 }
 
 #[derive(Clone)]
@@ -107,6 +114,8 @@ pub struct LocalModelPaths<P> {
     xlora_ordering: Option<Ordering>,
     gen_conf: Option<P>,
     lora_preload_adapter_info: Option<HashMap<String, (P, LoraConfig)>>,
+    preprocessor_config: Option<P>,
+    processor_config: Option<P>,
 }
 
 impl<P> LocalModelPaths<P> {
@@ -123,6 +132,8 @@ impl<P> LocalModelPaths<P> {
         xlora_ordering: Option<Ordering>,
         gen_conf: Option<P>,
         lora_preload_adapter_info: Option<HashMap<String, (P, LoraConfig)>>,
+        preprocessor_config: Option<P>,
+        processor_config: Option<P>,
     ) -> Self {
         Self {
             tokenizer_filename,
@@ -136,6 +147,8 @@ impl<P> LocalModelPaths<P> {
             xlora_ordering,
             gen_conf,
             lora_preload_adapter_info,
+            preprocessor_config,
+            processor_config,
         }
     }
 }
@@ -173,6 +186,12 @@ impl ModelPaths for LocalModelPaths<PathBuf> {
     }
     fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>> {
         &self.lora_preload_adapter_info
+    }
+    fn get_preprocessor_config(&self) -> &Option<PathBuf> {
+        &self.preprocessor_config
+    }
+    fn get_processor_config(&self) -> &Option<PathBuf> {
+        &self.processor_config
     }
 }
 
@@ -522,6 +541,7 @@ pub trait PreProcessingMixin: MetadataMixin {
             .map_err(|e| anyhow::Error::msg(e.to_string()))?;
         Ok(encoding.get_ids().to_vec())
     }
+    fn get_input_processor_config(&self) -> Option<Arc<dyn Any>>;
 }
 
 pub trait IsqPipelineMixin {
@@ -593,6 +613,7 @@ pub trait Pipeline:
                 &self.device(),
                 self.get_metadata().has_no_kv_cache,
                 None,
+                self.get_input_processor_config(),
             )
             .unwrap();
 

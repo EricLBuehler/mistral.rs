@@ -184,6 +184,9 @@ impl PreProcessingMixin for SpeculativePipeline {
     fn get_input_processor(&self) -> Box<dyn InputsProcessor> {
         get_mut_arcmutex!(self.target).get_input_processor()
     }
+    fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
+        get_mut_arcmutex!(self.target).get_input_processor_config()
+    }
 }
 
 impl IsqPipelineMixin for SpeculativePipeline {
@@ -348,6 +351,7 @@ impl Pipeline for SpeculativePipeline {
                     &device,
                     has_no_kv_cache,
                     None,
+                    None,
                 )
                 .unwrap();
             let logits = get_mut_arcmutex!(self.draft).forward_inputs(Box::new(inputs))?;
@@ -411,6 +415,7 @@ impl Pipeline for SpeculativePipeline {
                 &device,
                 has_no_kv_cache,
                 Some((self.gamma, initial_cache_len)), // Get the last gamma, see above
+                None,
             )
             .unwrap();
 

@@ -344,6 +344,9 @@ impl PreProcessingMixin for NormalPipeline {
     fn get_input_processor(&self) -> Box<dyn InputsProcessor> {
         Box::new(text_models_inputs_processor::TextInputsProcessor)
     }
+    fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
+        None
+    }
 }
 
 impl IsqPipelineMixin for NormalPipeline {

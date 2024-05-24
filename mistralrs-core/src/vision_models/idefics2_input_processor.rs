@@ -1,7 +1,9 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use std::{any::Any, sync::Arc};
+
 use candle_core::{Device, Result, Tensor};
-use image::{imageops::FilterType, DynamicImage, GenericImageView};
+use image::{DynamicImage, GenericImageView};
 
 use crate::{
     pipeline::{
@@ -15,7 +17,10 @@ use crate::{
     },
 };
 
-use super::image_processor::{ImagePreProcessor, NormalizationMetadata, PreprocessedImages};
+use super::{
+    image_processor::{ImagePreProcessor, PreprocessedImages},
+    preprocessor_config::PreProcessorConfig,
+};
 
 pub struct Idefics2ImageProcessor;
 
@@ -66,6 +71,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
         device: &Device,
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
+        other_config: Option<Arc<dyn Any>>,
     ) -> anyhow::Result<Box<dyn std::any::Any>> {
         if is_xlora {
             anyhow::bail!("Cannot make inputs for X-LoRA vision model.");
@@ -84,6 +90,8 @@ impl InputsProcessor for Idefics2ImageProcessor {
         } else {
             get_completion_input(input_seqs, device, no_kv_cache, last_n_context_len)?
         };
+        let config = other_config.expect("Need a PreProcessorConfig config.");
+        let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
         let (pixel_values, pixel_attention_mask) = if is_prompt {
             let mut pixel_values_accum = Vec::new();
@@ -109,11 +117,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
                 } = self.preprocess(
                     seq.take_images()
                         .expect("Need to have images by this point."),
-                    None,
-                    None,
-                    None,
-                    None,
-                    true,
+                    config,
                     Some((max_w, max_h)),
                     device,
                 )?;
@@ -142,18 +146,14 @@ impl InputsProcessor for Idefics2ImageProcessor {
 
 impl ImagePreProcessor for Idefics2ImageProcessor {
     #[allow(clippy::excessive_precision)]
-    const DEFAULT_MEAN: [f32; 3] = [0.48145466, 0.4578275, 0.40821073];
+    const DEFAULT_MEAN: [f64; 3] = [0.48145466, 0.4578275, 0.40821073];
     #[allow(clippy::excessive_precision)]
-    const DEFAULT_STD: [f32; 3] = [0.26862954, 0.26130258, 0.27577711];
+    const DEFAULT_STD: [f64; 3] = [0.26862954, 0.26130258, 0.27577711];
 
     fn preprocess(
         &self,
         mut images: Vec<DynamicImage>,
-        filter: Option<FilterType>,
-        resize: Option<(usize, usize)>,
-        rescale: Option<f32>,
-        normalize: Option<NormalizationMetadata>,
-        do_pad: bool,
+        config: &PreProcessorConfig,
         pad_to: Option<(u32, u32)>,
         device: &Device,
     ) -> Result<PreprocessedImages> {
@@ -184,43 +184,50 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
         }
         let mut patch_masks = Vec::new();
         let mut pixel_values = Vec::new();
-        for image in images.iter_mut() {
-            // Convert image to rgb8 always
-            // TODO configurable? Will need to update the image_processor.rs functions
-            *image = DynamicImage::ImageRgb8(image.to_rgb8());
 
-            // TODO: implement image splitting?
+        // Image splitting
+        if config.do_image_splitting {
+            let mut new_images = Vec::new();
+            for image in images {
+                let (w, h) = image.dimensions();
+                let mid_w = w / 2;
+                let mid_h = h / 2;
+                new_images.push(image.crop_imm(0, 0, mid_w, mid_h));
+                new_images.push(image.crop_imm(mid_w, 0, w, mid_h));
+                new_images.push(image.crop_imm(0, mid_h, mid_w, h));
+                new_images.push(image.crop_imm(mid_w, mid_h, w, h));
+                new_images.push(image);
+            }
+            images = new_images;
+        }
+
+        for image in images.iter_mut() {
+            // Convert to rgb
+            if config.do_convert_rgb {
+                *image = DynamicImage::ImageRgb8(image.to_rgb8());
+            }
 
             // Resize
-            if let Some((w, h)) = resize {
-                *image = super::image_processor::resize(
-                    image,
-                    w as u32,
-                    h as u32,
-                    filter.expect("Need filter if resizing."),
-                );
+            if config.do_resize {
+                *image = super::image_processor::resize(image, &config.size, config.resampling)?;
             }
 
             // Rescale
-            if let Some(factor) = rescale {
-                *image = self.rescale(image, factor);
+            if config.do_rescale {
+                *image = self.rescale(image, config.rescale_factor);
             }
 
             // Normalize
-            if let Some(NormalizationMetadata {
-                image_mean,
-                image_std,
-            }) = normalize
-            {
+            if config.do_normalize {
                 *image = self.normalize(
                     image,
-                    image_mean.unwrap_or(Self::DEFAULT_MEAN),
-                    image_std.unwrap_or(Self::DEFAULT_STD),
+                    config.image_mean.unwrap_or(Self::DEFAULT_MEAN),
+                    config.image_std.unwrap_or(Self::DEFAULT_STD),
                 );
             }
 
             // Pad images, calculating attention mask.
-            if do_pad {
+            if config.do_pad {
                 let (new_image, mask) = pad(image, max_h as usize, max_w as usize, device)?;
                 *image = new_image;
                 patch_masks.push(mask.unsqueeze(0)?);
