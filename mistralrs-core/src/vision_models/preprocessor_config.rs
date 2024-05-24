@@ -4,7 +4,7 @@ use candle_core::Result;
 use image::imageops::FilterType;
 use serde::Deserialize;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub(crate) struct PreProcessorConfig {
     pub(crate) do_convert_rgb: bool,
     pub(crate) do_image_splitting: bool,

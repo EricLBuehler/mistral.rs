@@ -1,5 +1,4 @@
 use super::cache_manager::DefaultCacheManager;
-use super::inputs_processor::{text_models_inputs_processor, InputsProcessor};
 use super::normal_loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
     Phi3Loader, Qwen2Loader,
@@ -340,9 +339,6 @@ impl Loader for NormalLoader {
 impl PreProcessingMixin for NormalPipeline {
     fn get_chat_template(&self) -> Arc<ChatTemplate> {
         self.chat_template.clone()
-    }
-    fn get_input_processor(&self) -> Box<dyn InputsProcessor> {
-        Box::new(text_models_inputs_processor::TextInputsProcessor)
     }
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
         None

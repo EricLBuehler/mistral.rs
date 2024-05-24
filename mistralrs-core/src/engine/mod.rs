@@ -57,6 +57,13 @@ impl Engine {
         prefix_cache_n: usize,
         disable_eos_stop: bool,
     ) -> Self {
+        {
+            let pipeline_deref = &*get_mut_arcmutex!(pipeline);
+            // Add any special tokens the processor needs
+            pipeline_deref
+                .get_processor()
+                .add_special_tokens(pipeline_deref);
+        }
         let device = get_mut_arcmutex!(pipeline).device().clone();
         let is_xlora = get_mut_arcmutex!(pipeline).get_metadata().is_xlora;
         Self {
@@ -323,27 +330,28 @@ impl Engine {
             _ => None,
         };
 
-        let mut force_tokens = None;
-        let formatted_prompt = match request.messages {
+        let mut prompt = match request.messages {
             RequestMessage::Chat(messages)
             | RequestMessage::VisionChat {
                 images: _,
                 messages,
             } => {
-                let template = get_mut_arcmutex!(self.pipeline).apply_chat_template(messages, true);
+                let pipeline = &*get_mut_arcmutex!(self.pipeline);
+                let template = pipeline.get_processor().process(pipeline, messages, true);
                 handle_seq_error!(template, request.response)
             }
-            RequestMessage::Completion { text, .. } => text,
-            RequestMessage::CompletionTokens(it) => {
-                let res = get_mut_arcmutex!(self.pipeline)
+            RequestMessage::Completion { text, .. } => {
+                let prompt = get_mut_arcmutex!(self.pipeline)
                     .tokenizer()
-                    .decode(&it, false)
-                    .expect("cannot decode completion tokens");
-                force_tokens = Some(it);
-                res
+                    .encode(text, false)
+                    .map_err(|e| anyhow::Error::msg(e.to_string()));
+                handle_seq_error!(prompt, request.response)
+                    .get_ids()
+                    .to_vec()
             }
+            RequestMessage::CompletionTokens(it) => it,
         };
-        if formatted_prompt.is_empty() {
+        if prompt.is_empty() {
             request
                 .response
                 .send(Response::ValidationError(
@@ -353,13 +361,6 @@ impl Engine {
                 .expect("Expected receiver.");
             return;
         }
-        let mut prompt = match force_tokens {
-            Some(tks) => tks,
-            None => {
-                let prompt = get_mut_arcmutex!(self.pipeline).tokenize_prompt(&formatted_prompt);
-                handle_seq_error!(prompt, request.response)
-            }
-        };
 
         if prompt.len() > get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len {
             if !self.truncate_sequence {
@@ -536,7 +537,12 @@ impl Engine {
                 recognizer,
                 request.suffix.clone(),
                 if echo_prompt {
-                    Some(formatted_prompt.clone())
+                    Some(
+                        get_mut_arcmutex!(self.pipeline)
+                            .tokenizer()
+                            .decode(&prompt, false)
+                            .expect("cannot decode completion tokens"),
+                    )
                 } else {
                     None
                 },

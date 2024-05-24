@@ -8,6 +8,7 @@ mod macros;
 mod normal;
 mod normal_loaders;
 mod paths;
+mod processing;
 mod sampling;
 mod speculative;
 mod vision;
@@ -16,14 +17,12 @@ use crate::aici::toktree::TokTrie;
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
 use crate::lora::{LoraConfig, Ordering};
-use crate::{Content, DeviceMapMetadata};
+use crate::DeviceMapMetadata;
 use candle_core::quantized::GgmlDType;
-use chat_template::{apply_chat_template_to, ChatTemplate};
+use chat_template::ChatTemplate;
 use core::fmt;
-use either::Either;
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
-use indexmap::IndexMap;
 pub use isq::IsqModel;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 pub use normal_loaders::{
@@ -31,6 +30,7 @@ pub use normal_loaders::{
     Phi2Loader, Phi3Loader, Qwen2Loader,
 };
 pub(crate) use paths::{get_model_paths, get_xlora_paths, XLoraPaths};
+pub(crate) use processing::{apply_chat_template, Processor};
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 use std::any::Any;
@@ -54,6 +54,7 @@ pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
 };
+use self::processing::BasicProcessor;
 
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
 /// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
@@ -496,51 +497,10 @@ pub enum CacheInstruction {
 }
 
 pub trait PreProcessingMixin: MetadataMixin {
-    fn apply_chat_template(
-        &self,
-        messages: Vec<IndexMap<String, Content>>,
-        add_generation_prompt: bool,
-    ) -> Result<String> {
-        let chat_template = self.get_chat_template();
-        let template = chat_template.chat_template.as_ref().unwrap();
-        let bos_tok = if let Some(ref bos) = self.get_chat_template().bos_token {
-            match bos.0 {
-                Either::Left(ref lit) => Some(lit.to_string()),
-                Either::Right(ref added) => Some(added.content.to_string()),
-            }
-        } else {
-            None
-        };
-        let eos_tok = match chat_template.eos_token {
-            Either::Left(ref lit) => lit,
-            Either::Right(ref added) => &added.content,
-        };
-        let unk_tok = if let Some(ref unk) = self.get_chat_template().unk_token {
-            match unk.0 {
-                Either::Left(ref lit) => Some(lit.to_string()),
-                Either::Right(ref added) => Some(added.content.to_string()),
-            }
-        } else {
-            None
-        };
-        apply_chat_template_to(
-            messages,
-            add_generation_prompt,
-            template,
-            bos_tok,
-            eos_tok,
-            unk_tok,
-        )
+    fn get_processor(&self) -> Arc<dyn Processor> {
+        Arc::new(BasicProcessor)
     }
     fn get_chat_template(&self) -> Arc<ChatTemplate>;
-    fn get_input_processor(&self) -> Box<dyn InputsProcessor>;
-    fn tokenize_prompt(&self, prompt: &str) -> Result<Vec<u32>> {
-        let encoding = self
-            .tokenizer()
-            .encode(prompt, false)
-            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
-        Ok(encoding.get_ids().to_vec())
-    }
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>>;
 }
 
@@ -605,7 +565,8 @@ pub trait Pipeline:
         post_op: CacheInstruction,
     ) -> Result<(), candle_core::Error> {
         let inputs = self
-            .get_input_processor()
+            .get_processor()
+            .inputs_processor()
             .process_inputs(
                 input_seqs,
                 is_prompt,
@@ -763,10 +724,10 @@ mod tests {
     /// >>> t.apply_chat_template([{"role":"system","content":"You are a helpful assistant"},{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi there"},{"role":"user","content":"Who are you"},{"role":"assistant","content":"   I am an assistant   "},{"role":"user","content":"Another question"}], add_generation_prompt=True, tokenize=False)
     /// ```
     fn test_chat_templates() {
+        use crate::pipeline::chat_template::apply_chat_template_to;
         use either::Either;
         use indexmap::IndexMap;
 
-        use crate::pipeline::apply_chat_template_to;
         let templates = [
             // ChatML: https://huggingface.co/teknium/OpenHermes-2.5-Mistral-7B
             (true, "<s>", "</s>", "<unk>", "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"),

@@ -4,25 +4,98 @@ use std::{any::Any, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
 use image::{DynamicImage, GenericImageView};
+use indexmap::IndexMap;
+use tokenizers::AddedToken;
 
 use crate::{
     pipeline::{
+        apply_chat_template,
         text_models_inputs_processor::{self, get_completion_input, get_prompt_input},
-        InputsProcessor, InputsProcessorType,
+        InputsProcessor, InputsProcessorType, Processor,
     },
     sequence::Sequence,
     vision_models::{
         image_processor::{from_pixel_data, get_pixel_data, make_pixel_values},
         ModelInputs,
     },
+    Content, Pipeline,
 };
 
 use super::{
     image_processor::{ImagePreProcessor, PreprocessedImages},
     preprocessor_config::PreProcessorConfig,
+    processor_config::ProcessorConfig,
 };
 
+// Input processor
 pub struct Idefics2ImageProcessor;
+// Processor
+pub struct Idefics2Processor {
+    config: ProcessorConfig,
+    preprocessor_config: PreProcessorConfig,
+    fake_image_token: &'static str,
+    image_token: &'static str,
+}
+
+impl Idefics2Processor {
+    pub fn new(config: ProcessorConfig, preprocessor_config: PreProcessorConfig) -> Self {
+        Self {
+            config,
+            preprocessor_config,
+            fake_image_token: "<fake_token_around_image>",
+            image_token: "<image>",
+        }
+    }
+}
+
+impl Processor for Idefics2Processor {
+    fn process(
+        &self,
+        pipeline: &dyn Pipeline,
+        messages: Vec<IndexMap<String, Content>>,
+        add_generation_prompt: bool,
+    ) -> anyhow::Result<Vec<u32>> {
+        let mut prompt = apply_chat_template(pipeline, messages, add_generation_prompt)?;
+
+        let mut image_str = format!(
+            "{}{}{}",
+            self.fake_image_token,
+            self.image_token.repeat(self.config.image_seq_len),
+            self.fake_image_token
+        );
+        if self.preprocessor_config.do_image_splitting {
+            // 4 patches + 1 original
+            image_str = image_str.repeat(5);
+        }
+
+        prompt = prompt.replace(self.image_token, &image_str);
+        // Deal with any adjacent images.
+        prompt = prompt.replace(
+            &format!("{}{}", self.fake_image_token, self.fake_image_token),
+            self.fake_image_token,
+        );
+
+        let encoding = pipeline
+            .tokenizer()
+            .encode(prompt, false)
+            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
+        Ok(encoding.get_ids().to_vec())
+    }
+
+    fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
+        Arc::new(Idefics2ImageProcessor)
+    }
+
+    fn add_special_tokens(&self, pipeline: &dyn Pipeline) {
+        Arc::get_mut(&mut pipeline.tokenizer())
+            .expect("Tokenizer has multiple Arc owners, we cannot add the required special tokens.")
+            .add_special_tokens(&[
+                AddedToken::from("<fake_token_around_image>", true),
+                AddedToken::from("<image>", true),
+                AddedToken::from("<end_of_utterance>", true),
+            ]);
+    }
+}
 
 /// Generate pixel mask. 1 indicates valid pixel, 0 indicates padding
 /// Shape is (h,w)

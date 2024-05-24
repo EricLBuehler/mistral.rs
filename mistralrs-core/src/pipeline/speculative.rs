@@ -21,10 +21,9 @@ use crate::{
 };
 
 use super::{
-    cache_manager::DefaultCacheManager, chat_template::ChatTemplate,
-    inputs_processor::InputsProcessor, sampling::SpeculativeSample, AdapterActivationMixin,
-    CacheInstruction, CacheManager, CacheManagerMixin, GeneralMetadata, IsqPipelineMixin,
-    MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
+    cache_manager::DefaultCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
+    AdapterActivationMixin, CacheInstruction, CacheManager, CacheManagerMixin, GeneralMetadata,
+    IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
 };
 
 pub struct SpeculativeLoader {
@@ -158,8 +157,14 @@ impl SpeculativePipeline {
         if get_mut_arcmutex!(target).category() != get_mut_arcmutex!(draft).category() {
             candle_core::bail!("Target and draft models' category do not match. This is required for speculative decoding.");
         }
-        if get_mut_arcmutex!(target).get_input_processor().get_type()
-            != get_mut_arcmutex!(draft).get_input_processor().get_type()
+        if get_mut_arcmutex!(target)
+            .get_processor()
+            .inputs_processor()
+            .get_type()
+            != get_mut_arcmutex!(draft)
+                .get_processor()
+                .inputs_processor()
+                .get_type()
         {
             candle_core::bail!("Target and draft models' input processors do not match. This is required for speculative decoding.");
         }
@@ -180,9 +185,6 @@ impl SpeculativePipeline {
 impl PreProcessingMixin for SpeculativePipeline {
     fn get_chat_template(&self) -> Arc<ChatTemplate> {
         get_mut_arcmutex!(self.target).get_chat_template()
-    }
-    fn get_input_processor(&self) -> Box<dyn InputsProcessor> {
-        get_mut_arcmutex!(self.target).get_input_processor()
     }
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
         get_mut_arcmutex!(self.target).get_input_processor_config()
@@ -343,7 +345,8 @@ impl Pipeline for SpeculativePipeline {
             let device = get_mut_arcmutex!(self.draft).device();
             let has_no_kv_cache = get_mut_arcmutex!(self.draft).get_metadata().has_no_kv_cache;
             let inputs = self
-                .get_input_processor()
+                .get_processor()
+                .inputs_processor()
                 .process_inputs(
                     &mut [seq],
                     is_prompt && i == 0, // Only prompt (no kv cache) if first
@@ -407,7 +410,8 @@ impl Pipeline for SpeculativePipeline {
             .get_metadata()
             .has_no_kv_cache;
         let inputs = self
-            .get_input_processor()
+            .get_processor()
+            .inputs_processor()
             .process_inputs(
                 &mut [seq],
                 true, // use the "prefill" tokens

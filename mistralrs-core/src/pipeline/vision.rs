@@ -1,11 +1,10 @@
 use super::cache_manager::DefaultCacheManager;
-use super::inputs_processor::InputsProcessor;
 use super::vision_loaders::{Idefics2Loader, VisionLoaderType};
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, Cache, CacheManager,
     CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory,
-    ModelKind, ModelPaths, PreProcessingMixin, TokenSource, VisionModel, VisionModelLoader,
-    XLoraPaths,
+    ModelKind, ModelPaths, PreProcessingMixin, Processor, TokenSource, VisionModel,
+    VisionModelLoader, XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -15,8 +14,9 @@ use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
-use crate::vision_models::idefics2_input_processor::Idefics2ImageProcessor;
+use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
+use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
     deserialize_chat_template, do_sample, get_paths, vision_normal_model_loader, DeviceMapMetadata,
@@ -45,6 +45,7 @@ pub struct VisionPipeline {
     chat_template: Arc<ChatTemplate>,
     model_id: String,
     metadata: GeneralMetadata,
+    processor: Arc<dyn Processor + Send + Sync>,
     preprocessor_config: Arc<PreProcessorConfig>,
 }
 
@@ -211,6 +212,18 @@ impl Loader for VisionLoader {
             .unwrap(),
         )
         .unwrap();
+        let processor_config: ProcessorConfig = serde_json::from_str(
+            &fs::read_to_string(
+                paths
+                    .get_processor_config()
+                    .as_ref()
+                    .expect("Need preprocessor config"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        // TODO: This needs to be configured
+        let processor = Idefics2Processor::new(processor_config, preprocessor_config.clone());
 
         if let Some(in_situ_quant) = in_situ_quant {
             model.quantize(in_situ_quant, device.clone())?;
@@ -236,6 +249,7 @@ impl Loader for VisionLoader {
                 is_lora: false,
                 has_no_kv_cache: false,
             },
+            processor: Arc::new(processor),
             preprocessor_config: Arc::new(preprocessor_config),
         })))
     }
@@ -253,11 +267,11 @@ impl PreProcessingMixin for VisionPipeline {
     fn get_chat_template(&self) -> Arc<ChatTemplate> {
         self.chat_template.clone()
     }
-    fn get_input_processor(&self) -> Box<dyn InputsProcessor> {
-        Box::new(Idefics2ImageProcessor)
-    }
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
         Some(self.preprocessor_config.clone())
+    }
+    fn get_processor(&self) -> Arc<dyn super::Processor> {
+        self.processor.clone()
     }
 }
 
