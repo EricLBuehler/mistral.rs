@@ -121,7 +121,15 @@ fn pad(
     max_w: usize,
     device: &Device,
 ) -> Result<(DynamicImage, Tensor)> {
-    let new_image = from_pixel_data(get_pixel_data(image, max_h, max_w), max_h, max_w);
+    let new_image = from_pixel_data(
+        get_pixel_data(
+            image,
+            image.dimensions().1 as usize,
+            image.dimensions().0 as usize,
+        ),
+        max_h,
+        max_w,
+    );
     Ok((new_image, make_pixel_mask(image, max_h, max_w, device)?))
 }
 
@@ -234,18 +242,12 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
             }
         }
         if let Some((h, w)) = pad_to {
-            if h < max_h {
-                candle_core::bail!(
-                    "`pad_to` height ({h}) less than maximum height of specified images ({max_h})."
-                );
+            if h >= max_h {
+                max_h = h;
             }
-            if w < max_w {
-                candle_core::bail!(
-                    "`pad_to` width ({w}) less than maximum width of specified images ({max_w})."
-                );
+            if w >= max_w {
+                max_w = w;
             }
-            max_h = h;
-            max_w = w;
         }
         let mut patch_masks = Vec::new();
         let mut pixel_values = Vec::new();

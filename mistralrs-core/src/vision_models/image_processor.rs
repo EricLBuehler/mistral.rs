@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use candle_core::{Device, Result, Tensor};
-use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageBuffer, Pixel};
+use image::{imageops::FilterType, DynamicImage, GenericImageView, Pixel, RgbaImage};
 
 use crate::pipeline::InputsProcessor;
 
@@ -26,19 +26,25 @@ pub(crate) fn get_pixel_data(image: &DynamicImage, h: usize, w: usize) -> Vec<Ve
     pixel_data
 }
 
-pub(crate) fn from_pixel_data(data: Vec<Vec<Vec<u8>>>, h: usize, w: usize) -> DynamicImage {
+pub(crate) fn from_pixel_data(mut data: Vec<Vec<Vec<u8>>>, h: usize, w: usize) -> DynamicImage {
     let channels = data[0][0].len();
+    let cur_h = data.len();
+    let cur_w = data[0].len();
+    let delta_h = h - cur_h;
+    let delta_w = w - cur_w;
+
     let mut flat_data: Vec<u8> = Vec::with_capacity(w * h * channels);
-    for row in data {
+    data.extend(vec![vec![vec![0; channels]; cur_w]; delta_h]);
+    for mut row in data {
+        row.extend(vec![vec![0; channels]; delta_w]);
         for pixel in row {
             flat_data.extend_from_slice(&pixel);
         }
     }
 
-    let img_buffer =
-        ImageBuffer::from_vec(w as u32, h as u32, flat_data).expect("Unable to create ImageBuffer");
-
-    DynamicImage::ImageRgb8(img_buffer)
+    DynamicImage::ImageRgba8(
+        RgbaImage::from_raw(w as u32, h as u32, flat_data).expect("Unable to create RgbaImage"),
+    )
 }
 
 pub(crate) fn resize(
@@ -85,9 +91,10 @@ pub(crate) fn make_pixel_values(image: &DynamicImage, device: &Device) -> Result
         for item in row {
             row_accum.push(Tensor::from_slice(&item, (1, item.len()), device)?)
         }
-        accum.push(Tensor::cat(&row_accum, 0)?.reshape((3, ()))?.unsqueeze(0)?);
+        let row = Tensor::cat(&row_accum, 0)?;
+        accum.push(row.reshape((row.dim(1)?, ()))?.unsqueeze(1)?);
     }
-    Tensor::cat(&accum, 0)
+    Tensor::cat(&accum, 1)
 }
 
 pub trait ImagePreProcessor: InputsProcessor {
@@ -194,7 +201,7 @@ pub trait ImagePreProcessor: InputsProcessor {
     /// (image-mean)/std
     fn normalize(&self, image: &DynamicImage, mean: [f64; 3], std: [f64; 3]) -> DynamicImage {
         self.map_image_channels(image, |x, channel| {
-            ((x as f64 - mean[channel]) / std[channel]) as u8
+            ((x as f64 - mean.get(channel).unwrap_or(&1.)) / std.get(channel).unwrap_or(&1.)) as u8
         })
     }
 }
