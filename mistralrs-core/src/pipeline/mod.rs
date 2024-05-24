@@ -713,7 +713,78 @@ pub(crate) fn extract_logits(
     Tensor::cat(&toks, 0)
 }
 
+#[cfg(test)]
 mod tests {
+    use crate::Content;
+    use either::Either;
+    use indexmap::IndexMap;
+
+    macro_rules! hashmap {
+        (@single $($x:tt)*) => (());
+        (@count $($rest:expr),*) => (<[()]>::len(&[$(hashmap!(@single $rest)),*]));
+
+        ($($key:expr => $value:expr,)+) => { hashmap!($($key => $value),+) };
+        ($($key:expr => $value:expr),*) => {
+            {
+                let _cap = hashmap!(@count $($key),*);
+                let mut _map = ::indexmap::IndexMap::with_capacity(_cap);
+                $(
+                    let _ = _map.insert($key, $value);
+                )*
+                _map
+            }
+        };
+    }
+
+    #[cfg(test)]
+    #[track_caller]
+    fn test_with_inputs(
+        templates: &[(bool, &str, &str, &str, &str)],
+        expected_outputs: &[&str],
+        inputs: Vec<IndexMap<String, Content>>,
+    ) {
+        use super::chat_template::apply_chat_template_to;
+        let mut failed = Vec::new();
+        let n_templates = templates.len();
+        for ((has_system, bos, eos, unk, template), expected) in
+            templates.into_iter().zip(expected_outputs)
+        {
+            let output = match apply_chat_template_to(
+                if !has_system {
+                    inputs[1..].to_vec()
+                } else {
+                    inputs.clone()
+                },
+                true,
+                template,
+                Some(bos.to_string()),
+                eos,
+                Some(unk.to_string()),
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    failed.push(format!("Failed with {e}."));
+                    continue;
+                }
+            };
+            if output != *expected {
+                failed.push(format!(
+                    "Expected: `{}` \n\nGot:      `{}`",
+                    expected.replace("\n", "\\n"),
+                    output.replace("\n", "\\n")
+                ));
+            }
+        }
+        if !failed.is_empty() {
+            for (i, line) in failed.iter().enumerate() {
+                println!("------------ Template {i} ------------");
+                println!("{line}");
+            }
+            println!("------------------------");
+            panic!("{}/{n_templates} chat templates failed.", failed.len());
+        }
+    }
+
     #[test]
     /// Generating these cases:
     /// ```py
@@ -724,10 +795,6 @@ mod tests {
     /// >>> t.apply_chat_template([{"role":"system","content":"You are a helpful assistant"},{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi there"},{"role":"user","content":"Who are you"},{"role":"assistant","content":"   I am an assistant   "},{"role":"user","content":"Another question"}], add_generation_prompt=True, tokenize=False)
     /// ```
     fn test_chat_templates() {
-        use crate::pipeline::chat_template::apply_chat_template_to;
-        use either::Either;
-        use indexmap::IndexMap;
-
         let templates = [
             // ChatML: https://huggingface.co/teknium/OpenHermes-2.5-Mistral-7B
             (true, "<s>", "</s>", "<unk>", "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"),
@@ -739,6 +806,8 @@ mod tests {
             (false, "<s>", "</s>", "<unk>", "{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token}}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}"),
             // google/gemma-7b-it
             (false, "<bos>", "<eos>", "<unk>", "{{ bos_token }}{% if messages[0]['role'] == 'system' %}{{ raise_exception('System role not supported') }}{% endif %}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if (message['role'] == 'assistant') %}{% set role = 'model' %}{% else %}{% set role = message['role'] %}{% endif %}{{ '<start_of_turn>' + role + '\n' + message['content'] | trim + '<end_of_turn>\n' }}{% endfor %}{% if add_generation_prompt %}{{'<start_of_turn>model\n'}}{% endif %}"),
+            // HuggingFaceM4/idefics2-8b-chatty
+            (true, "<s>", "</s>", "<unk>", "{% for message in messages %}{{message['role'].capitalize()}}{% if message['content'][0]['type'] == 'image' %}{{':'}}{% else %}{{': '}}{% endif %}{% for line in message['content'] %}{% if line['type'] == 'text' %}{{line['text']}}{% elif line['type'] == 'image' %}{{ '<image>' }}{% endif %}{% endfor %}<end_of_utterance>\n{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"),
         ];
         let expected_outputs = [
             // ChatML: https://huggingface.co/teknium/OpenHermes-2.5-Mistral-7B
@@ -768,23 +837,121 @@ mod tests {
             message.insert("content".to_string(), Either::Left(content.to_string()));
             inputs.push(message);
         }
-        for ((i, (has_system, bos, eos, unk, template)), expected) in
-            templates.into_iter().enumerate().zip(expected_outputs)
-        {
-            let output = apply_chat_template_to(
-                if !has_system {
-                    inputs[1..].to_vec()
-                } else {
-                    inputs.clone()
+        test_with_inputs(&templates, &expected_outputs, inputs);
+    }
+
+    #[test]
+    /// Generating these cases:
+    /// ```py
+    /// >>> processor=transformers.AutoProcessor.from_pretrained(...)
+    /// >>> processor.apply_chat_template([
+    ///         {"role":"system","content":[{"type":"text", "text": "You are a helpful assistant"}]},
+    ///         {"role":"user","content":[{"type":"image"}, {"type":"text", "text": "Hello, please describe the above."}]},
+    ///         {"role":"assistant","content":[{"type":"text", "text": "Hi there"}]},
+    ///         {"role":"user","content":[{"type":"text", "text": "Who are you"}]},
+    ///         {"role":"assistant","content":[{"type":"text", "text": "   I am an assistant   "}]},
+    ///         {"role":"user","content":[{"type":"text", "text": "Another question"}]}
+    ///     ], add_generation_prompt=True, tokenize=False)
+    /// ```
+    fn test_image_chat_templates() {
+        let templates = [
+            // HuggingFaceM4/idefics2-8b-chatty: first run, without images
+            (true, "<s>", "</s>", "<unk>", "{% for message in messages %}{{message['role'].capitalize()}}{% if message['content'][0]['type'] == 'image' %}{{':'}}{% else %}{{': '}}{% endif %}{% for line in message['content'] %}{% if line['type'] == 'text' %}{{line['text']}}{% elif line['type'] == 'image' %}{{ '<image>' }}{% endif %}{% endfor %}<end_of_utterance>\n{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"),
+        ];
+        let expected_outputs = [
+            // HuggingFaceM4/idefics2-8b-chatty: first run, without images
+            "System: You are a helpful assistant<end_of_utterance>\nUser:<image>Hello, please describe the above.<end_of_utterance>\nAssistant: Hi there<end_of_utterance>\nUser:<image>This is me, who are you<end_of_utterance>\nAssistant:    I am an assistant   <end_of_utterance>\nUser:<image>Another question, what is this?<end_of_utterance>\nAssistant:",
+        ];
+
+        let mut inputs = Vec::new();
+
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+            IndexMap::new();
+        message.insert("role".to_string(), Either::Left("system".to_string()));
+        message.insert(
+            "content".to_string(),
+            Either::Right(vec![hashmap! {
+                "type".to_string() => "text".to_string(),
+                "text".to_string() => "You are a helpful assistant".to_string()
+            }]),
+        );
+        inputs.push(message);
+
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+            IndexMap::new();
+        message.insert("role".to_string(), Either::Left("user".to_string()));
+        message.insert(
+            "content".to_string(),
+            Either::Right(vec![
+                hashmap! {
+                    "type".to_string() => "image".to_string()
                 },
-                true,
-                template,
-                Some(bos.to_string()),
-                eos,
-                Some(unk.to_string()),
-            )
-            .unwrap_or_else(|_| panic!("Template number {i}"));
-            assert_eq!(output, expected, "Template number {i}");
-        }
+                hashmap! {
+                    "type".to_string() => "text".to_string(),
+                    "text".to_string() => "Hello, please describe the above.".to_string()
+                },
+            ]),
+        );
+        inputs.push(message);
+
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+            IndexMap::new();
+        message.insert("role".to_string(), Either::Left("assistant".to_string()));
+        message.insert(
+            "content".to_string(),
+            Either::Right(vec![hashmap! {
+                "type".to_string() => "text".to_string(),
+                "text".to_string() => "Hi there".to_string()
+            }]),
+        );
+        inputs.push(message);
+
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+            IndexMap::new();
+        message.insert("role".to_string(), Either::Left("user".to_string()));
+        message.insert(
+            "content".to_string(),
+            Either::Right(vec![
+                hashmap! {
+                    "type".to_string() => "image".to_string()
+                },
+                hashmap! {
+                    "type".to_string() => "text".to_string(),
+                    "text".to_string() => "This is me, who are you".to_string()
+                },
+            ]),
+        );
+        inputs.push(message);
+
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+            IndexMap::new();
+        message.insert("role".to_string(), Either::Left("assistant".to_string()));
+        message.insert(
+            "content".to_string(),
+            Either::Right(vec![hashmap! {
+                "type".to_string() => "text".to_string(),
+                "text".to_string() => "   I am an assistant   ".to_string()
+            }]),
+        );
+        inputs.push(message);
+
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+            IndexMap::new();
+        message.insert("role".to_string(), Either::Left("user".to_string()));
+        message.insert(
+            "content".to_string(),
+            Either::Right(vec![
+                hashmap! {
+                    "type".to_string() => "image".to_string()
+                },
+                hashmap! {
+                    "type".to_string() => "text".to_string(),
+                    "text".to_string() => "Another question, what is this?".to_string()
+                },
+            ]),
+        );
+        inputs.push(message);
+
+        test_with_inputs(&templates, &expected_outputs, inputs);
     }
 }

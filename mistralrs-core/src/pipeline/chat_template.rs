@@ -4,7 +4,7 @@ use anyhow::Result;
 use either::Either;
 use indexmap::IndexMap;
 use minijinja::{context, Environment, ErrorKind};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use tracing::info;
 
@@ -180,12 +180,27 @@ pub fn apply_chat_template_to(
     env.set_lstrip_blocks(true);
     env.set_trim_blocks(true);
 
-    let template = template.replace(".strip()", "|trim");
+    #[derive(Serialize, Deserialize)]
+    struct UntaggedContent(#[serde(with = "either::serde_untagged")] Content);
+    let mut new_messages = Vec::new();
+    for message in messages {
+        let mut new_message = IndexMap::new();
+        for (k, v) in message {
+            new_message.insert(k, UntaggedContent(v));
+        }
+        new_messages.push(new_message);
+    }
+
+    let template = template
+        .replace(".strip()", "|trim")
+        .replace(".upper()", "|upper")
+        .replace(".lower()", "|lower")
+        .replace(".capitalize()", "|capitalize ");
     env.add_template("chat_template", template.as_str())?;
     env.add_function("raise_exception", raise_exception);
     let tmpl = env.get_template("chat_template").unwrap();
     Ok(tmpl.render(context! {
-        messages => messages,
+        messages => new_messages,
         add_generation_prompt => add_generation_prompt,
         bos_token => bos_tok,
         eos_token => eos_tok,
