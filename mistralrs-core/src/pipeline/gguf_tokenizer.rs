@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use candle_core::quantized::gguf_file::Content;
 use tokenizers::{models::bpe::BpeBuilder, AddedToken, ModelWrapper, Tokenizer};
+use tracing::info;
 
 pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
     let model = content.metadata["tokenizer.ggml.model"]
@@ -39,6 +40,12 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
             .collect::<Vec<_>>()
     });
 
+    info!(
+        "Converting GGML tokenizer. Model: `{model}`, num tokens: {}, num added tokens: {}, num merges: {}",
+        tokens.len(),
+        added_tokens.as_ref().map(|x| x.len()).unwrap_or(0),
+        merges.as_ref().map(|x| x.len()).unwrap_or(0)
+    );
     let _bos = content.metadata["tokenizer.ggml.bos_token_id"]
         .to_u32()
         .expect("GGUF bos token is not u32");
@@ -59,6 +66,7 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
         "llama" | "replit" | "gpt2" | "rwkv" => {
             // BPE, as seen in relevant tokenizer.json files
             let bpe_builder = BpeBuilder::new().unk_token(tokens[unk as usize].clone());
+            info!("Loading as BPE tokenizer.");
 
             let mut vocab = HashMap::new();
             for (i, tok) in tokens.into_iter().enumerate() {
