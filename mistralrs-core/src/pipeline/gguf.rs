@@ -7,11 +7,11 @@ use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::calculate_eos_tokens;
+use crate::pipeline::gguf_tokenizer::convert_ggml_to_hf_tokenizer;
 use crate::pipeline::Cache;
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
-use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 use crate::xlora_models::NonGranularState;
 use crate::{deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata};
@@ -329,6 +329,8 @@ impl Loader for GGUFLoader {
             }
         }
 
+        let tokenizer = convert_ggml_to_hf_tokenizer(&model)?;
+
         let mut is_lora = false;
         let model = match self.kind {
             ModelKind::QuantizedGGUF => match arch {
@@ -448,8 +450,6 @@ impl Loader for GGUFLoader {
             }
             _ => unreachable!(),
         };
-
-        let tokenizer = get_tokenizer(paths.get_tokenizer_filename())?;
 
         let (chat_template, gen_conf) = deserialize_chat_template!(paths, self);
 
