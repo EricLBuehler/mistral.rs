@@ -3,5 +3,3 @@ Cargo.lock
 output.log
 .ruff_cache
 .vscode
-testgen_text.py
-testgen_vision.py
