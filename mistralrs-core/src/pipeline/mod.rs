@@ -623,7 +623,7 @@ pub trait Pipeline:
             _ => unreachable!("Unreachable PRE cache op."),
         }
 
-        let logits = self.forward_inputs(Box::new(inputs))?;
+        let logits = self.forward_inputs(inputs)?;
 
         match post_op {
             CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
