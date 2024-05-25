@@ -233,9 +233,9 @@ async fn parse_request(
                         > = IndexMap::new();
                         message_map.insert("role".to_string(), Either::Left(message.role));
                         let (content, url) = if items[0] == "text" {
-                            get_content_and_url(0, 1, &image_messages)?
+                            get_content_and_url(0, 1, image_messages)?
                         } else {
-                            get_content_and_url(1, 0, &image_messages)?
+                            get_content_and_url(1, 0, image_messages)?
                         };
 
                         let mut content_map = Vec::new();

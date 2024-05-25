@@ -170,19 +170,6 @@ impl InputsProcessor for Idefics2ImageProcessor {
         let (pixel_values, pixel_attention_mask) = if is_prompt {
             let mut pixel_values_accum = Vec::new();
             let mut pixel_attention_mask_accum = Vec::new();
-            let mut max_h = 0;
-            let mut max_w = 0;
-            for seq in input_seqs.iter() {
-                for image in seq.images().expect("Need to have images by this point.") {
-                    let (w, h) = image.dimensions();
-                    if w > max_w {
-                        max_w = w;
-                    }
-                    if h > max_h {
-                        max_h = h;
-                    }
-                }
-            }
             for seq in input_seqs.iter_mut() {
                 let PreprocessedImages {
                     pixel_values,
@@ -191,7 +178,6 @@ impl InputsProcessor for Idefics2ImageProcessor {
                     seq.take_images()
                         .expect("Need to have images by this point."),
                     config,
-                    Some((max_w, max_h)),
                     device,
                 )?;
                 pixel_values_accum.push(pixel_values.unsqueeze(0)?);
@@ -227,28 +213,8 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
         &self,
         mut images: Vec<DynamicImage>,
         config: &PreProcessorConfig,
-        pad_to: Option<(u32, u32)>,
         device: &Device,
     ) -> Result<PreprocessedImages> {
-        let mut max_h = 0;
-        let mut max_w = 0;
-        for image in &images {
-            let (w, h) = image.dimensions();
-            if w > max_w {
-                max_w = w;
-            }
-            if h > max_h {
-                max_h = h;
-            }
-        }
-        if let Some((h, w)) = pad_to {
-            if h >= max_h {
-                max_h = h;
-            }
-            if w >= max_w {
-                max_w = w;
-            }
-        }
         let mut patch_masks = Vec::new();
         let mut pixel_values = Vec::new();
 
@@ -269,14 +235,28 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
         }
 
         for image in images.iter_mut() {
-            // Convert to rgb
-            if config.do_convert_rgb {
-                *image = DynamicImage::ImageRgb8(image.to_rgb8());
-            }
-
             // Resize
             if config.do_resize {
                 *image = super::image_processor::resize(image, &config.size, config.resampling)?;
+            }
+        }
+
+        let mut max_h = 0;
+        let mut max_w = 0;
+        for image in &images {
+            let (w, h) = image.dimensions();
+            if w > max_w {
+                max_w = w;
+            }
+            if h > max_h {
+                max_h = h;
+            }
+        }
+
+        for image in images.iter_mut() {
+            // Convert to rgb
+            if config.do_convert_rgb {
+                *image = DynamicImage::ImageRgb8(image.to_rgb8());
             }
 
             // Rescale

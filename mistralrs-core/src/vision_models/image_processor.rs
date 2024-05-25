@@ -89,12 +89,12 @@ pub(crate) fn make_pixel_values(image: &DynamicImage, device: &Device) -> Result
     for row in data {
         let mut row_accum = Vec::new();
         for item in row {
-            row_accum.push(Tensor::from_slice(&item, (1, item.len()), device)?)
+            row_accum.push(Tensor::from_slice(&item, (1, item.len()), &Device::Cpu)?)
         }
         let row = Tensor::cat(&row_accum, 0)?;
         accum.push(row.reshape((row.dim(1)?, ()))?.unsqueeze(1)?);
     }
-    Tensor::cat(&accum, 1)
+    Tensor::cat(&accum, 1)?.to_device(device)
 }
 
 pub trait ImagePreProcessor: InputsProcessor {
@@ -116,7 +116,6 @@ pub trait ImagePreProcessor: InputsProcessor {
         &self,
         images: Vec<DynamicImage>,
         config: &PreProcessorConfig,
-        pad_to: Option<(u32, u32)>,
         device: &Device,
     ) -> Result<PreprocessedImages>;
 
