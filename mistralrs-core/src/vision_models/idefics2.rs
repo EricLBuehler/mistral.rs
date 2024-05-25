@@ -919,7 +919,7 @@ impl Idefics2 {
                 .reshape((batch_size * num_images, num_channels * height * width))?
                 .sum(D::Minus1)?
                 .ne(nb_values_per_image as f64)?;
-            let pixel_values = pixel_values.gather(&real_images_inds, 0)?;
+            let pixel_values = pixel_values.index_select(&real_images_inds, 0)?;
 
             // Vision attention mask
             let pixel_attention_mask = if let Some(pixel_attention_mask) = pixel_attention_mask {
