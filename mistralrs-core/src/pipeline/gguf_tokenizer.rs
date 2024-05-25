@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use candle_core::quantized::gguf_file::Content;
-use tokenizers::{models::bpe::BpeBuilder, AddedToken, ModelWrapper, Tokenizer};
+use tokenizers::{
+    decoders::bpe::BPEDecoder, models::bpe::BpeBuilder, AddedToken, ModelWrapper, Tokenizer,
+};
 use tracing::info;
 
 pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
@@ -46,21 +48,9 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
         added_tokens.as_ref().map(|x| x.len()).unwrap_or(0),
         merges.as_ref().map(|x| x.len()).unwrap_or(0)
     );
-    let _bos = content.metadata["tokenizer.ggml.bos_token_id"]
-        .to_u32()
-        .expect("GGUF bos token is not u32");
-    let _eos = content.metadata["tokenizer.ggml.eos_token_id"]
-        .to_u32()
-        .expect("GGUF eos token is not u32");
     let unk = content.metadata["tokenizer.ggml.unknown_token_id"]
         .to_u32()
         .expect("GGUF unk token is not u32");
-    let _sep = content.metadata["tokenizer.ggml.separator_token_id"]
-        .to_u32()
-        .expect("GGUF sep token is not u32");
-    let _pad = content.metadata["tokenizer.ggml.padding_token_id"]
-        .to_u32()
-        .expect("GGUF pad token is not u32");
 
     let tokenizer = match model.as_str() {
         "llama" | "replit" | "gpt2" | "rwkv" => {
@@ -85,6 +75,7 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
                 .build()
                 .map_err(anyhow::Error::msg)?;
             let mut tokenizer = Tokenizer::new(ModelWrapper::BPE(bpe));
+            tokenizer.with_decoder(BPEDecoder::default());
             if let Some(added_tokens) = added_tokens {
                 for added_token in added_tokens {
                     tokenizer.add_special_tokens(&[AddedToken::from(added_token, true)]);
