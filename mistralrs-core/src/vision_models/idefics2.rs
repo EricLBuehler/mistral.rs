@@ -774,10 +774,9 @@ impl PerceiverResampler {
     }
 
     fn forward(&self, context: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
-        let latents = self
-            .latents
-            .unsqueeze(0)?
-            .expand(vec![context.dim(0)?].extend(self.latents.dims()))?;
+        let mut s = vec![context.dim(0)?];
+        s.extend(self.latents.dims());
+        let latents = self.latents.unsqueeze(0)?.expand(s)?;
 
         let latent_attention_mask = Tensor::ones(
             (attention_mask.dim(0)?, latents.dim(1)?),
@@ -909,8 +908,9 @@ impl Idefics2 {
             // == START VISUAL INPUTS INTEGRATION ==
             let (batch_size, num_images, num_channels, height, width) = pixel_values.dims5()?;
             let pixel_values = pixel_values.to_dtype(self.dtype)?;
-            let pixel_values = pixel_values
-                .reshape(vec![batch_size * num_images].extend(pixel_values.dims()[2..].to_vec()))?;
+            let mut s = vec![batch_size * num_images];
+            s.extend(pixel_values.dims()[2..].to_vec());
+            let pixel_values = pixel_values.reshape(s)?;
 
             // Remove padding images which are full of 0s
             let nb_values_per_image = pixel_values.dims()[1..].iter().product::<usize>();

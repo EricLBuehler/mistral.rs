@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use candle_core::{Device, Result, Tensor};
-use image::{imageops::FilterType, DynamicImage, GenericImageView, Pixel, RgbaImage};
+use image::{imageops::FilterType, DynamicImage, GenericImageView, Pixel, RgbImage, RgbaImage};
 
 use crate::pipeline::InputsProcessor;
 
@@ -20,9 +20,10 @@ pub(crate) fn empty_image(h: usize, w: usize) -> Vec<Vec<Vec<u8>>> {
 
 pub(crate) fn get_pixel_data(image: &DynamicImage, h: usize, w: usize) -> Vec<Vec<Vec<u8>>> {
     let mut pixel_data = empty_image(h, w);
-    image
-        .pixels()
-        .for_each(|(x, y, pixel)| pixel_data[y as usize][x as usize] = pixel.channels().to_vec());
+    let n_channels = image.color().channel_count() as usize;
+    image.pixels().for_each(|(x, y, pixel)| {
+        pixel_data[y as usize][x as usize] = pixel.channels()[..n_channels].to_vec()
+    });
     pixel_data
 }
 
@@ -42,9 +43,15 @@ pub(crate) fn from_pixel_data(mut data: Vec<Vec<Vec<u8>>>, h: usize, w: usize) -
         }
     }
 
-    DynamicImage::ImageRgba8(
-        RgbaImage::from_raw(w as u32, h as u32, flat_data).expect("Unable to create RgbaImage"),
-    )
+    if channels == 3 {
+        DynamicImage::ImageRgb8(
+            RgbImage::from_raw(w as u32, h as u32, flat_data).expect("Unable to create RgbaImage"),
+        )
+    } else {
+        DynamicImage::ImageRgba8(
+            RgbaImage::from_raw(w as u32, h as u32, flat_data).expect("Unable to create RgbaImage"),
+        )
+    }
 }
 
 pub(crate) fn resize(
