@@ -30,6 +30,12 @@ impl<S: Copy, R: FunctionalRecognizer<S>> StackRecognizer<S, R> {
         };
         Ok(rec)
     }
+
+    pub fn reset(&mut self) -> anyhow::Result<()> {
+        self.stack_ptr = 0;
+        self.stack[0] = self.rec.initial()?;
+        Ok(())
+    }
 }
 
 impl<S: Copy + Debug, R: FunctionalRecognizer<S>> Debug for StackRecognizer<S, R> {
