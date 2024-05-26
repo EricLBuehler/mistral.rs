@@ -1,9 +1,8 @@
 use std::{fs::File, sync::Arc};
 use tokio::sync::mpsc::channel;
 
-use candle_core::Device;
 use mistralrs::{
-    Constraint, DeviceMapMetadata, MistralRs, MistralRsBuilder, NormalLoaderBuilder,
+    Constraint, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder, NormalLoaderBuilder,
     NormalLoaderType, NormalRequest, NormalSpecificConfig, Request, RequestMessage, Response,
     SamplingParams, SchedulerMethod, TokenSource,
 };
