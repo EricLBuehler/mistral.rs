@@ -923,7 +923,12 @@ impl Idefics2 {
 
             // Vision attention mask
             let pixel_attention_mask = if let Some(pixel_attention_mask) = pixel_attention_mask {
-                pixel_attention_mask
+                let pixel_attention_mask = pixel_attention_mask.reshape((
+                    batch_size * num_images,
+                    pixel_attention_mask.dims()[2],
+                    pixel_attention_mask.dims()[3],
+                ))?;
+                pixel_attention_mask.index_select(&real_images_inds, 0)?
             } else {
                 Tensor::ones(
                     (
