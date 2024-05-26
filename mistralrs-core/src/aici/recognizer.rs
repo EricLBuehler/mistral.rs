@@ -1,9 +1,10 @@
 use crate::aici::toktree::{Recognizer, SpecialToken};
+use anyhow;
 use std::fmt::Debug;
 
 pub trait FunctionalRecognizer<S: Copy> {
     /// Initial state
-    fn initial(&self) -> S;
+    fn initial(&self) -> Result<S, anyhow::Error>;
     /// Extend the recognizer with given byte.
     fn append(&self, state: S, byte: u8) -> S;
     /// Check if given byte is allowed in given state.
@@ -20,18 +21,14 @@ pub struct StackRecognizer<S: Copy, R: FunctionalRecognizer<S>> {
 }
 
 impl<S: Copy, R: FunctionalRecognizer<S>> StackRecognizer<S, R> {
-    pub fn from(rec: R) -> Self {
-        let stack = vec![rec.initial(); 130];
-        StackRecognizer {
+    pub fn from(rec: R) -> anyhow::Result<Self> {
+        let stack = vec![rec.initial()?; 130];
+        let rec = StackRecognizer {
             rec,
             stack,
             stack_ptr: 0,
-        }
-    }
-
-    pub fn reset(&mut self) {
-        self.stack_ptr = 0;
-        self.stack[0] = self.rec.initial();
+        };
+        Ok(rec)
     }
 }
 
