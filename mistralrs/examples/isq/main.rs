@@ -1,11 +1,10 @@
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
-use candle_core::{quantized::GgmlDType, Device};
 use mistralrs::{
-    Constraint, DeviceMapMetadata, MistralRs, MistralRsBuilder, NormalLoaderBuilder,
-    NormalLoaderType, NormalRequest, NormalSpecificConfig, Request, RequestMessage, Response,
-    SamplingParams, SchedulerMethod, TokenSource,
+    Constraint, Device, DeviceMapMetadata, GgmlDType, MistralRs, MistralRsBuilder,
+    NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig, Request,
+    RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
 };
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {
