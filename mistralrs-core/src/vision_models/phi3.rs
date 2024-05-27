@@ -18,13 +18,13 @@ use crate::{
         ScaledDotProductAttention,
     },
     pipeline::{extract_logits, Cache, IsqModel, VisionModel},
+    serde_default_fn,
     vision_models::clip::{Activation, ClipConfig, ClipVisionTransformer},
     DeviceMapMetadata,
 };
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct EmbedLayerConfig {
-    embedding_cls: String,
     hd_transform_order: Option<String>,
     projection_cls: Option<String>,
     use_hd_transform: Option<bool>,
@@ -34,12 +34,13 @@ pub struct EmbedLayerConfig {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ImageProcessorConfig {
     image_dim_out: usize,
-    model_name: String,
     name: String,
     num_img_tokens: usize,
     layer_idx: Option<isize>,
     type_feature: Option<String>,
 }
+
+serde_default_fn!(bool, d_flash_attn, false);
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
@@ -56,6 +57,7 @@ pub struct Config {
     pub eos_token_id: Option<u32>,
     pub rope_scaling: Option<HashMap<String, Either<Vec<f32>, String>>>,
     pub max_position_embeddings: usize,
+    #[serde(default = "d_flash_attn")]
     pub use_flash_attn: bool,
     pub sliding_window: Option<usize>,
     pub original_max_position_embeddings: usize,
@@ -81,7 +83,7 @@ impl Config {
     }
 }
 
-trait ModuleWithMetadata: Module + Debug {
+trait ModuleWithMetadata: Module + Debug + Send + Sync {
     fn device(&self) -> &Device;
     fn dtype(&self) -> DType;
 }

@@ -11,6 +11,7 @@ use pyo3::pyclass;
 use serde::Deserialize;
 
 use super::{Processor, VisionModel};
+use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3};
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::DeviceMapMetadata;
@@ -38,16 +39,58 @@ pub trait VisionModelLoader {
 #[derive(Clone, Debug, Deserialize)]
 /// The architecture to load the vision model as.
 pub enum VisionLoaderType {
-    #[serde(rename = "phi3v")]
-    Phi3V,
+    #[serde(rename = "phi3")]
+    Phi3,
 }
 
 impl FromStr for VisionLoaderType {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "idefics2" => Ok(Self::Phi3V),
+            "phi3" => Ok(Self::Phi3),
             a => Err(format!("Unknown architecture `{a}`")),
         }
+    }
+}
+
+// ======================== Phi 3 loader
+
+pub struct Phi3Loader;
+
+impl VisionModelLoader for Phi3Loader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        device: Device,
+    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+        let mut config: Phi3Config = serde_json::from_str(config)?;
+        config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(Phi3::new(
+            &config,
+            vb,
+            self.is_gptx(),
+            mapper,
+            loading_isq,
+            device,
+        )?))
+    }
+    fn is_gptx(&self) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        let mut config: Phi3Config = serde_json::from_str(config)?;
+        config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(config))
+    }
+    fn get_processor(
+        &self,
+        _processor_config: ProcessorConfig,
+        _preprocessor_config: PreProcessorConfig,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        todo!()
     }
 }
