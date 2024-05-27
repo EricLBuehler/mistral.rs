@@ -1,5 +1,4 @@
 use crate::aici::{recognizer::FunctionalRecognizer, toktree::SpecialToken};
-use anyhow;
 use regex_automata::{
     dfa::{dense, Automaton},
     util::{primitives::StateID, syntax},

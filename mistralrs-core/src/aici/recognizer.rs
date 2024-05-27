@@ -1,5 +1,4 @@
 use crate::aici::toktree::{Recognizer, SpecialToken};
-use anyhow;
 use std::fmt::Debug;
 
 pub trait FunctionalRecognizer<S: Copy> {
