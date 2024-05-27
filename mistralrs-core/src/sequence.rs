@@ -194,12 +194,16 @@ impl Sequence {
         mut self,
         cache: LayerCaches,
         xlora_cache: Option<LayerCaches>,
-        toks: Vec<u32>,
+        remaining_toks: Option<Vec<u32>>,
     ) -> Self {
         self.cache = cache;
         self.xlora_cache = xlora_cache;
-        self.prefill_prompt_toks = Some(toks);
-        self.set_state(SequenceState::RunningPrefillPrompt);
+        if let Some(remaining_toks) = remaining_toks {
+            self.prefill_prompt_toks = Some(remaining_toks);
+            self.set_state(SequenceState::RunningPrefillPrompt);
+        } else {
+            self.set_state(SequenceState::RunningCompletion);
+        }
         self
     }
 

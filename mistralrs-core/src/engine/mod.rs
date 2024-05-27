@@ -532,7 +532,7 @@ impl Engine {
                 seq.prefill(
                     prefill_cache.normal,
                     prefill_cache.xlora,
-                    prefill_cache.toks,
+                    prefill_cache.remaining_toks,
                 )
             } else {
                 seq
