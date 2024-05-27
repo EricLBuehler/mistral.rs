@@ -87,12 +87,14 @@
 <a href="#85" id="85">85</a>
 <a href="#86" id="86">86</a>
 <a href="#87" id="87">87</a>
+<a href="#88" id="88">88</a>
+<a href="#89" id="89">89</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">crate</span>::aici::toktree::{Recognizer, SpecialToken};
 <span class="kw">use </span>std::fmt::Debug;
 
 <span class="kw">pub trait </span>FunctionalRecognizer&lt;S: Copy&gt; {
     <span class="doccomment">/// Initial state
-    </span><span class="kw">fn </span>initial(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; S;
+    </span><span class="kw">fn </span>initial(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;S, anyhow::Error&gt;;
     <span class="doccomment">/// Extend the recognizer with given byte.
     </span><span class="kw">fn </span>append(<span class="kw-2">&amp;</span><span class="self">self</span>, state: S, byte: u8) -&gt; S;
     <span class="doccomment">/// Check if given byte is allowed in given state.
@@ -109,18 +111,20 @@
 }
 
 <span class="kw">impl</span>&lt;S: Copy, R: FunctionalRecognizer&lt;S&gt;&gt; StackRecognizer&lt;S, R&gt; {
-    <span class="kw">pub fn </span>from(rec: R) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span>stack = <span class="macro">vec!</span>[rec.initial(); <span class="number">130</span>];
-        StackRecognizer {
+    <span class="kw">pub fn </span>from(rec: R) -&gt; anyhow::Result&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">let </span>stack = <span class="macro">vec!</span>[rec.initial()<span class="question-mark">?</span>; <span class="number">130</span>];
+        <span class="kw">let </span>rec = StackRecognizer {
             rec,
             stack,
             stack_ptr: <span class="number">0</span>,
-        }
+        };
+        <span class="prelude-val">Ok</span>(rec)
     }
 
-    <span class="kw">pub fn </span>reset(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+    <span class="kw">pub fn </span>reset(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;()&gt; {
         <span class="self">self</span>.stack_ptr = <span class="number">0</span>;
-        <span class="self">self</span>.stack[<span class="number">0</span>] = <span class="self">self</span>.rec.initial();
+        <span class="self">self</span>.stack[<span class="number">0</span>] = <span class="self">self</span>.rec.initial()<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(())
     }
 }
 

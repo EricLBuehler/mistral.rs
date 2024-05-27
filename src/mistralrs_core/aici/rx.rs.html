@@ -56,6 +56,16 @@
 <a href="#54" id="54">54</a>
 <a href="#55" id="55">55</a>
 <a href="#56" id="56">56</a>
+<a href="#57" id="57">57</a>
+<a href="#58" id="58">58</a>
+<a href="#59" id="59">59</a>
+<a href="#60" id="60">60</a>
+<a href="#61" id="61">61</a>
+<a href="#62" id="62">62</a>
+<a href="#63" id="63">63</a>
+<a href="#64" id="64">64</a>
+<a href="#65" id="65">65</a>
+<a href="#66" id="66">66</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">crate</span>::aici::{recognizer::FunctionalRecognizer, toktree::SpecialToken};
 <span class="kw">use </span>regex_automata::{
     dfa::{dense, Automaton},
@@ -87,10 +97,20 @@
 }
 
 <span class="kw">impl </span>FunctionalRecognizer&lt;RecRxState&gt; <span class="kw">for </span>RecRx {
-    <span class="kw">fn </span>initial(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; RecRxState {
-        <span class="self">self</span>.dfa
-            .universal_start_state(regex_automata::Anchored::Yes)
-            .expect(<span class="string">"dfa has no universal start state; make sure it doesn't match empty string"</span>)
+    <span class="kw">fn </span>initial(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;RecRxState&gt; {
+        <span class="kw">let </span>state = <span class="self">self
+            </span>.dfa
+            .universal_start_state(regex_automata::Anchored::Yes);
+
+        <span class="kw">match </span>state {
+            <span class="prelude-val">Some</span>(state) =&gt; <span class="prelude-val">Ok</span>(state),
+            <span class="prelude-val">None </span>=&gt; {
+                <span class="kw">let </span>err = anyhow::Error::msg(
+                    <span class="string">"dfa has no universal start state; make sure it doesn't match empty string"</span>,
+                );
+                <span class="prelude-val">Err</span>(err)
+            }
+        }
     }
 
     <span class="attr">#[inline(always)]
