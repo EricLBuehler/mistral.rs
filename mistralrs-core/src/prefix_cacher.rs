@@ -18,20 +18,28 @@ impl From<Vec<u32>> for Tokens {
 
 type EvictionCacheGroup = (Arc<Mutex<LayerCaches>>, Option<Arc<Mutex<LayerCaches>>>);
 
-trait Narrowable
+trait SubsetCacheUtils
 where
     Self: Sized,
 {
     fn narrow(self, found_idx: usize) -> Result<Self>;
+    fn to(self, device: &Device) -> Result<Self>;
 }
 
-impl Narrowable for Option<(Tensor, Tensor)> {
+impl SubsetCacheUtils for Option<(Tensor, Tensor)> {
     fn narrow(self, found_idx: usize) -> Result<Self> {
         if let Some((k, v)) = self {
             Ok(Some((
                 k.narrow(2, 0, found_idx)?,
                 v.narrow(2, 0, found_idx)?,
             )))
+        } else {
+            Ok(None)
+        }
+    }
+    fn to(self, device: &Device) -> Result<Self> {
+        if let Some((k, v)) = self {
+            Ok(Some((k.to_device(device)?, v.to_device(device)?)))
         } else {
             Ok(None)
         }
@@ -200,18 +208,19 @@ impl PrefixCacheManager {
             // of the found tokens (ie there are some tokens added)
             // TODO(EricLBuehler): n^2 performance here...
             let mut found = None;
-            'outer: for candidate in self.caches.keys() {
-                for i in 0..(candidate.0.len().max(toks.0.len())) {
+            for candidate in self.caches.keys() {
+                for i in 1..(candidate.0.len().min(toks.0.len())) {
                     let candidate_tokens = &candidate.0[0..i];
                     let needle_tokens = &toks.0[0..i];
-                    if candidate_tokens == needle_tokens {
+                    if candidate_tokens == needle_tokens
+                        && (found.is_none() || found.is_some_and(|(other, _)| other < i))
+                    {
                         found = Some((i, candidate));
-                        break 'outer;
                     }
                 }
             }
             if let Some((found_idx, candidate)) = found {
-                // We now have the index `i`` of a candidate whose cache up to `i`` can be used.
+                // We now have the index `i` of a candidate whose cache up to `i` can be used.
                 // Get the caches
                 let cache = self.caches[candidate].clone();
                 let cache = get_mut_arcmutex!(cache.as_ref()).clone();
@@ -223,12 +232,12 @@ impl PrefixCacheManager {
                 // Narrow the caches
                 let mut new_cache = vec![None; cache.len()];
                 for (i, layer) in cache.into_iter().enumerate() {
-                    new_cache[i] = layer.narrow(found_idx)?;
+                    new_cache[i] = layer.narrow(found_idx)?.to(&self.device)?;
                 }
                 let xlora_cache = if let Some(xlora_cache) = xlora_cache {
                     let mut new_cache = vec![None; xlora_cache.len()];
                     for (i, layer) in xlora_cache.into_iter().enumerate() {
-                        new_cache[i] = layer.narrow(found_idx)?;
+                        new_cache[i] = layer.narrow(found_idx)?.to(&self.device)?;
                     }
                     Some(new_cache)
                 } else {
