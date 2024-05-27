@@ -241,12 +241,15 @@ impl Sequence {
 
     pub fn is_completion(&self) -> bool {
         *self.state.read().unwrap() == SequenceState::RunningCompletion
-            || *self.state.read().unwrap() == SequenceState::RunningPrefillPrompt
     }
 
     pub fn is_prompt(&self) -> bool {
         *self.state.read().unwrap() == SequenceState::RunningPrompt
             || *self.state.read().unwrap() == SequenceState::RunningPrefillPrompt
+    }
+
+    pub fn is_currently_prefill_prompt(&self) -> bool {
+        self.prefill_prompt_toks.is_some()
     }
 
     pub fn is_waiting(&self) -> bool {
@@ -257,6 +260,10 @@ impl Sequence {
         if let Some(toks) = &self.prefill_prompt_toks {
             return toks;
         }
+        self.get_raw_toks()
+    }
+
+    pub fn get_raw_toks(&self) -> &[u32] {
         &self.tokens
     }
 

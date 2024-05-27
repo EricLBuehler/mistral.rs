@@ -815,11 +815,14 @@ fn get_prompt_input(
     let mut position_ids = Vec::new();
     for seq in input_seqs.iter() {
         let mut ctxt = seq.get_toks().to_vec();
-        let offset = if let Some((_, offset)) = last_n_context_len {
+        let mut offset = if let Some((_, offset)) = last_n_context_len {
             offset
         } else {
             0
         };
+        if seq.is_currently_prefill_prompt() {
+            offset = seq.get_raw_toks().len();
+        }
         seqlen_offsets.push(offset);
 
         ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));

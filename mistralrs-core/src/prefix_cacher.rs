@@ -234,12 +234,12 @@ impl PrefixCacheManager {
                 // Narrow the caches
                 let mut new_cache = vec![None; cache.len()];
                 for (i, layer) in cache.into_iter().enumerate() {
-                    new_cache[i] = layer.narrow(found_idx)?.to(&self.device)?;
+                    new_cache[i] = layer.narrow(found_idx - 1)?.to(&self.device)?;
                 }
                 let xlora_cache = if let Some(xlora_cache) = xlora_cache {
                     let mut new_cache = vec![None; xlora_cache.len()];
                     for (i, layer) in xlora_cache.into_iter().enumerate() {
-                        new_cache[i] = layer.narrow(found_idx)?.to(&self.device)?;
+                        new_cache[i] = layer.narrow(found_idx - 1)?.to(&self.device)?;
                     }
                     Some(new_cache)
                 } else {
