@@ -59,6 +59,7 @@ pub struct PrefixCacheManager {
 pub struct MatchingCache {
     pub normal: LayerCaches,
     pub xlora: Option<LayerCaches>,
+    pub current_toks: Vec<u32>,
     pub remaining_toks: Option<Vec<u32>>,
 }
 
@@ -201,6 +202,7 @@ impl PrefixCacheManager {
             Ok(Some(MatchingCache {
                 normal: cache,
                 xlora: xlora_cache,
+                current_toks: toks.0,
                 remaining_toks: None,
             }))
         } else {
@@ -246,6 +248,7 @@ impl PrefixCacheManager {
                 Ok(Some(MatchingCache {
                     normal: new_cache,
                     xlora: xlora_cache,
+                    current_toks: candidate.0[..found_idx].to_vec(),
                     remaining_toks: Some(candidate.0[found_idx..].to_vec()),
                 }))
             } else {

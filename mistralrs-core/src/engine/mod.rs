@@ -504,8 +504,20 @@ impl Engine {
                 }
             };
 
+            let (prefill, prompt) = if let Some(prefill_cache) = prefill_cache.clone() {
+                (
+                    Some((
+                        prefill_cache.normal,
+                        prefill_cache.xlora,
+                        prefill_cache.remaining_toks,
+                    )),
+                    prefill_cache.current_toks,
+                )
+            } else {
+                (None, prompt.clone())
+            };
             let seq = Sequence::new_waiting(
-                prompt.clone(),
+                prompt,
                 self.id,
                 now.as_millis(),
                 num_hidden_layers,
@@ -522,18 +534,14 @@ impl Engine {
                 recognizer,
                 request.suffix.clone(),
                 if echo_prompt {
-                    Some(formatted_prompt.clone())
+                    Some(formatted_prompt.clone()) // TODO(EricLBuehler): this is probably wrong when using the prefix cacher.
                 } else {
                     None
                 },
                 request.adapters.clone(),
             );
-            let seq = if let Some(prefill_cache) = prefill_cache.clone() {
-                seq.prefill(
-                    prefill_cache.normal,
-                    prefill_cache.xlora,
-                    prefill_cache.remaining_toks,
-                )
+            let seq = if let Some((normal, xlora, remaining_toks)) = prefill {
+                seq.prefill(normal, xlora, remaining_toks)
             } else {
                 seq
             };
