@@ -105,6 +105,8 @@ pub trait MaybeAdapter {}
 impl MaybeAdapter for Adapter<'_> {}
 impl MaybeAdapter for NoAdapter {}
 
+// `derive_more::From` provides a terser construction for enum variants of `ModelParams`.
+#[derive(derive_more::From)]
 pub struct Config<Q: QuantParams, A: MaybeAdapter> {
     pub quant: Q,
     pub adapter: A,
@@ -130,10 +132,7 @@ impl<'a, Q: QuantParams> ModelParams<'a, Q> {
     pub fn with_adapter<'b: 'a>(self, adapter: Adapter<'b>) -> Self {
         let q = self.expect_quantized("Config should be Quantized (without an Adapter)");
 
-        Self::Adapted( Config::<Q, Adapter<'b>> {
-            adapter,
-            quant: q.quant
-        })
+        Self::Adapted((q.quant, adapter).into())
     }
 }
 
@@ -285,7 +284,7 @@ impl TryFrom<ModelParams<'_, GGML>> for QLlama {
 
     fn try_from(params: ModelParams<'_, GGML>) -> Result<Self, Self::Error> {
         let config = params.expect_quantized("`Config` should be GGML Quantized");
-        config.try_into_model::<Self>()
+        config.try_into_model()
     }
 }
 
@@ -294,7 +293,7 @@ impl TryFrom<ModelParams<'_, GGML>> for XLoraQLlama {
 
     fn try_from(params: ModelParams<'_, GGML>) -> Result<Self, Self::Error> {
         let config = params.expect_adapted("`Config` should be GGML Quantized with an Adapter");
-        config.try_into_model::<Self>()
+        config.try_into_model()
     }
 }
 
@@ -306,7 +305,7 @@ akin! {
 
         fn try_from(params: ModelParams<'_, GGUF<'_>>) -> Result<Self, Self::Error> {
             let config = params.expect_quantized("`Config` should be GGUF Quantized");
-            config.try_into_model::<Self>()
+            config.try_into_model()
         }
     }
 }
@@ -319,7 +318,7 @@ akin! {
 
         fn try_from(params: ModelParams<'_, GGUF<'_>>) -> Result<Self, Self::Error> {
             let config = params.expect_adapted("`Config` should be GGUF Quantized with an Adapter");
-            config.try_into_model::<Self>()
+            config.try_into_model()
         }
     }
 }
