@@ -63,14 +63,14 @@ pub struct Config {
     pub img_processor: ImageProcessorConfig,
 }
 
-impl Into<PhiRopeConfig> for Config {
-    fn into(self) -> PhiRopeConfig {
+impl From<Config> for PhiRopeConfig {
+    fn from(val: Config) -> Self {
         PhiRopeConfig {
-            rope_scaling: self.rope_scaling,
-            max_position_embeddings: self.max_position_embeddings,
-            original_max_position_embeddings: self.original_max_position_embeddings,
-            rope_theta: self.rope_theta,
-            head_dim: self.hidden_size / self.num_attention_heads,
+            rope_scaling: val.rope_scaling,
+            max_position_embeddings: val.max_position_embeddings,
+            original_max_position_embeddings: val.original_max_position_embeddings,
+            rope_theta: val.rope_theta,
+            head_dim: val.hidden_size / val.num_attention_heads,
         }
     }
 }
@@ -692,7 +692,7 @@ impl ImageEmbedding {
                 image_set_tensor = Some(Either::Left(image_set_tensor_inner));
             } else if pixel_values.dims().len() == 4 {
                 let tt = self
-                    .get_image_features(&pixel_values)?
+                    .get_image_features(pixel_values)?
                     .to_device(target_dev)?
                     .to_dtype(target_dtype)?
                     .reshape(((), self.image_dim_out))?;
@@ -723,6 +723,7 @@ impl ImageEmbedding {
                         // hidden_states[positions[idx, 0], positions[idx, 1] : positions[idx, 1] + cnt] = ...
                         let p_0 = positions.i((idx, 0))?.to_scalar::<u32>()? as usize;
                         let p_1 = positions.i((idx, 1))?.to_scalar::<u32>()? as usize;
+                        // TODO(EricLBuehler): https://github.com/huggingface/candle/pull/2223 will make this nicer
                         hidden_states = hidden_states
                             .slice_assign(&[p_0..p_0 + 1, p_1..p_1 + cnt], &img_set_tensor)?;
                         idx += cnt;
@@ -741,6 +742,7 @@ impl ImageEmbedding {
                         let p_0 = positions.i((idx, 0))?.to_scalar::<u32>()? as usize;
                         let p_1 = positions.i((idx, 1))?.to_scalar::<u32>()? as usize;
                         // hidden_states[positions[idx, 0], positions[idx, 1] : positions[idx, 1] + cnt] = ...
+                        // TODO(EricLBuehler): https://github.com/huggingface/candle/pull/2223 will make this nicer
                         hidden_states = hidden_states
                             .slice_assign(&[p_0..p_0 + 1, p_1..p_1 + cnt], &img_set_tensor)?;
                         idx += cnt;

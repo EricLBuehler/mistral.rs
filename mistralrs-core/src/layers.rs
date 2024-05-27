@@ -102,7 +102,7 @@ struct ScaledRopeParams {
     scaling_type: ScaledRopeType,
 }
 
-pub(crate) struct PhiRopeConfig {
+pub struct PhiRopeConfig {
     pub rope_scaling: Option<HashMap<String, Either<Vec<f32>, String>>>,
     pub max_position_embeddings: usize,
     pub original_max_position_embeddings: usize,

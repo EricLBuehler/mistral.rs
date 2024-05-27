@@ -30,7 +30,7 @@ pub use normal_loaders::{
     Phi2Loader, Phi3Loader, Qwen2Loader,
 };
 pub(crate) use paths::{get_model_paths, get_xlora_paths, XLoraPaths};
-pub(crate) use processing::{apply_chat_template, Processor};
+pub(crate) use processing::Processor;
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 use std::any::Any;
@@ -51,9 +51,7 @@ use crate::{
 };
 
 pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
-pub use self::inputs_processor::{
-    text_models_inputs_processor, InputsProcessor, InputsProcessorType,
-};
+pub use self::inputs_processor::{text_models_inputs_processor, InputsProcessor};
 use self::processing::BasicProcessor;
 
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For

@@ -38,14 +38,14 @@ pub struct Config {
     pub original_max_position_embeddings: usize,
 }
 
-impl Into<PhiRopeConfig> for Config {
-    fn into(self) -> PhiRopeConfig {
+impl From<Config> for PhiRopeConfig {
+    fn from(val: Config) -> Self {
         PhiRopeConfig {
-            rope_scaling: self.rope_scaling,
-            max_position_embeddings: self.max_position_embeddings,
-            original_max_position_embeddings: self.original_max_position_embeddings,
-            rope_theta: self.rope_theta,
-            head_dim: self.hidden_size / self.num_attention_heads,
+            rope_scaling: val.rope_scaling,
+            max_position_embeddings: val.max_position_embeddings,
+            original_max_position_embeddings: val.original_max_position_embeddings,
+            rope_theta: val.rope_theta,
+            head_dim: val.hidden_size / val.num_attention_heads,
         }
     }
 }

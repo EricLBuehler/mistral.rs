@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 // Sourced from https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/clip/vision_model.rs
 use candle_core::{DType, IndexOp, Result, Shape, Tensor, D};
 use candle_nn::{Conv2dConfig, Module};
@@ -302,7 +304,7 @@ impl ClipVisionTransformer {
     pub fn new(vb: candle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
         let embeddings = ClipVisionEmbeddings::new(vb.pp("embeddings"), c)?;
         let pre_layer_norm = candle_nn::layer_norm(c.hidden_size, 1e-5, vb.pp("pre_layrnorm"))?;
-        let encoder = ClipEncoder::new(vb.pp("encoder"), &c)?;
+        let encoder = ClipEncoder::new(vb.pp("encoder"), c)?;
         let final_layer_norm = candle_nn::layer_norm(c.hidden_size, 1e-5, vb.pp("post_layernorm"))?;
         Ok(Self {
             embeddings,
