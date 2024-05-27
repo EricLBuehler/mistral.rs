@@ -11,8 +11,6 @@ use pyo3::pyclass;
 use serde::Deserialize;
 
 use super::{Processor, VisionModel};
-use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
-use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::DeviceMapMetadata;
@@ -40,61 +38,16 @@ pub trait VisionModelLoader {
 #[derive(Clone, Debug, Deserialize)]
 /// The architecture to load the vision model as.
 pub enum VisionLoaderType {
-    #[serde(rename = "idefics2")]
-    Idefics2,
+    #[serde(rename = "phi3v")]
+    Phi3V,
 }
 
 impl FromStr for VisionLoaderType {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "idefics2" => Ok(Self::Idefics2),
+            "idefics2" => Ok(Self::Phi3V),
             a => Err(format!("Unknown architecture `{a}`")),
         }
-    }
-}
-
-// ======================== Idefics 2 loader
-
-pub struct Idefics2Loader;
-
-impl VisionModelLoader for Idefics2Loader {
-    fn load(
-        &self,
-        config: &str,
-        use_flash_attn: bool,
-        vb: VarBuilder,
-        mapper: DeviceMapMetadata,
-        loading_isq: bool,
-        device: Device,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        let mut config: Idefics2Config = serde_json::from_str(config)?;
-        config.text_config.use_flash_attn = use_flash_attn;
-        Ok(Box::new(Idefics2::new(
-            &config,
-            vb,
-            self.is_gptx(),
-            mapper,
-            loading_isq,
-            device,
-        )?))
-    }
-    fn is_gptx(&self) -> bool {
-        true
-    }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        let mut config: Idefics2Config = serde_json::from_str(config)?;
-        config.text_config.use_flash_attn = use_flash_attn;
-        Ok(Box::new(config))
-    }
-    fn get_processor(
-        &self,
-        processor_config: ProcessorConfig,
-        preprocessor_config: PreProcessorConfig,
-    ) -> Arc<dyn Processor + Send + Sync> {
-        Arc::new(Idefics2Processor::new(
-            processor_config,
-            preprocessor_config,
-        ))
     }
 }

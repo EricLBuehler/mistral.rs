@@ -3,7 +3,7 @@
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
-use candle_nn::{linear_no_bias, VarBuilder};
+use candle_nn::{linear_b, linear_no_bias, VarBuilder};
 use either::Either;
 use std::{collections::HashMap, sync::Arc};
 
@@ -14,10 +14,29 @@ use crate::{
         ScaledDotProductAttention,
     },
     pipeline::{extract_logits, Cache, IsqModel, NormalModel},
+    vision_models::clip::{Activation, ClipConfig, ClipVisionTransformer},
     DeviceMapMetadata,
 };
 
-// https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct EmbedLayerConfig {
+    embedding_cls: String,
+    hd_transform_order: Option<String>,
+    projection_cls: Option<String>,
+    use_hd_transform: Option<bool>,
+    with_learnable_separator: Option<bool>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ImageProcessorConfig {
+    image_dim_out: usize,
+    model_name: String,
+    name: String,
+    num_img_tokens: usize,
+    layer_idx: Option<isize>,
+    type_feature: Option<String>,
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
     pub vocab_size: usize,
@@ -36,6 +55,8 @@ pub struct Config {
     pub use_flash_attn: bool,
     pub sliding_window: Option<usize>,
     pub original_max_position_embeddings: usize,
+    pub embd_layer: EmbedLayerConfig,
+    pub img_processor: ImageProcessorConfig,
 }
 
 impl Into<PhiRopeConfig> for Config {
@@ -55,6 +76,8 @@ impl Config {
         self.hidden_size / self.num_attention_heads
     }
 }
+
+// =================== BASE LAYERS ===================
 
 #[derive(Debug, Clone)]
 struct Attention {
@@ -272,6 +295,152 @@ impl DecoderLayer {
         residual + xs
     }
 }
+
+// =================== ============= ===================
+
+// =================== VISION LAYERS ===================
+
+pub struct ImageEmbedding {
+    wte: candle_nn::Embedding,
+    image_dim_out: usize,
+    num_img_tokens: usize,
+    glb_gn: Option<Tensor>,
+    sub_gn: Option<Tensor>,
+    layers: Vec<Box<dyn Module>>,
+    type_feature: String,
+    layer_idx: isize,
+    image_processor: ClipVisionTransformer,
+    hd_transform_order: String,
+}
+
+impl ImageEmbedding {
+    fn new(
+        config: &Config,
+        wte: candle_nn::Embedding,
+        embed_config: &EmbedLayerConfig,
+        vb: VarBuilder,
+    ) -> Result<Self> {
+        let hidden_size = config.hidden_size;
+        if config.img_processor.name != "clip_vision_model" {
+            candle_core::bail!(
+                "img_processor=`{}` nor supported.",
+                config.img_processor.name
+            );
+        }
+        let image_dim_out = config.img_processor.image_dim_out;
+        let num_img_tokens = config.img_processor.num_img_tokens;
+
+        // CLIP image processor here...
+        let image_processor = ClipVisionTransformer::new(
+            vb.pp("img_processor.vision_model"),
+            &ClipConfig {
+                hidden_act: Activation::QuickGelu,
+                hidden_size: 1024,
+                image_size: 336,
+                intermediate_size: 4096,
+                layer_norm_eps: 1e-05,
+                num_attention_heads: 16,
+                num_channels: 3,
+                num_hidden_layers: 24,
+                patch_size: 14,
+                projection_dim: 768,
+            },
+        )?;
+
+        // High dim transform
+        let use_hd_transform = embed_config.use_hd_transform.unwrap_or(false);
+        let with_learnable_separator = embed_config.with_learnable_separator.unwrap_or(false);
+        let hd_transform_order = embed_config
+            .hd_transform_order
+            .clone()
+            .unwrap_or("glb_sub".to_string());
+        assert_eq!(use_hd_transform, with_learnable_separator);
+        let (glb_gn, sub_gn) = if with_learnable_separator {
+            let glb_gn = vb.get((1, 1, image_dim_out * 4), "glb_gn")?;
+            let sub_gn = vb.get((1, 1, 1, image_dim_out * 4), "sub_gn")?;
+            (Some(glb_gn), Some(sub_gn))
+        } else {
+            (None, None)
+        };
+
+        // Inner projection
+        let projection_cls = embed_config
+            .projection_cls
+            .clone()
+            .unwrap_or("linear".to_string());
+        let layers: Vec<Box<dyn Module>> = match (projection_cls.as_str(), use_hd_transform) {
+            ("linear", _) => {
+                vec![Box::new(linear_b(
+                    image_dim_out,
+                    hidden_size,
+                    true,
+                    vb.pp("img_projection"),
+                )?)]
+            }
+            ("mlp", true) => {
+                let dim_proj = hidden_size;
+                vec![
+                    Box::new(linear_b(
+                        image_dim_out * 4,
+                        dim_proj,
+                        true,
+                        vb.pp("img_projection.0"),
+                    )?),
+                    Box::new(candle_nn::Activation::Gelu),
+                    Box::new(linear_b(
+                        dim_proj,
+                        dim_proj,
+                        true,
+                        vb.pp("img_projection.2"),
+                    )?),
+                ]
+            }
+            ("mlp", false) => {
+                let dim_proj = hidden_size;
+                vec![
+                    Box::new(linear_b(
+                        image_dim_out,
+                        dim_proj,
+                        true,
+                        vb.pp("img_projection.0"),
+                    )?),
+                    Box::new(candle_nn::Activation::Gelu),
+                    Box::new(linear_b(
+                        dim_proj,
+                        dim_proj,
+                        true,
+                        vb.pp("img_projection.2"),
+                    )?),
+                ]
+            }
+            _ => {
+                candle_core::bail!("projection_cls=`{projection_cls}` not implemented.");
+            }
+        };
+
+        let layer_idx = config.img_processor.layer_idx.unwrap_or(-2);
+        let type_feature = config
+            .img_processor
+            .type_feature
+            .clone()
+            .unwrap_or("patch".to_string());
+
+        Ok(Self {
+            wte,
+            image_dim_out,
+            num_img_tokens,
+            glb_gn,
+            sub_gn,
+            layer_idx,
+            type_feature,
+            image_processor,
+            layers,
+            hd_transform_order,
+        })
+    }
+}
+
+// =================== ============= ===================
 
 #[derive(Debug)]
 pub struct Model {

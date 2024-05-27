@@ -405,7 +405,7 @@ impl Model {
         for layer_idx in 0..cfg.num_hidden_layers {
             let rotary_emb = Arc::new(PhiRotaryEmbedding::new(
                 vb.dtype(),
-                cfg,
+                cfg.clone(),
                 mapper.device_for(layer_idx, false).unwrap_or(&real_device),
             )?);
             let layer = DecoderLayer::new(
