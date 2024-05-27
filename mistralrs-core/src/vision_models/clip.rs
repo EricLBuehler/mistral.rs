@@ -272,12 +272,18 @@ impl ClipEncoder {
         Ok(ClipEncoder { layers })
     }
 
-    pub fn forward(&self, xs: &Tensor, causal_attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    pub fn forward_get_hidden_states(
+        &self,
+        xs: &Tensor,
+        causal_attention_mask: Option<&Tensor>,
+    ) -> Result<(Tensor, Vec<Tensor>)> {
         let mut xs = xs.clone();
+        let mut hidden_states = Vec::new();
         for layer in self.layers.iter() {
             xs = layer.forward(&xs, causal_attention_mask)?;
+            hidden_states.push(xs.clone());
         }
-        Ok(xs)
+        Ok((xs, hidden_states))
     }
 }
 
@@ -305,18 +311,25 @@ impl ClipVisionTransformer {
             pre_layer_norm,
         })
     }
-}
 
-impl Module for ClipVisionTransformer {
-    fn forward(&self, pixel_values: &Tensor) -> Result<Tensor> {
+    pub fn forward_get_hidden_states(
+        &self,
+        pixel_values: &Tensor,
+    ) -> Result<(Tensor, Vec<Tensor>)> {
         let hidden_states = pixel_values
             .apply(&self.embeddings)?
             .apply(&self.pre_layer_norm)?;
 
-        let encoder_outputs = self.encoder.forward(&hidden_states, None)?;
+        // TODO(EricLBuehler): evaluate if these are the correct hidden states
+        let (encoder_outputs, hidden_states) = self
+            .encoder
+            .forward_get_hidden_states(&hidden_states, None)?;
         // https://github.com/huggingface/transformers/blob/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip/modeling_clip.py#L787
         // pooled_output = encoder_outputs[:, 0, :]
         let pooled_output = encoder_outputs.i((.., 0, ..))?;
-        self.final_layer_norm.forward(&pooled_output)
+        Ok((
+            self.final_layer_norm.forward(&pooled_output)?,
+            hidden_states,
+        ))
     }
 }

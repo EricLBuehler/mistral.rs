@@ -2,10 +2,14 @@
 
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
-use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
-use candle_nn::{linear_b, linear_no_bias, VarBuilder};
+use candle_core::{
+    quantized::QMatMul, shape::ShapeWithOneHole, DType, Device, IndexOp, Module, Result, Shape,
+    Tensor, D,
+};
+use candle_nn::{linear_b, linear_no_bias, Linear, VarBuilder};
 use either::Either;
-use std::{collections::HashMap, sync::Arc};
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
 
 use crate::{
     device_map::DeviceMapper,
@@ -13,7 +17,7 @@ use crate::{
         repeat_kv, CausalMasker, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm,
         ScaledDotProductAttention,
     },
-    pipeline::{extract_logits, Cache, IsqModel, NormalModel},
+    pipeline::{extract_logits, Cache, IsqModel, VisionModel},
     vision_models::clip::{Activation, ClipConfig, ClipVisionTransformer},
     DeviceMapMetadata,
 };
@@ -74,6 +78,50 @@ impl Into<PhiRopeConfig> for Config {
 impl Config {
     pub fn head_dim(&self) -> usize {
         self.hidden_size / self.num_attention_heads
+    }
+}
+
+trait ModuleWithMetadata: Module + Debug {
+    fn device(&self) -> &Device;
+    fn dtype(&self) -> DType;
+}
+
+impl ModuleWithMetadata for Linear {
+    fn device(&self) -> &Device {
+        self.weight().device()
+    }
+    fn dtype(&self) -> DType {
+        self.weight().dtype()
+    }
+}
+
+impl ModuleWithMetadata for candle_nn::Activation {
+    fn device(&self) -> &Device {
+        unreachable!()
+    }
+    fn dtype(&self) -> DType {
+        unreachable!()
+    }
+}
+
+#[derive(Debug)]
+struct BigShapeWithOneHole((usize, usize, usize, usize, usize, ()));
+
+fn hole_size(el_count: usize, prod_d: usize, s: &dyn std::fmt::Debug) -> Result<usize> {
+    if prod_d == 0 {
+        candle_core::bail!("cannot reshape tensor of {el_count} elements to {s:?}")
+    }
+    if el_count % prod_d != 0 {
+        candle_core::bail!("cannot reshape tensor with {el_count} elements to {s:?}")
+    }
+    Ok(el_count / prod_d)
+}
+
+impl ShapeWithOneHole for BigShapeWithOneHole {
+    fn into_shape(self, el_count: usize) -> Result<Shape> {
+        let (d1, d2, d3, d4, d5, ()) = self.0;
+        let d = hole_size(el_count, d1 * d2 * d3 * d4 * d5, &self)?;
+        Ok((d1, d2, d3, d4, d5, d).into())
     }
 }
 
@@ -300,17 +348,64 @@ impl DecoderLayer {
 
 // =================== VISION LAYERS ===================
 
+const MAX_INPUT_ID: f64 = 1e9;
+
+/// torch.nonzero(lt & gt, as_tuple=False)
+fn nonzero_between_as_tuple_false(lt: &Tensor, gt: &Tensor) -> Result<Tensor> {
+    let dev = lt.device();
+    let lt = lt.to_vec2::<u32>()?;
+    let gt = gt.to_vec2::<u32>()?;
+    // lt & gt
+    let res = lt
+        .par_iter()
+        .zip(gt)
+        .enumerate()
+        .flat_map(|(i, (lt_row, gt_row))| {
+            lt_row
+                .par_iter()
+                .zip(gt_row)
+                .enumerate()
+                .filter_map(|(j, (lt, gt))| {
+                    if (lt & gt) != 0 {
+                        Some(vec![i as u32, j as u32])
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .map(|x| Tensor::from_slice(&x, (x.len(), 1), dev))
+        .collect::<Result<Vec<_>>>()?;
+    Tensor::cat(&res, D::Minus1)
+}
+
+#[derive(Debug)]
+struct EmbeddingLayers(Vec<Box<dyn ModuleWithMetadata>>);
+
+impl Module for EmbeddingLayers {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let mut xs = xs.clone();
+        for layer in &self.0 {
+            xs = layer.forward(&xs)?;
+        }
+        Ok(xs)
+    }
+}
+
+#[derive(Debug)]
 pub struct ImageEmbedding {
     wte: candle_nn::Embedding,
     image_dim_out: usize,
     num_img_tokens: usize,
     glb_gn: Option<Tensor>,
     sub_gn: Option<Tensor>,
-    layers: Vec<Box<dyn Module>>,
+    layers: EmbeddingLayers,
     type_feature: String,
     layer_idx: isize,
     image_processor: ClipVisionTransformer,
     hd_transform_order: String,
+    use_hd_transform: bool,
+    vocab_size: usize,
 }
 
 impl ImageEmbedding {
@@ -368,55 +463,56 @@ impl ImageEmbedding {
             .projection_cls
             .clone()
             .unwrap_or("linear".to_string());
-        let layers: Vec<Box<dyn Module>> = match (projection_cls.as_str(), use_hd_transform) {
-            ("linear", _) => {
-                vec![Box::new(linear_b(
-                    image_dim_out,
-                    hidden_size,
-                    true,
-                    vb.pp("img_projection"),
-                )?)]
-            }
-            ("mlp", true) => {
-                let dim_proj = hidden_size;
-                vec![
-                    Box::new(linear_b(
-                        image_dim_out * 4,
-                        dim_proj,
-                        true,
-                        vb.pp("img_projection.0"),
-                    )?),
-                    Box::new(candle_nn::Activation::Gelu),
-                    Box::new(linear_b(
-                        dim_proj,
-                        dim_proj,
-                        true,
-                        vb.pp("img_projection.2"),
-                    )?),
-                ]
-            }
-            ("mlp", false) => {
-                let dim_proj = hidden_size;
-                vec![
-                    Box::new(linear_b(
+        let layers: Vec<Box<dyn ModuleWithMetadata>> =
+            match (projection_cls.as_str(), use_hd_transform) {
+                ("linear", _) => {
+                    vec![Box::new(linear_b(
                         image_dim_out,
-                        dim_proj,
+                        hidden_size,
                         true,
-                        vb.pp("img_projection.0"),
-                    )?),
-                    Box::new(candle_nn::Activation::Gelu),
-                    Box::new(linear_b(
-                        dim_proj,
-                        dim_proj,
-                        true,
-                        vb.pp("img_projection.2"),
-                    )?),
-                ]
-            }
-            _ => {
-                candle_core::bail!("projection_cls=`{projection_cls}` not implemented.");
-            }
-        };
+                        vb.pp("img_projection"),
+                    )?)]
+                }
+                ("mlp", true) => {
+                    let dim_proj = hidden_size;
+                    vec![
+                        Box::new(linear_b(
+                            image_dim_out * 4,
+                            dim_proj,
+                            true,
+                            vb.pp("img_projection.0"),
+                        )?),
+                        Box::new(candle_nn::Activation::Gelu),
+                        Box::new(linear_b(
+                            dim_proj,
+                            dim_proj,
+                            true,
+                            vb.pp("img_projection.2"),
+                        )?),
+                    ]
+                }
+                ("mlp", false) => {
+                    let dim_proj = hidden_size;
+                    vec![
+                        Box::new(linear_b(
+                            image_dim_out,
+                            dim_proj,
+                            true,
+                            vb.pp("img_projection.0"),
+                        )?),
+                        Box::new(candle_nn::Activation::Gelu),
+                        Box::new(linear_b(
+                            dim_proj,
+                            dim_proj,
+                            true,
+                            vb.pp("img_projection.2"),
+                        )?),
+                    ]
+                }
+                _ => {
+                    candle_core::bail!("projection_cls=`{projection_cls}` not implemented.");
+                }
+            };
 
         let layer_idx = config.img_processor.layer_idx.unwrap_or(-2);
         let type_feature = config
@@ -434,9 +530,227 @@ impl ImageEmbedding {
             layer_idx,
             type_feature,
             image_processor,
-            layers,
+            layers: EmbeddingLayers(layers),
             hd_transform_order,
+            use_hd_transform,
+            vocab_size: config.vocab_size,
         })
+    }
+
+    fn get_image_features(&self, pixel_values: &Tensor) -> Result<Tensor> {
+        let (_, hidden_states) = self
+            .image_processor
+            .forward_get_hidden_states(pixel_values)?;
+        let img_feature =
+            hidden_states[(hidden_states.len() as isize + self.layer_idx) as usize].clone();
+        if self.type_feature == "patch" {
+            img_feature.i((.., 1..))
+        } else if self.type_feature == "cls_patch" {
+            Ok(img_feature)
+        } else {
+            candle_core::bail!("Unsupported image feature type {}", self.type_feature)
+        }
+    }
+
+    #[allow(non_snake_case)]
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        pixel_values: &Tensor,
+        image_sizes: Option<Vec<(usize, usize)>>,
+    ) -> Result<Tensor> {
+        let input_ids = input_ids.reshape(((), input_ids.dim(D::Minus1)?))?;
+
+        let input_ids_lt = input_ids.lt(0.0f64)?;
+        let input_ids_gt = input_ids.lt(-MAX_INPUT_ID)?;
+        // positions = torch.nonzero((input_ids < 0) & (input_ids > -MAX_INPUT_ID), as_tuple=False)
+        let positions = nonzero_between_as_tuple_false(&input_ids_lt, &input_ids_gt)?;
+
+        let target_dev = self.layers.0[0].device();
+        let target_dtype = self.layers.0[0].dtype();
+
+        let mut select = false;
+        // If some, use hd transform case and it contains num_img_toks
+        let mut hd_transform = None;
+        let mut image_set_tensor = None;
+        if positions.dim(0)? > 0 {
+            select = true;
+            // input_ids[positions[:, 0], positions[:, 1]]
+            if self.use_hd_transform && image_sizes.is_some() {
+                let bs = pixel_values.dim(0)?;
+                let img_features = self.get_image_features(&pixel_values.flatten(0, 1)?)?;
+                let base_feat_dim = (img_features.dims()[1] as f32).sqrt() as usize;
+                assert_eq!(base_feat_dim, 24);
+
+                // bs x max_num_crops x (24x24) x C
+                let img_features =
+                    img_features.reshape((bs, (), base_feat_dim.pow(2), self.image_dim_out))?;
+                let C = self.image_dim_out;
+                let H = base_feat_dim;
+
+                let mut output_imgs = Vec::new();
+                let mut output_len = Vec::new();
+                for bs_ in 0..bs {
+                    let (h, w) = image_sizes.as_ref().unwrap()[bs_];
+                    let h = h / 336;
+                    let w = w / 336;
+                    let B_ = h * w;
+
+                    // 1 x (24x24) x 1024
+                    let global_img_feature = img_features.i((bs_, ..(img_features.dim(1)? - 1)))?;
+
+                    // 1 x 12 x 12 x 4096
+                    let glb_img = global_img_feature
+                        .reshape((1, H, H, C))?
+                        .reshape((1, H / 2, 2, H / 2, 2, C))?
+                        .contiguous()?
+                        .permute((0, 1, 3, 2, 4, 5))?
+                        .reshape((1, H / 2, H / 2, 4 * C))?
+                        .contiguous()?;
+                    let temp_glbl_gn = self
+                        .sub_gn
+                        .as_ref()
+                        .expect("Need `sub_gn` if `use_hd_transform`")
+                        .repeat((1, H / 2, 1, 1))?;
+
+                    // 1 x 156 x 4096
+                    let glb_img =
+                        Tensor::cat(&[glb_img, temp_glbl_gn], 2)?.reshape((1, (), 4 * C))?;
+
+                    // (max_num_crops-1) x (12x12) x C
+                    let sub_img = img_features.i((bs_, 1..))?;
+                    // 16x574x1024
+                    // Get rid of padding sub_img
+                    let sub_img = sub_img.i(..(sub_img.dim(0)? - B_))?;
+
+                    // (num_crops, 12, 2, 12, 2, 1024) -> (num_crops, 12, 12, 2, 2, 1024) -> (num_crops, 12*12, 4*1024)
+                    let sub_img = sub_img
+                        .reshape((B_, H, H, C))?
+                        .reshape((B_, H / 2, 2, H / 2, 2, C))?
+                        .contiguous()?
+                        .permute((0, 1, 3, 2, 4, 5))?
+                        .reshape((B_, 1, 4 * C))?
+                        .contiguous()?;
+                    let sub_img = sub_img
+                        .reshape(BigShapeWithOneHole((1usize, h, w, 12usize, 12usize, ())))?
+                        .permute((0, 1, 3, 2, 4, 5))?
+                        .reshape((1, h * 12, w * 12, 4 * C))?;
+                    let temp_sub_gn = self
+                        .sub_gn
+                        .as_ref()
+                        .expect("Need `sub_gn` if `use_hd_transform`")
+                        .repeat((1, H * 12, 1, 1))?;
+                    let sub_img =
+                        Tensor::cat(&[sub_img, temp_sub_gn], 2)?.reshape((1, (), 4 * C))?;
+                    // (1, num_img_tokens, 1024*4)
+
+                    match self.hd_transform_order.as_str() {
+                        "glb_sub" => {
+                            output_imgs.push(Tensor::cat(
+                                &[
+                                    glb_img,
+                                    self.glb_gn
+                                        .as_ref()
+                                        .expect("Need `glb_gn` if `use_hd_transform`")
+                                        .clone(),
+                                    sub_img,
+                                ],
+                                1,
+                            )?);
+                        }
+                        "sub_glb" => {
+                            output_imgs.push(Tensor::cat(
+                                &[
+                                    sub_img,
+                                    self.glb_gn
+                                        .as_ref()
+                                        .expect("Need `glb_gn` if `use_hd_transform`")
+                                        .clone(),
+                                    glb_img,
+                                ],
+                                1,
+                            )?);
+                        }
+                        other => {
+                            candle_core::bail!("Invalid hd_transform_order=`{other}`");
+                        }
+                    }
+
+                    let temp_len = (h * w + 1) * 144 + 1 + (h + 1) * 12;
+                    assert_eq!(temp_len, output_imgs.last().unwrap().dims()[1]);
+                    output_len.push(temp_len);
+                }
+
+                hd_transform = Some(output_len);
+                let mut image_set_tensor_inner = Vec::new();
+                for img in output_imgs {
+                    image_set_tensor_inner.push(
+                        self.layers
+                            .forward(&img.to_device(target_dev)?.to_dtype(target_dtype)?)?,
+                    );
+                }
+                image_set_tensor = Some(Either::Left(image_set_tensor_inner));
+            } else if pixel_values.dims().len() == 4 {
+                let tt = self
+                    .get_image_features(&pixel_values)?
+                    .to_device(target_dev)?
+                    .to_dtype(target_dtype)?
+                    .reshape(((), self.image_dim_out))?;
+                let image_set_tensor_inner = self.layers.forward(&tt)?;
+                image_set_tensor = Some(Either::Right(image_set_tensor_inner));
+            } else if pixel_values.dims().len() == 3 {
+                let tt = pixel_values
+                    .to_device(target_dev)?
+                    .to_dtype(target_dtype)?
+                    .reshape(((), self.image_dim_out))?;
+                let image_set_tensor_inner = self.layers.forward(&tt)?;
+                image_set_tensor = Some(Either::Right(image_set_tensor_inner));
+            } else {
+                unreachable!()
+            }
+        }
+
+        let input_ids = input_ids.clamp(0.0, self.vocab_size as f64)?;
+        let mut hidden_states = self.wte.forward(&input_ids)?;
+        if select {
+            match (hd_transform, image_set_tensor) {
+                (Some(output_lens), Some(Either::Left(image_set_tensors))) => {
+                    let mut idx = 0;
+                    for (i, cnt) in output_lens.into_iter().enumerate() {
+                        let img_set_tensor = image_set_tensors[i]
+                            .to_device(target_dev)?
+                            .to_dtype(target_dtype)?;
+                        // hidden_states[positions[idx, 0], positions[idx, 1] : positions[idx, 1] + cnt] = ...
+                        let p_0 = positions.i((idx, 0))?.to_scalar::<u32>()? as usize;
+                        let p_1 = positions.i((idx, 1))?.to_scalar::<u32>()? as usize;
+                        hidden_states = hidden_states
+                            .slice_assign(&[p_0..p_0 + 1, p_1..p_1 + cnt], &img_set_tensor)?;
+                        idx += cnt;
+                    }
+                }
+                (None, Some(Either::Right(image_set_tensor))) => {
+                    let mut idx = 0;
+                    // Know len(img_embeds) == pixel_values.dim(0) == len(selected_g_values)
+                    // https://huggingface.co/microsoft/Phi-3-vision-128k-instruct/blob/dbcdaaacf52c8e40cf8de6d6ffa6ff6860e5f256/image_embedding_phi3_v.py#L259
+                    for i in 0..pixel_values.dim(0)? {
+                        let cnt = self.num_img_tokens;
+                        let img_set_tensor = image_set_tensor
+                            .i(i * cnt..(i + 1) * cnt)?
+                            .to_device(target_dev)?
+                            .to_dtype(target_dtype)?;
+                        let p_0 = positions.i((idx, 0))?.to_scalar::<u32>()? as usize;
+                        let p_1 = positions.i((idx, 1))?.to_scalar::<u32>()? as usize;
+                        // hidden_states[positions[idx, 0], positions[idx, 1] : positions[idx, 1] + cnt] = ...
+                        hidden_states = hidden_states
+                            .slice_assign(&[p_0..p_0 + 1, p_1..p_1 + cnt], &img_set_tensor)?;
+                        idx += cnt;
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        Ok(hidden_states)
     }
 }
 
@@ -444,6 +758,7 @@ impl ImageEmbedding {
 
 #[derive(Debug)]
 pub struct Model {
+    vision_embed_tokens: ImageEmbedding,
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
@@ -470,6 +785,12 @@ impl Model {
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+        )?;
+        let vision_embed_tokens = ImageEmbedding::new(
+            cfg,
+            embed_tokens.clone(),
+            &cfg.embd_layer,
+            vb.pp("vision_embed_tokens"),
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
@@ -500,7 +821,7 @@ impl Model {
             mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
         )?;
         Ok(Self {
-            embed_tokens,
+            vision_embed_tokens,
             layers,
             norm,
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
@@ -509,17 +830,25 @@ impl Model {
             max_seq_len: cfg.max_position_embeddings,
             mapper,
             sliding_window: cfg.sliding_window,
+            embed_tokens,
         })
     }
 
     pub fn forward(
         &mut self,
         input_ids: &Tensor,
+        pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
         position_ids: &[usize],
         context_lens: Vec<(usize, usize)>,
+        image_sizes: Option<Vec<(usize, usize)>>,
     ) -> Result<Tensor> {
-        let mut xs = self.embed_tokens.forward(input_ids)?;
+        let mut xs = if let Some(ref pixel_values) = pixel_values {
+            self.vision_embed_tokens
+                .forward(input_ids, pixel_values, image_sizes)?
+        } else {
+            self.embed_tokens.forward(input_ids)?
+        };
         let mut cache = self.cache.lock();
         let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
@@ -558,6 +887,7 @@ impl Model {
 
 impl IsqModel for Model {
     fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+        // TODO(EricLBuehler): more?
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
@@ -570,40 +900,38 @@ impl IsqModel for Model {
     }
 }
 
-impl NormalModel for Model {
+pub(crate) struct Phi3VisionSpecificArgs {
+    pub image_sizes: Option<Vec<(usize, usize)>>,
+}
+
+impl VisionModel for Model {
     fn forward(
         &mut self,
         input_ids: &Tensor,
+        pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
         _start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
+        model_specific_args: Box<dyn Any>,
     ) -> Result<Tensor> {
-        self.forward(input_ids, seqlen_offsets, &position_ids, context_lens)
-    }
-    fn xlora_forward(
-        &mut self,
-        _input_ids: &Tensor,
-        _input_ids_full: &Tensor,
-        _seqlen_offsets: &[usize],
-        _seqlen_offsets_full: &[usize],
-        _start_offsets_kernel: Tensor,
-        _start_offsets_kernel_full: Tensor,
-        _no_kv_cache: bool,
-        _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
-        _context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-    ) -> Result<Tensor> {
-        unimplemented!()
+        let Phi3VisionSpecificArgs { image_sizes } = *model_specific_args
+            .downcast()
+            .expect("Cannot downcast into `Phi3VisionSpecificArgs`");
+        self.forward(
+            input_ids,
+            pixel_values,
+            seqlen_offsets,
+            &position_ids,
+            context_lens,
+            image_sizes,
+        )
     }
     fn cache(&self) -> &Cache {
         &self.cache
     }
     fn device(&self) -> &Device {
         &self.device
-    }
-    fn is_xlora(&self) -> bool {
-        false
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len

@@ -695,7 +695,7 @@ pub trait VisionModel: IsqModel {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
-        pixel_attention_mask: Option<Tensor>,
+        model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
     ) -> candle_core::Result<Tensor>;
     fn device(&self) -> &Device;
     fn cache(&self) -> &Cache;

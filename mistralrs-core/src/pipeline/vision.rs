@@ -338,7 +338,7 @@ impl Pipeline for VisionPipeline {
             context_lens,
             position_ids,
             pixel_values,
-            pixel_attention_mask,
+            model_specific_args,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
         self.model.forward(
             &input_ids,
@@ -347,7 +347,7 @@ impl Pipeline for VisionPipeline {
             seqlen_offsets_kernel,
             context_lens,
             position_ids,
-            pixel_attention_mask,
+            model_specific_args,
         )
     }
     async fn sample(
