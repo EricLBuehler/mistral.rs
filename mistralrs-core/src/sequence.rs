@@ -237,11 +237,11 @@ impl Sequence {
     pub fn is_running(&self) -> bool {
         *self.state.read().unwrap() == SequenceState::RunningCompletion
             || *self.state.read().unwrap() == SequenceState::RunningPrompt
-            || *self.state.read().unwrap() == SequenceState::RunningPrefillPrompt
     }
 
     pub fn is_completion(&self) -> bool {
         *self.state.read().unwrap() == SequenceState::RunningCompletion
+            || *self.state.read().unwrap() == SequenceState::RunningPrefillPrompt
     }
 
     pub fn is_prompt(&self) -> bool {
