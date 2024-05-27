@@ -121,18 +121,18 @@ pub enum ModelParams<'a, Q> where Q: QuantParams {
     Adapted(Config::<Q, Adapter<'a>>),
 }
 
+// A `builder()` method is derived from the `new()` method and it's params (derived builder struct fields).
+// NOTE: Intended to be built via fluent API in a single line, cannot conditionally append params.
+// `.adapter(Adapter<' >)` or for conditional usage `.and_adapter(Option<Adapter<' >)` can be used.
+// Otherwise omitting an `.adapter()` call prior to calling `build()` is ok, defaults to `None`.
+#[buildstructor::buildstructor]
 impl<'a, Q: QuantParams> ModelParams<'a, Q> {
-    pub fn new(quant: Q) -> Self {
-        Self::Quantized(Config::<Q, NoAdapter> {
-            quant,
-            adapter: NoAdapter {},
-        })
-    }
-
-    pub fn with_adapter<'b: 'a>(self, adapter: Adapter<'b>) -> Self {
-        let q = self.expect_quantized("Config should be Quantized (without an Adapter)");
-
-        Self::Adapted((q.quant, adapter).into())
+    #[builder]
+    pub fn new<'b: 'a>(quant: Q, adapter: Option<Adapter<'b>>) -> Self {
+        match adapter {
+            None => Self::Quantized((quant, NoAdapter {}).into()),
+            Some(a) => Self::Adapted((quant, a).into()),
+        }
     }
 }
 

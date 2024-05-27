@@ -271,15 +271,16 @@ impl Loader for GGMLLoader {
         let quant = ModelConfig::GGML(
             ModelConfig::FileGGML { ct: model, gqa: self.config.gqa },
         );
-        let mut model_config = ModelConfig::ModelParams::new(quant);
 
         // Adapter specific config:
+        let mut adapter = None;
         let is_lora = self.kind.is_adapted_and(|a| a.is_lora());
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
         if self.kind.is_adapted() {
-            let adapter = ModelConfig::Adapter::try_new(paths, device, silent, is_xlora)?;
-            model_config = model_config.with_adapter(adapter);
+            adapter.replace(ModelConfig::Adapter::try_new(paths, device, silent, is_xlora)?);
         }
+
+        let model_config = ModelConfig::ModelParams::builder().quant(quant).and_adapter(adapter).build();
 
         // Config into model:
         let model = match self.kind {
