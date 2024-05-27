@@ -267,20 +267,23 @@ impl Loader for GGMLLoader {
             info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_ggml_tensors.txt`.");
         }
 
-        // Base config (quantization only):
-        let quant = ModelConfig::GGML(
-            ModelConfig::FileGGML { ct: model, gqa: self.config.gqa },
-        );
-
-        // Adapter specific config:
-        let mut adapter = None;
         let is_lora = self.kind.is_adapted_and(|a| a.is_lora());
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
-        if self.kind.is_adapted() {
-            adapter.replace(ModelConfig::Adapter::try_new(paths, device, silent, is_xlora)?);
-        }
 
-        let model_config = ModelConfig::ModelParams::builder().quant(quant).and_adapter(adapter).build();
+        let model_config = {
+            // Base config (quantization only):
+            let quant = ModelConfig::GGML(
+                ModelConfig::FileGGML { ct: model, gqa: self.config.gqa },
+            );
+
+            // Adapter specific config:
+            let mut adapter = None;
+            if self.kind.is_adapted() {
+                adapter.replace(ModelConfig::Adapter::try_new(paths, device, silent, is_xlora)?);
+            }
+
+            ModelConfig::ModelParams::builder().quant(quant).and_adapter(adapter).build()
+        };
 
         // Config into model:
         let model = match self.kind {
