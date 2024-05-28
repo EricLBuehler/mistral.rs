@@ -521,8 +521,6 @@
 <a href="#519" id="519">519</a>
 <a href="#520" id="520">520</a>
 <a href="#521" id="521">521</a>
-<a href="#522" id="522">522</a>
-<a href="#523" id="523">523</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
@@ -531,17 +529,15 @@
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
 <span class="kw">use </span><span class="kw">crate</span>::lora::Ordering;
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::calculate_eos_tokens;
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::Cache;
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::{get_chat_template, Cache};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{ChatTemplate, LocalModelPaths};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
 <span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
 <span class="kw">use </span><span class="kw">crate</span>::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
-<span class="kw">use crate</span>::{
-    deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, DEBUG,
-};
+<span class="kw">use crate</span>::{do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, DEBUG};
 <span class="kw">use crate</span>::{
     models::quantized_llama::ModelWeights <span class="kw">as </span>QLlama, utils::tokens::get_token,
     xlora_models::XLoraQLlama,
@@ -551,8 +547,6 @@
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
-<span class="kw">use </span>serde_json::Value;
-<span class="kw">use </span>std::collections::HashMap;
 <span class="kw">use </span>std::fs;
 <span class="kw">use </span>std::path::PathBuf;
 <span class="kw">use </span>std::str::FromStr;
@@ -864,8 +858,10 @@
         };
 
         <span class="kw">let </span>tokenizer = get_tokenizer(paths.get_tokenizer_filename())<span class="question-mark">?</span>;
-
-        <span class="kw">let </span>(chat_template, gen_conf) = <span class="macro">deserialize_chat_template!</span>(paths, <span class="self">self</span>);
+        <span class="kw">let </span>gen_conf: <span class="prelude-ty">Option</span>&lt;GenerationConfig&gt; = paths
+            .get_gen_conf_filename()
+            .map(|f| serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap()).unwrap());
+        <span class="kw">let </span>chat_template = get_chat_template(paths, <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template);
 
         <span class="kw">let </span>max_seq_len = <span class="kw">match </span>model {
             Model::Llama(<span class="kw-2">ref </span>l) =&gt; l.max_seq_len,
