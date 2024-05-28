@@ -1307,7 +1307,12 @@ pub(crate) fn get_chat_template(
     } else {
         paths.get_template_filename().clone()
     };
-    if !template_filename.ends_with(".json") {
+    if template_filename
+        .extension()
+        .expect("Template filename must be a file")
+        .to_string_lossy()
+        != "json"
+    {
         panic!("Template filename {template_filename:?} must end with `.json`.");
     }
     let template: ChatTemplate =
