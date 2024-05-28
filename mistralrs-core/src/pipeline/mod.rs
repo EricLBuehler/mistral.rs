@@ -51,7 +51,9 @@ use crate::{
 };
 
 pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
-pub use self::inputs_processor::{text_models_inputs_processor, InputsProcessor};
+pub use self::inputs_processor::{
+    text_models_inputs_processor, InputsProcessor, InputsProcessorType,
+};
 use self::processing::BasicProcessor;
 
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For

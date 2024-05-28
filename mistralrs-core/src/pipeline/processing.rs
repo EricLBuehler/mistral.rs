@@ -8,6 +8,9 @@ use crate::{Content, Pipeline};
 
 use super::{chat_template::apply_chat_template_to, text_models_inputs_processor, InputsProcessor};
 
+/// Processor for messages.
+/// Also includes method to retrieve the input processor for processing inputs for the
+/// model.
 pub trait Processor {
     fn process(
         &self,

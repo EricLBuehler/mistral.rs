@@ -104,6 +104,7 @@ pub(crate) fn make_pixel_values(image: &DynamicImage, device: &Device) -> Result
     Tensor::cat(&accum, 1)?.to_device(device)
 }
 
+/// ImagePreProcessor: process images for the model (similar to `InputsProcessor`, typically called by it)
 pub trait ImagePreProcessor: InputsProcessor {
     const DEFAULT_MEAN: [f64; 3];
     const DEFAULT_STD: [f64; 3];
