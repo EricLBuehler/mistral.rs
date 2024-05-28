@@ -81,5 +81,6 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
             anyhow::bail!("Tokenizer model `{other}` not supported.");
         }
     };
+    info!("GGUF tokenizer model is `{model}`: {tokenizer:?}.");
     Ok(tokenizer)
 }
