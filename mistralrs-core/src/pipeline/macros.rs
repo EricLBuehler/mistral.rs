@@ -233,6 +233,32 @@ macro_rules! get_paths_gguf {
             None
         };
 
+        let preprocessor_config = if $crate::api_dir_list!(api, model_id)
+            .collect::<Vec<_>>()
+            .contains(&"preprocessor_config.json".to_string())
+        {
+            Some($crate::api_get_file!(
+                api,
+                "preprocessor_config.json",
+                model_id
+            ))
+        } else {
+            None
+        };
+
+        let processor_config = if $crate::api_dir_list!(api, model_id)
+            .collect::<Vec<_>>()
+            .contains(&"processor_config.json".to_string())
+        {
+            Some($crate::api_get_file!(
+                api,
+                "processor_config.json",
+                model_id
+            ))
+        } else {
+            None
+        };
+
         Ok(Box::new($path_name {
             tokenizer_filename: PathBuf::from_str("")?,
             config_filename: PathBuf::from_str("")?,
@@ -245,6 +271,8 @@ macro_rules! get_paths_gguf {
             template_filename: chat_template,
             gen_conf,
             lora_preload_adapter_info,
+            preprocessor_config,
+            processor_config
         }))
     }};
 }
