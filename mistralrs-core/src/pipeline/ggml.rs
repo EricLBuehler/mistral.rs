@@ -254,6 +254,23 @@ impl Loader for GGMLLoader {
 
         info!("Model config: {:?}", model.hparams);
 
+        if DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
+            let mut tensors = Vec::new();
+            for (name, t) in &model.tensors {
+                tensors.push(format!(
+                    "name = `{name}`, shape = {:?}, dtype = {:?}",
+                    t.shape().clone(),
+                    t.dtype(),
+                ));
+            }
+            fs::write(
+                "mistralrs_ggml_tensors.txt",
+                serde_json::to_string_pretty(&tensors).expect("Serialization failed."),
+            )?;
+
+            info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_ggml_tensors.txt`.");
+        }
+
         let mut is_lora = false;
         let model = match self.kind {
             ModelKind::QuantizedGGML => Model::Llama(QLlama::from_ggml(model, self.config.gqa)?),

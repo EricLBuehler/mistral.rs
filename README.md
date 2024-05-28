@@ -416,8 +416,10 @@ If you have any problems or want to contribute something, please raise an issue 
 If you want to add a new model, please see [our guide](docs/ADDING_MODELS.md).
 
 ## FAQ
-- Debugging
-    - Consider setting the enviornment variable `MISTRALRS_DEBUG=1`.
+- Debugging with the environment variable `MISTRALRS_DEBUG=1` causes the following things
+    - If loading a GGUF or GGML model, this will output a file containing the names, shapes, and types of each tensor.
+        - `mistralrs_gguf_tensors.txt` or `mistralrs_ggml_tensors.txt`
+    - More logging.
 - Setting the CUDA compiler path:
     - Set the `NVCC_CCBIN` environment variable during build.
 - Error: `recompile with -fPIE`:

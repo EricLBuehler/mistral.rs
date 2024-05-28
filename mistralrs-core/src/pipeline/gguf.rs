@@ -351,7 +351,7 @@ impl Loader for GGUFLoader {
             let mut tensors = Vec::new();
             for (name, info) in &model.tensor_infos {
                 tensors.push(format!(
-                    "name = {name:?}, shape = {:?}, dtype = {:?}",
+                    "name = `{name}`, shape = {:?}, dtype = {:?}",
                     info.shape.clone(),
                     info.ggml_dtype
                 ));
