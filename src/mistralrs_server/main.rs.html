@@ -312,12 +312,6 @@
 <a href="#310" id="310">310</a>
 <a href="#311" id="311">311</a>
 <a href="#312" id="312">312</a>
-<a href="#313" id="313">313</a>
-<a href="#314" id="314">314</a>
-<a href="#315" id="315">315</a>
-<a href="#316" id="316">316</a>
-<a href="#317" id="317">317</a>
-<a href="#318" id="318">318</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{Json, State},
@@ -334,7 +328,6 @@
 <span class="kw">use </span>openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>std::sync::Arc;
-<span class="kw">use </span>tracing_subscriber::EnvFilter;
 <span class="kw">mod </span>chat_completion;
 <span class="kw">mod </span>completions;
 <span class="kw">use crate</span>::{chat_completion::__path_chatcompletions, completions::completions};
@@ -345,7 +338,7 @@
 
 <span class="kw">use </span>interactive_mode::interactive_mode;
 <span class="kw">use </span>tower_http::cors::{AllowOrigin, CorsLayer};
-<span class="kw">use </span>tracing::{info, level_filters::LevelFilter, warn};
+<span class="kw">use </span>tracing::{info, warn};
 <span class="kw">use </span>utoipa::{OpenApi, ToSchema};
 <span class="kw">use </span>utoipa_swagger_ui::SwaggerUi;
 
@@ -572,11 +565,6 @@
     </span><span class="kw">let </span>device = Device::new_metal(<span class="number">0</span>)<span class="question-mark">?</span>;
     <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
     </span><span class="kw">let </span>device = Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?</span>;
-
-    <span class="kw">let </span>filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
-    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     <span class="macro">info!</span>(
         <span class="string">"avx: {}, neon: {}, simd128: {}, f16c: {}"</span>,

@@ -544,9 +544,13 @@
 <a href="#542" id="542">542</a>
 <a href="#543" id="543">543</a>
 <a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::{HashMap, VecDeque},
-    sync::{atomic::AtomicBool, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 <span class="kw">use </span>tokio::sync::{mpsc::Receiver, Mutex};
@@ -556,7 +560,7 @@
     pipeline::{AdapterInstruction, CacheInstruction},
     request::NormalRequest,
     response::CompletionChoice,
-    CompletionResponse, RequestMessage, Response,
+    CompletionResponse, RequestMessage, Response, DEBUG,
 };
 <span class="kw">use </span>candle_core::{<span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>rand::SeedableRng;
@@ -618,9 +622,7 @@
                 is_xlora,
                 no_prefix_cache,
             ),
-            is_debug: std::env::var(<span class="string">"RUST_LOG"</span>)
-                .unwrap_or_default()
-                .contains(<span class="string">"debug"</span>),
+            is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
         }
     }
