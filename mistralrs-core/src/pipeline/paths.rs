@@ -10,11 +10,12 @@ use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
     Repo, RepoType,
 };
+use serde_json::Value;
 use tracing::{info, warn};
 
 use crate::{
-    api_dir_list, api_get_file, lora::LoraConfig, utils::tokens::get_token,
-    xlora_models::XLoraConfig, Ordering, TokenSource,
+    api_dir_list, api_get_file, lora::LoraConfig, pipeline::chat_template::ChatTemplate,
+    utils::tokens::get_token, xlora_models::XLoraConfig, ModelPaths, Ordering, TokenSource,
 };
 
 pub(crate) struct XLoraPaths {
@@ -277,4 +278,77 @@ pub fn get_model_paths(
             Ok(filenames)
         }
     }
+}
+
+/// Find and parse the appropriate [`ChatTemplate`], and ensure is has a valid [`ChatTemplate.chat_template`].
+/// If the the provided `tokenizer_config.json` from [`ModelPaths.get_template_filename`] does not
+/// have a `chat_template`, use the provided one.
+#[allow(clippy::borrowed_box)]
+pub(crate) fn get_chat_template(
+    paths: &Box<dyn ModelPaths>,
+    chat_template: &Option<String>,
+) -> ChatTemplate {
+    let mut template: ChatTemplate =
+        serde_json::from_str(&fs::read_to_string(paths.get_template_filename()).unwrap()).unwrap();
+    let processor_conf: Option<crate::vision_models::processor_config::ProcessorConfig> = paths
+        .get_processor_config()
+        .as_ref()
+        .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
+    if let Some(processor_conf) = processor_conf {
+        if processor_conf.chat_template.is_some() {
+            template.chat_template = processor_conf.chat_template;
+        }
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct SpecifiedTemplate {
+        chat_template: String,
+        bos_token: Option<String>,
+        eos_token: Option<String>,
+    }
+
+    if template.chat_template.is_some() {
+        return template;
+    };
+
+    info!("`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
+    let mut deser: HashMap<String, Value> =
+        serde_json::from_str(&fs::read_to_string(paths.get_template_filename()).unwrap()).unwrap();
+
+    match chat_template.clone() {
+        Some(t) => {
+            if t.ends_with(".json") {
+                info!("Loading specified loading chat template file at `{t}`.");
+                let templ: SpecifiedTemplate =
+                    serde_json::from_str(&fs::read_to_string(t.clone()).unwrap()).unwrap();
+                deser.insert(
+                    "chat_template".to_string(),
+                    Value::String(templ.chat_template),
+                );
+                if templ.bos_token.is_some() {
+                    deser.insert(
+                        "bos_token".to_string(),
+                        Value::String(templ.bos_token.unwrap()),
+                    );
+                }
+                if templ.eos_token.is_some() {
+                    deser.insert(
+                        "eos_token".to_string(),
+                        Value::String(templ.eos_token.unwrap()),
+                    );
+                }
+                info!("Loaded chat template file.");
+            } else {
+                deser.insert("chat_template".to_string(), Value::String(t));
+                info!("Loaded specified literal chat template.");
+            }
+        }
+        None => {
+            info!("No specified chat template. No chat template will be used. Only prompts will be accepted, not messages.");
+            deser.insert("chat_template".to_string(), Value::Null);
+        }
+    };
+    let ser = serde_json::to_string_pretty(&deser)
+        .expect("Serialization of modified chat template failed.");
+    serde_json::from_str(&ser).unwrap()
 }
