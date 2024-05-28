@@ -57,6 +57,7 @@ strum = { version = "0.26", features = ["derive"] }
 image.workspace = true
 derive_more = { version = "0.99.17", default-features = false, features = ["from"] }
 tracing-subscriber.workspace = true
+reqwest = { version = "0.12.4", features = ["blocking"] }
 
 [features]
 pyo3_macros = ["pyo3"]
