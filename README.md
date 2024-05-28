@@ -219,7 +219,12 @@ To install mistral.rs, one should ensure they have Rust installed by following [
     You can install Python support by following the guide [here](mistralrs-pyo3/README.md).
 
 ## Getting models
-### Getting models from HF Hub
+
+There are 2 ways to run a model with mistral.rs:
+- From Hugging Face Hub (easiest)
+- From local files
+
+### Getting models from Hugging Face Hub
 
 Mistral.rs can automatically download models from HF Hub. To access gated models, you should provide a token source. They may be one of:
 - `literal:<value>`: Load from a specified literal
@@ -299,7 +304,7 @@ Additionally, for models without quantization, the model architecture should be 
 You can launch interactive mode, a simple chat application running in the terminal, by passing `-i`:
 
 ```bash
-./mistralrs_server -i gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
+./mistralrs_server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
 ```
 
 ### Quick examples:
@@ -342,7 +347,7 @@ To start a server running Llama from GGML:
 To start a server running Mistral from safetensors.
 
 ```bash
-./mistralrs_server --port 1234 gguf -m mistralai/Mistral-7B-Instruct-v0.1
+./mistralrs_server --port 1234 plain -m mistralai/Mistral-7B-Instruct-v0.1 -a mistral
 ```
 
 ### Structured selection with a `.toml` file
