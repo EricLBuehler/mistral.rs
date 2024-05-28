@@ -14,7 +14,7 @@ use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 use crate::xlora_models::NonGranularState;
-use crate::{do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, DEBUG};
+use crate::{do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, DEBUG};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
     models::quantized_phi2::ModelWeights as QPhi,
@@ -69,7 +69,6 @@ pub struct GGUFLoader {
     xlora_order: Option<Ordering>,
     no_kv_cache: bool,
     chat_template: Option<String>,
-    tokenizer_json: Option<String>,
     kind: ModelKind,
     tgt_non_granular_index: Option<usize>,
 }
@@ -119,24 +118,24 @@ pub struct GGUFLoaderBuilder {
     xlora_order: Option<Ordering>,
     no_kv_cache: bool,
     chat_template: Option<String>,
-    tokenizer_json: Option<String>,
     tgt_non_granular_index: Option<usize>,
 }
 
 impl GGUFLoaderBuilder {
+    /// Create a loader builder for a GGUF model. `tok_model_id` is the model ID where you can find a
+    /// `tokenizer_config.json` file. If the `chat_template` is specified, then it will be treated as a
+    /// path and used over remote files, removing all remote accesses.
     pub fn new(
         config: GGUFSpecificConfig,
         chat_template: Option<String>,
-        tokenizer_json: Option<String>,
-        model_id: Option<String>,
+        tok_model_id: Option<String>,
         quantized_model_id: String,
         quantized_filename: String,
     ) -> Self {
         Self {
             config,
             chat_template,
-            tokenizer_json,
-            model_id,
+            model_id: tok_model_id,
             kind: ModelKind::QuantizedGGUF,
             quantized_filename,
             quantized_model_id,
@@ -197,7 +196,6 @@ impl GGUFLoaderBuilder {
             xlora_order: self.xlora_order,
             no_kv_cache: self.no_kv_cache,
             chat_template: self.chat_template,
-            tokenizer_json: self.tokenizer_json,
             tgt_non_granular_index: self.tgt_non_granular_index,
             quantized_filename: Some(self.quantized_filename),
             quantized_model_id: Some(self.quantized_model_id),
@@ -217,7 +215,6 @@ impl GGUFLoader {
         xlora_order: Option<Ordering>,
         no_kv_cache: bool,
         chat_template: Option<String>,
-        tokenizer_json: Option<String>,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
         let model_id = if let Some(id) = model_id {
@@ -238,7 +235,6 @@ impl GGUFLoader {
             xlora_order,
             no_kv_cache,
             chat_template,
-            tokenizer_json,
             kind,
             tgt_non_granular_index,
         }
@@ -279,7 +275,7 @@ impl Loader for GGUFLoader {
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
+        let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths_gguf!(
             LocalModelPaths,
             &token_source,
             revision,

@@ -57,7 +57,6 @@ pub enum Which {
     #[allow(clippy::upper_case_acronyms)]
     GGUF {
         tok_model_id: String,
-        tokenizer_json: Option<String>,
         quantized_model_id: String,
         quantized_filename: String,
         repeat_last_n: Option<usize>,
@@ -65,7 +64,6 @@ pub enum Which {
 
     XLoraGGUF {
         tok_model_id: Option<String>,
-        tokenizer_json: Option<String>,
         quantized_model_id: String,
         quantized_filename: String,
         repeat_last_n: Option<usize>,
@@ -76,7 +74,6 @@ pub enum Which {
 
     LoraGGUF {
         tok_model_id: Option<String>,
-        tokenizer_json: Option<String>,
         quantized_model_id: String,
         quantized_filename: String,
         repeat_last_n: Option<usize>,

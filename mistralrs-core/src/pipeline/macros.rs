@@ -139,6 +139,89 @@ macro_rules! get_paths {
 }
 
 #[macro_export]
+macro_rules! get_paths_gguf {
+    ($path_name:ident, $token_source:expr, $revision:expr, $this:expr, $quantized_model_id:expr, $quantized_filename:expr, $silent:expr) => {{
+        let api = ApiBuilder::new()
+            .with_progress(!$silent)
+            .with_token(get_token($token_source)?)
+            .build()?;
+        let revision = $revision.unwrap_or("main".to_string());
+        let api = api.repo(Repo::with_revision(
+            $this.model_id.clone(),
+            RepoType::Model,
+            revision.clone(),
+        ));
+        let model_id = std::path::Path::new(&$this.model_id);
+
+        let chat_template = if let Some(ref p) = $this.chat_template {
+            if p.ends_with(".json") {
+                info!("Using chat template file at `{p}`");
+                PathBuf::from_str(p)?
+            } else {
+                PathBuf::from_str("")?
+            }
+        } else {
+            $crate::api_get_file!(
+                api,
+                "tokenizer_config.json",
+                model_id
+            ) // Will be loaded from inside gguf file
+        };
+
+        let filenames = get_model_paths(
+            revision.clone(),
+            &$token_source,
+            &$quantized_model_id,
+            &$quantized_filename,
+            &api,
+            &model_id,
+        )?;
+
+        let XLoraPaths {
+            adapter_configs,
+            adapter_safetensors,
+            classifier_path,
+            xlora_order,
+            xlora_config,
+            lora_preload_adapter_info,
+        } = get_xlora_paths(
+            $this.model_id.clone(),
+            &$this.xlora_model_id,
+            &$token_source,
+            revision.clone(),
+            &$this.xlora_order,
+        )?;
+
+        let gen_conf = if $crate::api_dir_list!(api, model_id)
+            .collect::<Vec<_>>()
+            .contains(&"generation_config.json".to_string())
+        {
+            Some($crate::api_get_file!(
+                api,
+                "generation_config.json",
+                model_id
+            ))
+        } else {
+            None
+        };
+
+        Ok(Box::new($path_name {
+            tokenizer_filename: PathBuf::from_str("")?,
+            config_filename: PathBuf::from_str("")?,
+            filenames,
+            xlora_adapter_configs: adapter_configs,
+            xlora_adapter_filenames: adapter_safetensors,
+            classifier_path,
+            classifier_config: xlora_config,
+            xlora_ordering: xlora_order,
+            template_filename: chat_template,
+            gen_conf,
+            lora_preload_adapter_info,
+        }))
+    }};
+}
+
+#[macro_export]
 macro_rules! normal_model_loader {
     ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
         let vb = from_mmaped_safetensors(

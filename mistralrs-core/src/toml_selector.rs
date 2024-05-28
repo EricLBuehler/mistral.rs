@@ -65,7 +65,9 @@ enum TomlModelSelected {
     /// Select a GGUF model.
     #[allow(clippy::upper_case_acronyms)]
     GGUF {
-        /// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
+        /// `tok_model_id` is the local or remote model ID where you can find a `tokenizer_config.json` file.
+        /// If the `chat_template` is specified, then it will be treated as a path and used over remote files,
+        /// removing all remote accesses.
         tok_model_id: String,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
@@ -78,7 +80,9 @@ enum TomlModelSelected {
 
     /// Select a GGUF model with X-LoRA.
     XLoraGGUF {
-        /// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
+        /// `tok_model_id` is the local or remote model ID where you can find a `tokenizer_config.json` file.
+        /// If the `chat_template` is specified, then it will be treated as a path and used over remote files,
+        /// removing all remote accesses.
         tok_model_id: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
@@ -101,7 +105,9 @@ enum TomlModelSelected {
 
     /// Select a GGUF model with LoRA.
     LoraGGUF {
-        /// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
+        /// `tok_model_id` is the local or remote model ID where you can find a `tokenizer_config.json` file.
+        /// If the `chat_template` is specified, then it will be treated as a path and used over remote files,
+        /// removing all remote accesses.
         tok_model_id: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
@@ -299,7 +305,6 @@ fn loader_from_selected(
                 repeat_last_n: args.repeat_last_n,
             },
             args.chat_template,
-            args.tokenizer_json,
             Some(tok_model_id),
             quantized_model_id,
             quantized_filename,
@@ -317,7 +322,6 @@ fn loader_from_selected(
                 repeat_last_n: args.repeat_last_n,
             },
             args.chat_template,
-            args.tokenizer_json,
             tok_model_id,
             quantized_model_id,
             quantized_filename,
@@ -343,7 +347,6 @@ fn loader_from_selected(
                 repeat_last_n: args.repeat_last_n,
             },
             args.chat_template,
-            args.tokenizer_json,
             tok_model_id,
             quantized_model_id,
             quantized_filename,
