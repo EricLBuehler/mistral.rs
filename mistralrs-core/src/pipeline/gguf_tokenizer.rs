@@ -70,7 +70,7 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
         .to_u32()
         .expect("GGUF unk token is not u32");
 
-    let tokenizer = match model.as_str() {
+    let (tokenizer, ty) = match model.as_str() {
         "llama" | "replit" => {
             // unigram
             let scores =
@@ -87,12 +87,16 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
                 DecoderWrapper::ByteFallback(ByteFallback::new()),
                 DecoderWrapper::Strip(Strip::new(' ', 1, 0)),
             ]));
-            tokenizer
+            (tokenizer, "unigram")
         }
         other => {
             anyhow::bail!("Tokenizer model `{other}` not supported.");
         }
     };
-    info!("GGUF tokenizer model is `{model}`: {tokenizer:?}.");
+    info!(
+        "GGUF tokenizer model is `{model}`, num vocab: {}, kind: `{}`",
+        tokenizer.get_vocab_size(true),
+        ty
+    );
     Ok(tokenizer)
 }
