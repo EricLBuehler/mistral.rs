@@ -29,10 +29,20 @@ impl RecRx {
 }
 
 impl FunctionalRecognizer<RecRxState> for RecRx {
-    fn initial(&self) -> RecRxState {
-        self.dfa
-            .universal_start_state(regex_automata::Anchored::Yes)
-            .expect("dfa has no universal start state; make sure it doesn't match empty string")
+    fn initial(&self) -> anyhow::Result<RecRxState> {
+        let state = self
+            .dfa
+            .universal_start_state(regex_automata::Anchored::Yes);
+
+        match state {
+            Some(state) => Ok(state),
+            None => {
+                let err = anyhow::Error::msg(
+                    "dfa has no universal start state; make sure it doesn't match empty string",
+                );
+                Err(err)
+            }
+        }
     }
 
     #[inline(always)]

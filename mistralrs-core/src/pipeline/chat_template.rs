@@ -44,6 +44,9 @@ pub struct ChatTemplate {
     added_tokens_decoder: Option<HashMap<String, AddedTokensDecoder>>,
     additional_special_tokens: Option<Vec<String>>,
     pub bos_token: Option<Bos>,
+
+    /// Jinja format chat templating for chat completion.
+    /// See: https://huggingface.co/docs/transformers/chat_templating
     pub chat_template: Option<String>,
     clean_up_tokenization_spaces: Option<bool>,
     device_map: Option<String>,

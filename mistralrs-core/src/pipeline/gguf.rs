@@ -10,8 +10,8 @@ use super::{
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::lora::Ordering;
-use crate::pipeline::chat_template::calculate_eos_tokens;
-use crate::pipeline::Cache;
+use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
@@ -19,7 +19,7 @@ use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 use crate::xlora_models::NonGranularState;
 use crate::{
-    deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, Pipeline,
+    do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, DEBUG, Pipeline,
 };
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
@@ -47,6 +47,8 @@ use strum::EnumString;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::info;
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::EnvFilter;
 
 enum Model {
     Llama(QLlama),
@@ -308,6 +310,20 @@ impl Loader for GGUFLoader {
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let is_debug = std::env::var("MISTRALRS_DEBUG")
+            .unwrap_or_default()
+            .contains('1');
+        DEBUG.store(is_debug, std::sync::atomic::Ordering::Relaxed);
+
+        let filter = EnvFilter::builder()
+            .with_default_directive(if is_debug {
+                LevelFilter::INFO.into()
+            } else {
+                LevelFilter::DEBUG.into()
+            })
+            .from_env_lossy();
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+
         if in_situ_quant.is_some() {
             anyhow::bail!(
                 "You are trying to in-situ quantize a GGUF model. This will not do anything."
@@ -334,6 +350,23 @@ impl Loader for GGUFLoader {
                 let value = parse_gguf_value(&model.metadata[name]);
                 println!("{name}: {}", value);
             }
+        }
+
+        if DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
+            let mut tensors = Vec::new();
+            for (name, info) in &model.tensor_infos {
+                tensors.push(format!(
+                    "name = `{name}`, shape = {:?}, dtype = {:?}",
+                    info.shape.clone(),
+                    info.ggml_dtype
+                ));
+            }
+            fs::write(
+                "mistralrs_gguf_tensors.txt",
+                serde_json::to_string_pretty(&tensors).expect("Serialization failed."),
+            )?;
+
+            info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_gguf_tensors.txt`.");
         }
 
         let mut is_lora = false;
@@ -458,7 +491,10 @@ impl Loader for GGUFLoader {
 
         let tokenizer = get_tokenizer(paths.get_tokenizer_filename(), None)?;
 
-        let (chat_template, gen_conf) = deserialize_chat_template!(paths, self);
+        let gen_conf: Option<GenerationConfig> = paths
+            .get_gen_conf_filename()
+            .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
+        let chat_template = get_chat_template(paths, &self.chat_template);
 
         let max_seq_len = match model {
             Model::Llama(ref l) => l.max_seq_len,
