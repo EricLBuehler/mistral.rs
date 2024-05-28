@@ -483,8 +483,6 @@ impl Loader for GGUFLoader {
             _ => unreachable!(),
         };
 
-        let tokenizer = get_tokenizer(paths.get_tokenizer_filename(), None)?;
-
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());

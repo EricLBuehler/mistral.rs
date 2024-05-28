@@ -290,8 +290,26 @@ pub(crate) fn get_chat_template(
     paths: &Box<dyn ModelPaths>,
     chat_template: &Option<String>,
 ) -> ChatTemplate {
+    let template_filename = if paths.get_template_filename().to_string_lossy().is_empty() {
+        PathBuf::from(
+            chat_template
+                .as_ref()
+                .expect("A tokenizer config or chat template file path must be specified."),
+        )
+    } else {
+        paths.get_template_filename().clone()
+    };
+    if template_filename
+        .extension()
+        .expect("Template filename must be a file")
+        .to_string_lossy()
+        != "json"
+    {
+        panic!("Template filename {template_filename:?} must end with `.json`.");
+    }
+
     let mut template: ChatTemplate =
-        serde_json::from_str(&fs::read_to_string(paths.get_template_filename()).unwrap()).unwrap();
+        serde_json::from_str(&fs::read_to_string(&template_filename).unwrap()).unwrap();
     let processor_conf: Option<crate::vision_models::processor_config::ProcessorConfig> = paths
         .get_processor_config()
         .as_ref()
@@ -315,7 +333,7 @@ pub(crate) fn get_chat_template(
 
     info!("`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
     let mut deser: HashMap<String, Value> =
-        serde_json::from_str(&fs::read_to_string(paths.get_template_filename()).unwrap()).unwrap();
+        serde_json::from_str(&fs::read_to_string(&template_filename).unwrap()).unwrap();
 
     match chat_template.clone() {
         Some(t) => {
