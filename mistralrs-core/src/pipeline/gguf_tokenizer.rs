@@ -223,7 +223,7 @@ mod tests {
     }
 
     #[test]
-    fn test_decode() -> Result<()> {
+    fn test_decode_llama() -> Result<()> {
         use rand::seq::SliceRandom;
         use rand::thread_rng;
 

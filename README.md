@@ -247,13 +247,6 @@ You can also instruct mistral.rs to load models fully locally by modifying the `
 ./mistralrs_server --port 1234 plain -m . -a mistral
 ```
 
-To run GGUF models fully locally, you do not need to specify the tokenizer model ID argument and instead should pass a path to the
-chat template JSON file (examples [here](chat_templates)) as well as specifying a local model ID. For example:
-
-```bash
-./mistralrs-server --chat-template <chat_template> gguf -m . -f Phi-3-mini-128k-instruct-q4_K_M.gguf
-```
-
 Throughout mistral.rs, any model ID argument or option may be a local path and should contain the following files for each model ID option:
 - `--model-id` (server) or `model_id` (python/rust) or `--tok-model-id` (server) or `tok_model_id` (python/rust): 
   - `config.json`
@@ -268,6 +261,21 @@ Throughout mistral.rs, any model ID argument or option may be a local path and s
   - Adapters `.safetensors` and `adapter_config.json` files in their respective directories
 - `--adapters-model-id` (server) or `adapters_model_id` (python/rust):
   - Adapters `.safetensors` and `adapter_config.json` files in their respective directories
+
+## Running GGUF models locally
+
+To run GGUF models fully locally, you do not need to specify the tokenizer model ID argument and instead should pass a path to the
+chat template JSON file (examples [here](chat_templates)) as well as specifying a local model ID. For example:
+
+```bash
+./mistralrs-server --chat-template <chat_template> gguf -m . -f Phi-3-mini-128k-instruct-q4_K_M.gguf
+```
+
+The following tokenizer model types are currently supported. If you would like one to be added, please raise an issue. Otherwise,
+please consider using the method demonstrated in examples below, where the tokenizer is sourced from Hugging Face.
+
+**Supported GGUF tokenizer types**
+- `llama`
 
 ### Run
 
