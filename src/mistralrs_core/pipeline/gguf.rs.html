@@ -671,10 +671,6 @@
 <a href="#669" id="669">669</a>
 <a href="#670" id="670">670</a>
 <a href="#671" id="671">671</a>
-<a href="#672" id="672">672</a>
-<a href="#673" id="673">673</a>
-<a href="#674" id="674">674</a>
-<a href="#675" id="675">675</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
@@ -684,14 +680,14 @@
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
 <span class="kw">use </span><span class="kw">crate</span>::lora::Ordering;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::gguf_tokenizer::convert_ggml_to_hf_tokenizer;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{get_chat_template, Cache};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{ChatTemplate, LocalModelPaths};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
-<span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
 <span class="kw">use </span><span class="kw">crate</span>::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
-<span class="kw">use crate</span>::{do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, DEBUG};
+<span class="kw">use crate</span>::{do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, DEBUG};
 <span class="kw">use crate</span>::{
     models::quantized_llama::ModelWeights <span class="kw">as </span>QLlama,
     models::quantized_phi2::ModelWeights <span class="kw">as </span>QPhi,
@@ -746,7 +742,6 @@
     xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
     no_kv_cache: bool,
     chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
     kind: ModelKind,
     tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
@@ -796,24 +791,24 @@
     xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
     no_kv_cache: bool,
     chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
     tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
 <span class="kw">impl </span>GGUFLoaderBuilder {
-    <span class="kw">pub fn </span>new(
+    <span class="doccomment">/// Create a loader builder for a GGUF model. `tok_model_id` is the model ID where you can find a
+    /// `tokenizer_config.json` file. If the `chat_template` is specified, then it will be treated as a
+    /// path and used over remote files, removing all remote accesses.
+    </span><span class="kw">pub fn </span>new(
         config: GGUFSpecificConfig,
         chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
-        tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
-        model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
+        tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         quantized_model_id: String,
         quantized_filename: String,
     ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             config,
             chat_template,
-            tokenizer_json,
-            model_id,
+            model_id: tok_model_id,
             kind: ModelKind::QuantizedGGUF,
             quantized_filename,
             quantized_model_id,
@@ -874,7 +869,6 @@
             xlora_order: <span class="self">self</span>.xlora_order,
             no_kv_cache: <span class="self">self</span>.no_kv_cache,
             chat_template: <span class="self">self</span>.chat_template,
-            tokenizer_json: <span class="self">self</span>.tokenizer_json,
             tgt_non_granular_index: <span class="self">self</span>.tgt_non_granular_index,
             quantized_filename: <span class="prelude-val">Some</span>(<span class="self">self</span>.quantized_filename),
             quantized_model_id: <span class="prelude-val">Some</span>(<span class="self">self</span>.quantized_model_id),
@@ -894,7 +888,6 @@
         xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
         no_kv_cache: bool,
         chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
-        tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
         tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>model_id = <span class="kw">if let </span><span class="prelude-val">Some</span>(id) = model_id {
@@ -915,7 +908,6 @@
             xlora_order,
             no_kv_cache,
             chat_template,
-            tokenizer_json,
             kind,
             tgt_non_granular_index,
         }
@@ -956,7 +948,7 @@
         mapper: DeviceMapMetadata,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
-        <span class="kw">let </span>paths: anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>ModelPaths&gt;&gt; = <span class="macro">get_paths!</span>(
+        <span class="kw">let </span>paths: anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>ModelPaths&gt;&gt; = <span class="macro">get_paths_gguf!</span>(
             LocalModelPaths,
             <span class="kw-2">&amp;</span>token_source,
             revision,
@@ -1036,6 +1028,8 @@
 
             <span class="macro">info!</span>(<span class="string">"Debug is enabled, wrote the names and information about each tensor to `mistralrs_gguf_tensors.txt`."</span>);
         }
+
+        <span class="kw">let </span>tokenizer = convert_ggml_to_hf_tokenizer(<span class="kw-2">&amp;</span>model)<span class="question-mark">?</span>;
 
         <span class="kw">let </span><span class="kw-2">mut </span>is_lora = <span class="bool-val">false</span>;
         <span class="kw">let </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
@@ -1156,8 +1150,6 @@
             }
             <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
         };
-
-        <span class="kw">let </span>tokenizer = get_tokenizer(paths.get_tokenizer_filename())<span class="question-mark">?</span>;
 
         <span class="kw">let </span>gen_conf: <span class="prelude-ty">Option</span>&lt;GenerationConfig&gt; = paths
             .get_gen_conf_filename()

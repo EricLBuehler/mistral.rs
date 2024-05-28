@@ -1428,10 +1428,29 @@
 <a href="#1426" id="1426">1426</a>
 <a href="#1427" id="1427">1427</a>
 <a href="#1428" id="1428">1428</a>
+<a href="#1429" id="1429">1429</a>
+<a href="#1430" id="1430">1430</a>
+<a href="#1431" id="1431">1431</a>
+<a href="#1432" id="1432">1432</a>
+<a href="#1433" id="1433">1433</a>
+<a href="#1434" id="1434">1434</a>
+<a href="#1435" id="1435">1435</a>
+<a href="#1436" id="1436">1436</a>
+<a href="#1437" id="1437">1437</a>
+<a href="#1438" id="1438">1438</a>
+<a href="#1439" id="1439">1439</a>
+<a href="#1440" id="1440">1440</a>
+<a href="#1441" id="1441">1441</a>
+<a href="#1442" id="1442">1442</a>
+<a href="#1443" id="1443">1443</a>
+<a href="#1444" id="1444">1444</a>
+<a href="#1445" id="1445">1445</a>
+<a href="#1446" id="1446">1446</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>cache_manager;
 <span class="kw">mod </span>chat_template;
 <span class="kw">mod </span>ggml;
 <span class="kw">mod </span>gguf;
+<span class="kw">mod </span>gguf_tokenizer;
 <span class="kw">mod </span>loaders;
 <span class="kw">mod </span>macros;
 <span class="kw">mod </span>normal;
@@ -2727,8 +2746,25 @@
     paths: <span class="kw-2">&amp;</span>Box&lt;<span class="kw">dyn </span>ModelPaths&gt;,
     chat_template: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;String&gt;,
 ) -&gt; ChatTemplate {
+    <span class="kw">let </span>template_filename = <span class="kw">if </span>paths.get_template_filename().to_string_lossy().is_empty() {
+        PathBuf::from(
+            chat_template
+                .as_ref()
+                .expect(<span class="string">"A tokenizer config or chat template file path must be specified."</span>),
+        )
+    } <span class="kw">else </span>{
+        paths.get_template_filename().clone()
+    };
+    <span class="kw">if </span>template_filename
+        .extension()
+        .expect(<span class="string">"Template filename must be a file"</span>)
+        .to_string_lossy()
+        != <span class="string">"json"
+    </span>{
+        <span class="macro">panic!</span>(<span class="string">"Template filename {template_filename:?} must end with `.json`."</span>);
+    }
     <span class="kw">let </span>template: ChatTemplate =
-        serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(paths.get_template_filename()).unwrap()).unwrap();
+        serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(<span class="kw-2">&amp;</span>template_filename).unwrap()).unwrap();
 
     <span class="attr">#[derive(Debug, serde::Deserialize)]
     </span><span class="kw">struct </span>SpecifiedTemplate {
@@ -2743,7 +2779,7 @@
 
     <span class="macro">info!</span>(<span class="string">"`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template."</span>);
     <span class="kw">let </span><span class="kw-2">mut </span>deser: HashMap&lt;String, Value&gt; =
-        serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(paths.get_template_filename()).unwrap()).unwrap();
+        serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(<span class="kw-2">&amp;</span>template_filename).unwrap()).unwrap();
 
     <span class="kw">match </span>chat_template.clone() {
         <span class="prelude-val">Some</span>(t) =&gt; {

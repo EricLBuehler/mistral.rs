@@ -462,10 +462,6 @@
 <a href="#460" id="460">460</a>
 <a href="#461" id="461">461</a>
 <a href="#462" id="462">462</a>
-<a href="#463" id="463">463</a>
-<a href="#464" id="464">464</a>
-<a href="#465" id="465">465</a>
-<a href="#466" id="466">466</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -881,11 +877,7 @@
 
     <span class="attr">#[allow(dead_code)]
     </span><span class="kw">fn </span>get_tokenizer() -&gt; Tokenizer {
-        <span class="kw">let </span>api = ApiBuilder::new()
-            .with_progress(<span class="bool-val">true</span>)
-            .with_token(<span class="prelude-val">Some</span>(std::env::var(<span class="string">"TESTS_HF_TOKEN"</span>).unwrap()))
-            .build()
-            .unwrap();
+        <span class="kw">let </span>api = ApiBuilder::new().with_progress(<span class="bool-val">true</span>).build().unwrap();
         <span class="kw">let </span>api = api.repo(Repo::with_revision(
             <span class="string">"EricB/mistralrs_tests"</span>.to_string(),
             RepoType::Model,
