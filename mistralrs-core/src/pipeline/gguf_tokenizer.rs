@@ -1,6 +1,11 @@
 use anyhow::Result;
 use candle_core::quantized::gguf_file::Content;
-use tokenizers::{models::unigram::Unigram, ModelWrapper, Tokenizer};
+use tokenizers::{
+    decoders::{byte_fallback::ByteFallback, sequence::Sequence, strip::Strip},
+    models::unigram::Unigram,
+    normalizers::Replace,
+    DecoderWrapper, ModelWrapper, Tokenizer,
+};
 use tracing::info;
 
 pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
@@ -66,7 +71,8 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
         .expect("GGUF unk token is not u32");
 
     let tokenizer = match model.as_str() {
-        "llama" => {
+        "llama" | "replit" => {
+            // unigram
             let scores =
                 scores.expect("Expect `tokenizer.ggml.scores` for `llama` unigram tokeizer.");
             let mut vocab = Vec::new();
@@ -75,7 +81,13 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
             }
             let unigram =
                 Unigram::from(vocab, Some(unk as usize), true).map_err(anyhow::Error::msg)?;
-            Tokenizer::new(ModelWrapper::Unigram(unigram))
+            let mut tokenizer = Tokenizer::new(ModelWrapper::Unigram(unigram));
+            tokenizer.with_decoder(Sequence::new(vec![
+                DecoderWrapper::Replace(Replace::new("▁", " ").map_err(anyhow::Error::msg)?),
+                DecoderWrapper::ByteFallback(ByteFallback::new()),
+                DecoderWrapper::Strip(Strip::new(' ', 1, 0)),
+            ]));
+            tokenizer
         }
         other => {
             anyhow::bail!("Tokenizer model `{other}` not supported.");
