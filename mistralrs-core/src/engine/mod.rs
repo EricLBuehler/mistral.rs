@@ -1,6 +1,9 @@
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{atomic::AtomicBool, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{mpsc::Receiver, Mutex};
@@ -10,7 +13,7 @@ use crate::{
     pipeline::{AdapterInstruction, CacheInstruction},
     request::NormalRequest,
     response::CompletionChoice,
-    CompletionResponse, RequestMessage, Response,
+    CompletionResponse, RequestMessage, Response, DEBUG,
 };
 use candle_core::{Result, Tensor};
 use rand::SeedableRng;
@@ -72,9 +75,7 @@ impl Engine {
                 is_xlora,
                 no_prefix_cache,
             ),
-            is_debug: std::env::var("RUST_LOG")
-                .unwrap_or_default()
-                .contains("debug"),
+            is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
         }
     }

@@ -14,7 +14,9 @@ use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 use crate::xlora_models::NonGranularState;
-use crate::{deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata};
+use crate::{
+    deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, DEBUG,
+};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
     models::quantized_phi2::ModelWeights as QPhi,
@@ -327,6 +329,23 @@ impl Loader for GGUFLoader {
                 let value = parse_gguf_value(&model.metadata[name]);
                 println!("{name}: {}", value);
             }
+        }
+
+        if DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
+            let mut tensors = Vec::new();
+            for (name, info) in &model.tensor_infos {
+                tensors.push(format!(
+                    "name = {name:?}, shape = {:?}, dtype = {:?}",
+                    info.shape.clone(),
+                    info.ggml_dtype
+                ));
+            }
+            fs::write(
+                "mistralrs_gguf_tensors.txt",
+                serde_json::to_string_pretty(&tensors).expect("Serialization failed."),
+            )?;
+
+            info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_gguf_tensors.txt`.");
         }
 
         let mut is_lora = false;

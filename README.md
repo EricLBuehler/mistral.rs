@@ -412,13 +412,13 @@ Mistral.rs will attempt to automatically load a chat template and tokenizer. Thi
 ## Contributing
 If you have any problems or want to contribute something, please raise an issue or pull request!
 
-Consider enabling `RUST_LOG=debug` environment variable.
 
 If you want to add a new model, please see [our guide](docs/ADDING_MODELS.md).
 
-## CUDA FAQ
-
-- Setting the compiler path:
+## FAQ
+- Debugging
+    - Consider setting the enviornment variable `MISTRALRS_DEBUG=1`.
+- Setting the CUDA compiler path:
     - Set the `NVCC_CCBIN` environment variable during build.
 - Error: `recompile with -fPIE`:
     - Some Linux distributions require compiling with `-fPIE`.
