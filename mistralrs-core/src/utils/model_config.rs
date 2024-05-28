@@ -11,16 +11,19 @@ use crate::{
     pipeline::ModelPaths,
 };
 
+#[derive(derive_more::From)]
 pub struct FileGGML {
     pub ct: ggml_file::Content,
     pub gqa: usize,
 }
 
+#[derive(derive_more::From)]
 pub struct FileGGUF<'a> {
     pub ct: gguf_file::Content,
     pub reader: &'a mut std::fs::File,
 }
 
+#[derive(derive_more::From)]
 pub struct Device<'a> {
     pub device: &'a candle_core::Device,
     pub mapper: DeviceMapMetadata,
@@ -63,6 +66,7 @@ impl<'a> Adapter<'a> {
         }
 
         // Create VarBuilder:
+        // TODO: `from_mmaped_safetensors` has `xlora_paths` as the 2nd param, is this a bug?
         let vb = from_mmaped_safetensors(
             xlora_paths,
             paths

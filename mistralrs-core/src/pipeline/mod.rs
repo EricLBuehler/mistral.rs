@@ -290,6 +290,7 @@ pub enum AdapterKind {
     XLora,
 }
 
+// For the proper name as formatted via doc comment for a variant
 pub trait PrettyName: strum::EnumMessage + ToString {
     fn pretty_name(&self) -> String {
         match self.get_documentation() {

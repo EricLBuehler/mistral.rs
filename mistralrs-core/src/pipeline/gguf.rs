@@ -366,8 +366,8 @@ impl Loader for GGUFLoader {
         let model_config = {
             // Base config (quantization only):
             let quant = ModelConfig::GGUF(
-                ModelConfig::FileGGUF { ct: model, reader: &mut file },
-                ModelConfig::Device { device, mapper },
+                (model, &mut file).into(),
+                (device, mapper).into(),
             );
 
             // With optional adapter config:
