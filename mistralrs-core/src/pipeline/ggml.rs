@@ -282,15 +282,19 @@ impl Loader for GGMLLoader {
                 adapter.replace(ModelConfig::Adapter::try_new(paths, device, silent, is_xlora)?);
             }
 
-            ModelConfig::ModelParams::builder().quant(quant).and_adapter(adapter).build()
+            ModelConfig::ModelParams::builder()
+              .quant(quant)
+              .and_adapter(adapter)
+              .build()
         };
 
         // Config into model:
-        let model = match self.kind {
-            ModelKind::QuantizedGGML => Model::Llama(QLlama::try_from(model_config)?),
-            ModelKind::LoraGGML
-            | ModelKind::XLoraGGML => Model::XLoraLlama(XLoraQLlama::try_from(model_config)?),
-            _ => unreachable!(),
+        // NOTE: No architecture to infer like GGUF, Llama model is implicitly matched
+        let model = match self.kind.adapted_kind().first().unwrap() {
+            // Quantized only:
+            None => Model::Llama(QLlama::try_from(model_config)?),
+            // Quantized with Adapter:
+            Some(adapter) => Model::XLoraLlama(XLoraQLlama::try_from(model_config)?),
         };
 
         let tokenizer = get_tokenizer(paths.get_tokenizer_filename())?;

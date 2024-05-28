@@ -272,19 +272,37 @@ pub enum ModelKindB {
     },
 }
 
-#[derive(Clone, Copy, strum::Display, strum::EnumIs)]
+#[derive(Clone, Copy, strum::Display, strum::EnumIs, strum::EnumMessage)]
 #[strum(serialize_all = "kebab-case")]
 pub enum QuantizationKind {
+    /// GGML
     Ggml,
+    /// GGUF
     Gguf,
 }
 
-#[derive(Clone, Copy, strum::Display, strum::EnumIs)]
+#[derive(Clone, Copy, strum::Display, strum::EnumIs, strum::EnumMessage)]
 #[strum(serialize_all = "kebab-case")]
 pub enum AdapterKind {
+    /// LoRA
     Lora,
+    /// X-LoRA
     XLora,
 }
+
+pub trait PrettyName: strum::EnumMessage + ToString {
+    fn pretty_name(&self) -> String {
+        match self.get_documentation() {
+            Some(s) => s.to_string(),
+            // Instead of panic via expect(),
+            // fallback to default kebab-case:
+            None => self.to_string(),
+        }
+    }
+}
+
+impl PrettyName for AdapterKind {}
+impl PrettyName for QuantizationKind {}
 
 impl ModelKindB {
     // Quantized helpers:

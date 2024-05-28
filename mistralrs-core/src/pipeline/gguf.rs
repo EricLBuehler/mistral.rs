@@ -376,23 +376,27 @@ impl Loader for GGUFLoader {
                 adapter.replace(ModelConfig::Adapter::try_new(paths, device, silent, is_xlora)?);
             }
 
-            ModelConfig::ModelParams::builder().quant(quant).and_adapter(adapter).build()
+            ModelConfig::ModelParams::builder()
+              .quant(quant)
+              .and_adapter(adapter)
+              .build()
         };
 
         // Config into model:
-        let model = match self.kind {
-            ModelKind::QuantizedGGUF => match arch {
+        let model = match self.kind.adapted_kind().first().unwrap() {
+            // Quantized only:
+            None => match arch {
                 GGUFArchitecture::Llama => Model::Llama(QLlama::try_from(model_config)?),
                 GGUFArchitecture::Phi2 => Model::Phi2(QPhi::try_from(model_config)?),
                 GGUFArchitecture::Phi3 => Model::Phi3(QPhi3::try_from(model_config)?),
-                a => bail!("Unsupported architecture `{a:?}`"),
-            },
-            ModelKind::LoraGGUF | ModelKind::XLoraGGUF => match arch {
+                a => bail!("Unsupported architecture `{a:?}` for GGUF"),
+            }
+            // Quantized with Adapter:
+            Some(adapter) => match arch {
                 GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::try_from(model_config)?),
                 GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::try_from(model_config)?),
-                a => bail!("Unsupported architecture for {kind} `{a:?}`", kind = self.kind),
-            }
-            _ => unreachable!(),
+                a => bail!("Unsupported architecture `{a:?}` for GGUF {kind}", kind = adapter.pretty_name()),
+            },
         };
 
         let tokenizer = get_tokenizer(paths.get_tokenizer_filename())?;
