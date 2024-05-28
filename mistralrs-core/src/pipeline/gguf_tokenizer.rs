@@ -3,10 +3,10 @@ use std::sync::atomic::Ordering;
 use anyhow::Result;
 use candle_core::quantized::gguf_file::Content;
 use tokenizers::{
-    decoders::{byte_fallback::ByteFallback, sequence::Sequence, strip::Strip},
+    decoders::{self, byte_fallback::ByteFallback, fuse::Fuse, strip::Strip},
     models::unigram::Unigram,
-    normalizers::Replace,
-    DecoderWrapper, ModelWrapper, Tokenizer,
+    normalizers::{self, Prepend, Replace},
+    AddedToken, DecoderWrapper, ModelWrapper, NormalizerWrapper, Tokenizer,
 };
 use tracing::info;
 
@@ -59,11 +59,11 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
         .to_u32()
         .expect("GGUF unk token is not u32");
 
-    let _eos = content.metadata["tokenizer.ggml.eos_token_id"]
+    let eos = content.metadata["tokenizer.ggml.eos_token_id"]
         .to_u32()
         .expect("GGUF unk token is not u32");
 
-    let _bos = content.metadata["tokenizer.ggml.bos_token_id"]
+    let bos = content.metadata["tokenizer.ggml.bos_token_id"]
         .to_u32()
         .expect("GGUF unk token is not u32");
 
@@ -74,17 +74,27 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
                 .as_ref()
                 .expect("Expect `tokenizer.ggml.scores` for `llama` unigram tokeizer.");
             let mut vocab = Vec::new();
-            for (token, score) in tokens.into_iter().zip(scores) {
-                vocab.push((token, *score as f64));
+            for (token, score) in tokens.iter().zip(scores) {
+                vocab.push((token.clone(), *score as f64));
             }
             let unigram =
                 Unigram::from(vocab, Some(unk as usize), true).map_err(anyhow::Error::msg)?;
             let mut tokenizer = Tokenizer::new(ModelWrapper::Unigram(unigram));
-            tokenizer.with_decoder(Sequence::new(vec![
+            tokenizer.with_decoder(decoders::sequence::Sequence::new(vec![
                 DecoderWrapper::Replace(Replace::new("▁", " ").map_err(anyhow::Error::msg)?),
                 DecoderWrapper::ByteFallback(ByteFallback::new()),
+                DecoderWrapper::Fuse(Fuse::new()),
                 DecoderWrapper::Strip(Strip::new(' ', 1, 0)),
             ]));
+            tokenizer.with_normalizer(normalizers::Sequence::new(vec![
+                NormalizerWrapper::Prepend(Prepend::new("▁".to_string())),
+                NormalizerWrapper::Replace(Replace::new(" ", "▁").map_err(anyhow::Error::msg)?),
+            ]));
+
+            tokenizer.add_special_tokens(&[AddedToken::from(tokens[bos as usize].clone(), true)]);
+            tokenizer.add_special_tokens(&[AddedToken::from(tokens[eos as usize].clone(), true)]);
+            tokenizer.add_special_tokens(&[AddedToken::from(tokens[unk as usize].clone(), true)]);
+
             (tokenizer, "unigram")
         }
         other => {
@@ -103,4 +113,143 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
         info!("Tokenizer: {tokenizer:?}");
     }
     Ok(tokenizer)
+}
+
+mod tests {
+    use anyhow::Result;
+    use candle_core::quantized::gguf_file::Content;
+    use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+    use tokenizers::Tokenizer;
+
+    use super::convert_ggml_to_hf_tokenizer;
+
+    #[allow(dead_code)]
+    #[derive(Debug)]
+    enum TokenizerType {
+        /// Mistral v0.1 tokenizer
+        Llama,
+        Replit,
+        Gpt2,
+        Rwkv,
+    }
+
+    #[allow(dead_code)]
+    fn get_gguf_tokenizer(tokenizer: TokenizerType) -> Result<Tokenizer> {
+        match tokenizer {
+            TokenizerType::Llama => {
+                let api = ApiBuilder::new().with_progress(true).build().unwrap();
+                let api = api.repo(Repo::with_revision(
+                    "TheBloke/Mistral-7B-Instruct-v0.1-GGUF".to_string(),
+                    RepoType::Model,
+                    "main".to_string(),
+                ));
+
+                let filename = api.get("mistral-7b-instruct-v0.1.Q2_K.gguf").unwrap();
+                let mut file = std::fs::File::open(&filename)?;
+                convert_ggml_to_hf_tokenizer(
+                    &Content::read(&mut file)
+                        .map_err(|e| e.with_path(filename))
+                        .map_err(anyhow::Error::msg)?,
+                )
+                .map_err(anyhow::Error::msg)
+            }
+            other => anyhow::bail!("Cannot get testing HF tokenizer for type {other:?}"),
+        }
+    }
+
+    #[allow(dead_code)]
+    fn get_hf_tokenizer(tokenizer: TokenizerType) -> Result<Tokenizer> {
+        match tokenizer {
+            TokenizerType::Llama => {
+                let api = ApiBuilder::new().with_progress(true).build().unwrap();
+                let api = api.repo(Repo::with_revision(
+                    "EricB/mistralrs_tests".to_string(),
+                    RepoType::Model,
+                    "main".to_string(),
+                ));
+
+                let tokenizer_filename = api.get("tokenizer.json").unwrap();
+                Ok(Tokenizer::from_file(tokenizer_filename).unwrap())
+            }
+            other => anyhow::bail!("Cannot get testing HF tokenizer for type {other:?}"),
+        }
+    }
+
+    #[allow(dead_code)]
+    fn get_test_passage() -> String {
+        let passage = reqwest::blocking::get("https://loripsum.net/api")
+            .expect("Failed to download sample text")
+            .bytes()
+            .expect("Failed to get bytes");
+        String::from_utf8(passage.to_vec()).expect("Failed to convert sample text to string.")
+    }
+
+    #[test]
+    fn test_encode_llama() -> Result<()> {
+        let passage = get_test_passage();
+        let hf_tokenizer = get_hf_tokenizer(TokenizerType::Llama)?;
+        let gguf_tokenizer = get_gguf_tokenizer(TokenizerType::Llama)?;
+
+        // Without special tokens
+        let hf_tokenized = hf_tokenizer
+            .encode(passage.as_str(), false)
+            .map_err(anyhow::Error::msg)?;
+        let gguf_tokenized = gguf_tokenizer
+            .encode(passage.as_str(), false)
+            .map_err(anyhow::Error::msg)?;
+        let hf_decoded = hf_tokenizer
+            .decode(hf_tokenized.get_ids(), false)
+            .map_err(anyhow::Error::msg)?;
+        let gguf_decoded = gguf_tokenizer
+            .decode(gguf_tokenized.get_ids(), false)
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(hf_decoded, gguf_decoded);
+
+        // With special tokens
+        let hf_tokenized = hf_tokenizer
+            .encode(passage.as_str(), true)
+            .map_err(anyhow::Error::msg)?;
+        let gguf_tokenized = gguf_tokenizer
+            .encode(passage.as_str(), true)
+            .map_err(anyhow::Error::msg)?;
+        let hf_decoded = hf_tokenizer
+            .decode(hf_tokenized.get_ids(), true)
+            .map_err(anyhow::Error::msg)?;
+        let gguf_decoded = gguf_tokenizer
+            .decode(gguf_tokenized.get_ids(), true)
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(hf_decoded, gguf_decoded);
+        Ok(())
+    }
+
+    #[test]
+    fn test_decode() -> Result<()> {
+        use rand::seq::SliceRandom;
+        use rand::thread_rng;
+
+        let hf_tokenizer = get_hf_tokenizer(TokenizerType::Llama)?;
+        let gguf_tokenizer = get_gguf_tokenizer(TokenizerType::Llama)?;
+
+        let mut tokens = (0..hf_tokenizer.get_vocab_size(false) as u32).collect::<Vec<_>>();
+        tokens.shuffle(&mut thread_rng());
+
+        // Without skipping special tokens
+        let hf_decoded = hf_tokenizer
+            .decode(&tokens, false)
+            .map_err(anyhow::Error::msg)?;
+        let gguf_decoded = gguf_tokenizer
+            .decode(&tokens, false)
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(hf_decoded, gguf_decoded);
+
+        // With skipping special tokens
+        let hf_decoded = hf_tokenizer
+            .decode(&tokens, true)
+            .map_err(anyhow::Error::msg)?;
+        let gguf_decoded = gguf_tokenizer
+            .decode(&tokens, true)
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(hf_decoded, gguf_decoded);
+        Ok(())
+    }
 }
