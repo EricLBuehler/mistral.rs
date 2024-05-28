@@ -450,6 +450,8 @@ pub trait Loader {
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
 
+    /// Load a model from the specified paths.
+    /// Also initializes `DEBUG`.
     #[allow(
         clippy::type_complexity,
         clippy::too_many_arguments,
