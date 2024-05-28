@@ -1,6 +1,10 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use cublaslt::setup_cublas_lt_wrapper;
+use engine::Engine;
+pub use engine::TERMINATE_ALL_NEXT_STEP;
+pub use lora::Ordering;
+pub use pipeline::Pipeline;
 use std::{
     cell::RefCell,
     error::Error,
@@ -11,12 +15,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::mpsc::{channel, Sender};
-use tracing::level_filters::LevelFilter;
-
-use engine::Engine;
-pub use engine::TERMINATE_ALL_NEXT_STEP;
-pub use lora::Ordering;
-pub use pipeline::Pipeline;
 
 mod aici;
 mod device_map;
@@ -59,7 +57,6 @@ pub use scheduler::SchedulerMethod;
 use serde::Serialize;
 use tokio::runtime::Runtime;
 pub use toml_selector::{TomlLoaderArgs, TomlSelector};
-use tracing_subscriber::EnvFilter;
 
 /// `true` if `MISTRALRS_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
@@ -212,20 +209,6 @@ impl MistralRs {
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);
         let prefix_cache_n = prefix_cache_n.unwrap_or(16);
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
-
-        let is_debug = std::env::var("MISTRALRS_DEBUG")
-            .unwrap_or_default()
-            .contains('1');
-        DEBUG.store(is_debug, std::sync::atomic::Ordering::Relaxed);
-
-        let filter = EnvFilter::builder()
-            .with_default_directive(if is_debug {
-                LevelFilter::INFO.into()
-            } else {
-                LevelFilter::DEBUG.into()
-            })
-            .from_env_lossy();
-        tracing_subscriber::fmt().with_env_filter(filter).init();
 
         let (tx, rx) = channel(10_000);
 

@@ -42,6 +42,8 @@ use strum::EnumString;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::info;
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::EnvFilter;
 
 enum Model {
     Llama(QLlama),
@@ -303,6 +305,20 @@ impl Loader for GGUFLoader {
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let is_debug = std::env::var("MISTRALRS_DEBUG")
+            .unwrap_or_default()
+            .contains('1');
+        DEBUG.store(is_debug, std::sync::atomic::Ordering::Relaxed);
+
+        let filter = EnvFilter::builder()
+            .with_default_directive(if is_debug {
+                LevelFilter::INFO.into()
+            } else {
+                LevelFilter::DEBUG.into()
+            })
+            .from_env_lossy();
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+
         if in_situ_quant.is_some() {
             anyhow::bail!(
                 "You are trying to in-situ quantize a GGUF model. This will not do anything."

@@ -14,7 +14,9 @@ use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 use crate::xlora_models::NonGranularState;
-use crate::{deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata};
+use crate::{
+    deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, DEBUG,
+};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama, utils::tokens::get_token,
     xlora_models::XLoraQLlama,
@@ -32,7 +34,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
+use tracing::level_filters::LevelFilter;
 use tracing::{info, warn};
+use tracing_subscriber::EnvFilter;
 
 enum Model {
     Llama(QLlama),
@@ -220,6 +224,20 @@ impl Loader for GGMLLoader {
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let is_debug = std::env::var("MISTRALRS_DEBUG")
+            .unwrap_or_default()
+            .contains('1');
+        DEBUG.store(is_debug, std::sync::atomic::Ordering::Relaxed);
+
+        let filter = EnvFilter::builder()
+            .with_default_directive(if is_debug {
+                LevelFilter::INFO.into()
+            } else {
+                LevelFilter::DEBUG.into()
+            })
+            .from_env_lossy();
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+
         if in_situ_quant.is_some() {
             anyhow::bail!(
                 "You are trying to in-situ quantize a GGUF model. This will not do anything."
