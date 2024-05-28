@@ -155,7 +155,7 @@ Please submit more benchmarks via raising an issue!
 
 ## Usage
 ### Installation and Build
-To install mistral.rs, one should ensure they have Rust installed by following [this](https://rustup.rs/) link. Additionally, the Hugging Face token should be provided in `~/.cache/huggingface/token` when using the server to enable automatic download of gated models.
+To install mistral.rs, one should ensure they have Rust installed by following [this](https://rustup.rs/) link. Additionally, the Hugging Face token should be provided in `~/.cache/huggingface/token` by running `huggingface-cli login` to enable automatic download of gated models.
 
 1) Install required packages
     - `openssl` (ex., `sudo apt install libssl-dev`)
@@ -169,9 +169,7 @@ To install mistral.rs, one should ensure they have Rust installed by following [
 
 3) Set HF token correctly (skip if already set or your model is not gated, or if you want to use the `token_source` parameters in Python or the command line.)
     ```bash
-    mkdir ~/.cache/huggingface
-    touch ~/.cache/huggingface/token
-    echo <HF_TOKEN_HERE> > ~/.cache/huggingface/token
+    huggingface-cli login
     ```
 
 4) Download the code
@@ -220,6 +218,7 @@ To install mistral.rs, one should ensure they have Rust installed by following [
 
     You can install Python support by following the guide [here](mistralrs-pyo3/README.md).
 
+## Getting models
 ### Getting models from HF Hub
 
 Mistral.rs can automatically download models from HF Hub. To access gated models, you should provide a token source. They may be one of:
@@ -240,7 +239,7 @@ This is passed in the following ways:
 
 If token cannot be loaded, no token will be used (i.e. effectively using `none`).
 
-## Loading models from local files:
+### Loading models from local files:
 
 You can also instruct mistral.rs to load models fully locally by modifying the `*_model_id` arguments or options:
 ```bash
@@ -262,10 +261,10 @@ Throughout mistral.rs, any model ID argument or option may be a local path and s
 - `--adapters-model-id` (server) or `adapters_model_id` (python/rust):
   - Adapters `.safetensors` and `adapter_config.json` files in their respective directories
 
-## Running GGUF models locally
+### Running GGUF models locally
 
 To run GGUF models fully locally, you do not need to specify the tokenizer model ID argument and instead should pass a path to the
-chat template JSON file (examples [here](chat_templates)) as well as specifying a local model ID. For example:
+chat template JSON file (examples [here](chat_templates), you will need to create your own by specifying the chat template and `bos`/`eos` tokens) as well as specifying a local model ID. For example:
 
 ```bash
 ./mistralrs-server --chat-template <chat_template> gguf -m . -f Phi-3-mini-128k-instruct-q4_K_M.gguf
@@ -277,7 +276,7 @@ please consider using the method demonstrated in examples below, where the token
 **Supported GGUF tokenizer types**
 - `llama`
 
-### Run
+## Run
 
 To start a server serving Mistral GGUF on `localhost:1234`, 
 ```bash
