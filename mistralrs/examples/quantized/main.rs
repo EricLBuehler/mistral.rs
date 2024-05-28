@@ -1,9 +1,8 @@
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
-use candle_core::Device;
 use mistralrs::{
-    Constraint, DeviceMapMetadata, GGUFLoaderBuilder, GGUFSpecificConfig, MistralRs,
+    Constraint, Device, DeviceMapMetadata, GGUFLoaderBuilder, GGUFSpecificConfig, MistralRs,
     MistralRsBuilder, NormalRequest, Request, RequestMessage, Response, SamplingParams,
     SchedulerMethod, TokenSource,
 };

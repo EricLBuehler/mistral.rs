@@ -129,7 +129,7 @@ impl DeviceMapper for DummyDeviceMapper {
         loading_isq: bool,
     ) -> VarBuilder<'a> {
         if loading_isq {
-            varbuilder
+            varbuilder.set_device(Device::Cpu)
         } else {
             varbuilder.set_device(self.nm_device.clone())
         }
@@ -142,7 +142,7 @@ impl DeviceMapper for DummyDeviceMapper {
     }
     fn set_nm_device<'a>(&self, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a> {
         if loading_isq {
-            varbuilder
+            varbuilder.set_device(Device::Cpu)
         } else {
             varbuilder.set_device(self.nm_device.clone())
         }
