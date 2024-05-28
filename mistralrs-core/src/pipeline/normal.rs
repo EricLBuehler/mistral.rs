@@ -5,7 +5,7 @@ use super::loaders::{
 };
 use super::{
     get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
-    ModelKind, ModelPaths, NormalModel, NormalModelLoader, Pipeline, TokenSource, XLoraPaths,
+    ModelKind, AdapterKind, ModelPaths, NormalModel, NormalModelLoader, Pipeline, TokenSource, XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -130,7 +130,7 @@ impl NormalLoaderBuilder {
         no_kv_cache: bool,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
-        self.kind = ModelKind::XLoraNormal;
+        self.kind = ModelKind::Adapter { adapter: AdapterKind::XLora };
         self.with_adapter(
             xlora_model_id,
             xlora_order,
@@ -140,7 +140,7 @@ impl NormalLoaderBuilder {
     }
 
     pub fn with_lora(mut self, lora_model_id: String, lora_order: Ordering) -> Self {
-        self.kind = ModelKind::LoraNormal;
+        self.kind = ModelKind::Adapter { adapter: AdapterKind::Lora };
         self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
@@ -259,7 +259,7 @@ impl Loader for NormalLoader {
                 in_situ_quant.is_some(),
                 device.clone()
             ),
-            ModelKind::XLoraNormal => xlora_model_loader!(
+            ModelKind::Adapter { adapter: AdapterKind::XLora } => xlora_model_loader!(
                 paths,
                 dtype,
                 default_dtype,
@@ -272,7 +272,7 @@ impl Loader for NormalLoader {
                 in_situ_quant.is_some(),
                 device.clone()
             ),
-            ModelKind::LoraNormal => lora_model_loader!(
+            ModelKind::Adapter { adapter: AdapterKind::Lora }  => lora_model_loader!(
                 paths,
                 dtype,
                 default_dtype,
@@ -285,13 +285,7 @@ impl Loader for NormalLoader {
                 in_situ_quant.is_some(),
                 device.clone()
             ),
-            ModelKind::QuantizedGGUF
-            | ModelKind::QuantizedGGML
-            | ModelKind::XLoraGGUF
-            | ModelKind::XLoraGGML
-            | ModelKind::LoraGGUF
-            | ModelKind::LoraGGML
-            | ModelKind::Speculative { .. } => unreachable!(),
+            _ => unreachable!(),
         };
 
         let tokenizer = get_tokenizer(paths.get_tokenizer_filename())?;

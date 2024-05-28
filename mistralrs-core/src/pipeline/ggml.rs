@@ -1,7 +1,7 @@
 use super::cache_manager::DefaultCacheManager;
 use super::{
     get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
-    ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
+    ModelKind, QuantizationKind, AdapterKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -96,12 +96,16 @@ impl GGMLLoaderBuilder {
         quantized_model_id: String,
         quantized_filename: String,
     ) -> Self {
+        let kind = ModelKind::Quantized {
+            quant: QuantizationKind::Ggml
+        };
+
         Self {
             config,
             chat_template,
             tokenizer_json,
             model_id,
-            kind: ModelKind::QuantizedGGML,
+            kind,
             quantized_filename,
             quantized_model_id,
             ..Default::default()
@@ -138,7 +142,11 @@ impl GGMLLoaderBuilder {
         no_kv_cache: bool,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
-        self.kind = ModelKind::XLoraGGML;
+        self.kind = (
+            AdapterKind::XLora,
+            QuantizationKind::Ggml
+        ).into();
+
         self.with_adapter(
             xlora_model_id,
             xlora_order,
@@ -148,7 +156,11 @@ impl GGMLLoaderBuilder {
     }
 
     pub fn with_lora(mut self, lora_model_id: String, lora_order: Ordering) -> Self {
-        self.kind = ModelKind::LoraGGML;
+        self.kind = (
+            AdapterKind::Lora,
+            QuantizationKind::Ggml
+        ).into();
+
         self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
@@ -290,11 +302,10 @@ impl Loader for GGMLLoader {
 
         // Config into model:
         // NOTE: No architecture to infer like GGUF, Llama model is implicitly matched
-        let model = match self.kind.adapted_kind().first().unwrap() {
-            // Quantized only:
-            None => Model::Llama(QLlama::try_from(model_config)?),
-            // Quantized with Adapter:
-            Some(adapter) => Model::XLoraLlama(XLoraQLlama::try_from(model_config)?),
+        let model = match self.kind {
+            ModelKind::Quantized { .. } => Model::Llama(QLlama::try_from(model_config)?),
+            ModelKind::AdapterQuantized { .. } => Model::XLoraLlama(XLoraQLlama::try_from(model_config)?),
+            _ => unreachable!(),
         };
 
         let tokenizer = get_tokenizer(paths.get_tokenizer_filename())?;

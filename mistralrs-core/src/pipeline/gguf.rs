@@ -1,7 +1,7 @@
 use super::cache_manager::DefaultCacheManager;
 use super::{
     get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
-    ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
+    ModelKind, QuantizationKind, AdapterKind, ModelPaths, Pipeline, TokenSource, XLoraPaths, PrettyName
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -132,12 +132,16 @@ impl GGUFLoaderBuilder {
         quantized_model_id: String,
         quantized_filename: String,
     ) -> Self {
+        let kind = ModelKind::Quantized {
+            quant: QuantizationKind::Gguf
+        };
+
         Self {
             config,
             chat_template,
             tokenizer_json,
             model_id,
-            kind: ModelKind::QuantizedGGUF,
+            kind,
             quantized_filename,
             quantized_model_id,
             ..Default::default()
@@ -174,7 +178,11 @@ impl GGUFLoaderBuilder {
         no_kv_cache: bool,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
-        self.kind = ModelKind::XLoraGGUF;
+        self.kind = (
+            AdapterKind::XLora,
+            QuantizationKind::Gguf
+        ).into();
+
         self.with_adapter(
             xlora_model_id,
             xlora_order,
@@ -184,7 +192,11 @@ impl GGUFLoaderBuilder {
     }
 
     pub fn with_lora(mut self, lora_model_id: String, lora_order: Ordering) -> Self {
-        self.kind = ModelKind::LoraGGUF;
+        self.kind = (
+            AdapterKind::Lora,
+            QuantizationKind::Gguf
+        ).into();
+
         self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
@@ -383,20 +395,19 @@ impl Loader for GGUFLoader {
         };
 
         // Config into model:
-        let model = match self.kind.adapted_kind().first().unwrap() {
-            // Quantized only:
-            None => match arch {
+        let model = match self.kind {
+            ModelKind::Quantized { .. } => match arch {
                 GGUFArchitecture::Llama => Model::Llama(QLlama::try_from(model_config)?),
                 GGUFArchitecture::Phi2 => Model::Phi2(QPhi::try_from(model_config)?),
                 GGUFArchitecture::Phi3 => Model::Phi3(QPhi3::try_from(model_config)?),
                 a => bail!("Unsupported architecture `{a:?}` for GGUF"),
             }
-            // Quantized with Adapter:
-            Some(adapter) => match arch {
+            ModelKind::AdapterQuantized { adapter, .. } => match arch {
                 GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::try_from(model_config)?),
                 GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::try_from(model_config)?),
                 a => bail!("Unsupported architecture `{a:?}` for GGUF {kind}", kind = adapter.pretty_name()),
             },
+            _ => unreachable!(),
         };
 
         let tokenizer = get_tokenizer(paths.get_tokenizer_filename())?;
