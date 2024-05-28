@@ -14,7 +14,9 @@ use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 use crate::xlora_models::NonGranularState;
-use crate::{deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata};
+use crate::{
+    deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, DEBUG,
+};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
     models::quantized_phi2::ModelWeights as QPhi,
@@ -40,6 +42,8 @@ use strum::EnumString;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::info;
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::EnvFilter;
 
 enum Model {
     Llama(QLlama),
@@ -301,6 +305,20 @@ impl Loader for GGUFLoader {
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let is_debug = std::env::var("MISTRALRS_DEBUG")
+            .unwrap_or_default()
+            .contains('1');
+        DEBUG.store(is_debug, std::sync::atomic::Ordering::Relaxed);
+
+        let filter = EnvFilter::builder()
+            .with_default_directive(if is_debug {
+                LevelFilter::INFO.into()
+            } else {
+                LevelFilter::DEBUG.into()
+            })
+            .from_env_lossy();
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+
         if in_situ_quant.is_some() {
             anyhow::bail!(
                 "You are trying to in-situ quantize a GGUF model. This will not do anything."
@@ -327,6 +345,23 @@ impl Loader for GGUFLoader {
                 let value = parse_gguf_value(&model.metadata[name]);
                 println!("{name}: {}", value);
             }
+        }
+
+        if DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
+            let mut tensors = Vec::new();
+            for (name, info) in &model.tensor_infos {
+                tensors.push(format!(
+                    "name = `{name}`, shape = {:?}, dtype = {:?}",
+                    info.shape.clone(),
+                    info.ggml_dtype
+                ));
+            }
+            fs::write(
+                "mistralrs_gguf_tensors.txt",
+                serde_json::to_string_pretty(&tensors).expect("Serialization failed."),
+            )?;
+
+            info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_gguf_tensors.txt`.");
         }
 
         let mut is_lora = false;
