@@ -267,7 +267,7 @@ impl Loader for GGMLLoader {
             info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_ggml_tensors.txt`.");
         }
 
-        let is_lora = self.kind.is_adapted_and(|a| a.is_lora());
+        let has_adapter = self.kind.is_adapted();
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
 
         let model_config = {
@@ -276,9 +276,9 @@ impl Loader for GGMLLoader {
                 ModelConfig::FileGGML { ct: model, gqa: self.config.gqa },
             );
 
-            // Adapter specific config:
+            // With optional adapter config:
             let mut adapter = None;
-            if self.kind.is_adapted() {
+            if has_adapter {
                 adapter.replace(ModelConfig::Adapter::try_new(paths, device, silent, is_xlora)?);
             }
 
@@ -327,10 +327,10 @@ impl Loader for GGMLLoader {
                 repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
                 has_no_kv_cache: self.no_kv_cache,
-                is_xlora,
                 num_hidden_layers,
                 eos_tok: eos,
-                is_lora,
+                has_adapter,
+                is_xlora,
             },
         })))
     }
@@ -463,8 +463,8 @@ impl Pipeline for GGMLPipeline {
         }
     }
     fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
-        if !self.metadata.is_lora {
-            anyhow::bail!("Cannot activate adapters non-LoRA models.")
+        if !self.metadata.has_adapter {
+            anyhow::bail!("Activating adapters is only compatible with LoRA / X-LoRA models.")
         }
         match self.model {
             Model::Llama(_) => unreachable!(),

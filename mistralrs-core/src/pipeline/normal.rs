@@ -242,7 +242,8 @@ impl Loader for NormalLoader {
             Device::Cpu
         };
 
-        let is_lora = self.kind.is_adapted_and(|a| a.is_lora());
+        let has_adapter = self.kind.is_adapted();
+        let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
 
         let mut model = match self.kind {
             ModelKind::Normal => normal_model_loader!(
@@ -305,7 +306,6 @@ impl Loader for NormalLoader {
 
         let max_seq_len = model.max_seq_len();
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
-        let is_xlora = model.is_xlora() && !is_lora;
         let num_hidden_layers = model.cache().lock().len();
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         Ok(Arc::new(Mutex::new(NormalPipeline {
@@ -329,7 +329,7 @@ impl Loader for NormalLoader {
                 is_xlora,
                 num_hidden_layers,
                 eos_tok: eos,
-                is_lora,
+                has_adapter,
             },
         })))
     }

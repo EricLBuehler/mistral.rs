@@ -457,10 +457,13 @@ pub struct GeneralMetadata {
     pub repeat_last_n: usize,
     pub tok_trie: Arc<TokTrie>,
     pub has_no_kv_cache: bool,
-    pub is_xlora: bool,
     pub num_hidden_layers: usize,
     pub eos_tok: Vec<u32>,
-    pub is_lora: bool,
+    // Model utilizes an adapter (LoRA or X-LoRA):
+    pub has_adapter: bool,
+    // TODO: There is a possibility that code mistakenly queries only `is_xlora`,
+    // rather than `has_adapter`. Thus may actually only support X-LoRA? (potential bugs?)
+    pub is_xlora: bool,
 }
 
 pub enum AdapterInstruction {
