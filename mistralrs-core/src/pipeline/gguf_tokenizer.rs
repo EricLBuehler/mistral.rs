@@ -51,13 +51,6 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
             .collect::<Vec<_>>()
     });
 
-    info!(
-        "Converting GGML tokenizer. Model: `{model}`, num tokens: {}, num added tokens: {}, num merges: {}, num scores: {}",
-        tokens.len(),
-        added_tokens.as_ref().map(|x| x.len()).unwrap_or(0),
-        merges.as_ref().map(|x| x.len()).unwrap_or(0),
-        scores.as_ref().map(|x| x.len()).unwrap_or(0)
-    );
     let unk = content.metadata["tokenizer.ggml.unknown_token_id"]
         .to_u32()
         .expect("GGUF unk token is not u32");
@@ -73,11 +66,12 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
     let (tokenizer, ty) = match model.as_str() {
         "llama" | "replit" => {
             // unigram
-            let scores =
-                scores.expect("Expect `tokenizer.ggml.scores` for `llama` unigram tokeizer.");
+            let scores = scores
+                .as_ref()
+                .expect("Expect `tokenizer.ggml.scores` for `llama` unigram tokeizer.");
             let mut vocab = Vec::new();
             for (token, score) in tokens.into_iter().zip(scores) {
-                vocab.push((token, score as f64));
+                vocab.push((token, *score as f64));
             }
             let unigram =
                 Unigram::from(vocab, Some(unk as usize), true).map_err(anyhow::Error::msg)?;
@@ -94,9 +88,12 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
         }
     };
     info!(
-        "GGUF tokenizer model is `{model}`, num vocab: {}, kind: `{}`",
+        "GGUF tokenizer model is `{model}`, kind: `{}`, num tokens: {}, num added tokens: {}, num merges: {}, num scores: {}",
+        ty,
         tokenizer.get_vocab_size(true),
-        ty
+        added_tokens.as_ref().map(|x| x.len()).unwrap_or(0),
+        merges.as_ref().map(|x| x.len()).unwrap_or(0),
+        scores.as_ref().map(|x| x.len()).unwrap_or(0)
     );
     Ok(tokenizer)
 }
