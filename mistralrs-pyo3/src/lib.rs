@@ -167,7 +167,6 @@ fn parse_which(
         .build(arch.into()),
         Which::GGUF {
             tok_model_id,
-            tokenizer_json,
             quantized_model_id,
             quantized_filename,
             repeat_last_n,
@@ -176,15 +175,13 @@ fn parse_which(
                 repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
             },
             chat_template,
-            tokenizer_json,
-            Some(tok_model_id),
+            tok_model_id,
             quantized_model_id,
             quantized_filename,
         )
         .build(),
         Which::XLoraGGUF {
             tok_model_id,
-            tokenizer_json,
             quantized_model_id,
             quantized_filename,
             repeat_last_n,
@@ -196,7 +193,6 @@ fn parse_which(
                 repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
             },
             chat_template,
-            tokenizer_json,
             tok_model_id,
             quantized_model_id,
             quantized_filename,
@@ -214,7 +210,6 @@ fn parse_which(
         .build(),
         Which::LoraGGUF {
             tok_model_id,
-            tokenizer_json,
             quantized_model_id,
             quantized_filename,
             repeat_last_n,
@@ -225,7 +220,6 @@ fn parse_which(
                 repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
             },
             chat_template,
-            tokenizer_json,
             tok_model_id,
             quantized_model_id,
             quantized_filename,
