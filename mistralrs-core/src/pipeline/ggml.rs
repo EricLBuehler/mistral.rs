@@ -19,9 +19,8 @@ use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 use crate::xlora_models::NonGranularState;
 use crate::{
-    
-    deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, DEBUG,
-, Pipeline,
+    deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, Pipeline,
+    DEBUG,
 };
 use crate::{
     models::quantized_llama::ModelWeights as QLlama, utils::tokens::get_token,

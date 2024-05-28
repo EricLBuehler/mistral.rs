@@ -25,7 +25,7 @@ use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors}
 use crate::xlora_models::NonGranularState;
 use crate::{
     deserialize_chat_template, do_sample, get_mut_arcmutex, get_paths, lora_model_loader,
-    normal_model_loader, xlora_model_loader, DeviceMapMetadata, DEBUG, Pipeline,
+    normal_model_loader, xlora_model_loader, DeviceMapMetadata, Pipeline, DEBUG,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
