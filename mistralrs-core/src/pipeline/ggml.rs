@@ -18,9 +18,7 @@ use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 use crate::xlora_models::NonGranularState;
-use crate::{
-    do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, DEBUG, Pipeline,
-};
+use crate::{do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, Pipeline, DEBUG};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama, utils::tokens::get_token,
     xlora_models::XLoraQLlama,
@@ -30,9 +28,7 @@ use candle_core::quantized::{ggml_file, GgmlDType};
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
-use serde_json::Value;
 use std::any::Any;
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;

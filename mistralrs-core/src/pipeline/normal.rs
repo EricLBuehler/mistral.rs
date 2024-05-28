@@ -25,16 +25,14 @@ use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors}
 use crate::xlora_models::NonGranularState;
 use crate::{
     do_sample, get_mut_arcmutex, get_paths, lora_model_loader, normal_model_loader,
-    xlora_model_loader, DeviceMapMetadata, DEBUG, Pipeline,
+    xlora_model_loader, DeviceMapMetadata, Pipeline, DEBUG,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
-use serde_json::Value;
 use std::any::Any;
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
