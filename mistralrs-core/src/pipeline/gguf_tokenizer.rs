@@ -230,6 +230,7 @@ mod tests {
         let hf_tokenizer = get_hf_tokenizer(TokenizerType::Llama)?;
         let gguf_tokenizer = get_gguf_tokenizer(TokenizerType::Llama)?;
 
+        #[allow(clippy::cast_possible_truncation)]
         let mut tokens = (0..hf_tokenizer.get_vocab_size(false) as u32).collect::<Vec<_>>();
         tokens.shuffle(&mut thread_rng());
 
