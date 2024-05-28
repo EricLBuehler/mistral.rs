@@ -70,8 +70,7 @@ pub trait ModelPaths {
     /// See: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/tokenizer
     fn get_tokenizer_filename(&self) -> &PathBuf;
 
-    /// Jinja format chat templating for chat completion.
-    /// See: https://huggingface.co/docs/transformers/chat_templating
+    /// Content expected to deserialize to [`ChatTemplate`].
     fn get_template_filename(&self) -> &PathBuf;
 
     /// Optional adapter files. `(String, PathBuf)` is of the form `(id name, path)`.
