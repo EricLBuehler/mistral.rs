@@ -99,7 +99,7 @@ pub enum ModelSelected {
         /// If the `chat_template` is specified, then it will be treated as a path and used over remote files,
         /// removing all remote accesses.
         #[arg(short, long)]
-        tok_model_id: String,
+        tok_model_id: Option<String>,
 
         /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
         /// This may be a HF hub repo or a local path.

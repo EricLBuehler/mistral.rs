@@ -240,16 +240,18 @@ This is passed in the following ways:
 
 If token cannot be loaded, no token will be used (i.e. effectively using `none`).
 
-## Loading models from local files:**
+## Loading models from local files:
 
-You can also instruct mistral.rs to load models locally by modifying the `*_model_id` arguments or options:
+You can also instruct mistral.rs to load models fully locally by modifying the `*_model_id` arguments or options:
 ```bash
 ./mistralrs_server --port 1234 plain -m . -a mistral
 ```
-or
+
+To run GGUF models fully locally, you do not need to specify the tokenizer model ID argument and instead should pass a path to the
+chat template JSON file (examples [here](chat_templates)) as well as specifying a local model ID. For example:
 
 ```bash
-./mistralrs-server gguf -m . -t . -f Phi-3-mini-128k-instruct-q4_K_M.gguf
+./mistralrs-server --chat-template <chat_template> gguf -m . -f Phi-3-mini-128k-instruct-q4_K_M.gguf
 ```
 
 Throughout mistral.rs, any model ID argument or option may be a local path and should contain the following files for each model ID option:

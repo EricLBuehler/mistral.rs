@@ -175,7 +175,7 @@ fn parse_which(
                 repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
             },
             chat_template,
-            Some(tok_model_id),
+            tok_model_id,
             quantized_model_id,
             quantized_filename,
         )

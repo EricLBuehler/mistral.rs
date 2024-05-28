@@ -56,7 +56,7 @@ pub enum Which {
 
     #[allow(clippy::upper_case_acronyms)]
     GGUF {
-        tok_model_id: String,
+        tok_model_id: Option<String>,
         quantized_model_id: String,
         quantized_filename: String,
         repeat_last_n: Option<usize>,

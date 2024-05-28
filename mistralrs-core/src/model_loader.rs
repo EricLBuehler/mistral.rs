@@ -156,7 +156,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         } => GGUFLoaderBuilder::new(
             GGUFSpecificConfig { repeat_last_n },
             args.chat_template,
-            Some(tok_model_id),
+            tok_model_id,
             quantized_model_id,
             quantized_filename,
         )
