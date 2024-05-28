@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering;
+
 use anyhow::Result;
 use candle_core::quantized::gguf_file::Content;
 use tokenizers::{
@@ -7,6 +9,8 @@ use tokenizers::{
     DecoderWrapper, ModelWrapper, Tokenizer,
 };
 use tracing::info;
+
+use crate::DEBUG;
 
 pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
     let model = content.metadata["tokenizer.ggml.model"]
@@ -95,5 +99,8 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
         merges.as_ref().map(|x| x.len()).unwrap_or(0),
         scores.as_ref().map(|x| x.len()).unwrap_or(0)
     );
+    if DEBUG.load(Ordering::Relaxed) {
+        info!("Tokenizer: {tokenizer:?}");
+    }
     Ok(tokenizer)
 }
