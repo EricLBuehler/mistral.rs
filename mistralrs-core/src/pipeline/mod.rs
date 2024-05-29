@@ -598,9 +598,13 @@ pub trait Pipeline: Send + Sync {
         } else {
             None
         };
-        let eos_tok = match chat_template.eos_token {
-            Either::Left(ref lit) => lit,
-            Either::Right(ref added) => &added.content,
+        let eos_tok = if let Some(ref unk) = self.get_chat_template().eos_token {
+            match unk.0 {
+                Either::Left(ref lit) => Some(lit.to_string()),
+                Either::Right(ref added) => Some(added.content.to_string()),
+            }
+        } else {
+            None
         };
         let unk_tok = if let Some(ref unk) = self.get_chat_template().unk_token {
             match unk.0 {
@@ -1436,7 +1440,7 @@ mod tests {
                 true,
                 template,
                 Some(bos.to_string()),
-                eos,
+                Some(eos.to_string()),
                 Some(unk.to_string()),
             )
             .unwrap_or_else(|_| panic!("Template number {i}"));

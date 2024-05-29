@@ -12,7 +12,14 @@ use tracing::info;
 
 use crate::DEBUG;
 
-pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
+pub struct ConversionResult {
+    pub tokenizer: Tokenizer,
+    pub bos: Option<String>,
+    pub eos: Option<String>,
+    pub unk: Option<String>,
+}
+
+pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<ConversionResult> {
     let model = content.metadata["tokenizer.ggml.model"]
         .to_string()
         .expect("GGUF tokenizer model is not a string.")
@@ -67,6 +74,10 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
         .to_u32()
         .expect("GGUF unk token is not u32");
 
+    let bos_str = tokens[bos as usize].clone();
+    let eos_str = tokens[eos as usize].clone();
+    let unk_str = tokens[unk as usize].clone();
+
     let (tokenizer, ty) = match model.as_str() {
         "llama" | "replit" => {
             // unigram
@@ -112,7 +123,12 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<Tokenizer> {
     if DEBUG.load(Ordering::Relaxed) {
         info!("Tokenizer: {tokenizer:?}");
     }
-    Ok(tokenizer)
+    Ok(ConversionResult {
+        tokenizer,
+        bos: Some(bos_str),
+        eos: Some(eos_str),
+        unk: Some(unk_str),
+    })
 }
 
 mod tests {
@@ -152,6 +168,7 @@ mod tests {
                         .map_err(anyhow::Error::msg)?,
                 )
                 .map_err(anyhow::Error::msg)
+                .map(|res| res.tokenizer)
             }
             other => anyhow::bail!("Cannot get testing HF tokenizer for type {other:?}"),
         }
