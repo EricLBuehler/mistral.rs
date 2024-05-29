@@ -67,7 +67,7 @@ impl<'a> Adapter<'a> {
         }
 
         // Create VarBuilder:
-        // TODO: `from_mmaped_safetensors` has `xlora_paths` as the 2nd param, is this a bug?
+        // TODO: `from_mmaped_safetensors` has `xlora_paths` as the 2nd param (_valid but params need to be named better_)
         let vb = from_mmaped_safetensors(
             xlora_paths,
             paths
