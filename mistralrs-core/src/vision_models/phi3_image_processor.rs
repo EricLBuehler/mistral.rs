@@ -1,7 +1,7 @@
 use std::{any::Any, sync::Arc};
 
 use candle_core::{Device, Result};
-use image::{imageops::FilterType, DynamicImage, GenericImageView};
+use image::{imageops::FilterType, DynamicImage, GenericImageView, RgbImage, RgbaImage};
 use indexmap::IndexMap;
 
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
 };
 
 use super::{
-    image_processor::{from_pixel_data, get_pixel_data, ImagePreProcessor, PreprocessedImages},
+    image_processor::{get_pixel_data, ImagePreProcessor, PreprocessedImages},
     phi3::Phi3VisionSpecificArgs,
     preprocessor_config::PreProcessorConfig,
     processor_config::ProcessorConfig,
@@ -120,8 +120,77 @@ impl InputsProcessor for Phi3ImageProcessor {
     }
 }
 
+pub(crate) fn from_pixel_data_top_bottom(
+    mut data: Vec<Vec<Vec<u8>>>,
+    h: usize,
+    w: usize,
+    fill: u8,
+    pad_top: usize,
+    pad_bottom: usize,
+) -> DynamicImage {
+    let channels = data[0][0].len();
+    let cur_w = data[0].len();
+
+    let mut flat_data: Vec<u8> = Vec::with_capacity(w * h * channels);
+    // Add top padding
+    for _ in 0..pad_top {
+        data.insert(0, vec![vec![fill; channels]; cur_w]);
+    }
+    // Add the bottom padding
+    data.extend(vec![vec![vec![fill; channels]; cur_w]; pad_bottom]);
+    for row in data {
+        for pixel in row {
+            flat_data.extend_from_slice(&pixel);
+        }
+    }
+
+    if channels == 3 {
+        DynamicImage::ImageRgb8(
+            RgbImage::from_raw(w as u32, h as u32, flat_data).expect("Unable to create RgbaImage"),
+        )
+    } else {
+        DynamicImage::ImageRgba8(
+            RgbaImage::from_raw(w as u32, h as u32, flat_data).expect("Unable to create RgbaImage"),
+        )
+    }
+}
+
+pub(crate) fn from_pixel_data_left_right(
+    data: Vec<Vec<Vec<u8>>>,
+    h: usize,
+    w: usize,
+    fill: u8,
+    pad_left: usize,
+    pad_right: usize,
+) -> DynamicImage {
+    let channels = data[0][0].len();
+
+    let mut flat_data: Vec<u8> = Vec::with_capacity(w * h * channels);
+    for mut row in data {
+        // Add left padding
+        for _ in 0..pad_left {
+            row.insert(0, vec![fill; channels]);
+        }
+        // Add the right padding
+        row.extend(vec![vec![fill; channels]; pad_right]);
+        for pixel in row {
+            flat_data.extend_from_slice(&pixel);
+        }
+    }
+
+    if channels == 3 {
+        DynamicImage::ImageRgb8(
+            RgbImage::from_raw(w as u32, h as u32, flat_data).expect("Unable to create RgbaImage"),
+        )
+    } else {
+        DynamicImage::ImageRgba8(
+            RgbaImage::from_raw(w as u32, h as u32, flat_data).expect("Unable to create RgbaImage"),
+        )
+    }
+}
+
 /// Pad image, left and right if transposed, and top to bottom if not
-fn pad(image: &DynamicImage, trans: bool, device: &Device) -> DynamicImage {
+fn pad_336(image: &DynamicImage, trans: bool) -> DynamicImage {
     let (mut w, mut h) = image.dimensions();
     if w < h {
         std::mem::swap(&mut w, &mut h);
@@ -132,13 +201,31 @@ fn pad(image: &DynamicImage, trans: bool, device: &Device) -> DynamicImage {
     let bottom_pad = tar - h as u32 - top_pad; // also left if transposed
     let left_pad = 0;
     let right_pad = 0;
-    /*from_pixel_data(
-        get_pixel_data(image, image.dimensions().1, image.dimensions().0),
-        pad_h,
-        pad_w,
-        255,
-    )*/
-    todo!() // TODO POINT HERE
+
+    let data = get_pixel_data(
+        image,
+        image.dimensions().1 as usize,
+        image.dimensions().0 as usize,
+    );
+    if trans {
+        from_pixel_data_top_bottom(
+            data,
+            (h + top_pad + bottom_pad) as usize,
+            w as usize,
+            255,
+            top_pad as usize,
+            bottom_pad as usize,
+        )
+    } else {
+        from_pixel_data_left_right(
+            data,
+            h as usize,
+            (w + top_pad + bottom_pad) as usize,
+            255,
+            top_pad as usize,
+            bottom_pad as usize,
+        )
+    }
 }
 
 impl Phi3ImageProcessor {
@@ -164,7 +251,7 @@ impl Phi3ImageProcessor {
             if trans { new_w } else { new_h },
             FilterType::Triangle,
         );
-        todo!()
+        Ok(pad_336(&img, trans))
     }
 }
 
@@ -185,6 +272,8 @@ impl ImagePreProcessor for Phi3ImageProcessor {
             if config.do_convert_rgb {
                 *image = DynamicImage::ImageRgb8(image.to_rgb8());
             }
+
+            *image = self.hd_transform(image)?;
 
             // Normalize
             if config.do_normalize {
