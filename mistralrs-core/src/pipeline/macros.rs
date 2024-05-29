@@ -11,14 +11,21 @@ macro_rules! api_dir_list {
             .unwrap_or_else(|e| {
                 // If we do not get a 404, it was something else.
                 let format = format!("{e:?}");
+                let mut unauth = false;
                 if let hf_hub::api::sync::ApiError::RequestError(resp) = e {
-                    if resp.into_response().is_some_and(|r| r.status() != 404) {
+                    let resp = resp.into_response();
+                    // If it's 401, assume that we're running locally only.
+                    if resp.as_ref().is_some_and(|r| r.status() != 401) {
+                        unauth = true;
+                    } else if resp.as_ref().is_some_and(|r| r.status() != 404) {
                         panic!("{format}");
                     }
                 }
 
                 let listing = std::fs::read_dir($model_id);
-                if listing.is_err() {
+                if listing.is_err() && unauth {
+                    panic!("{format}");
+                } else if listing.is_err() {
                     panic!("Cannot list directory {:?}", $model_id)
                 }
                 let listing = listing.unwrap();
@@ -43,14 +50,21 @@ macro_rules! api_get_file {
         $api.get($file).unwrap_or_else(|e| {
             // If we do not get a 404, it was something else.
             let format = format!("{e:?}");
+            let mut unauth = false;
             if let hf_hub::api::sync::ApiError::RequestError(resp) = e {
-                if resp.into_response().is_some_and(|r| r.status() != 404) {
+                let resp = resp.into_response();
+                // If it's 401, assume that we're running locally only.
+                if resp.as_ref().is_some_and(|r| r.status() != 401) {
+                    unauth = true;
+                } else if resp.as_ref().is_some_and(|r| r.status() != 404) {
                     panic!("{format}");
                 }
             }
 
             let path = $model_id.join($file);
-            if !path.exists() {
+            if !path.exists() && unauth {
+                panic!("{format}");
+            } else if !path.exists() {
                 panic!("File \"{}\" not found at model id {:?}", $file, $model_id)
             }
             info!("Loading `{:?}` locally at `{path:?}`", &$file);
@@ -132,6 +146,97 @@ macro_rules! get_paths {
             classifier_config: xlora_config,
             xlora_ordering: xlora_order,
             template_filename,
+            gen_conf,
+            lora_preload_adapter_info,
+        }))
+    }};
+}
+
+#[macro_export]
+macro_rules! get_paths_gguf {
+    ($path_name:ident, $token_source:expr, $revision:expr, $this:expr, $quantized_model_id:expr, $quantized_filename:expr, $silent:expr) => {{
+        let api = ApiBuilder::new()
+            .with_progress(!$silent)
+            .with_token(get_token($token_source)?)
+            .build()?;
+        let revision = $revision.unwrap_or("main".to_string());
+        let model_id_this = $this.model_id.clone().unwrap_or($this.quantized_model_id.clone());
+        let model_id_copy = model_id_this.clone();
+        let api = api.repo(Repo::with_revision(
+            model_id_this.clone(),
+            RepoType::Model,
+            revision.clone(),
+        ));
+        let model_id = std::path::Path::new(&model_id_copy);
+
+        let chat_template = if let Some(ref p) = $this.chat_template {
+            if p.ends_with(".json") {
+                info!("Using chat template file at `{p}`");
+                PathBuf::from_str(p)?
+            } else {
+                PathBuf::from_str("")?
+            }
+        } else {
+            $crate::api_get_file!(
+                api,
+                "tokenizer_config.json",
+                model_id
+            ) // Will be loaded from inside gguf file
+        };
+
+        let filenames = get_model_paths(
+            revision.clone(),
+            &$token_source,
+            &Some($quantized_model_id),
+            &Some($quantized_filename),
+            &api,
+            &model_id,
+        )?;
+
+        let XLoraPaths {
+            adapter_configs,
+            adapter_safetensors,
+            classifier_path,
+            xlora_order,
+            xlora_config,
+            lora_preload_adapter_info,
+        } = get_xlora_paths(
+            model_id_this,
+            &$this.xlora_model_id,
+            &$token_source,
+            revision.clone(),
+            &$this.xlora_order,
+        )?;
+
+        let gen_conf = if $crate::api_dir_list!(api, model_id)
+            .collect::<Vec<_>>()
+            .contains(&"generation_config.json".to_string())
+        {
+            Some($crate::api_get_file!(
+                api,
+                "generation_config.json",
+                model_id
+            ))
+        } else {
+            None
+        };
+
+        let tokenizer_filename = if $this.model_id.is_some() {
+            $crate::api_get_file!(api, "tokenizer.json", model_id)
+        } else {
+            PathBuf::from_str("")?
+        };
+
+        Ok(Box::new($path_name {
+            tokenizer_filename,
+            config_filename: PathBuf::from_str("")?,
+            filenames,
+            xlora_adapter_configs: adapter_configs,
+            xlora_adapter_filenames: adapter_safetensors,
+            classifier_path,
+            classifier_config: xlora_config,
+            xlora_ordering: xlora_order,
+            template_filename: chat_template,
             gen_conf,
             lora_preload_adapter_info,
         }))

@@ -9,12 +9,14 @@ use mistralrs::{
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {
     // Select a Mistral model
-    // This uses a model, tokenizer, and chat template, from HF hub.
+    // We do not use any files from HF servers here, and instead load the
+    // chat template from the specified file, and the tokenizer and model from a
+    // local GGUF file at the path `.`
     let loader = GGUFLoaderBuilder::new(
         GGUFSpecificConfig { repeat_last_n: 64 },
+        Some("chat_templates/mistral.json".to_string()),
         None,
-        Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
-        "TheBloke/Mistral-7B-Instruct-v0.1-GGUF".to_string(),
+        ".".to_string(),
         "mistral-7b-instruct-v0.1.Q4_K_M.gguf".to_string(),
     )
     .build();

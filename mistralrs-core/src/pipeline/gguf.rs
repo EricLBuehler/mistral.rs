@@ -7,7 +7,8 @@ use super::{
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::lora::Ordering;
-use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
+use crate::pipeline::gguf_tokenizer::{convert_ggml_to_hf_tokenizer, ConversionResult};
 use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
@@ -15,7 +16,7 @@ use crate::sequence::Sequence;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
-use crate::{do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, DEBUG};
+use crate::{do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, DEBUG};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
     models::quantized_phi2::ModelWeights as QPhi,
@@ -29,6 +30,7 @@ use candle_core::quantized::{
     GgmlDType,
 };
 use candle_core::{DType, Device, Tensor};
+use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
 use std::fs;
@@ -62,15 +64,14 @@ pub struct GGUFPipeline {
 }
 
 pub struct GGUFLoader {
-    model_id: String,
+    model_id: Option<String>,
     config: GGUFSpecificConfig,
-    quantized_model_id: Option<String>,
-    quantized_filename: Option<String>,
+    quantized_model_id: String,
+    quantized_filename: String,
     xlora_model_id: Option<String>,
     xlora_order: Option<Ordering>,
     no_kv_cache: bool,
     chat_template: Option<String>,
-    tokenizer_json: Option<String>,
     kind: ModelKind,
     tgt_non_granular_index: Option<usize>,
 }
@@ -120,16 +121,17 @@ pub struct GGUFLoaderBuilder {
     xlora_order: Option<Ordering>,
     no_kv_cache: bool,
     chat_template: Option<String>,
-    tokenizer_json: Option<String>,
     tgt_non_granular_index: Option<usize>,
 }
 
 impl GGUFLoaderBuilder {
+    /// Create a loader builder for a GGUF model. `tok_model_id` is the model ID where you can find a
+    /// `tokenizer_config.json` file. If the `chat_template` is specified, then it will be treated as a
+    /// path and used over remote files, removing all remote accesses.
     pub fn new(
         config: GGUFSpecificConfig,
         chat_template: Option<String>,
-        tokenizer_json: Option<String>,
-        model_id: Option<String>,
+        tok_model_id: Option<String>,
         quantized_model_id: String,
         quantized_filename: String,
     ) -> Self {
@@ -140,8 +142,7 @@ impl GGUFLoaderBuilder {
         Self {
             config,
             chat_template,
-            tokenizer_json,
-            model_id,
+            model_id: tok_model_id,
             kind,
             quantized_filename,
             quantized_model_id,
@@ -197,17 +198,16 @@ impl GGUFLoaderBuilder {
 
     pub fn build(self) -> Box<dyn Loader> {
         Box::new(GGUFLoader {
-            model_id: self.model_id.unwrap(),
+            model_id: self.model_id,
             config: self.config,
             xlora_model_id: self.xlora_model_id,
             kind: self.kind,
             xlora_order: self.xlora_order,
             no_kv_cache: self.no_kv_cache,
             chat_template: self.chat_template,
-            tokenizer_json: self.tokenizer_json,
             tgt_non_granular_index: self.tgt_non_granular_index,
-            quantized_filename: Some(self.quantized_filename),
-            quantized_model_id: Some(self.quantized_model_id),
+            quantized_filename: self.quantized_filename,
+            quantized_model_id: self.quantized_model_id,
         })
     }
 }
@@ -217,24 +217,25 @@ impl GGUFLoader {
     pub fn new(
         model_id: Option<String>,
         config: GGUFSpecificConfig,
-        quantized_model_id: Option<String>,
-        quantized_filename: Option<String>,
+        quantized_model_id: String,
+        quantized_filename: String,
         xlora_model_id: Option<String>,
         kind: ModelKind,
         xlora_order: Option<Ordering>,
         no_kv_cache: bool,
         chat_template: Option<String>,
-        tokenizer_json: Option<String>,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
         let model_id = if let Some(id) = model_id {
-            id
-        } else {
+            Some(id)
+        } else if let Some(xlora_order) = xlora_order.clone() {
             info!(
                 "Using adapter base model ID: `{}`",
-                xlora_order.as_ref().unwrap().base_model_id
+                xlora_order.base_model_id
             );
-            xlora_order.as_ref().unwrap().base_model_id.clone()
+            Some(xlora_order.base_model_id.clone())
+        } else {
+            None
         };
         Self {
             model_id,
@@ -245,7 +246,6 @@ impl GGUFLoader {
             xlora_order,
             no_kv_cache,
             chat_template,
-            tokenizer_json,
             kind,
             tgt_non_granular_index,
         }
@@ -286,13 +286,13 @@ impl Loader for GGUFLoader {
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
+        let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths_gguf!(
             LocalModelPaths,
             &token_source,
             revision,
             self,
-            self.quantized_model_id,
-            self.quantized_filename,
+            self.quantized_model_id.clone(),
+            self.quantized_filename.clone(),
             silent
         );
         self.load_model_from_path(&paths?, _dtype, device, silent, mapper, in_situ_quant)
@@ -367,6 +367,22 @@ impl Loader for GGUFLoader {
             info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_gguf_tensors.txt`.");
         }
 
+        let ConversionResult {
+            tokenizer,
+            bos,
+            eos,
+            unk,
+        } = if paths.get_tokenizer_filename().to_string_lossy().is_empty() {
+            convert_ggml_to_hf_tokenizer(&model)?
+        } else {
+            ConversionResult {
+                tokenizer: get_tokenizer(paths.get_tokenizer_filename())?,
+                bos: None,
+                eos: None,
+                unk: None,
+            }
+        };
+
         let has_adapter = self.kind.is_adapted();
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
 
@@ -407,12 +423,10 @@ impl Loader for GGUFLoader {
             _ => unreachable!(),
         };
 
-        let tokenizer = get_tokenizer(paths.get_tokenizer_filename())?;
-
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
-        let chat_template = get_chat_template(paths, &self.chat_template);
+        let mut chat_template = get_chat_template(paths, &self.chat_template);
 
         let max_seq_len = match model {
             Model::Llama(ref l) => l.max_seq_len,
@@ -429,6 +443,17 @@ impl Loader for GGUFLoader {
             Model::Phi3(ref model) => model.cache.lock().len(),
             Model::XLoraPhi3(ref model) => model.cache.lock().len(),
         };
+
+        if chat_template.bos_token.is_none() && bos.is_some() {
+            chat_template.bos_token = Some(BeginEndUnkTok(Either::Left(bos.unwrap())));
+        }
+        if chat_template.eos_token.is_none() && eos.is_some() {
+            chat_template.eos_token = Some(BeginEndUnkTok(Either::Left(eos.unwrap())));
+        }
+        if chat_template.unk_token.is_none() && unk.is_some() {
+            chat_template.unk_token = Some(BeginEndUnkTok(Either::Left(unk.unwrap())));
+        }
+
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         Ok(Arc::new(Mutex::new(GGUFPipeline {
             model,
@@ -436,7 +461,10 @@ impl Loader for GGUFLoader {
             tokenizer: tokenizer.into(),
             no_kv_cache: self.no_kv_cache,
             chat_template: Arc::new(chat_template),
-            model_id: self.model_id.clone(),
+            model_id: self
+                .model_id
+                .clone()
+                .unwrap_or(self.quantized_model_id.clone()),
             non_granular_state: self.tgt_non_granular_index.map(|tgt_non_granular_index| {
                 NonGranularState {
                     non_granular_index: Arc::new(Mutex::new(0)),
@@ -459,7 +487,7 @@ impl Loader for GGUFLoader {
     fn get_id(&self) -> String {
         self.xlora_model_id
             .as_deref()
-            .unwrap_or(&self.model_id)
+            .unwrap_or(self.model_id.as_ref().unwrap_or(&self.quantized_model_id))
             .to_string()
     }
 

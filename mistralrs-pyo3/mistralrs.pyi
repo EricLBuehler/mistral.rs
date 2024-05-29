@@ -96,7 +96,6 @@ class Which(Enum):
         tok_model_id: str
         quantized_model_id: str
         quantized_filename: str
-        tokenizer_json: str | None = None
         repeat_last_n: int = 64
     @dataclass
     class XLoraGGUF:
@@ -106,7 +105,6 @@ class Which(Enum):
         xlora_model_id: str
         order: str
         tgt_non_granular_index: int | None = None
-        tokenizer_json: str | None = None
         repeat_last_n: int = 64
     @dataclass
     class LoraGGUF:
@@ -115,7 +113,6 @@ class Which(Enum):
         quantized_filename: str
         adapters_model_id: str
         order: str
-        tokenizer_json: str | None = None
         repeat_last_n: int = 64
     @dataclass
     class GGML:
