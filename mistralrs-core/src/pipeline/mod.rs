@@ -301,8 +301,8 @@ impl ModelKind {
             Normal | Adapter { .. } => vec![None],
             Quantized { quant } | AdapterQuantized { quant, .. } => vec![Some(*quant)],
             Speculative { target, draft } => {
-                let t = ModelKind::from(*target.clone());
-                let d = ModelKind::from(*draft.clone());
+                let t = *target.clone();
+                let d = *draft.clone();
 
                 [t.quantized_kind(), d.quantized_kind()].concat()
             }
@@ -325,8 +325,8 @@ impl ModelKind {
             Normal | Quantized { .. } => vec![None],
             Adapter { adapter } | AdapterQuantized { adapter, .. } => vec![Some(*adapter)],
             Speculative { target, draft } => {
-                let t = ModelKind::from(*target.clone());
-                let d = ModelKind::from(*draft.clone());
+                let t = *target.clone();
+                let d = *draft.clone();
 
                 [t.adapted_kind(), d.adapted_kind()].concat()
             }

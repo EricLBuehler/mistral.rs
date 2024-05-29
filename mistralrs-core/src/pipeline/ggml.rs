@@ -284,7 +284,7 @@ impl Loader for GGMLLoader {
 
         let model_config = {
             // Base config (quantization only):
-            let quant = ModelConfig::GGML(
+            let quant = ModelConfig::ParamsGGML(
                 (model, self.config.gqa).into()
             );
 

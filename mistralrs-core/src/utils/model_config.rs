@@ -42,6 +42,7 @@ impl<'a> Adapter<'a> {
     // As referenced value would drop after this method, Adapter takes ownership of vb + preload_adapters
     // and then passes by reference to the `from_gguf()` / `from_ggml()` methods when proxying to params.
     // NOTE: Due to reference usage persisting in returned struct, additional lifetime annotations were required.
+    #[allow(clippy::borrowed_box)]
     pub fn try_new<'b: 'a>(
         paths: &'b Box<dyn ModelPaths>,
         device: &'b candle_core::Device,
@@ -92,8 +93,8 @@ impl<'a> Adapter<'a> {
 }
 
 // New type wrappers that segment the distinct parameter sets used by `from_ggml()` + `from_gguf()` methods:
-pub struct GGML(pub FileGGML);
-pub struct GGUF<'a>(pub FileGGUF<'a>, pub Device<'a>);
+pub struct ParamsGGML(pub FileGGML);
+pub struct ParamsGGUF<'a>(pub FileGGUF<'a>, pub Device<'a>);
 
 // A `None` type vs the `Some` type (`Adapter<'a>`)
 pub struct NoAdapter {}
@@ -101,8 +102,8 @@ pub struct NoAdapter {}
 // Marker traits to restrict type input:
 // (required workaround to support impl on subtypes, otherwise would use an enum)
 pub trait QuantParams {}
-impl QuantParams for GGML {}
-impl QuantParams for GGUF<'_> {}
+impl QuantParams for ParamsGGML {}
+impl QuantParams for ParamsGGUF<'_> {}
 
 // Emulates `Option<Adapter>` but is compatible as a type bound in `impl<T>` for Some vs None
 pub trait MaybeAdapter {}
@@ -119,6 +120,7 @@ pub struct Config<Q: QuantParams, A: MaybeAdapter> {
 // NOTE: Variantly used for `.expect_quantized()` / `.expect_adapted()` methods
 // `where` clause required due to bug with inline bounds:
 // https://github.com/luker-os/variantly/pull/16
+#[allow(clippy::large_enum_variant)]
 #[derive(variantly::Variantly)]
 pub enum ModelParams<'a, Q> where Q: QuantParams {
     Quantized(Config::<Q, NoAdapter>),
@@ -183,10 +185,10 @@ pub trait FromAdapterGGUF {
 }
 
 // NOTE: Below is a workaround to proxy params to the existing API methods `get_gguf()` / `get_gmml()` traits covered above.
-impl Config<GGML, NoAdapter> {
+impl Config<ParamsGGML, NoAdapter> {
     pub fn try_into_model<T: FromGGML>(self) -> Result<T, candle_core::Error> {
         // Destructure props:
-        let GGML(
+        let ParamsGGML(
             FileGGML { ct, gqa },
         ) = self.quant;
 
@@ -198,10 +200,10 @@ impl Config<GGML, NoAdapter> {
     }
 }
 
-impl Config<GGML, Adapter<'_>> {
+impl Config<ParamsGGML, Adapter<'_>> {
     pub fn try_into_model<T: FromAdapterGGML>(self) -> Result<T, candle_core::Error> {
         // Destructure props:
-        let GGML(
+        let ParamsGGML(
             FileGGML { ct, gqa },
         ) = self.quant;
 
@@ -226,10 +228,10 @@ impl Config<GGML, Adapter<'_>> {
     }
 }
 
-impl Config<GGUF<'_>, NoAdapter> {
+impl Config<ParamsGGUF<'_>, NoAdapter> {
     pub fn try_into_model<T: FromGGUF>(self) -> Result<T, candle_core::Error> {
         // Destructure props:
-        let GGUF(
+        let ParamsGGUF(
             FileGGUF { ct, reader },
             Device { device, mapper },
         ) = self.quant;
@@ -244,10 +246,10 @@ impl Config<GGUF<'_>, NoAdapter> {
     }
 }
 
-impl Config<GGUF<'_>, Adapter<'_>> {
+impl Config<ParamsGGUF<'_>, Adapter<'_>> {
     pub fn try_into_model<T: FromAdapterGGUF>(self) -> Result<T, candle_core::Error> {
         // Destructure props:
-        let GGUF(
+        let ParamsGGUF(
             FileGGUF { ct, reader },
             Device { device, mapper },
         ) = self.quant;
@@ -283,19 +285,19 @@ use crate::{
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 
-impl TryFrom<ModelParams<'_, GGML>> for QLlama {
+impl TryFrom<ModelParams<'_, ParamsGGML>> for QLlama {
     type Error = candle_core::Error;
 
-    fn try_from(params: ModelParams<'_, GGML>) -> Result<Self, Self::Error> {
+    fn try_from(params: ModelParams<'_, ParamsGGML>) -> Result<Self, Self::Error> {
         let config = params.expect_quantized("`Config` should be GGML Quantized");
         config.try_into_model()
     }
 }
 
-impl TryFrom<ModelParams<'_, GGML>> for XLoraQLlama {
+impl TryFrom<ModelParams<'_, ParamsGGML>> for XLoraQLlama {
     type Error = candle_core::Error;
 
-    fn try_from(params: ModelParams<'_, GGML>) -> Result<Self, Self::Error> {
+    fn try_from(params: ModelParams<'_, ParamsGGML>) -> Result<Self, Self::Error> {
         let config = params.expect_adapted("`Config` should be GGML Quantized with an Adapter");
         config.try_into_model()
     }
@@ -304,10 +306,10 @@ impl TryFrom<ModelParams<'_, GGML>> for XLoraQLlama {
 akin! {
     let &models_gguf = [QLlama, QPhi, QPhi3];
 
-    impl TryFrom<ModelParams<'_, GGUF<'_>>> for *models_gguf {
+    impl TryFrom<ModelParams<'_, ParamsGGUF<'_>>> for *models_gguf {
         type Error = candle_core::Error;
 
-        fn try_from(params: ModelParams<'_, GGUF<'_>>) -> Result<Self, Self::Error> {
+        fn try_from(params: ModelParams<'_, ParamsGGUF<'_>>) -> Result<Self, Self::Error> {
             let config = params.expect_quantized("`Config` should be GGUF Quantized");
             config.try_into_model()
         }
@@ -317,10 +319,10 @@ akin! {
 akin! {
     let &models_gguf_a = [XLoraQLlama, XLoraQPhi3];
 
-    impl TryFrom<ModelParams<'_, GGUF<'_>>> for *models_gguf_a {
+    impl TryFrom<ModelParams<'_, ParamsGGUF<'_>>> for *models_gguf_a {
         type Error = candle_core::Error;
 
-        fn try_from(params: ModelParams<'_, GGUF<'_>>) -> Result<Self, Self::Error> {
+        fn try_from(params: ModelParams<'_, ParamsGGUF<'_>>) -> Result<Self, Self::Error> {
             let config = params.expect_adapted("`Config` should be GGUF Quantized with an Adapter");
             config.try_into_model()
         }
