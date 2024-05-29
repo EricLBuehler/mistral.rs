@@ -27,7 +27,12 @@ pub(crate) fn get_pixel_data(image: &DynamicImage, h: usize, w: usize) -> Vec<Ve
     pixel_data
 }
 
-pub(crate) fn from_pixel_data(mut data: Vec<Vec<Vec<u8>>>, h: usize, w: usize) -> DynamicImage {
+pub(crate) fn from_pixel_data(
+    mut data: Vec<Vec<Vec<u8>>>,
+    h: usize,
+    w: usize,
+    fill: u8,
+) -> DynamicImage {
     let channels = data[0][0].len();
     let cur_h = data.len();
     let cur_w = data[0].len();
@@ -35,7 +40,7 @@ pub(crate) fn from_pixel_data(mut data: Vec<Vec<Vec<u8>>>, h: usize, w: usize) -
     let delta_w = w - cur_w;
 
     let mut flat_data: Vec<u8> = Vec::with_capacity(w * h * channels);
-    data.extend(vec![vec![vec![0; channels]; cur_w]; delta_h]);
+    data.extend(vec![vec![vec![fill; channels]; cur_w]; delta_h]);
     for mut row in data {
         row.extend(vec![vec![0; channels]; delta_w]);
         for pixel in row {
@@ -160,7 +165,7 @@ pub trait ImagePreProcessor: InputsProcessor {
             ..((new_width as i32).min(right + right_pad as i32) as usize);
         pixel_data = pixel_data[y_range][x_range].to_vec();
 
-        from_pixel_data(pixel_data, new_height, new_width)
+        from_pixel_data(pixel_data, new_height, new_width, 0)
     }
 
     /// Map an image's pixel channels.
@@ -177,7 +182,7 @@ pub trait ImagePreProcessor: InputsProcessor {
                 });
             }
         });
-        from_pixel_data(data, h as usize, w as usize)
+        from_pixel_data(data, h as usize, w as usize, 0)
     }
 
     /// Map an image's pixel channels and while providing the image channel
@@ -194,7 +199,7 @@ pub trait ImagePreProcessor: InputsProcessor {
                 }
             }
         });
-        from_pixel_data(data, h as usize, w as usize)
+        from_pixel_data(data, h as usize, w as usize, 0)
     }
 
     /// Rescale image by `scale`

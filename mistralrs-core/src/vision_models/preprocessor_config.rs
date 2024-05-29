@@ -18,6 +18,7 @@ pub struct PreProcessorConfig {
     pub(crate) resampling: Option<usize>,
     pub(crate) size: HashMap<String, u32>,
     pub(crate) num_img_tokens: Option<usize>,
+    pub(crate) num_crops: Option<usize>,
 }
 
 pub(crate) trait ToFilter {
