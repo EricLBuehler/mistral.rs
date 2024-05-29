@@ -374,7 +374,7 @@ impl Loader for GGUFLoader {
             convert_ggml_to_hf_tokenizer(&model)?
         } else {
             ConversionResult {
-                tokenizer: get_tokenizer(paths.get_tokenizer_filename())?,
+                tokenizer: get_tokenizer(paths.get_tokenizer_filename(), None)?,
                 bos: None,
                 eos: None,
                 unk: None,
