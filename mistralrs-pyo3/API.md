@@ -22,11 +22,13 @@ Additionally, for models without quantization, the model architecture should be 
 
 ```py
 class Which(Enum):
+    @dataclass
     class Plain:
         model_id: str
         arch: Architecture
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
+    @dataclass
     class XLora:
         arch: Architecture
         xlora_model_id: str
@@ -35,6 +37,7 @@ class Which(Enum):
         model_id: str | None = None
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
+    @dataclass
     class Lora:
         arch: Architecture
         adapters_model_id: str
@@ -42,12 +45,13 @@ class Which(Enum):
         model_id: str | None = None
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
+    @dataclass
     class GGUF:
         tok_model_id: str
         quantized_model_id: str
         quantized_filename: str
-        tokenizer_json: str | None = None
         repeat_last_n: int = 64
+    @dataclass
     class XLoraGGUF:
         tok_model_id: str
         quantized_model_id: str
@@ -55,22 +59,23 @@ class Which(Enum):
         xlora_model_id: str
         order: str
         tgt_non_granular_index: int | None = None
-        tokenizer_json: str | None = None
         repeat_last_n: int = 64
+    @dataclass
     class LoraGGUF:
         tok_model_id: str
         quantized_model_id: str
         quantized_filename: str
         adapters_model_id: str
         order: str
-        tokenizer_json: str | None = None
         repeat_last_n: int = 64
+    @dataclass
     class GGML:
         tok_model_id: str
         quantized_model_id: str
         quantized_filename: str
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
+    @dataclass
     class XLoraGGML:
         tok_model_id: str
         quantized_model_id: str
@@ -80,6 +85,7 @@ class Which(Enum):
         tgt_non_granular_index: int | None = None
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
+    @dataclass
     class LoraGGML:
         tok_model_id: str
         quantized_model_id: str

@@ -2,6 +2,7 @@ mod cache_manager;
 mod chat_template;
 mod ggml;
 mod gguf;
+mod gguf_tokenizer;
 mod loaders;
 mod macros;
 mod normal;
@@ -34,6 +35,7 @@ pub use loaders::{
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use serde_json::Value;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 use std::fmt::{Debug, Display};
 use std::path::Path;
@@ -69,8 +71,7 @@ pub trait ModelPaths {
     /// See: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/tokenizer
     fn get_tokenizer_filename(&self) -> &PathBuf;
 
-    /// Jinja format chat templating for chat completion.
-    /// See: https://huggingface.co/docs/transformers/chat_templating
+    /// Content expected to deserialize to [`ChatTemplate`].
     fn get_template_filename(&self) -> &PathBuf;
 
     /// Optional adapter files. `(String, PathBuf)` is of the form `(id name, path)`.
@@ -430,6 +431,8 @@ pub trait Loader {
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
 
+    /// Load a model from the specified paths.
+    /// Also initializes `DEBUG`.
     #[allow(
         clippy::type_complexity,
         clippy::too_many_arguments,
@@ -595,9 +598,13 @@ pub trait Pipeline: Send + Sync {
         } else {
             None
         };
-        let eos_tok = match chat_template.eos_token {
-            Either::Left(ref lit) => lit,
-            Either::Right(ref added) => &added.content,
+        let eos_tok = if let Some(ref unk) = self.get_chat_template().eos_token {
+            match unk.0 {
+                Either::Left(ref lit) => Some(lit.to_string()),
+                Either::Right(ref added) => Some(added.content.to_string()),
+            }
+        } else {
+            None
         };
         let unk_tok = if let Some(ref unk) = self.get_chat_template().unk_token {
             match unk.0 {
@@ -1290,6 +1297,87 @@ fn get_model_paths(
     }
 }
 
+/// Find and parse the appropriate [`ChatTemplate`], and ensure is has a valid [`ChatTemplate.chat_template`].
+/// If the the provided `tokenizer_config.json` from [`ModelPaths.get_template_filename`] does not
+/// have a `chat_template`, use the provided one.
+#[allow(clippy::borrowed_box)]
+pub(crate) fn get_chat_template(
+    paths: &Box<dyn ModelPaths>,
+    chat_template: &Option<String>,
+) -> ChatTemplate {
+    let template_filename = if paths.get_template_filename().to_string_lossy().is_empty() {
+        PathBuf::from(
+            chat_template
+                .as_ref()
+                .expect("A tokenizer config or chat template file path must be specified."),
+        )
+    } else {
+        paths.get_template_filename().clone()
+    };
+    if template_filename
+        .extension()
+        .expect("Template filename must be a file")
+        .to_string_lossy()
+        != "json"
+    {
+        panic!("Template filename {template_filename:?} must end with `.json`.");
+    }
+    let template: ChatTemplate =
+        serde_json::from_str(&fs::read_to_string(&template_filename).unwrap()).unwrap();
+
+    #[derive(Debug, serde::Deserialize)]
+    struct SpecifiedTemplate {
+        chat_template: String,
+        bos_token: Option<String>,
+        eos_token: Option<String>,
+    }
+
+    if template.chat_template.is_some() {
+        return template;
+    };
+
+    info!("`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
+    let mut deser: HashMap<String, Value> =
+        serde_json::from_str(&fs::read_to_string(&template_filename).unwrap()).unwrap();
+
+    match chat_template.clone() {
+        Some(t) => {
+            if t.ends_with(".json") {
+                info!("Loading specified loading chat template file at `{t}`.");
+                let templ: SpecifiedTemplate =
+                    serde_json::from_str(&fs::read_to_string(t.clone()).unwrap()).unwrap();
+                deser.insert(
+                    "chat_template".to_string(),
+                    Value::String(templ.chat_template),
+                );
+                if templ.bos_token.is_some() {
+                    deser.insert(
+                        "bos_token".to_string(),
+                        Value::String(templ.bos_token.unwrap()),
+                    );
+                }
+                if templ.eos_token.is_some() {
+                    deser.insert(
+                        "eos_token".to_string(),
+                        Value::String(templ.eos_token.unwrap()),
+                    );
+                }
+                info!("Loaded chat template file.");
+            } else {
+                deser.insert("chat_template".to_string(), Value::String(t));
+                info!("Loaded specified literal chat template.");
+            }
+        }
+        None => {
+            info!("No specified chat template. No chat template will be used. Only prompts will be accepted, not messages.");
+            deser.insert("chat_template".to_string(), Value::Null);
+        }
+    };
+    let ser = serde_json::to_string_pretty(&deser)
+        .expect("Serialization of modified chat template failed.");
+    serde_json::from_str(&ser).unwrap()
+}
+
 mod tests {
     #[test]
     /// Generating these cases:
@@ -1355,7 +1443,7 @@ mod tests {
                 true,
                 template,
                 Some(bos.to_string()),
-                eos,
+                Some(eos.to_string()),
                 Some(unk.to_string()),
             )
             .unwrap_or_else(|_| panic!("Template number {i}"));

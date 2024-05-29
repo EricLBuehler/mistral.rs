@@ -12,7 +12,6 @@ use std::{
 };
 use stream::ChatCompletionStreamer;
 use tokio::sync::mpsc::channel;
-use tracing_subscriber::{filter::LevelFilter, EnvFilter};
 
 use candle_core::Device;
 use mistralrs_core::{
@@ -168,7 +167,6 @@ fn parse_which(
         .build(arch.into()),
         Which::GGUF {
             tok_model_id,
-            tokenizer_json,
             quantized_model_id,
             quantized_filename,
             repeat_last_n,
@@ -177,15 +175,13 @@ fn parse_which(
                 repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
             },
             chat_template,
-            tokenizer_json,
-            Some(tok_model_id),
+            tok_model_id,
             quantized_model_id,
             quantized_filename,
         )
         .build(),
         Which::XLoraGGUF {
             tok_model_id,
-            tokenizer_json,
             quantized_model_id,
             quantized_filename,
             repeat_last_n,
@@ -197,7 +193,6 @@ fn parse_which(
                 repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
             },
             chat_template,
-            tokenizer_json,
             tok_model_id,
             quantized_model_id,
             quantized_filename,
@@ -215,7 +210,6 @@ fn parse_which(
         .build(),
         Which::LoraGGUF {
             tok_model_id,
-            tokenizer_json,
             quantized_model_id,
             quantized_filename,
             repeat_last_n,
@@ -226,7 +220,6 @@ fn parse_which(
                 repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
             },
             chat_template,
-            tokenizer_json,
             tok_model_id,
             quantized_model_id,
             quantized_filename,
@@ -829,11 +822,6 @@ impl ChatCompletionRequest {
 
 #[pymodule]
 fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    let filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
-    tracing_subscriber::fmt().with_env_filter(filter).init();
-
     m.add_class::<Runner>()?;
     m.add_class::<Which>()?;
     m.add_class::<ChatCompletionRequest>()?;

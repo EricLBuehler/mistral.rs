@@ -9,9 +9,7 @@ use mistralrs_core::{
 use std::fmt::Display;
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;
-use tracing::level_filters::LevelFilter;
 use tracing::{info, warn};
-use tracing_subscriber::EnvFilter;
 
 enum TestName {
     Prompt(usize),
@@ -295,11 +293,6 @@ fn main() -> anyhow::Result<()> {
     let device = Device::new_metal(0)?;
     #[cfg(not(feature = "metal"))]
     let device = Device::cuda_if_available(0)?;
-
-    let filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
-    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let token_source = TokenSource::CacheToken;
     info!(

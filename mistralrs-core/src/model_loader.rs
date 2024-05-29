@@ -150,22 +150,19 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         .build(arch),
         ModelSelected::GGUF {
             tok_model_id,
-            tokenizer_json,
             quantized_model_id,
             quantized_filename,
             repeat_last_n,
         } => GGUFLoaderBuilder::new(
             GGUFSpecificConfig { repeat_last_n },
             args.chat_template,
-            tokenizer_json,
-            Some(tok_model_id),
+            tok_model_id,
             quantized_model_id,
             quantized_filename,
         )
         .build(),
         ModelSelected::XLoraGGUF {
             tok_model_id,
-            tokenizer_json,
             quantized_model_id,
             quantized_filename,
             repeat_last_n,
@@ -175,7 +172,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         } => GGUFLoaderBuilder::new(
             GGUFSpecificConfig { repeat_last_n },
             args.chat_template,
-            tokenizer_json,
             tok_model_id,
             quantized_model_id,
             quantized_filename,
@@ -192,7 +188,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         .build(),
         ModelSelected::LoraGGUF {
             tok_model_id,
-            tokenizer_json,
             quantized_model_id,
             quantized_filename,
             repeat_last_n,
@@ -201,7 +196,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         } => GGUFLoaderBuilder::new(
             GGUFSpecificConfig { repeat_last_n },
             args.chat_template,
-            tokenizer_json,
             tok_model_id,
             quantized_model_id,
             quantized_filename,
