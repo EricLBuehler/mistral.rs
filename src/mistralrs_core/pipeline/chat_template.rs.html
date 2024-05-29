@@ -194,7 +194,6 @@
 <a href="#192" id="192">192</a>
 <a href="#193" id="193">193</a>
 <a href="#194" id="194">194</a>
-<a href="#195" id="195">195</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>anyhow::Result;
@@ -227,9 +226,9 @@
 }
 
 <span class="attr">#[derive(Debug, Deserialize)]
-</span><span class="kw">pub struct </span>Unk(<span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span><span class="kw">pub </span>Either&lt;String, AddedTokensDecoder&gt;);
-<span class="attr">#[derive(Debug, Deserialize)]
-</span><span class="kw">pub struct </span>Bos(<span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span><span class="kw">pub </span>Either&lt;String, AddedTokensDecoder&gt;);
+</span><span class="kw">pub struct </span>BeginEndUnkTok(
+    <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span><span class="kw">pub </span>Either&lt;String, AddedTokensDecoder&gt;,
+);
 
 <span class="attr">#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
@@ -238,23 +237,22 @@
     add_eos_token: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     added_tokens_decoder: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, AddedTokensDecoder&gt;&gt;,
     additional_special_tokens: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
-    <span class="kw">pub </span>bos_token: <span class="prelude-ty">Option</span>&lt;Bos&gt;,
+    <span class="kw">pub </span>bos_token: <span class="prelude-ty">Option</span>&lt;BeginEndUnkTok&gt;,
 
     <span class="doccomment">/// Jinja format chat templating for chat completion.
     /// See: https://huggingface.co/docs/transformers/chat_templating
     </span><span class="kw">pub </span>chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     clean_up_tokenization_spaces: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     device_map: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)]
-    </span><span class="kw">pub </span>eos_token: Either&lt;String, AddedTokensDecoder&gt;,
+    <span class="kw">pub </span>eos_token: <span class="prelude-ty">Option</span>&lt;BeginEndUnkTok&gt;,
     legacy: <span class="prelude-ty">Option</span>&lt;bool&gt;,
-    model_max_length: f64,
+    model_max_length: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     pad_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
     sp_model_kwargs: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, String&gt;&gt;,
     spaces_between_special_tokens: <span class="prelude-ty">Option</span>&lt;bool&gt;,
-    tokenizer_class: String,
+    tokenizer_class: <span class="prelude-ty">Option</span>&lt;String&gt;,
     truncation_size: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    <span class="kw">pub </span>unk_token: <span class="prelude-ty">Option</span>&lt;Unk&gt;,
+    <span class="kw">pub </span>unk_token: <span class="prelude-ty">Option</span>&lt;BeginEndUnkTok&gt;,
     use_default_system_prompt: <span class="prelude-ty">Option</span>&lt;bool&gt;,
 }
 
@@ -263,10 +261,10 @@
         <span class="self">self</span>.chat_template.is_some()
     }
 
-    <span class="kw">pub fn </span>eos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
-        <span class="kw">match </span><span class="self">self</span>.eos_token {
-            Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit.clone(),
-            Either::Right(<span class="kw-2">ref </span>added) =&gt; added.content.clone(),
+    <span class="kw">pub fn </span>eos_tok(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;String&gt; {
+        <span class="kw">match </span><span class="self">self</span>.eos_token.as_ref()<span class="question-mark">?</span>.<span class="number">0 </span>{
+            Either::Left(<span class="kw-2">ref </span>lit) =&gt; <span class="prelude-val">Some</span>(lit.clone()),
+            Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="prelude-val">Some</span>(added.content.clone()),
         }
     }
 
@@ -290,7 +288,7 @@
     gen_conf: <span class="prelude-ty">Option</span>&lt;GenerationConfig&gt;,
     tokenizer: <span class="kw-2">&amp;</span>Tokenizer,
 ) -&gt; Vec&lt;u32&gt; {
-    <span class="kw">let </span><span class="kw-2">mut </span>eos_tok_ids = <span class="macro">vec!</span>[chat_template.eos_tok()];
+    <span class="kw">let </span><span class="kw-2">mut </span>eos_tok_ids = chat_template.eos_tok().map(|x| <span class="macro">vec!</span>[x]).unwrap_or_default();
     <span class="kw">let </span><span class="kw-2">mut </span>bos_tok_ids = chat_template.bos_tok().map(|b| <span class="macro">vec!</span>[b]).unwrap_or_default();
 
     <span class="kw">for </span>alternate <span class="kw">in </span>SUPPORTED_ALTERNATE_EOS {
@@ -370,7 +368,7 @@
     add_generation_prompt: bool,
     template: <span class="kw-2">&amp;</span>str,
     bos_tok: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    eos_tok: <span class="kw-2">&amp;</span>str,
+    eos_tok: <span class="prelude-ty">Option</span>&lt;String&gt;,
     unk_tok: <span class="prelude-ty">Option</span>&lt;String&gt;,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
     <span class="kw">let </span><span class="kw-2">mut </span>env = Environment::new();

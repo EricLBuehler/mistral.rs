@@ -1446,6 +1446,10 @@
 <a href="#1444" id="1444">1444</a>
 <a href="#1445" id="1445">1445</a>
 <a href="#1446" id="1446">1446</a>
+<a href="#1447" id="1447">1447</a>
+<a href="#1448" id="1448">1448</a>
+<a href="#1449" id="1449">1449</a>
+<a href="#1450" id="1450">1450</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>cache_manager;
 <span class="kw">mod </span>chat_template;
 <span class="kw">mod </span>ggml;
@@ -2046,10 +2050,14 @@
         } <span class="kw">else </span>{
             <span class="prelude-val">None
         </span>};
-        <span class="kw">let </span>eos_tok = <span class="kw">match </span>chat_template.eos_token {
-            Either::Left(<span class="kw-2">ref </span>lit) =&gt; lit,
-            Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="kw-2">&amp;</span>added.content,
-        };
+        <span class="kw">let </span>eos_tok = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>unk) = <span class="self">self</span>.get_chat_template().eos_token {
+            <span class="kw">match </span>unk.<span class="number">0 </span>{
+                Either::Left(<span class="kw-2">ref </span>lit) =&gt; <span class="prelude-val">Some</span>(lit.to_string()),
+                Either::Right(<span class="kw-2">ref </span>added) =&gt; <span class="prelude-val">Some</span>(added.content.to_string()),
+            }
+        } <span class="kw">else </span>{
+            <span class="prelude-val">None
+        </span>};
         <span class="kw">let </span>unk_tok = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>unk) = <span class="self">self</span>.get_chat_template().unk_token {
             <span class="kw">match </span>unk.<span class="number">0 </span>{
                 Either::Left(<span class="kw-2">ref </span>lit) =&gt; <span class="prelude-val">Some</span>(lit.to_string()),
@@ -2884,7 +2892,7 @@
                 <span class="bool-val">true</span>,
                 template,
                 <span class="prelude-val">Some</span>(bos.to_string()),
-                eos,
+                <span class="prelude-val">Some</span>(eos.to_string()),
                 <span class="prelude-val">Some</span>(unk.to_string()),
             )
             .unwrap_or_else(|<span class="kw">_</span>| <span class="macro">panic!</span>(<span class="string">"Template number {i}"</span>));
