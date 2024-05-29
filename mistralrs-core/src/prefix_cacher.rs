@@ -214,7 +214,7 @@ impl PrefixCacheManager {
                 for i in 1..(candidate.0.len().min(toks.0.len())) {
                     let candidate_tokens = &candidate.0[0..i];
                     let needle_tokens = &toks.0[0..i];
-                    if candidate_tokens == needle_tokens && toks.0[i..].len() > 0 {
+                    if candidate_tokens == needle_tokens && !toks.0[i..].is_empty() {
                         found = Some((i, candidate));
                     }
                 }
