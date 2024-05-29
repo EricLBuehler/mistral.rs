@@ -146,12 +146,14 @@ macro_rules! get_paths_gguf {
             .with_token(get_token($token_source)?)
             .build()?;
         let revision = $revision.unwrap_or("main".to_string());
+        let model_id_this = $this.model_id.clone().unwrap_or($this.quantized_model_id.clone());
+        let model_id_copy = model_id_this.clone();
         let api = api.repo(Repo::with_revision(
-            $this.model_id.clone(),
+            model_id_this.clone(),
             RepoType::Model,
             revision.clone(),
         ));
-        let model_id = std::path::Path::new(&$this.model_id);
+        let model_id = std::path::Path::new(&model_id_copy);
 
         let chat_template = if let Some(ref p) = $this.chat_template {
             if p.ends_with(".json") {
@@ -171,8 +173,8 @@ macro_rules! get_paths_gguf {
         let filenames = get_model_paths(
             revision.clone(),
             &$token_source,
-            &$quantized_model_id,
-            &$quantized_filename,
+            &Some($quantized_model_id),
+            &Some($quantized_filename),
             &api,
             &model_id,
         )?;
@@ -185,7 +187,7 @@ macro_rules! get_paths_gguf {
             xlora_config,
             lora_preload_adapter_info,
         } = get_xlora_paths(
-            $this.model_id.clone(),
+            model_id_this,
             &$this.xlora_model_id,
             &$token_source,
             revision.clone(),
@@ -205,8 +207,14 @@ macro_rules! get_paths_gguf {
             None
         };
 
+        let tokenizer_filename = if $this.model_id.is_some() {
+            $crate::api_get_file!(api, "tokenizer.json", model_id)
+        } else {
+            PathBuf::from_str("")?
+        };
+
         Ok(Box::new($path_name {
-            tokenizer_filename: PathBuf::from_str("")?,
+            tokenizer_filename,
             config_filename: PathBuf::from_str("")?,
             filenames,
             xlora_adapter_configs: adapter_configs,
