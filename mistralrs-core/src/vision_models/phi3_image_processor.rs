@@ -1,3 +1,5 @@
+#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+
 use std::{any::Any, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
@@ -210,8 +212,8 @@ fn pad_336(image: &DynamicImage, trans: bool) -> DynamicImage {
     }
 
     let tar = ((h as f32 / 336.).ceil() * 336.) as u32;
-    let top_pad = ((tar - h as u32) as f32 / 2.) as u32; // also right if transposed
-    let bottom_pad = tar - h as u32 - top_pad; // also left if transposed
+    let top_pad = ((tar - h) as f32 / 2.) as u32; // also right if transposed
+    let bottom_pad = tar - h - top_pad; // also left if transposed
 
     let data = get_pixel_data(
         image,
