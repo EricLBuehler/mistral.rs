@@ -1,15 +1,17 @@
 use std::{any::Any, sync::Arc};
 
-use candle_core::{Device, Result};
+use candle_core::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView, RgbImage, RgbaImage};
 use indexmap::IndexMap;
 
 use crate::{
     pipeline::{
+        apply_chat_template,
         text_models_inputs_processor::{self, get_completion_input, get_prompt_input},
         InputsProcessor, InputsProcessorType, Processor,
     },
     sequence::Sequence,
+    vision_models::image_processor::make_pixel_values,
     Content, Pipeline,
 };
 
@@ -22,29 +24,15 @@ use super::{
 };
 
 // Input processor
-pub struct Phi3ImageProcessor {
-    image_mean: [f64; 3],
-    image_std: [f64; 3],
-    num_crops: usize,
-}
+pub struct Phi3ImageProcessor;
 // Processor
 pub struct Phi3Processor {
-    image_mean: [f64; 3],
-    image_std: [f64; 3],
-    num_crops: usize,
     num_img_tokens: usize,
 }
 
 impl Phi3Processor {
     pub fn new(_: ProcessorConfig, preprocessor_config: PreProcessorConfig) -> Self {
         Self {
-            image_mean: preprocessor_config
-                .image_mean
-                .unwrap_or(Phi3ImageProcessor::DEFAULT_MEAN),
-            image_std: preprocessor_config
-                .image_std
-                .unwrap_or(Phi3ImageProcessor::DEFAULT_STD),
-            num_crops: preprocessor_config.num_crops.unwrap_or(1),
             num_img_tokens: preprocessor_config
                 .num_img_tokens
                 .expect("Require `num_img_tokens` for phi3 preprocessor config."),
@@ -59,14 +47,11 @@ impl Processor for Phi3Processor {
         messages: Vec<IndexMap<String, Content>>,
         add_generation_prompt: bool,
     ) -> anyhow::Result<Vec<u32>> {
+        let _prompt = apply_chat_template(pipeline, messages, add_generation_prompt)?;
         todo!()
     }
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
-        Arc::new(Phi3ImageProcessor {
-            image_mean: self.image_mean,
-            image_std: self.image_std,
-            num_crops: self.num_crops,
-        })
+        Arc::new(Phi3ImageProcessor)
     }
     fn get_special_tokens(&self) -> &[&'static str] {
         &[]
@@ -106,16 +91,44 @@ impl InputsProcessor for Phi3ImageProcessor {
         };
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
+
+        let (pixel_values, image_sizes, num_img_tokens) = if is_prompt {
+            let mut pixel_values_accum = Vec::new();
+            let mut image_sizes_accum = Vec::new();
+            let mut num_img_tokens_accum = Vec::new();
+            for seq in input_seqs.iter_mut() {
+                let PreprocessedImages {
+                    pixel_values,
+                    pixel_attention_mask: _,
+                    image_sizes,
+                    num_img_tokens,
+                } = self.preprocess(
+                    seq.take_images()
+                        .expect("Need to have images by this point."),
+                    config,
+                    device,
+                )?;
+                let image_sizes = image_sizes.unwrap();
+                pixel_values_accum.push(pixel_values.unsqueeze(0)?);
+                image_sizes_accum.push(image_sizes);
+                num_img_tokens_accum.push(num_img_tokens);
+            }
+            (
+                Some(Tensor::cat(&pixel_values_accum, 0)?),
+                Some(image_sizes_accum),
+                Some(num_img_tokens_accum),
+            )
+        } else {
+            (None, None, None)
+        };
         Ok(Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
             seqlen_offsets_kernel: positions_kernel,
             context_lens,
             position_ids,
-            pixel_values: todo!(),
-            model_specific_args: Box::new(Phi3VisionSpecificArgs {
-                image_sizes: todo!(),
-            }),
+            pixel_values,
+            model_specific_args: Box::new(Phi3VisionSpecificArgs { image_sizes }),
         }))
     }
 }
@@ -199,8 +212,6 @@ fn pad_336(image: &DynamicImage, trans: bool) -> DynamicImage {
     let tar = ((h as f32 / 336.).ceil() * 336.) as u32;
     let top_pad = ((tar - h as u32) as f32 / 2.) as u32; // also right if transposed
     let bottom_pad = tar - h as u32 - top_pad; // also left if transposed
-    let left_pad = 0;
-    let right_pad = 0;
 
     let data = get_pixel_data(
         image,
@@ -229,7 +240,7 @@ fn pad_336(image: &DynamicImage, trans: bool) -> DynamicImage {
 }
 
 impl Phi3ImageProcessor {
-    fn hd_transform(&self, image: &DynamicImage) -> Result<DynamicImage> {
+    fn hd_transform(image: &DynamicImage, num_crops: usize) -> Result<DynamicImage> {
         let (mut w, mut h) = image.dimensions();
         let trans = if w < h {
             std::mem::swap(&mut w, &mut h);
@@ -239,7 +250,7 @@ impl Phi3ImageProcessor {
         };
         let ratio = w as f32 / h as f32;
         let mut scale = 1.0;
-        while (scale * (scale / ratio).ceil()) as usize <= self.num_crops {
+        while (scale * (scale / ratio).ceil()) as usize <= num_crops {
             scale += 1.0;
         }
         let new_w = (scale * 336.) as u32;
@@ -255,6 +266,16 @@ impl Phi3ImageProcessor {
     }
 }
 
+fn pad_to_max_num_crops_tensor(image: &Tensor, max_crops: usize) -> Result<Tensor> {
+    let (b, _, h, w) = image.dims4()?;
+    if b < max_crops {
+        let pad = Tensor::zeros((max_crops - b, 3, h, w), image.dtype(), image.device())?;
+        Tensor::cat(&[image, &pad], 0)
+    } else {
+        Ok(image.clone())
+    }
+}
+
 impl ImagePreProcessor for Phi3ImageProcessor {
     #[allow(clippy::excessive_precision)]
     const DEFAULT_MEAN: [f64; 3] = [0.48145466, 0.4578275, 0.40821073];
@@ -267,13 +288,16 @@ impl ImagePreProcessor for Phi3ImageProcessor {
         config: &PreProcessorConfig,
         device: &Device,
     ) -> Result<PreprocessedImages> {
+        let mut image_sizes = Vec::new();
+        let mut padded_images = Vec::new();
+        let mut num_img_tokens = Vec::new();
         for image in images.iter_mut() {
             // Convert to rgb
             if config.do_convert_rgb {
                 *image = DynamicImage::ImageRgb8(image.to_rgb8());
             }
 
-            *image = self.hd_transform(image)?;
+            *image = Self::hd_transform(image, config.num_crops.expect("Need `num_crops`"))?;
 
             // Normalize
             if config.do_normalize {
@@ -283,7 +307,47 @@ impl ImagePreProcessor for Phi3ImageProcessor {
                     config.image_std.unwrap_or(Self::DEFAULT_STD),
                 );
             }
+
+            // Resize with bicubic interpolation
+            let global_image = image.resize(336, 336, FilterType::Triangle);
+            let global_image = make_pixel_values(&global_image, device)?.unsqueeze(0)?;
+
+            let (w, h) = image.dimensions();
+            let num_image_tokens =
+                (h as f32 / 336. * w as f32 / 336. + 1. + ((h as f32 / 336.) + 1.) * 12.) as usize;
+
+            // (3,336,336)
+            let image = make_pixel_values(image, device)?;
+            let hd_image_reshape = image
+                .reshape((
+                    1,
+                    3,
+                    (h as f32 / 336.) as usize,
+                    336,
+                    (w as f32 / 336.) as usize,
+                ))?
+                .permute((0, 2, 4, 1, 3, 5))?
+                .reshape(((), 3, 336, 336))?;
+            let hd_image_reshape = Tensor::cat(&[global_image, hd_image_reshape], 0)?;
+            let image_transformed = pad_to_max_num_crops_tensor(
+                &hd_image_reshape,
+                config.num_crops.expect("Need `num_crops`") + 1,
+            )?;
+            image_sizes.push((h, w));
+            padded_images.push(image_transformed);
+            num_img_tokens.push(num_image_tokens);
         }
-        todo!()
+        if padded_images.len() > 1 {
+            candle_core::bail!("Can only process one image per batch");
+        }
+        let image_sizes = image_sizes[0];
+        let num_img_tokens = num_img_tokens[0];
+
+        Ok(PreprocessedImages {
+            pixel_values: Tensor::stack(&padded_images, 0)?,
+            image_sizes: Some((image_sizes.0 as usize, image_sizes.1 as usize)),
+            pixel_attention_mask: None,
+            num_img_tokens: Some(num_img_tokens),
+        })
     }
 }

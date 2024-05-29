@@ -5,6 +5,7 @@ use image::imageops::FilterType;
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug, Clone)]
+#[allow(dead_code)]
 pub struct PreProcessorConfig {
     pub(crate) do_convert_rgb: bool,
     pub(crate) do_image_splitting: bool,
@@ -21,6 +22,7 @@ pub struct PreProcessorConfig {
     pub(crate) num_crops: Option<usize>,
 }
 
+#[allow(dead_code)]
 pub(crate) trait ToFilter {
     fn to_filter(self) -> Result<FilterType>;
 }

@@ -31,7 +31,7 @@ pub use normal_loaders::{
     Phi2Loader, Phi3Loader, Qwen2Loader,
 };
 pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths, XLoraPaths};
-pub(crate) use processing::Processor;
+pub(crate) use processing::{apply_chat_template, Processor};
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 use std::any::Any;

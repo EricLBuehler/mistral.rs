@@ -9,9 +9,14 @@ use crate::pipeline::InputsProcessor;
 
 use super::preprocessor_config::{PreProcessorConfig, ToFilter};
 
+#[allow(dead_code)]
 pub(crate) struct PreprocessedImages {
+    /// Without batch size, safe to concat in dim0
     pub(crate) pixel_values: Tensor,
-    pub(crate) pixel_attention_mask: Tensor,
+    /// Without batch size, safe to concat in dim0
+    pub(crate) pixel_attention_mask: Option<Tensor>,
+    pub(crate) image_sizes: Option<(usize, usize)>,
+    pub(crate) num_img_tokens: Option<usize>,
 }
 
 pub(crate) fn empty_image(h: usize, w: usize) -> Vec<Vec<Vec<u8>>> {
@@ -59,6 +64,7 @@ pub(crate) fn from_pixel_data(
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn resize(
     image: &DynamicImage,
     size: &HashMap<String, u32>,
@@ -168,6 +174,7 @@ pub trait ImagePreProcessor: InputsProcessor {
         from_pixel_data(pixel_data, new_height, new_width, 0)
     }
 
+    #[allow(dead_code)]
     /// Map an image's pixel channels.
     fn map_image<F>(&self, image: &DynamicImage, mut f: F) -> DynamicImage
     where
@@ -202,6 +209,7 @@ pub trait ImagePreProcessor: InputsProcessor {
         from_pixel_data(data, h as usize, w as usize, 0)
     }
 
+    #[allow(dead_code)]
     /// Rescale image by `scale`
     fn rescale(&self, image: &DynamicImage, scale: f64) -> DynamicImage {
         self.map_image(image, |x| (x as f64 * scale) as u8)
