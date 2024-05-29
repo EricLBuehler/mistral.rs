@@ -214,9 +214,7 @@ impl PrefixCacheManager {
                 for i in 1..(candidate.0.len().min(toks.0.len())) {
                     let candidate_tokens = &candidate.0[0..i];
                     let needle_tokens = &toks.0[0..i];
-                    if candidate_tokens == needle_tokens
-                        && (found.is_none() || found.is_some_and(|(other, _)| other < i))
-                    {
+                    if candidate_tokens == needle_tokens && toks.0[i..].len() > 0 {
                         found = Some((i, candidate));
                     }
                 }
@@ -231,25 +229,29 @@ impl PrefixCacheManager {
                     .as_ref()
                     .map(|cache| cache[candidate].clone())
                     .map(|cache| get_mut_arcmutex!(cache.as_ref()).clone());
+                // Tokens for which the cache has been computed
+                let current_toks = candidate.0[..found_idx].to_vec();
                 // Narrow the caches
                 let mut new_cache = vec![None; cache.len()];
                 for (i, layer) in cache.into_iter().enumerate() {
-                    new_cache[i] = layer.narrow(found_idx - 1)?.to(&self.device)?;
+                    new_cache[i] = layer.narrow(current_toks.len())?.to(&self.device)?;
                 }
                 let xlora_cache = if let Some(xlora_cache) = xlora_cache {
                     let mut new_cache = vec![None; xlora_cache.len()];
                     for (i, layer) in xlora_cache.into_iter().enumerate() {
-                        new_cache[i] = layer.narrow(found_idx - 1)?.to(&self.device)?;
+                        new_cache[i] = layer.narrow(current_toks.len())?.to(&self.device)?;
                     }
                     Some(new_cache)
                 } else {
                     None
                 };
+                // These tokens will be run on the next step.
+                let next_toks = toks.0[found_idx..].to_vec();
                 Ok(Some(MatchingCache {
                     normal: new_cache,
                     xlora: xlora_cache,
-                    current_toks: candidate.0[..found_idx].to_vec(),
-                    remaining_toks: Some(candidate.0[found_idx..].to_vec()),
+                    current_toks,
+                    remaining_toks: Some(next_toks),
                 }))
             } else {
                 Ok(None)
