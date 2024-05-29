@@ -155,7 +155,7 @@ Please submit more benchmarks via raising an issue!
 
 ## Usage
 ### Installation and Build
-To install mistral.rs, one should ensure they have Rust installed by following [this](https://rustup.rs/) link. Additionally, the Hugging Face token should be provided in `~/.cache/huggingface/token` when using the server to enable automatic download of gated models.
+To install mistral.rs, one should ensure they have Rust installed by following [this](https://rustup.rs/) link. Additionally, the Hugging Face token should be provided in `~/.cache/huggingface/token` by running `huggingface-cli login` to enable automatic download of gated models.
 
 1) Install required packages
     - `openssl` (ex., `sudo apt install libssl-dev`)
@@ -169,9 +169,7 @@ To install mistral.rs, one should ensure they have Rust installed by following [
 
 3) Set HF token correctly (skip if already set or your model is not gated, or if you want to use the `token_source` parameters in Python or the command line.)
     ```bash
-    mkdir ~/.cache/huggingface
-    touch ~/.cache/huggingface/token
-    echo <HF_TOKEN_HERE> > ~/.cache/huggingface/token
+    huggingface-cli login
     ```
 
 4) Download the code
@@ -220,7 +218,13 @@ To install mistral.rs, one should ensure they have Rust installed by following [
 
     You can install Python support by following the guide [here](mistralrs-pyo3/README.md).
 
-### Getting models from HF Hub
+## Getting models
+
+There are 2 ways to run a model with mistral.rs:
+- From Hugging Face Hub (easiest)
+- From local files
+
+### Getting models from Hugging Face Hub
 
 Mistral.rs can automatically download models from HF Hub. To access gated models, you should provide a token source. They may be one of:
 - `literal:<value>`: Load from a specified literal
@@ -240,16 +244,11 @@ This is passed in the following ways:
 
 If token cannot be loaded, no token will be used (i.e. effectively using `none`).
 
-## Loading models from local files:**
+### Loading models from local files:
 
-You can also instruct mistral.rs to load models locally by modifying the `*_model_id` arguments or options:
+You can also instruct mistral.rs to load models fully locally by modifying the `*_model_id` arguments or options:
 ```bash
 ./mistralrs_server --port 1234 plain -m . -a mistral
-```
-or
-
-```bash
-./mistralrs-server gguf -m . -t . -f Phi-3-mini-128k-instruct-q4_K_M.gguf
 ```
 
 Throughout mistral.rs, any model ID argument or option may be a local path and should contain the following files for each model ID option:
@@ -267,7 +266,22 @@ Throughout mistral.rs, any model ID argument or option may be a local path and s
 - `--adapters-model-id` (server) or `adapters_model_id` (python/rust):
   - Adapters `.safetensors` and `adapter_config.json` files in their respective directories
 
-### Run
+### Running GGUF models locally
+
+To run GGUF models fully locally, you do not need to specify the tokenizer model ID argument and instead should pass a path to the
+chat template JSON file (examples [here](chat_templates), you will need to create your own by specifying the chat template and `bos`/`eos` tokens) as well as specifying a local model ID. For example:
+
+```bash
+./mistralrs-server --chat-template <chat_template> gguf -m . -f Phi-3-mini-128k-instruct-q4_K_M.gguf
+```
+
+The following tokenizer model types are currently supported. If you would like one to be added, please raise an issue. Otherwise,
+please consider using the method demonstrated in examples below, where the tokenizer is sourced from Hugging Face.
+
+**Supported GGUF tokenizer types**
+- `llama`
+
+## Run
 
 To start a server serving Mistral GGUF on `localhost:1234`, 
 ```bash
@@ -290,7 +304,7 @@ Additionally, for models without quantization, the model architecture should be 
 You can launch interactive mode, a simple chat application running in the terminal, by passing `-i`:
 
 ```bash
-./mistralrs_server -i gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
+./mistralrs_server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
 ```
 
 ### Quick examples:
@@ -333,7 +347,7 @@ To start a server running Llama from GGML:
 To start a server running Mistral from safetensors.
 
 ```bash
-./mistralrs_server --port 1234 gguf -m mistralai/Mistral-7B-Instruct-v0.1
+./mistralrs_server --port 1234 plain -m mistralai/Mistral-7B-Instruct-v0.1 -a mistral
 ```
 
 ### Structured selection with a `.toml` file
@@ -412,13 +426,15 @@ Mistral.rs will attempt to automatically load a chat template and tokenizer. Thi
 ## Contributing
 If you have any problems or want to contribute something, please raise an issue or pull request!
 
-Consider enabling `RUST_LOG=debug` environment variable.
 
 If you want to add a new model, please see [our guide](docs/ADDING_MODELS.md).
 
-## CUDA FAQ
-
-- Setting the compiler path:
+## FAQ
+- Debugging with the environment variable `MISTRALRS_DEBUG=1` causes the following things
+    - If loading a GGUF or GGML model, this will output a file containing the names, shapes, and types of each tensor.
+        - `mistralrs_gguf_tensors.txt` or `mistralrs_ggml_tensors.txt`
+    - More logging.
+- Setting the CUDA compiler path:
     - Set the `NVCC_CCBIN` environment variable during build.
 - Error: `recompile with -fPIE`:
     - Some Linux distributions require compiling with `-fPIE`.

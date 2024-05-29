@@ -2,6 +2,7 @@ mod cache_manager;
 mod chat_template;
 mod ggml;
 mod gguf;
+mod gguf_tokenizer;
 mod loaders;
 mod macros;
 mod normal;
@@ -34,6 +35,7 @@ pub use loaders::{
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use serde_json::Value;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 use std::fmt::{Debug, Display};
 use std::path::Path;
@@ -69,8 +71,7 @@ pub trait ModelPaths {
     /// See: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/tokenizer
     fn get_tokenizer_filename(&self) -> &PathBuf;
 
-    /// Jinja format chat templating for chat completion.
-    /// See: https://huggingface.co/docs/transformers/chat_templating
+    /// Content expected to deserialize to [`ChatTemplate`].
     fn get_template_filename(&self) -> &PathBuf;
 
     /// Optional adapter files. `(String, PathBuf)` is of the form `(id name, path)`.
@@ -244,21 +245,153 @@ pub enum ModelKind {
     },
 }
 
+// TODO: Future replacement for `ModelKind` above:
+#[derive(Default, derive_more::From, strum::Display)]
+pub enum ModelKindB {
+    #[default]
+    #[strum(to_string = "normal (no quant, no adapters)")]
+    Plain,
+
+    #[strum(to_string = "quantized from {quant} (no adapters)")]
+    Quantized { quant: QuantizationKind },
+
+    #[strum(to_string = "{adapter}, (no quant)")]
+    Adapter { adapter: AdapterKind },
+
+    #[strum(to_string = "{adapter}, quantized from {quant}")]
+    AdapterQuantized {
+        adapter: AdapterKind,
+        quant: QuantizationKind,
+    },
+
+    // TODO: This would need to be later changed to reference `Self`, but this current way
+    // avoids having to handle the conversion logic with `ModelKind`.
+    #[strum(to_string = "speculative: target: `{target}`, draft: `{draft}`")]
+    Speculative {
+        target: Box<ModelKind>,
+        draft: Box<ModelKind>,
+    },
+}
+
+#[derive(Clone, Copy, strum::Display, strum::EnumIs)]
+#[strum(serialize_all = "kebab-case")]
+pub enum QuantizationKind {
+    Ggml,
+    Gguf,
+}
+
+#[derive(Clone, Copy, strum::Display, strum::EnumIs)]
+#[strum(serialize_all = "kebab-case")]
+pub enum AdapterKind {
+    Lora,
+    XLora,
+}
+
+impl ModelKindB {
+    // Quantized helpers:
+    pub fn is_quantized(&self) -> bool {
+        self.quantized_kind().iter().any(|q| q.is_some())
+    }
+
+    pub fn is_quantized_and(&self, mut f: impl FnMut(QuantizationKind) -> bool) -> bool {
+        self.quantized_kind().iter().any(|q| q.is_some_and(&mut f))
+    }
+
+    pub fn quantized_kind(&self) -> Vec<Option<QuantizationKind>> {
+        use ModelKindB::*;
+
+        match self {
+            Plain | Adapter { .. } => vec![None],
+            Quantized { quant } | AdapterQuantized { quant, .. } => vec![Some(*quant)],
+            Speculative { target, draft } => {
+                let t = ModelKindB::from(*target.clone());
+                let d = ModelKindB::from(*draft.clone());
+
+                [t.quantized_kind(), d.quantized_kind()].concat()
+            }
+        }
+    }
+
+    // Adapter helpers:
+    pub fn is_adapted(&self) -> bool {
+        self.adapted_kind().iter().any(|a| a.is_some())
+    }
+
+    pub fn is_adapted_and(&self, mut f: impl FnMut(AdapterKind) -> bool) -> bool {
+        self.adapted_kind().iter().any(|a| a.is_some_and(&mut f))
+    }
+
+    pub fn adapted_kind(&self) -> Vec<Option<AdapterKind>> {
+        use ModelKindB::*;
+
+        match self {
+            Plain | Quantized { .. } => vec![None],
+            Adapter { adapter } | AdapterQuantized { adapter, .. } => vec![Some(*adapter)],
+            Speculative { target, draft } => {
+                let t = ModelKindB::from(*target.clone());
+                let d = ModelKindB::from(*draft.clone());
+
+                [t.adapted_kind(), d.adapted_kind()].concat()
+            }
+        }
+    }
+}
+
+// TODO: Temporary compatibility layers follow (until a future PR follow-up introduces a breaking change)
 impl Display for ModelKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ModelKind::Normal => write!(f, "normal (no quant, no adapters)"),
-            ModelKind::QuantizedGGML => write!(f, "quantized from ggml (no adapters)"),
-            ModelKind::QuantizedGGUF => write!(f, "quantized from gguf (no adapters)"),
-            ModelKind::XLoraNormal => write!(f, "x-lora (no quant)"),
-            ModelKind::XLoraGGML => write!(f, "x-lora, quantized from ggml"),
-            ModelKind::XLoraGGUF => write!(f, "x-lora, quantized from gguf"),
-            ModelKind::LoraGGUF => write!(f, "lora, quantized from gguf"),
-            ModelKind::LoraGGML => write!(f, "lora, quantized from ggml"),
-            ModelKind::LoraNormal => write!(f, "lora (no quant)"),
-            ModelKind::Speculative { target, draft } => {
-                write!(f, "speculative: target: `{target}`, draft: `{draft}`")
-            }
+        write!(f, "{}", ModelKindB::from(self.clone()))
+    }
+}
+
+// Delegate to `ModelKindB` methods:
+impl ModelKind {
+    // Quantized helpers:
+    pub fn is_quantized(&self) -> bool {
+        let k = ModelKindB::from(self.clone());
+        k.is_quantized()
+    }
+
+    pub fn is_quantized_and(&self, f: impl FnMut(QuantizationKind) -> bool) -> bool {
+        let k = ModelKindB::from(self.clone());
+        k.is_quantized_and(f)
+    }
+
+    pub fn quantized_kind(&self) -> Vec<Option<QuantizationKind>> {
+        let k = ModelKindB::from(self.clone());
+        k.quantized_kind()
+    }
+
+    // Adapter helpers:
+    pub fn is_adapted(&self) -> bool {
+        let k = ModelKindB::from(self.clone());
+        k.is_adapted()
+    }
+
+    pub fn is_adapted_and(&self, f: impl FnMut(AdapterKind) -> bool) -> bool {
+        let k = ModelKindB::from(self.clone());
+        k.is_adapted_and(f)
+    }
+
+    pub fn adapted_kind(&self) -> Vec<Option<AdapterKind>> {
+        let k = ModelKindB::from(self.clone());
+        k.adapted_kind()
+    }
+}
+
+impl From<ModelKind> for ModelKindB {
+    fn from(kind: ModelKind) -> Self {
+        match kind {
+            ModelKind::Normal => ModelKindB::Plain,
+            ModelKind::QuantizedGGML => (QuantizationKind::Ggml).into(),
+            ModelKind::QuantizedGGUF => (QuantizationKind::Gguf).into(),
+            ModelKind::XLoraNormal => (AdapterKind::XLora).into(),
+            ModelKind::XLoraGGML => (AdapterKind::XLora, QuantizationKind::Ggml).into(),
+            ModelKind::XLoraGGUF => (AdapterKind::XLora, QuantizationKind::Gguf).into(),
+            ModelKind::LoraNormal => (AdapterKind::Lora).into(),
+            ModelKind::LoraGGML => (AdapterKind::Lora, QuantizationKind::Ggml).into(),
+            ModelKind::LoraGGUF => (AdapterKind::Lora, QuantizationKind::Gguf).into(),
+            ModelKind::Speculative { target, draft } => (target, draft).into(),
         }
     }
 }
@@ -298,6 +431,8 @@ pub trait Loader {
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
 
+    /// Load a model from the specified paths.
+    /// Also initializes `DEBUG`.
     #[allow(
         clippy::type_complexity,
         clippy::too_many_arguments,
@@ -463,9 +598,13 @@ pub trait Pipeline: Send + Sync {
         } else {
             None
         };
-        let eos_tok = match chat_template.eos_token {
-            Either::Left(ref lit) => lit,
-            Either::Right(ref added) => &added.content,
+        let eos_tok = if let Some(ref unk) = self.get_chat_template().eos_token {
+            match unk.0 {
+                Either::Left(ref lit) => Some(lit.to_string()),
+                Either::Right(ref added) => Some(added.content.to_string()),
+            }
+        } else {
+            None
         };
         let unk_tok = if let Some(ref unk) = self.get_chat_template().unk_token {
             match unk.0 {
@@ -1155,6 +1294,87 @@ fn get_model_paths(
     }
 }
 
+/// Find and parse the appropriate [`ChatTemplate`], and ensure is has a valid [`ChatTemplate.chat_template`].
+/// If the the provided `tokenizer_config.json` from [`ModelPaths.get_template_filename`] does not
+/// have a `chat_template`, use the provided one.
+#[allow(clippy::borrowed_box)]
+pub(crate) fn get_chat_template(
+    paths: &Box<dyn ModelPaths>,
+    chat_template: &Option<String>,
+) -> ChatTemplate {
+    let template_filename = if paths.get_template_filename().to_string_lossy().is_empty() {
+        PathBuf::from(
+            chat_template
+                .as_ref()
+                .expect("A tokenizer config or chat template file path must be specified."),
+        )
+    } else {
+        paths.get_template_filename().clone()
+    };
+    if template_filename
+        .extension()
+        .expect("Template filename must be a file")
+        .to_string_lossy()
+        != "json"
+    {
+        panic!("Template filename {template_filename:?} must end with `.json`.");
+    }
+    let template: ChatTemplate =
+        serde_json::from_str(&fs::read_to_string(&template_filename).unwrap()).unwrap();
+
+    #[derive(Debug, serde::Deserialize)]
+    struct SpecifiedTemplate {
+        chat_template: String,
+        bos_token: Option<String>,
+        eos_token: Option<String>,
+    }
+
+    if template.chat_template.is_some() {
+        return template;
+    };
+
+    info!("`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
+    let mut deser: HashMap<String, Value> =
+        serde_json::from_str(&fs::read_to_string(&template_filename).unwrap()).unwrap();
+
+    match chat_template.clone() {
+        Some(t) => {
+            if t.ends_with(".json") {
+                info!("Loading specified loading chat template file at `{t}`.");
+                let templ: SpecifiedTemplate =
+                    serde_json::from_str(&fs::read_to_string(t.clone()).unwrap()).unwrap();
+                deser.insert(
+                    "chat_template".to_string(),
+                    Value::String(templ.chat_template),
+                );
+                if templ.bos_token.is_some() {
+                    deser.insert(
+                        "bos_token".to_string(),
+                        Value::String(templ.bos_token.unwrap()),
+                    );
+                }
+                if templ.eos_token.is_some() {
+                    deser.insert(
+                        "eos_token".to_string(),
+                        Value::String(templ.eos_token.unwrap()),
+                    );
+                }
+                info!("Loaded chat template file.");
+            } else {
+                deser.insert("chat_template".to_string(), Value::String(t));
+                info!("Loaded specified literal chat template.");
+            }
+        }
+        None => {
+            info!("No specified chat template. No chat template will be used. Only prompts will be accepted, not messages.");
+            deser.insert("chat_template".to_string(), Value::Null);
+        }
+    };
+    let ser = serde_json::to_string_pretty(&deser)
+        .expect("Serialization of modified chat template failed.");
+    serde_json::from_str(&ser).unwrap()
+}
+
 mod tests {
     #[test]
     /// Generating these cases:
@@ -1220,7 +1440,7 @@ mod tests {
                 true,
                 template,
                 Some(bos.to_string()),
-                eos,
+                Some(eos.to_string()),
                 Some(unk.to_string()),
             )
             .unwrap_or_else(|_| panic!("Template number {i}"));

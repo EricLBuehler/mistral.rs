@@ -30,9 +30,9 @@ fn raise_exception(msg: String) -> Result<String, minijinja::Error> {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct Unk(#[serde(with = "either::serde_untagged")] pub Either<String, AddedTokensDecoder>);
-#[derive(Debug, Deserialize)]
-pub struct Bos(#[serde(with = "either::serde_untagged")] pub Either<String, AddedTokensDecoder>);
+pub struct BeginEndUnkTok(
+    #[serde(with = "either::serde_untagged")] pub Either<String, AddedTokensDecoder>,
+);
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
@@ -41,20 +41,22 @@ pub struct ChatTemplate {
     add_eos_token: Option<bool>,
     added_tokens_decoder: Option<HashMap<String, AddedTokensDecoder>>,
     additional_special_tokens: Option<Vec<String>>,
-    pub bos_token: Option<Bos>,
+    pub bos_token: Option<BeginEndUnkTok>,
+
+    /// Jinja format chat templating for chat completion.
+    /// See: https://huggingface.co/docs/transformers/chat_templating
     pub chat_template: Option<String>,
     clean_up_tokenization_spaces: Option<bool>,
     device_map: Option<String>,
-    #[serde(with = "either::serde_untagged")]
-    pub eos_token: Either<String, AddedTokensDecoder>,
+    pub eos_token: Option<BeginEndUnkTok>,
     legacy: Option<bool>,
-    model_max_length: f64,
+    model_max_length: Option<f64>,
     pad_token: Option<String>,
     sp_model_kwargs: Option<HashMap<String, String>>,
     spaces_between_special_tokens: Option<bool>,
-    tokenizer_class: String,
+    tokenizer_class: Option<String>,
     truncation_size: Option<String>,
-    pub unk_token: Option<Unk>,
+    pub unk_token: Option<BeginEndUnkTok>,
     use_default_system_prompt: Option<bool>,
 }
 
@@ -63,10 +65,10 @@ impl ChatTemplate {
         self.chat_template.is_some()
     }
 
-    pub fn eos_tok(&self) -> String {
-        match self.eos_token {
-            Either::Left(ref lit) => lit.clone(),
-            Either::Right(ref added) => added.content.clone(),
+    pub fn eos_tok(&self) -> Option<String> {
+        match self.eos_token.as_ref()?.0 {
+            Either::Left(ref lit) => Some(lit.clone()),
+            Either::Right(ref added) => Some(added.content.clone()),
         }
     }
 
@@ -90,7 +92,7 @@ pub fn calculate_eos_tokens(
     gen_conf: Option<GenerationConfig>,
     tokenizer: &Tokenizer,
 ) -> Vec<u32> {
-    let mut eos_tok_ids = vec![chat_template.eos_tok()];
+    let mut eos_tok_ids = chat_template.eos_tok().map(|x| vec![x]).unwrap_or_default();
     let mut bos_tok_ids = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
 
     for alternate in SUPPORTED_ALTERNATE_EOS {
@@ -170,7 +172,7 @@ pub fn apply_chat_template_to(
     add_generation_prompt: bool,
     template: &str,
     bos_tok: Option<String>,
-    eos_tok: &str,
+    eos_tok: Option<String>,
     unk_tok: Option<String>,
 ) -> Result<String> {
     let mut env = Environment::new();

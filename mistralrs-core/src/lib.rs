@@ -1,6 +1,10 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use cublaslt::setup_cublas_lt_wrapper;
+use engine::Engine;
+pub use engine::TERMINATE_ALL_NEXT_STEP;
+pub use lora::Ordering;
+pub use pipeline::Pipeline;
 use std::{
     cell::RefCell,
     error::Error,
@@ -11,11 +15,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::mpsc::{channel, Sender};
-
-use engine::Engine;
-pub use engine::TERMINATE_ALL_NEXT_STEP;
-pub use lora::Ordering;
-pub use pipeline::Pipeline;
 
 mod aici;
 mod device_map;
@@ -58,6 +57,9 @@ pub use scheduler::SchedulerMethod;
 use serde::Serialize;
 use tokio::runtime::Runtime;
 pub use toml_selector::{TomlLoaderArgs, TomlSelector};
+
+/// `true` if `MISTRALRS_DEBUG=1`
+pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
 
 /// The MistralRs struct handles sending requests to the engine.
 /// It is the core multi-threaded component of mistral.rs, and uses `mspc`

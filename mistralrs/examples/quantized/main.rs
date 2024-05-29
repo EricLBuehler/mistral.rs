@@ -1,18 +1,17 @@
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
-use candle_core::Device;
 use mistralrs::{
-    Constraint, DeviceMapMetadata, GGUFLoaderBuilder, GGUFSpecificConfig, MistralRs,
+    Constraint, Device, DeviceMapMetadata, GGUFLoaderBuilder, GGUFSpecificConfig, MistralRs,
     MistralRsBuilder, NormalRequest, Request, RequestMessage, Response, SamplingParams,
     SchedulerMethod, TokenSource,
 };
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {
     // Select a Mistral model
+    // This uses a model, tokenizer, and chat template, from HF hub.
     let loader = GGUFLoaderBuilder::new(
         GGUFSpecificConfig { repeat_last_n: 64 },
-        None,
         None,
         Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
         "TheBloke/Mistral-7B-Instruct-v0.1-GGUF".to_string(),

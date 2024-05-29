@@ -1,31 +1,25 @@
-use std::{fs::File, sync::Arc};
+use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
 use mistralrs::{
-    Constraint, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder, NormalLoaderBuilder,
-    NormalLoaderType, NormalRequest, NormalSpecificConfig, Request, RequestMessage, Response,
-    SamplingParams, SchedulerMethod, TokenSource,
+    Constraint, Device, DeviceMapMetadata, GGUFLoaderBuilder, GGUFSpecificConfig, MistralRs,
+    MistralRsBuilder, NormalRequest, Request, RequestMessage, Response, SamplingParams,
+    SchedulerMethod, TokenSource,
 };
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {
     // Select a Mistral model
-    let loader =
-        NormalLoaderBuilder::new(
-            NormalSpecificConfig {
-                use_flash_attn: false,
-                repeat_last_n: 64,
-            },
-            None,
-            None,
-            None, // Will detect from ordering file
-        )
-        .with_lora(
-            "lamm-mit/x-lora".to_string(),
-            serde_json::from_reader(File::open("my-ordering-file.json").unwrap_or_else(|_| {
-                panic!("Could not load ordering file at my-ordering-file.json")
-            }))?,
-        )
-        .build(NormalLoaderType::Mistral);
+    // We do not use any files from HF servers here, and instead load the
+    // chat template from the specified file, and the tokenizer and model from a
+    // local GGUF file at the path `.`
+    let loader = GGUFLoaderBuilder::new(
+        GGUFSpecificConfig { repeat_last_n: 64 },
+        Some("chat_templates/mistral.json".to_string()),
+        None,
+        ".".to_string(),
+        "mistral-7b-instruct-v0.1.Q4_K_M.gguf".to_string(),
+    )
+    .build();
     // Load, into a Pipeline
     let pipeline = loader.load_model_from_hf(
         None,
@@ -57,9 +51,8 @@ fn main() -> anyhow::Result<()> {
         id: 0,
         constraint: Constraint::None,
         suffix: None,
-        adapters: Some(vec!["adapter_2".to_string()]),
+        adapters: None,
     });
-
     mistralrs.get_sender().blocking_send(request)?;
 
     let response = rx.blocking_recv().unwrap();

@@ -2,16 +2,14 @@ use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
-    Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelKind,
+    Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder,
     ModelSelected, NormalRequest, Request, RequestMessage, Response, SamplingParams,
     SchedulerMethod, TokenSource, Usage,
 };
 use std::fmt::Display;
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;
-use tracing::level_filters::LevelFilter;
 use tracing::{info, warn};
-use tracing_subscriber::EnvFilter;
 
 enum TestName {
     Prompt(usize),
@@ -296,11 +294,6 @@ fn main() -> anyhow::Result<()> {
     #[cfg(not(feature = "metal"))]
     let device = Device::cuda_if_available(0)?;
 
-    let filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
-    tracing_subscriber::fmt().with_env_filter(filter).init();
-
     let token_source = TokenSource::CacheToken;
     info!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
@@ -313,15 +306,7 @@ fn main() -> anyhow::Result<()> {
     if use_flash_attn {
         info!("Using flash attention.");
     }
-    if use_flash_attn
-        && matches!(
-            loader.get_kind(),
-            ModelKind::QuantizedGGML
-                | ModelKind::QuantizedGGUF
-                | ModelKind::XLoraGGML
-                | ModelKind::XLoraGGUF
-        )
-    {
+    if use_flash_attn && loader.get_kind().is_quantized() {
         warn!("Using flash attention with a quantized model has no effect!")
     }
     info!("Model kind is: {}", loader.get_kind().to_string());
