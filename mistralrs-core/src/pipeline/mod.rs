@@ -36,7 +36,7 @@ use rand_isaac::Isaac64Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use serde_json::Value;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -398,10 +398,8 @@ pub struct GeneralMetadata {
     pub has_no_kv_cache: bool,
     pub num_hidden_layers: usize,
     pub eos_tok: Vec<u32>,
-    // Model utilizes an adapter (LoRA or X-LoRA):
-    pub has_adapter: bool,
-    // TODO: There is a possibility that code mistakenly queries only `is_xlora`,
-    // rather than `has_adapter`. Thus may actually only support X-LoRA? (potential bugs?)
+    pub kind: ModelKind,
+    // TODO: Replace is_xlora queries to check via kind instead:
     pub is_xlora: bool,
 }
 
@@ -729,7 +727,10 @@ pub trait NormalModel {
         Ok(())
     }
     fn activate_adapters(&mut self, _: Vec<String>) -> candle_core::Result<usize> {
-        candle_core::bail!("Unable to activate adapters for model without adapters");
+        // NOTE: While X-LoRA shares a similar name, it is not equivalent. Its adapter set must remain the same.
+        candle_core::bail!(
+            "Activating adapters is only supported for models fine-tuned with LoRA."
+        );
     }
 }
 

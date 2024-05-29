@@ -247,7 +247,6 @@ impl Loader for NormalLoader {
             Device::Cpu
         };
 
-        let has_adapter = self.kind.is_adapted();
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
 
         let mut model = match self.kind {
@@ -329,10 +328,10 @@ impl Loader for NormalLoader {
                 repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
                 has_no_kv_cache: self.no_kv_cache,
-                is_xlora,
                 num_hidden_layers,
                 eos_tok: eos,
-                has_adapter,
+                kind: self.kind.clone(),
+                is_xlora,
             },
         })))
     }

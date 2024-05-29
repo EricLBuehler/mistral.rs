@@ -340,7 +340,7 @@ impl Loader for GGMLLoader {
                 has_no_kv_cache: self.no_kv_cache,
                 num_hidden_layers,
                 eos_tok: eos,
-                has_adapter,
+                kind: self.kind.clone(),
                 is_xlora,
             },
         })))
@@ -474,14 +474,16 @@ impl Pipeline for GGMLPipeline {
         }
     }
     fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
-        if !self.metadata.has_adapter {
-            anyhow::bail!("Activating adapters is only compatible with LoRA / X-LoRA models.")
+        let is_lora = self.metadata.kind.is_adapted_and(|a| a.is_lora());
+        if !is_lora {
+            anyhow::bail!("Activating adapters is only supported for models fine-tuned with LoRA.")
         }
+
         match self.model {
-            Model::Llama(_) => unreachable!(),
             Model::XLoraLlama(ref mut model) => model
                 .activate_adapters(adapter_names)
                 .map_err(anyhow::Error::msg),
+            _ => unreachable!(),
         }
     }
 }
