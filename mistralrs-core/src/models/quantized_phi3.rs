@@ -5,13 +5,13 @@ use crate::layers::{
     repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention,
 };
 use crate::pipeline::Cache;
+use crate::utils::model_config as ModelConfig;
 use crate::DeviceMapMetadata;
 use candle_core::quantized::gguf_file;
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Embedding;
-use crate::utils::model_config as ModelConfig;
 
 #[derive(Debug, Clone)]
 struct Mlp {

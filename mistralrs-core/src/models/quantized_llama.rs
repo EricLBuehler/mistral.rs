@@ -10,8 +10,8 @@ use crate::layers::{
     repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention,
 };
 use crate::pipeline::{extract_logits, Cache};
-use crate::DeviceMapMetadata;
 use crate::utils::model_config as ModelConfig;
+use crate::DeviceMapMetadata;
 
 const MAX_SEQ_LEN: u32 = 4096;
 

@@ -1,14 +1,14 @@
+use super::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 use anyhow::Result;
-use candle_core::quantized::{gguf_file, ggml_file};
+use candle_core::quantized::{ggml_file, gguf_file};
 use candle_nn::VarBuilder;
 use std::{collections::HashMap, path::PathBuf};
-use super::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 
 use crate::{
-    DeviceMapMetadata,
-    lora::{Ordering, LoraConfig},
-    xlora_models::XLoraConfig,
+    lora::{LoraConfig, Ordering},
     pipeline::ModelPaths,
+    xlora_models::XLoraConfig,
+    DeviceMapMetadata,
 };
 
 #[derive(derive_more::From)]
@@ -122,9 +122,12 @@ pub struct Config<Q: QuantParams, A: MaybeAdapter> {
 // https://github.com/luker-os/variantly/pull/16
 #[allow(clippy::large_enum_variant)]
 #[derive(variantly::Variantly)]
-pub enum ModelParams<'a, Q> where Q: QuantParams {
-    Quantized(Config::<Q, NoAdapter>),
-    Adapted(Config::<Q, Adapter<'a>>),
+pub enum ModelParams<'a, Q>
+where
+    Q: QuantParams,
+{
+    Quantized(Config<Q, NoAdapter>),
+    Adapted(Config<Q, Adapter<'a>>),
 }
 
 // A `builder()` method is derived from the `new()` method and it's params (derived builder struct fields).
@@ -145,7 +148,9 @@ impl<'a, Q: QuantParams> ModelParams<'a, Q> {
 // Traits for the existing methods used across various model types to impl `from_ggml()` / `from_gguf()`
 // Basic:
 pub trait FromGGML {
-    fn from_ggml(ct: ggml_file::Content, gqa: usize) -> Result<Self, candle_core::Error> where Self: Sized;
+    fn from_ggml(ct: ggml_file::Content, gqa: usize) -> Result<Self, candle_core::Error>
+    where
+        Self: Sized;
 }
 
 pub trait FromGGUF {
@@ -154,7 +159,9 @@ pub trait FromGGUF {
         reader: &mut R,
         device: &candle_core::Device,
         mapper: DeviceMapMetadata,
-    ) -> Result<Self, candle_core::Error> where Self: Sized;
+    ) -> Result<Self, candle_core::Error>
+    where
+        Self: Sized;
 }
 
 // Extended variants:
@@ -167,7 +174,9 @@ pub trait FromAdapterGGML {
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
-    ) -> Result<Self, candle_core::Error> where Self: Sized;
+    ) -> Result<Self, candle_core::Error>
+    where
+        Self: Sized;
 }
 pub trait FromAdapterGGUF {
     #[allow(clippy::too_many_arguments)]
@@ -181,31 +190,26 @@ pub trait FromAdapterGGUF {
         xlora_config: Option<XLoraConfig>,
         mapper: DeviceMapMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
-    ) -> Result<Self, candle_core::Error> where Self: Sized;
+    ) -> Result<Self, candle_core::Error>
+    where
+        Self: Sized;
 }
 
 // NOTE: Below is a workaround to proxy params to the existing API methods `get_gguf()` / `get_gmml()` traits covered above.
 impl Config<ParamsGGML, NoAdapter> {
     pub fn try_into_model<T: FromGGML>(self) -> Result<T, candle_core::Error> {
         // Destructure props:
-        let ParamsGGML(
-            FileGGML { ct, gqa },
-        ) = self.quant;
+        let ParamsGGML(FileGGML { ct, gqa }) = self.quant;
 
         // Forwards all structured fields above into the required flattened param sequence:
-        T::from_ggml(
-            ct,
-            gqa,
-        )
+        T::from_ggml(ct, gqa)
     }
 }
 
 impl Config<ParamsGGML, Adapter<'_>> {
     pub fn try_into_model<T: FromAdapterGGML>(self) -> Result<T, candle_core::Error> {
         // Destructure props:
-        let ParamsGGML(
-            FileGGML { ct, gqa },
-        ) = self.quant;
+        let ParamsGGML(FileGGML { ct, gqa }) = self.quant;
 
         let Adapter {
             xlora_config,
@@ -231,28 +235,17 @@ impl Config<ParamsGGML, Adapter<'_>> {
 impl Config<ParamsGGUF<'_>, NoAdapter> {
     pub fn try_into_model<T: FromGGUF>(self) -> Result<T, candle_core::Error> {
         // Destructure props:
-        let ParamsGGUF(
-            FileGGUF { ct, reader },
-            Device { device, mapper },
-        ) = self.quant;
+        let ParamsGGUF(FileGGUF { ct, reader }, Device { device, mapper }) = self.quant;
 
         // Forwards all structured fields above into the required flattened param sequence:
-        T::from_gguf(
-            ct,
-            reader,
-            device,
-            mapper,
-        )
+        T::from_gguf(ct, reader, device, mapper)
     }
 }
 
 impl Config<ParamsGGUF<'_>, Adapter<'_>> {
     pub fn try_into_model<T: FromAdapterGGUF>(self) -> Result<T, candle_core::Error> {
         // Destructure props:
-        let ParamsGGUF(
-            FileGGUF { ct, reader },
-            Device { device, mapper },
-        ) = self.quant;
+        let ParamsGGUF(FileGGUF { ct, reader }, Device { device, mapper }) = self.quant;
 
         let Adapter {
             xlora_config,
@@ -277,13 +270,13 @@ impl Config<ParamsGGUF<'_>, Adapter<'_>> {
     }
 }
 
-use akin::akin;
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
     models::quantized_phi2::ModelWeights as QPhi,
     models::quantized_phi3::ModelWeights as QPhi3,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
+use akin::akin;
 
 impl TryFrom<ModelParams<'_, ParamsGGML>> for QLlama {
     type Error = candle_core::Error;

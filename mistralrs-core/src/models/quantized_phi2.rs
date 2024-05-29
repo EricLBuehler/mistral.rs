@@ -9,8 +9,8 @@ use crate::device_map::DeviceMapper;
 use crate::layers::ScaledDotProductAttention;
 use crate::layers::{repeat_kv, CausalMasker, QLinear};
 use crate::pipeline::{extract_logits, Cache};
-use crate::DeviceMapMetadata;
 use crate::utils::model_config as ModelConfig;
+use crate::DeviceMapMetadata;
 
 pub const MAX_SEQ_LEN: usize = 4096;
 

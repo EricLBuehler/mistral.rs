@@ -1,7 +1,8 @@
 use super::cache_manager::DefaultCacheManager;
 use super::{
-    get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
-    ModelKind, QuantizationKind, AdapterKind, ModelPaths, Pipeline, TokenSource, XLoraPaths, PrettyName
+    get_model_paths, get_xlora_paths, AdapterKind, CacheManager, GeneralMetadata, Loader,
+    ModelInputs, ModelKind, ModelPaths, Pipeline, PrettyName, QuantizationKind, TokenSource,
+    XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -11,6 +12,7 @@ use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
+use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, DEBUG};
@@ -39,7 +41,6 @@ use tokio::sync::Mutex;
 use tracing::info;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
-use crate::utils::model_config as ModelConfig;
 
 enum Model {
     Llama(QLlama),
@@ -133,7 +134,7 @@ impl GGUFLoaderBuilder {
         quantized_filename: String,
     ) -> Self {
         let kind = ModelKind::Quantized {
-            quant: QuantizationKind::Gguf
+            quant: QuantizationKind::Gguf,
         };
 
         Self {
@@ -178,10 +179,7 @@ impl GGUFLoaderBuilder {
         no_kv_cache: bool,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
-        self.kind = (
-            AdapterKind::XLora,
-            QuantizationKind::Gguf
-        ).into();
+        self.kind = (AdapterKind::XLora, QuantizationKind::Gguf).into();
 
         self.with_adapter(
             xlora_model_id,
@@ -192,10 +190,7 @@ impl GGUFLoaderBuilder {
     }
 
     pub fn with_lora(mut self, lora_model_id: String, lora_order: Ordering) -> Self {
-        self.kind = (
-            AdapterKind::Lora,
-            QuantizationKind::Gguf
-        ).into();
+        self.kind = (AdapterKind::Lora, QuantizationKind::Gguf).into();
 
         self.with_adapter(lora_model_id, lora_order, false, None)
     }
@@ -377,21 +372,20 @@ impl Loader for GGUFLoader {
 
         let model_config = {
             // Base config (quantization only):
-            let quant = ModelConfig::ParamsGGUF(
-                (model, &mut file).into(),
-                (device, mapper).into(),
-            );
+            let quant = ModelConfig::ParamsGGUF((model, &mut file).into(), (device, mapper).into());
 
             // With optional adapter config:
             let mut adapter = None;
             if has_adapter {
-                adapter.replace(ModelConfig::Adapter::try_new(paths, device, silent, is_xlora)?);
+                adapter.replace(ModelConfig::Adapter::try_new(
+                    paths, device, silent, is_xlora,
+                )?);
             }
 
             ModelConfig::ModelParams::builder()
-              .quant(quant)
-              .and_adapter(adapter)
-              .build()
+                .quant(quant)
+                .and_adapter(adapter)
+                .build()
         };
 
         // Config into model:
@@ -401,11 +395,14 @@ impl Loader for GGUFLoader {
                 GGUFArchitecture::Phi2 => Model::Phi2(QPhi::try_from(model_config)?),
                 GGUFArchitecture::Phi3 => Model::Phi3(QPhi3::try_from(model_config)?),
                 a => bail!("Unsupported architecture `{a:?}` for GGUF"),
-            }
+            },
             ModelKind::AdapterQuantized { adapter, .. } => match arch {
                 GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::try_from(model_config)?),
                 GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::try_from(model_config)?),
-                a => bail!("Unsupported architecture `{a:?}` for GGUF {kind}", kind = adapter.pretty_name()),
+                a => bail!(
+                    "Unsupported architecture `{a:?}` for GGUF {kind}",
+                    kind = adapter.pretty_name()
+                ),
             },
             _ => unreachable!(),
         };
