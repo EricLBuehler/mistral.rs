@@ -37,9 +37,13 @@ pub(crate) fn apply_chat_template(
     } else {
         None
     };
-    let eos_tok = match chat_template.eos_token {
-        Either::Left(ref lit) => lit,
-        Either::Right(ref added) => &added.content,
+    let eos_tok = if let Some(ref bos) = pipeline.get_chat_template().eos_token {
+        match bos.0 {
+            Either::Left(ref lit) => Some(lit.to_string()),
+            Either::Right(ref added) => Some(added.content.to_string()),
+        }
+    } else {
+        None
     };
     let unk_tok = if let Some(ref unk) = pipeline.get_chat_template().unk_token {
         match unk.0 {

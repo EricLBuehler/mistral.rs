@@ -760,7 +760,7 @@ mod tests {
                 true,
                 template,
                 Some(bos.to_string()),
-                eos,
+                Some(eos.to_string()),
                 Some(unk.to_string()),
             ) {
                 Ok(v) => v,
