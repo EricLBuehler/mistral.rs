@@ -11,14 +11,21 @@ macro_rules! api_dir_list {
             .unwrap_or_else(|e| {
                 // If we do not get a 404, it was something else.
                 let format = format!("{e:?}");
+                let mut unauth = false;
                 if let hf_hub::api::sync::ApiError::RequestError(resp) = e {
-                    if resp.into_response().is_some_and(|r| r.status() != 404) {
+                    let resp = resp.into_response();
+                    // If it's 401, assume that we're running locally only.
+                    if resp.as_ref().is_some_and(|r| r.status() != 401) {
+                        unauth = true;
+                    } else if resp.as_ref().is_some_and(|r| r.status() != 404) {
                         panic!("{format}");
                     }
                 }
 
                 let listing = std::fs::read_dir($model_id);
-                if listing.is_err() {
+                if listing.is_err() && unauth {
+                    panic!("{format}");
+                } else if listing.is_err() {
                     panic!("Cannot list directory {:?}", $model_id)
                 }
                 let listing = listing.unwrap();
@@ -43,14 +50,21 @@ macro_rules! api_get_file {
         $api.get($file).unwrap_or_else(|e| {
             // If we do not get a 404, it was something else.
             let format = format!("{e:?}");
+            let mut unauth = false;
             if let hf_hub::api::sync::ApiError::RequestError(resp) = e {
-                if resp.into_response().is_some_and(|r| r.status() != 404) {
+                let resp = resp.into_response();
+                // If it's 401, assume that we're running locally only.
+                if resp.as_ref().is_some_and(|r| r.status() != 401) {
+                    unauth = true;
+                } else if resp.as_ref().is_some_and(|r| r.status() != 404) {
                     panic!("{format}");
                 }
             }
 
             let path = $model_id.join($file);
-            if !path.exists() {
+            if !path.exists() && unauth {
+                panic!("{format}");
+            } else if !path.exists() {
                 panic!("File \"{}\" not found at model id {:?}", $file, $model_id)
             }
             info!("Loading `{:?}` locally at `{path:?}`", &$file);
