@@ -10,6 +10,7 @@ use candle_nn::{
 
 use crate::lora::LoraConfig;
 use crate::utils::progress::IterWithProgress;
+use derive_new::new;
 
 /// Load tensors into a VarBuilder backed by a VarMap using MmapedSafetensors.
 /// Set `silent` to not show a progress bar.
@@ -25,13 +26,15 @@ pub(crate) fn from_mmaped_safetensors<'a>(
     for path in paths {
         let device = device.clone();
         handles.push(thread::spawn(move || {
-            Common::load_tensors_from_path(&path, &device, dtype, silent)
+            let loader = Common::new();
+            loader.load_tensors_from_path(&path, &device, dtype, silent)
         }));
     }
-    for path in xlora_paths {
+    for (i, path) in xlora_paths.into_iter().enumerate() {
         let device = device.clone();
         handles.push(thread::spawn(move || {
-            XLora::load_tensors_from_path(&path, &device, dtype, silent)
+            let loader = XLora::new(i + 1);
+            loader.load_tensors_from_path(&path, &device, dtype, silent)
         }));
     }
 
@@ -54,7 +57,8 @@ pub(crate) fn load_preload_adapters<'a>(
     if let Some(paths) = paths {
         let mut map = HashMap::new();
         for (name, (path, config)) in paths {
-            let loaded_tensors = Common::load_tensors_from_path(path, device, dtype, silent)?;
+            let loader = Common::new();
+            let loaded_tensors = loader.load_tensors_from_path(path, device, dtype, silent)?;
 
             map.insert(
                 name.clone(),
@@ -73,6 +77,7 @@ pub(crate) fn load_preload_adapters<'a>(
 // Presently this logic only needs to diverge for X-LoRA support via `into_name_key_pairs()`
 trait LoadTensors {
     fn load_tensors_from_path(
+        &self,
         path: &PathBuf,
         device: &Device,
         dtype: DType,
@@ -82,15 +87,13 @@ trait LoadTensors {
 
         // Extracts the tensor name and processes it, filtering tensors and deriving the key name:
         let names_only = tensors.tensors().into_iter().map(|(name, _)| name);
-        let iter = Self::into_name_key_pairs(names_only);
+        let iter = self.into_name_key_pairs(names_only);
 
         // Take the filtered list of tensors to load, store with derived lookup key:
         let mut loaded_tensors = HashMap::new();
         for (load_name, key_name) in iter.with_progress(is_silent) {
             let tensor = tensors
                 .load(&load_name, device)?
-                // TODO: Seems redundant? Tensor was just loaded to this device?
-                // .to_device(&device)?
                 .to_dtype(dtype)?;
 
             loaded_tensors.insert(key_name, tensor);
@@ -100,6 +103,7 @@ trait LoadTensors {
     }
 
     fn into_name_key_pairs(
+        &self,
         tensors: impl Iterator<Item = String>,
     ) -> impl Iterator<Item = (String, String)> {
         tensors.map(|name| {
@@ -110,24 +114,30 @@ trait LoadTensors {
     }
 }
 
+#[derive(new)]
 struct Common {}
 impl LoadTensors for Common {}
 
-struct XLora {}
+#[derive(new)]
+struct XLora {
+    // Matches the associated path instance for reference in `into_name_key_pairs()`
+    index: usize
+}
+
 impl LoadTensors for XLora {
     fn into_name_key_pairs(
+        &self,
         tensors: impl Iterator<Item = String>,
     ) -> impl Iterator<Item = (String, String)> {
         let expectation = "tensor name `{new_name}` should have substring `.lora`";
 
         tensors
             .filter(|name| !name.contains("internal_xlora_classifier"))
-            .enumerate()
-            .map(|(i, name)| {
+            .map(|name| {
                 let mut new_name = name.replace("base_model.model.model", "model");
                 // TODO: Add better context to describe intent / requirement:
                 let pos = new_name.find(".lora").expect(expectation);
-                new_name.insert_str(pos + 7, &format!(".{i}"));
+                new_name.insert_str(pos + 7, &format!(".{}", self.index));
 
                 (name, new_name)
             })
