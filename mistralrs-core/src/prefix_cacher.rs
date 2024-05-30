@@ -57,10 +57,12 @@ impl PrefixCacheManager {
         }
     }
 
-    /// Save the prefix cache to the specified file (including X-LoRA if applicable)
-    pub fn save_to_file(&self, file: impl AsRef<Path>) -> Result<()> {
+    fn save_layer_caches<'a>(
+        file: impl AsRef<Path>,
+        caches: impl Iterator<Item = (&'a Tokens, &'a Arc<Mutex<LayerCaches>>)>,
+    ) -> Result<()> {
         let mut tensor_map = HashMap::new();
-        for (toks, kvs) in self.caches.iter() {
+        for (toks, kvs) in caches {
             let mut ks = Vec::new();
             let mut vs = Vec::new();
             // Really, we only have Some variants. This is just for the type system.
@@ -90,11 +92,38 @@ impl PrefixCacheManager {
         candle_core::safetensors::save(&tensor_map, file)
     }
 
-    /// Create a prefix cache manager from prefixes in a .safetensor file.
-    /// The file must have been
-    /// - Saved with `PrefixCacheManager::save_to_file`.
-    /// - Saved with a version of `mistral.rs` to which the current version is backwards compatible
-    pub fn from_file(file: impl AsRef<Path>, device: Device, n_on_device: usize) -> Result<Self> {
+    /// Save the prefix cache to the specified file (including X-LoRA if applicable)
+    /// Example of file: `prefix_cache.safetensors`
+    /// This function will save the content at the paths:
+    /// - `prefix_cache.safetensors.{model_id}`
+    /// - If X-LoRA: `prefix_cache.safetensors.{model_id}.xlora`
+    pub fn save_to_file(&self, file: impl AsRef<Path>, model_id: String) -> Result<()> {
+        let file = file.as_ref().to_string_lossy().to_string();
+        // NOTE(EricLBuehler): changing this format is a *breaking change*
+        let formatted_file = format!("{file}.{model_id}");
+        Self::save_layer_caches(formatted_file.clone(), self.caches.iter())?;
+
+        if self.xlora_caches.is_some() {
+            // NOTE(EricLBuehler): changing this format is a *breaking change*
+            let formatted_file_xlora = format!("{formatted_file}.xlora");
+            Self::save_layer_caches(
+                formatted_file_xlora,
+                self.xlora_caches.as_ref().unwrap().iter(),
+            )?;
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn load_layer_caches(
+        file: impl AsRef<Path>,
+        device: Device,
+        n_on_device: usize,
+    ) -> Result<(
+        Trie<Tokens, Arc<Mutex<LayerCaches>>>,
+        Vec<EvictionCacheGroup>,
+    )> {
         let map = candle_core::safetensors::load(file, &Device::Cpu)?;
         // Contains (k,v) tensors which are stacked along dim0 on the layer length.
         let mut shards = HashMap::new();
@@ -165,14 +194,43 @@ impl PrefixCacheManager {
             trie.insert(Tokens(toks), layer_caches.clone());
             eviction_cache_ptrs.push((layer_caches, None));
         }
-        Ok(Self {
-            caches: trie,
-            xlora_caches: None,
-            device,
-            n_on_device,
-            no_prefix_cache: false,
-            eviction_cache_ptrs,
-        })
+        Ok((trie, eviction_cache_ptrs))
+    }
+
+    /// Create a prefix cache manager from prefixes in a .safetensor file, erasing all current prefixes.
+    ///
+    /// The file must have been
+    /// - Saved with `PrefixCacheManager::save_to_file`.
+    /// - Saved with a version of `mistral.rs` to which the current version is backwards compatible
+    ///
+    /// For example, if you save pass `save_to_file` the file `prefix_cache.safetensors`, you should also pass
+    /// this function `prefix_cache.safetensors.`
+    /// This function expects content at the paths:
+    /// - `prefix_cache.safetensors.{model_id}`
+    /// - If X-LoRA: `prefix_cache.safetensors.{model_id}.xlora`
+    pub fn load_from_file(
+        mut self,
+        file: impl AsRef<Path>,
+        device: Device,
+        n_on_device: usize,
+        model_id: String,
+    ) -> Result<Self> {
+        // NOTE(EricLBuehler): changing this format is a *breaking change*
+        let file = file.as_ref().to_string_lossy().to_string();
+        let formatted_file = format!("{file}.{model_id}");
+        let (trie, ptrs) =
+            Self::load_layer_caches(formatted_file.clone(), device.clone(), n_on_device)?;
+        self.caches = trie;
+        self.eviction_cache_ptrs = ptrs;
+
+        if self.xlora_caches.is_some() {
+            // NOTE(EricLBuehler): changing this format is a *breaking change*
+            let formatted_file_xlora = format!("{formatted_file}.xlora");
+            let (trie, ptrs) = Self::load_layer_caches(formatted_file_xlora, device, n_on_device)?;
+            self.xlora_caches = Some(trie);
+            self.eviction_cache_ptrs.extend(ptrs);
+        }
+        Ok(self)
     }
 
     /// This always keeps the cache on the device. If later on, a new seq cannot be allocated due to memory shortage,
