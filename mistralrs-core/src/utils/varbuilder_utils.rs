@@ -9,7 +9,6 @@ use candle_nn::{
 };
 
 use crate::lora::LoraConfig;
-use tqdm::Iter;
 
 /// Load tensors into a VarBuilder backed by a VarMap using MmapedSafetensors.
 /// Set `silent` to not show a progress bar.
@@ -21,107 +20,23 @@ pub(crate) fn from_mmaped_safetensors<'a>(
     silent: bool,
 ) -> Result<VarBuilderArgs<'a, Box<dyn SimpleBackend>>> {
     let mut handles = Vec::new();
+
     for path in paths {
-        fn load(
-            path: PathBuf,
-            silent: bool,
-            device: Device,
-            dtype: DType,
-        ) -> Result<HashMap<String, Tensor>> {
-            let mut accum = HashMap::new();
-            let tensors = unsafe { candle_core::safetensors::MmapedSafetensors::new(path)? };
-
-            if silent {
-                for (name, _) in tensors.tensors() {
-                    let new_name = if name.contains("base_model.model.model") {
-                        name.replace("base_model.model.model", "model")
-                    } else {
-                        name.clone()
-                    };
-                    let tensor = tensors
-                        .load(&name, &device)?
-                        .to_device(&device)?
-                        .to_dtype(dtype)?;
-                    accum.insert(new_name, tensor);
-                }
-            } else {
-                for (name, _) in tensors.tensors().into_iter().tqdm() {
-                    let new_name = if name.contains("base_model.model.model") {
-                        name.replace("base_model.model.model", "model")
-                    } else {
-                        name.clone()
-                    };
-                    let tensor = tensors
-                        .load(&name, &device)?
-                        .to_device(&device)?
-                        .to_dtype(dtype)?;
-                    accum.insert(new_name, tensor);
-                }
-            }
-            Ok(accum)
-        }
         let device = device.clone();
-        handles.push(thread::spawn(move || load(path, silent, device, dtype)));
+        handles.push(thread::spawn(move || Common::load_tensors_from_path(&path, &device, dtype, silent)));
     }
-    for (i, path) in xlora_paths.into_iter().enumerate() {
-        fn load(
-            path: PathBuf,
-            silent: bool,
-            device: Device,
-            dtype: DType,
-            i: usize,
-        ) -> Result<HashMap<String, Tensor>> {
-            let mut accum = HashMap::new();
-            let tensors = unsafe { candle_core::safetensors::MmapedSafetensors::new(path)? };
-
-            if silent {
-                for (name, _) in tensors.tensors() {
-                    if name.contains("internal_xlora_classifier") {
-                        continue;
-                    }
-                    let mut new_name = if name.contains("base_model.model.model") {
-                        name.replace("base_model.model.model", "model")
-                    } else {
-                        name.clone()
-                    };
-                    let pos = new_name.find(".lora").unwrap();
-                    new_name.insert_str(pos + 7, &format!(".{}", i + 1));
-                    let tensor = tensors
-                        .load(&name, &device)?
-                        .to_device(&device)?
-                        .to_dtype(dtype)?;
-                    accum.insert(new_name, tensor);
-                }
-            } else {
-                for (name, _) in tensors.tensors().into_iter().tqdm() {
-                    if name.contains("internal_xlora_classifier") {
-                        continue;
-                    }
-                    let mut new_name = if name.contains("base_model.model.model") {
-                        name.replace("base_model.model.model", "model")
-                    } else {
-                        name.clone()
-                    };
-                    let pos = new_name.find(".lora").unwrap();
-                    new_name.insert_str(pos + 7, &format!(".{}", i + 1));
-                    let tensor = tensors
-                        .load(&name, &device)?
-                        .to_device(&device)?
-                        .to_dtype(dtype)?;
-                    accum.insert(new_name, tensor);
-                }
-            }
-            Ok(accum)
-        }
+    for path in xlora_paths {
         let device = device.clone();
-        handles.push(thread::spawn(move || load(path, silent, device, dtype, i)));
+        handles.push(thread::spawn(move || XLora::load_tensors_from_path(&path, &device, dtype, silent)));
     }
+
     let mut ws = HashMap::new();
-    // Wait until each finishes
+    // Wait until all spawned threads have finished loading tensors:
     while !handles.iter().all(|h| h.is_finished()) {}
     for h in handles {
         ws.extend(h.join().unwrap()?);
     }
+
     Ok(VarBuilder::from_tensors(ws, dtype, device))
 }
 
@@ -134,40 +49,12 @@ pub(crate) fn load_preload_adapters<'a>(
     if let Some(paths) = paths {
         let mut map = HashMap::new();
         for (name, (path, config)) in paths {
-            let tensors = unsafe { candle_core::safetensors::MmapedSafetensors::new(path)? };
-            let mut accum = HashMap::new();
+            let loaded_tensors = Common::load_tensors_from_path(path, device, dtype, silent)?;
 
-            if silent {
-                for (name, _) in tensors.tensors() {
-                    let new_name = if name.contains("base_model.model.model") {
-                        name.replace("base_model.model.model", "model")
-                    } else {
-                        name.clone()
-                    };
-                    let tensor = tensors
-                        .load(&name, device)?
-                        .to_device(device)?
-                        .to_dtype(dtype)?;
-                    accum.insert(new_name, tensor);
-                }
-            } else {
-                for (name, _) in tensors.tensors().into_iter().tqdm() {
-                    let new_name = if name.contains("base_model.model.model") {
-                        name.replace("base_model.model.model", "model")
-                    } else {
-                        name.clone()
-                    };
-                    let tensor = tensors
-                        .load(&name, device)?
-                        .to_device(device)?
-                        .to_dtype(dtype)?;
-                    accum.insert(new_name, tensor);
-                }
-            }
             map.insert(
                 name.clone(),
                 (
-                    VarBuilder::from_tensors(accum, dtype, device),
+                    VarBuilder::from_tensors(loaded_tensors, dtype, device),
                     config.clone(),
                 ),
             );
@@ -175,5 +62,73 @@ pub(crate) fn load_preload_adapters<'a>(
         Ok(Some(map))
     } else {
         Ok(None)
+    }
+}
+
+// Presently this logic only needs to diverge for X-LoRA support via `into_name_key_pairs()`
+trait LoadTensors {
+    fn load_tensors_from_path(
+        path: &PathBuf,
+        device: &Device,
+        dtype: DType,
+        silent: bool,
+    ) -> Result<HashMap<String, Tensor>> {
+        let tensors = unsafe { candle_core::safetensors::MmapedSafetensors::new(path)? };
+
+        // Extracts the tensor name and procceses it, filtering tensors and deriving the key name:
+        let iter = Self::into_name_key_pairs(
+            tensors.tensors().into_iter().map(|(name, _)| name)
+        );
+
+        // Optionally display a progress bar via the `tqdm` crate:
+        let iter: Box<dyn Iterator<Item = _>> = if silent {
+            Box::new(iter)
+        } else {
+            Box::new(tqdm::tqdm(iter))
+        };
+
+        // Take the filtered list of tensors to load, store with derived lookup key:
+        let mut loaded_tensors = HashMap::new();
+        for (load_name, key_name) in iter {
+            let tensor = tensors
+                .load(&load_name, &device)?
+                // TODO: Seems redundant? Tensor was just loaded to this device?
+                // .to_device(&device)?
+                .to_dtype(dtype)?;
+            
+            loaded_tensors.insert(key_name, tensor);
+        }
+
+        Ok(loaded_tensors)
+    }
+
+    fn into_name_key_pairs(tensors: impl Iterator<Item = String>) -> impl Iterator<Item = (String, String)>  {
+        tensors.map(|name| {
+            let new_name = name.replace("base_model.model.model", "model");
+    
+            (name, new_name)
+        })
+    }
+}
+
+struct Common {}
+impl LoadTensors for Common {}
+
+struct XLora {}
+impl LoadTensors for XLora {
+    fn into_name_key_pairs(tensors: impl Iterator<Item = String>) -> impl Iterator<Item = (String, String)>  {
+        let expectation = "tensor name `{new_name}` should have substring `.lora`";
+
+        tensors
+            .filter(|name| !name.contains("internal_xlora_classifier"))
+            .enumerate()
+            .map(|(i, name)| {
+                let mut new_name = name.replace("base_model.model.model", "model");
+                // TODO: Add better context to describe intent / requirement:
+                let pos = new_name.find(".lora").expect(expectation);
+                new_name.insert_str(pos + 7, &format!(".{i}"));
+
+                (name, new_name)
+            })
     }
 }
