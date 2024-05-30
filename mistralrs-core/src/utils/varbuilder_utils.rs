@@ -24,11 +24,15 @@ pub(crate) fn from_mmaped_safetensors<'a>(
 
     for path in paths {
         let device = device.clone();
-        handles.push(thread::spawn(move || Common::load_tensors_from_path(&path, &device, dtype, silent)));
+        handles.push(thread::spawn(move || {
+            Common::load_tensors_from_path(&path, &device, dtype, silent)
+        }));
     }
     for path in xlora_paths {
         let device = device.clone();
-        handles.push(thread::spawn(move || XLora::load_tensors_from_path(&path, &device, dtype, silent)));
+        handles.push(thread::spawn(move || {
+            XLora::load_tensors_from_path(&path, &device, dtype, silent)
+        }));
     }
 
     let mut ws = HashMap::new();
@@ -76,30 +80,31 @@ trait LoadTensors {
     ) -> Result<HashMap<String, Tensor>> {
         let tensors = unsafe { candle_core::safetensors::MmapedSafetensors::new(path)? };
 
-        // Extracts the tensor name and procceses it, filtering tensors and deriving the key name:
-        let iter = Self::into_name_key_pairs(
-            tensors.tensors().into_iter().map(|(name, _)| name)
-        );
+        // Extracts the tensor name and processes it, filtering tensors and deriving the key name:
+        let names_only = tensors.tensors().into_iter().map(|(name, _)| name);
+        let iter = Self::into_name_key_pairs(names_only);
 
         // Take the filtered list of tensors to load, store with derived lookup key:
         let mut loaded_tensors = HashMap::new();
         for (load_name, key_name) in iter.with_progress(is_silent) {
             let tensor = tensors
-                .load(&load_name, &device)?
+                .load(&load_name, device)?
                 // TODO: Seems redundant? Tensor was just loaded to this device?
                 // .to_device(&device)?
                 .to_dtype(dtype)?;
-            
+
             loaded_tensors.insert(key_name, tensor);
         }
 
         Ok(loaded_tensors)
     }
 
-    fn into_name_key_pairs(tensors: impl Iterator<Item = String>) -> impl Iterator<Item = (String, String)>  {
+    fn into_name_key_pairs(
+        tensors: impl Iterator<Item = String>,
+    ) -> impl Iterator<Item = (String, String)> {
         tensors.map(|name| {
             let new_name = name.replace("base_model.model.model", "model");
-    
+
             (name, new_name)
         })
     }
@@ -110,7 +115,9 @@ impl LoadTensors for Common {}
 
 struct XLora {}
 impl LoadTensors for XLora {
-    fn into_name_key_pairs(tensors: impl Iterator<Item = String>) -> impl Iterator<Item = (String, String)>  {
+    fn into_name_key_pairs(
+        tensors: impl Iterator<Item = String>,
+    ) -> impl Iterator<Item = (String, String)> {
         let expectation = "tensor name `{new_name}` should have substring `.lora`";
 
         tensors
