@@ -1,5 +1,6 @@
 pub(crate) mod tokenizer;
 pub(crate) mod tokens;
+pub(crate) mod progress;
 pub(crate) mod varbuilder_utils;
 
 #[macro_export]

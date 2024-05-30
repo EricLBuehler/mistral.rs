@@ -9,6 +9,7 @@ use candle_nn::{
 };
 
 use crate::lora::LoraConfig;
+use crate::utils::progress::IterWithProgress;
 
 /// Load tensors into a VarBuilder backed by a VarMap using MmapedSafetensors.
 /// Set `silent` to not show a progress bar.
@@ -71,7 +72,7 @@ trait LoadTensors {
         path: &PathBuf,
         device: &Device,
         dtype: DType,
-        silent: bool,
+        is_silent: bool,
     ) -> Result<HashMap<String, Tensor>> {
         let tensors = unsafe { candle_core::safetensors::MmapedSafetensors::new(path)? };
 
@@ -80,16 +81,9 @@ trait LoadTensors {
             tensors.tensors().into_iter().map(|(name, _)| name)
         );
 
-        // Optionally display a progress bar via the `tqdm` crate:
-        let iter: Box<dyn Iterator<Item = _>> = if silent {
-            Box::new(iter)
-        } else {
-            Box::new(tqdm::tqdm(iter))
-        };
-
         // Take the filtered list of tensors to load, store with derived lookup key:
         let mut loaded_tensors = HashMap::new();
-        for (load_name, key_name) in iter {
+        for (load_name, key_name) in iter.with_progress(is_silent) {
             let tensor = tensors
                 .load(&load_name, &device)?
                 // TODO: Seems redundant? Tensor was just loaded to this device?
