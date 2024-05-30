@@ -109,7 +109,7 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<ConversionResul
 
             tokenizer.add_special_tokens(&[AddedToken::from(tokens[bos as usize].clone(), true)]);
             tokenizer.add_special_tokens(&[AddedToken::from(tokens[eos as usize].clone(), true)]);
-            tokenizer.add_special_tokens(&[AddedToken::from(tokens[unk as usize].clone(), true)]);
+            tokenizer.add_special_tokens(&[AddedToken::from(tokens[unk].clone(), true)]);
 
             (tokenizer, "unigram")
         }
