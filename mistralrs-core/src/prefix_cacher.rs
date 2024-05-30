@@ -9,7 +9,7 @@ use radix_trie::{Trie, TrieCommon, TrieKey};
 
 use crate::{get_mut_arcmutex, pipeline::LayerCaches, sequence::Sequence};
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone)]
 struct Tokens(Vec<u32>);
 
 impl TrieKey for Tokens {
@@ -197,7 +197,7 @@ impl PrefixCacheManager {
         Ok((trie, eviction_cache_ptrs))
     }
 
-    /// Create a prefix cache manager from prefixes in a .safetensor file, erasing all current prefixes.
+    /// Create a prefix cache manager from prefixes in a .safetensor file, extending the current state.
     ///
     /// The file must have been
     /// - Saved with `PrefixCacheManager::save_to_file`.
@@ -220,14 +220,24 @@ impl PrefixCacheManager {
         let formatted_file = format!("{file}.{model_id}");
         let (trie, ptrs) =
             Self::load_layer_caches(formatted_file.clone(), device.clone(), n_on_device)?;
-        self.caches = trie;
-        self.eviction_cache_ptrs = ptrs;
+        // NOTE: Don't like the copy...
+        for (k, v) in trie.iter() {
+            self.caches.insert(k.clone(), v.clone());
+        }
+        self.eviction_cache_ptrs.extend(ptrs);
 
         if self.xlora_caches.is_some() {
             // NOTE(EricLBuehler): changing this format is a *breaking change*
             let formatted_file_xlora = format!("{formatted_file}.xlora");
             let (trie, ptrs) = Self::load_layer_caches(formatted_file_xlora, device, n_on_device)?;
-            self.xlora_caches = Some(trie);
+
+            // NOTE: Don't like the copy...
+            for (k, v) in trie.iter() {
+                self.xlora_caches
+                    .as_mut()
+                    .unwrap()
+                    .insert(k.clone(), v.clone());
+            }
             self.eviction_cache_ptrs.extend(ptrs);
         }
         Ok(self)
