@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{hash_map, HashMap},
     path::Path,
     sync::{Arc, Mutex},
 };
@@ -66,8 +66,7 @@ impl PrefixCacheManager {
             // Really, we only have Some variants. This is just for the type system.
             let kvs = get_mut_arcmutex!(kvs)
                 .iter()
-                .filter(|x| x.is_some())
-                .map(|x| x.clone().unwrap())
+                .filter_map(|x| x.clone())
                 .collect::<Vec<_>>();
             for (k, v) in kvs {
                 ks.push(k.to_device(&Device::Cpu)?);
@@ -101,33 +100,39 @@ impl PrefixCacheManager {
         let mut shards = HashMap::new();
         for (name, tensor) in map {
             // NOTE(EricLBuehler): changing this format is a *breaking change*
-            let parts = name.splitn(2, ":").collect::<Vec<_>>();
+            let parts = name.splitn(2, ':').collect::<Vec<_>>();
             let ty = parts[0];
             let toks = parts[1]
                 .split(':')
                 .map(|x| x.parse::<u32>().expect("Failed to parse token"))
                 .collect::<Vec<_>>();
-            if shards.get(&toks).is_none() {
+            if shards
+                .get(&toks)
+                .is_some_and(|x: &(Option<Tensor>, Option<Tensor>)| x.0.is_some())
+            {
+                // NOTE(EricLBuehler): changing this format is a *breaking change*
+                // Add V
+                assert_eq!(ty, "V");
+                shards.get_mut(&toks).unwrap().1 = Some(tensor);
+            } else if shards
+                .get(&toks)
+                .is_some_and(|x: &(Option<Tensor>, Option<Tensor>)| x.0.is_some())
+            {
+                // NOTE(EricLBuehler): changing this format is a *breaking change*
+                // Add K
+                assert_eq!(ty, "K");
+                shards.get_mut(&toks).unwrap().0 = Some(tensor);
+            } else if let hash_map::Entry::Vacant(e) = shards.entry(toks) {
                 // NOTE(EricLBuehler): changing this format is a *breaking change*
                 if ty == "K" {
-                    shards.insert(toks, (Some(tensor), None));
+                    e.insert((Some(tensor), None));
                 } else if ty == "V" {
-                    shards.insert(toks, (None, Some(tensor)));
+                    e.insert((None, Some(tensor)));
                 } else {
                     panic!("Got unexpected KV shard type {ty}");
                 }
             } else {
-                if shards.get(&toks).unwrap().0.is_some() {
-                    // NOTE(EricLBuehler): changing this format is a *breaking change*
-                    // Add V
-                    assert_eq!(ty, "V");
-                    shards.get_mut(&toks).unwrap().1 = Some(tensor);
-                } else {
-                    // NOTE(EricLBuehler): changing this format is a *breaking change*
-                    // Add K
-                    assert_eq!(ty, "K");
-                    shards.get_mut(&toks).unwrap().0 = Some(tensor);
-                }
+                unreachable!()
             }
         }
         let mut trie = Trie::new();
