@@ -15,7 +15,7 @@ macro_rules! api_dir_list {
                 if let hf_hub::api::sync::ApiError::RequestError(resp) = e {
                     let resp = resp.into_response();
                     // If it's 401, assume that we're running locally only.
-                    if resp.as_ref().is_some_and(|r| r.status() != 401) {
+                    if resp.as_ref().is_some_and(|r| r.status() == 401) {
                         unauth = true;
                     } else if resp.as_ref().is_some_and(|r| r.status() != 404) {
                         panic!("{format}");
@@ -54,7 +54,7 @@ macro_rules! api_get_file {
             if let hf_hub::api::sync::ApiError::RequestError(resp) = e {
                 let resp = resp.into_response();
                 // If it's 401, assume that we're running locally only.
-                if resp.as_ref().is_some_and(|r| r.status() != 401) {
+                if resp.as_ref().is_some_and(|r| r.status() == 401) {
                     unauth = true;
                 } else if resp.as_ref().is_some_and(|r| r.status() != 404) {
                     panic!("{format}");
