@@ -74,7 +74,7 @@ pub(crate) fn load_preload_adapters<'a>(
     }
 }
 
-// Presently this logic only needs to diverge for X-LoRA support via `into_name_key_pairs()`
+// Presently this logic only needs to diverge for X-LoRA support via `get_name_key_pairs()`
 trait LoadTensors {
     fn load_tensors_from_path(
         &self,
@@ -87,7 +87,7 @@ trait LoadTensors {
 
         // Extracts the tensor name and processes it, filtering tensors and deriving the key name:
         let names_only = tensors.tensors().into_iter().map(|(name, _)| name);
-        let iter = self.into_name_key_pairs(names_only);
+        let iter = self.get_name_key_pairs(names_only);
 
         // Take the filtered list of tensors to load, store with derived lookup key:
         let mut loaded_tensors = HashMap::new();
@@ -102,7 +102,7 @@ trait LoadTensors {
         Ok(loaded_tensors)
     }
 
-    fn into_name_key_pairs(
+    fn get_name_key_pairs(
         &self,
         tensors: impl Iterator<Item = String>,
     ) -> impl Iterator<Item = (String, String)> {
@@ -120,12 +120,12 @@ impl LoadTensors for Common {}
 
 #[derive(new)]
 struct XLora {
-    // Matches the associated path instance for reference in `into_name_key_pairs()`
-    index: usize
+    // Matches the associated path instance for reference in `get_name_key_pairs()`
+    adapter_index: usize,
 }
 
 impl LoadTensors for XLora {
-    fn into_name_key_pairs(
+    fn get_name_key_pairs(
         &self,
         tensors: impl Iterator<Item = String>,
     ) -> impl Iterator<Item = (String, String)> {
@@ -137,7 +137,7 @@ impl LoadTensors for XLora {
                 let mut new_name = name.replace("base_model.model.model", "model");
                 // TODO: Add better context to describe intent / requirement:
                 let pos = new_name.find(".lora").expect(expectation);
-                new_name.insert_str(pos + 7, &format!(".{}", self.index));
+                new_name.insert_str(pos + 7, &format!(".{}", self.adapter_index));
 
                 (name, new_name)
             })
