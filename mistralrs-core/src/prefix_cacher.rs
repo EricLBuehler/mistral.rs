@@ -1,4 +1,8 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use candle_core::{Device, Result, Tensor};
 use radix_trie::{Trie, TrieCommon, TrieKey};
@@ -51,6 +55,119 @@ impl PrefixCacheManager {
             no_prefix_cache,
             eviction_cache_ptrs: Vec::new(),
         }
+    }
+
+    /// Save the prefix cache to the specified file (including X-LoRA if applicable)
+    pub fn save_to_file(&self, file: impl AsRef<Path>) -> Result<()> {
+        let mut tensor_map = HashMap::new();
+        for (toks, kvs) in self.caches.iter() {
+            let mut ks = Vec::new();
+            let mut vs = Vec::new();
+            // Really, we only have Some variants. This is just for the type system.
+            let kvs = get_mut_arcmutex!(kvs)
+                .iter()
+                .filter(|x| x.is_some())
+                .map(|x| x.clone().unwrap())
+                .collect::<Vec<_>>();
+            for (k, v) in kvs {
+                ks.push(k.to_device(&Device::Cpu)?);
+                vs.push(v.to_device(&Device::Cpu)?);
+            }
+
+            let k = Tensor::stack(&ks, 0)?;
+            let v = Tensor::stack(&vs, 0)?;
+            // NOTE(EricLBuehler): changing this format is a *breaking change*
+            let repr = toks
+                .0
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(";");
+            // NOTE(EricLBuehler): changing this format is a *breaking change*
+            tensor_map.insert(format!("K:{repr}"), k);
+            // NOTE(EricLBuehler): changing this format is a *breaking change*
+            tensor_map.insert(format!("V:{repr}"), v);
+        }
+        candle_core::safetensors::save(&tensor_map, file)
+    }
+
+    /// Create a prefix cache manager from prefixes in a .safetensor file.
+    /// The file must have been
+    /// - Saved with `PrefixCacheManager::save_to_file`.
+    /// - Saved with a version of `mistral.rs` to which the current version is backwards compatible
+    pub fn from_file(file: impl AsRef<Path>, device: Device, n_on_device: usize) -> Result<Self> {
+        let map = candle_core::safetensors::load(file, &Device::Cpu)?;
+        // Contains (k,v) tensors which are stacked along dim0 on the layer length.
+        let mut shards = HashMap::new();
+        for (name, tensor) in map {
+            // NOTE(EricLBuehler): changing this format is a *breaking change*
+            let parts = name.splitn(2, ":").collect::<Vec<_>>();
+            let ty = parts[0];
+            let toks = parts[1]
+                .split(':')
+                .map(|x| x.parse::<u32>().expect("Failed to parse token"))
+                .collect::<Vec<_>>();
+            if shards.get(&toks).is_none() {
+                // NOTE(EricLBuehler): changing this format is a *breaking change*
+                if ty == "K" {
+                    shards.insert(toks, (Some(tensor), None));
+                } else if ty == "V" {
+                    shards.insert(toks, (None, Some(tensor)));
+                } else {
+                    panic!("Got unexpected KV shard type {ty}");
+                }
+            } else {
+                if shards.get(&toks).unwrap().0.is_some() {
+                    // NOTE(EricLBuehler): changing this format is a *breaking change*
+                    // Add V
+                    assert_eq!(ty, "V");
+                    shards.get_mut(&toks).unwrap().1 = Some(tensor);
+                } else {
+                    // NOTE(EricLBuehler): changing this format is a *breaking change*
+                    // Add K
+                    assert_eq!(ty, "K");
+                    shards.get_mut(&toks).unwrap().0 = Some(tensor);
+                }
+            }
+        }
+        let mut trie = Trie::new();
+        let mut eviction_cache_ptrs = Vec::new();
+        let mut n_prefixes = 0;
+        for (toks, (k, v)) in shards {
+            n_prefixes += 1;
+            let dev = if n_prefixes <= n_on_device {
+                device.clone()
+            } else {
+                Device::Cpu
+            };
+            let k = k.unwrap();
+            let v = v.unwrap();
+            let ks = k
+                .chunk(k.dim(0)?, 0)?
+                .iter()
+                .map(|x| x.squeeze(0))
+                .collect::<Result<Vec<_>>>()?;
+            let vs = v
+                .chunk(k.dim(0)?, 0)?
+                .iter()
+                .map(|x| x.squeeze(0))
+                .collect::<Result<Vec<_>>>()?;
+            let mut layer_caches = Vec::new();
+            for (k, v) in ks.into_iter().zip(vs) {
+                layer_caches.push(Some((k.to_device(&dev)?, v.to_device(&dev)?)));
+            }
+            let layer_caches = Arc::new(Mutex::new(layer_caches));
+            trie.insert(Tokens(toks), layer_caches.clone());
+            eviction_cache_ptrs.push((layer_caches, None));
+        }
+        Ok(Self {
+            caches: trie,
+            xlora_caches: None,
+            device,
+            n_on_device,
+            no_prefix_cache: false,
+            eviction_cache_ptrs,
+        })
     }
 
     /// This always keeps the cache on the device. If later on, a new seq cannot be allocated due to memory shortage,
