@@ -273,6 +273,11 @@
 <a href="#271" id="271">271</a>
 <a href="#272" id="272">272</a>
 <a href="#273" id="273">273</a>
+<a href="#274" id="274">274</a>
+<a href="#275" id="275">275</a>
+<a href="#276" id="276">276</a>
+<a href="#277" id="277">277</a>
+<a href="#278" id="278">278</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::atomic::Ordering;
 
 <span class="kw">use </span>anyhow::Result;
@@ -337,9 +342,10 @@
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
     });
 
-    <span class="kw">let </span>unk = content.metadata[<span class="string">"tokenizer.ggml.unknown_token_id"</span>]
-        .to_u32()
-        .expect(<span class="string">"GGUF unk token is not u32"</span>);
+    <span class="kw">let </span>unk = content
+        .metadata
+        .get(<span class="string">"tokenizer.ggml.unknown_token_id"</span>)
+        .map(|t| t.to_u32().expect(<span class="string">"GGUF unk token is not u32"</span>));
 
     <span class="kw">let </span>eos = content.metadata[<span class="string">"tokenizer.ggml.eos_token_id"</span>]
         .to_u32()
@@ -351,11 +357,11 @@
 
     <span class="kw">let </span>bos_str = tokens[bos <span class="kw">as </span>usize].clone();
     <span class="kw">let </span>eos_str = tokens[eos <span class="kw">as </span>usize].clone();
-    <span class="kw">let </span>unk_str = tokens[unk <span class="kw">as </span>usize].clone();
+    <span class="kw">let </span>unk_str;
 
     <span class="kw">let </span>(tokenizer, ty) = <span class="kw">match </span>model.as_str() {
         <span class="string">"llama" </span>| <span class="string">"replit" </span>=&gt; {
-            <span class="comment">// unigram
+            <span class="comment">// This is a `unigram` tokenizer
             </span><span class="kw">let </span>scores = scores
                 .as_ref()
                 .expect(<span class="string">"Expect `tokenizer.ggml.scores` for `llama` unigram tokeizer."</span>);
@@ -363,8 +369,12 @@
             <span class="kw">for </span>(token, score) <span class="kw">in </span>tokens.iter().zip(scores) {
                 vocab.push((token.clone(), <span class="kw-2">*</span>score <span class="kw">as </span>f64));
             }
-            <span class="kw">let </span>unigram =
-                Unigram::from(vocab, <span class="prelude-val">Some</span>(unk <span class="kw">as </span>usize), <span class="bool-val">true</span>).map_err(anyhow::Error::msg)<span class="question-mark">?</span>;
+
+            <span class="comment">// Unigram (sentencepiece) default UNK is 0
+            </span><span class="kw">let </span>unk = unk.map(|x| x <span class="kw">as </span>usize).unwrap_or(<span class="number">0</span>);
+            unk_str = tokens[unk].clone();
+
+            <span class="kw">let </span>unigram = Unigram::from(vocab, <span class="prelude-val">Some</span>(unk), <span class="bool-val">true</span>).map_err(anyhow::Error::msg)<span class="question-mark">?</span>;
             <span class="kw">let </span><span class="kw-2">mut </span>tokenizer = Tokenizer::new(ModelWrapper::Unigram(unigram));
             tokenizer.with_decoder(decoders::sequence::Sequence::new(<span class="macro">vec!</span>[
                 DecoderWrapper::Replace(Replace::new(<span class="string">"▁"</span>, <span class="string">" "</span>).map_err(anyhow::Error::msg)<span class="question-mark">?</span>),
@@ -379,7 +389,7 @@
 
             tokenizer.add_special_tokens(<span class="kw-2">&amp;</span>[AddedToken::from(tokens[bos <span class="kw">as </span>usize].clone(), <span class="bool-val">true</span>)]);
             tokenizer.add_special_tokens(<span class="kw-2">&amp;</span>[AddedToken::from(tokens[eos <span class="kw">as </span>usize].clone(), <span class="bool-val">true</span>)]);
-            tokenizer.add_special_tokens(<span class="kw-2">&amp;</span>[AddedToken::from(tokens[unk <span class="kw">as </span>usize].clone(), <span class="bool-val">true</span>)]);
+            tokenizer.add_special_tokens(<span class="kw-2">&amp;</span>[AddedToken::from(tokens[unk].clone(), <span class="bool-val">true</span>)]);
 
             (tokenizer, <span class="string">"unigram"</span>)
         }
