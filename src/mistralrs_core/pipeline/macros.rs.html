@@ -366,7 +366,7 @@
                 <span class="kw">if let </span>hf_hub::api::sync::ApiError::RequestError(resp) = e {
                     <span class="kw">let </span>resp = resp.into_response();
                     <span class="comment">// If it's 401, assume that we're running locally only.
-                    </span><span class="kw">if </span>resp.as_ref().is_some_and(|r| r.status() != <span class="number">401</span>) {
+                    </span><span class="kw">if </span>resp.as_ref().is_some_and(|r| r.status() == <span class="number">401</span>) {
                         unauth = <span class="bool-val">true</span>;
                     } <span class="kw">else if </span>resp.as_ref().is_some_and(|r| r.status() != <span class="number">404</span>) {
                         <span class="macro">panic!</span>(<span class="string">"{format}"</span>);
@@ -405,7 +405,7 @@
             <span class="kw">if let </span>hf_hub::api::sync::ApiError::RequestError(resp) = e {
                 <span class="kw">let </span>resp = resp.into_response();
                 <span class="comment">// If it's 401, assume that we're running locally only.
-                </span><span class="kw">if </span>resp.as_ref().is_some_and(|r| r.status() != <span class="number">401</span>) {
+                </span><span class="kw">if </span>resp.as_ref().is_some_and(|r| r.status() == <span class="number">401</span>) {
                     unauth = <span class="bool-val">true</span>;
                 } <span class="kw">else if </span>resp.as_ref().is_some_and(|r| r.status() != <span class="number">404</span>) {
                     <span class="macro">panic!</span>(<span class="string">"{format}"</span>);
