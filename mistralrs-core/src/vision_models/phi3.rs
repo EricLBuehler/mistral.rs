@@ -794,7 +794,7 @@ impl Model {
             cfg,
             embed_tokens.clone(),
             &cfg.embd_layer,
-            vb.pp("vision_embed_tokens"),
+            vb_m.pp("vision_embed_tokens"),
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
