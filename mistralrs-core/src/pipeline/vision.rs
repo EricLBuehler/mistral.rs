@@ -18,7 +18,7 @@ use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
-    do_sample, get_paths, vision_normal_model_loader, DeviceMapMetadata, Ordering, Pipeline,
+    do_sample, get_paths, vision_normal_model_loader, DeviceMapMetadata, Ordering, Pipeline, DEBUG,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
@@ -33,6 +33,8 @@ use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::info;
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::EnvFilter;
 
 pub struct VisionPipeline {
     model: Box<dyn VisionModel + Send + Sync>,
@@ -141,6 +143,20 @@ impl Loader for VisionLoader {
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let is_debug = std::env::var("MISTRALRS_DEBUG")
+            .unwrap_or_default()
+            .contains('1');
+        DEBUG.store(is_debug, std::sync::atomic::Ordering::Relaxed);
+
+        let filter = EnvFilter::builder()
+            .with_default_directive(if is_debug {
+                LevelFilter::INFO.into()
+            } else {
+                LevelFilter::DEBUG.into()
+            })
+            .from_env_lossy();
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         let default_dtype = if device.is_cuda() && mapper.is_dummy() {
             DType::BF16
