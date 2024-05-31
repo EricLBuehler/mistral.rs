@@ -453,8 +453,8 @@ impl ImageEmbedding {
             .unwrap_or("glb_sub".to_string());
         assert_eq!(use_hd_transform, with_learnable_separator);
         let (glb_gn, sub_gn) = if with_learnable_separator {
-            let glb_gn = vb.get((1, 1, image_dim_out * 4), "glb_gn")?;
-            let sub_gn = vb.get((1, 1, 1, image_dim_out * 4), "sub_gn")?;
+            let glb_gn = vb.get((1, 1, image_dim_out * 4), "glb_GN")?;
+            let sub_gn = vb.get((1, 1, 1, image_dim_out * 4), "sub_GN")?;
             (Some(glb_gn), Some(sub_gn))
         } else {
             (None, None)
