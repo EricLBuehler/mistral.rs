@@ -248,6 +248,9 @@
 <a href="#246" id="246">246</a>
 <a href="#247" id="247">247</a>
 <a href="#248" id="248">248</a>
+<a href="#249" id="249">249</a>
+<a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::quantized::gguf_file;
@@ -259,6 +262,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::layers::ScaledDotProductAttention;
 <span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, CausalMasker, QLinear};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, Cache};
+<span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
 
 <span class="kw">pub const </span>MAX_SEQ_LEN: usize = <span class="number">4096</span>;
@@ -391,8 +395,8 @@
     <span class="prelude-val">Ok</span>(ln)
 }
 
-<span class="kw">impl </span>ModelWeights {
-    <span class="kw">pub fn </span>from_gguf&lt;R: std::io::Seek + std::io::Read&gt;(
+<span class="kw">impl </span>ModelConfig::FromGGUF <span class="kw">for </span>ModelWeights {
+    <span class="kw">fn </span>from_gguf&lt;R: std::io::Seek + std::io::Read&gt;(
         ct: gguf_file::Content,
         reader: <span class="kw-2">&amp;mut </span>R,
         device: <span class="kw-2">&amp;</span>Device,
@@ -461,7 +465,9 @@
             mapper,
         })
     }
+}
 
+<span class="kw">impl </span>ModelWeights {
     <span class="kw">pub fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,

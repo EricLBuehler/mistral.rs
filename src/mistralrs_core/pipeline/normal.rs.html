@@ -443,14 +443,17 @@
 <a href="#441" id="441">441</a>
 <a href="#442" id="442">442</a>
 <a href="#443" id="443">443</a>
+<a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
     Phi3Loader, Qwen2Loader,
 };
 <span class="kw">use super</span>::{
-    get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
-    ModelKind, ModelPaths, NormalModel, NormalModelLoader, Pipeline, TokenSource, XLoraPaths,
+    get_model_paths, get_xlora_paths, AdapterKind, CacheManager, GeneralMetadata, Loader,
+    ModelInputs, ModelKind, ModelPaths, NormalModel, NormalModelLoader, Pipeline, TokenSource,
+    XLoraPaths,
 };
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
@@ -575,7 +578,9 @@
         no_kv_cache: bool,
         tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     ) -&gt; <span class="self">Self </span>{
-        <span class="self">self</span>.kind = ModelKind::XLoraNormal;
+        <span class="self">self</span>.kind = ModelKind::Adapter {
+            adapter: AdapterKind::XLora,
+        };
         <span class="self">self</span>.with_adapter(
             xlora_model_id,
             xlora_order,
@@ -585,7 +590,9 @@
     }
 
     <span class="kw">pub fn </span>with_lora(<span class="kw-2">mut </span><span class="self">self</span>, lora_model_id: String, lora_order: Ordering) -&gt; <span class="self">Self </span>{
-        <span class="self">self</span>.kind = ModelKind::LoraNormal;
+        <span class="self">self</span>.kind = ModelKind::Adapter {
+            adapter: AdapterKind::Lora,
+        };
         <span class="self">self</span>.with_adapter(lora_model_id, lora_order, <span class="bool-val">false</span>, <span class="prelude-val">None</span>)
     }
 
@@ -687,7 +694,7 @@
             Device::Cpu
         };
 
-        <span class="kw">let </span>is_lora = <span class="self">self</span>.kind.is_adapted_and(|a| a.is_lora());
+        <span class="kw">let </span>is_xlora = <span class="self">self</span>.kind.is_adapted_and(|a| a.is_x_lora());
 
         <span class="kw">let </span><span class="kw-2">mut </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
             ModelKind::Normal =&gt; <span class="macro">normal_model_loader!</span>(
@@ -703,7 +710,9 @@
                 in_situ_quant.is_some(),
                 device.clone()
             ),
-            ModelKind::XLoraNormal =&gt; <span class="macro">xlora_model_loader!</span>(
+            ModelKind::Adapter {
+                adapter: AdapterKind::XLora,
+            } =&gt; <span class="macro">xlora_model_loader!</span>(
                 paths,
                 dtype,
                 default_dtype,
@@ -716,7 +725,9 @@
                 in_situ_quant.is_some(),
                 device.clone()
             ),
-            ModelKind::LoraNormal =&gt; <span class="macro">lora_model_loader!</span>(
+            ModelKind::Adapter {
+                adapter: AdapterKind::Lora,
+            } =&gt; <span class="macro">lora_model_loader!</span>(
                 paths,
                 dtype,
                 default_dtype,
@@ -729,13 +740,7 @@
                 in_situ_quant.is_some(),
                 device.clone()
             ),
-            ModelKind::QuantizedGGUF
-            | ModelKind::QuantizedGGML
-            | ModelKind::XLoraGGUF
-            | ModelKind::XLoraGGML
-            | ModelKind::LoraGGUF
-            | ModelKind::LoraGGML
-            | ModelKind::Speculative { .. } =&gt; <span class="macro">unreachable!</span>(),
+            <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
         };
 
         <span class="kw">let </span>tokenizer = get_tokenizer(paths.get_tokenizer_filename())<span class="question-mark">?</span>;
@@ -750,7 +755,6 @@
 
         <span class="kw">let </span>max_seq_len = model.max_seq_len();
         <span class="kw">let </span>tok_trie: Arc&lt;TokTrie&gt; = build_tok_trie(tokenizer.clone()).into();
-        <span class="kw">let </span>is_xlora = model.is_xlora() &amp;&amp; !is_lora;
         <span class="kw">let </span>num_hidden_layers = model.cache().lock().len();
         <span class="kw">let </span>eos = calculate_eos_tokens(<span class="kw-2">&amp;</span>chat_template, gen_conf, <span class="kw-2">&amp;</span>tokenizer);
         <span class="prelude-val">Ok</span>(Arc::new(Mutex::new(NormalPipeline {
@@ -771,10 +775,10 @@
                 repeat_last_n: <span class="self">self</span>.config.repeat_last_n,
                 tok_trie,
                 has_no_kv_cache: <span class="self">self</span>.no_kv_cache,
-                is_xlora,
                 num_hidden_layers,
                 eos_tok: eos,
-                is_lora,
+                kind: <span class="self">self</span>.kind.clone(),
+                is_xlora,
             },
         })))
     }

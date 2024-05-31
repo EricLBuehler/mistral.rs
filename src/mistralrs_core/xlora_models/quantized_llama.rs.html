@@ -932,6 +932,11 @@
 <a href="#930" id="930">930</a>
 <a href="#931" id="931">931</a>
 <a href="#932" id="932">932</a>
+<a href="#933" id="933">933</a>
+<a href="#934" id="934">934</a>
+<a href="#935" id="935">935</a>
+<a href="#936" id="936">936</a>
+<a href="#937" id="937">937</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -955,6 +960,7 @@
 
 <span class="kw">use </span><span class="kw">super</span>::classifier::XLoraClassifier;
 <span class="kw">use super</span>::{verify_sanity_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
+<span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 
 <span class="kw">const </span>MAX_SEQ_LEN: u32 = <span class="number">4096</span>;
 <span class="kw">const </span>SUPPORTED_LAYERS: [<span class="kw-2">&amp;</span>str; <span class="number">7</span>] = [
@@ -1203,8 +1209,8 @@
     mapper: <span class="prelude-ty">Option</span>&lt;Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;&gt;,
 }
 
-<span class="kw">impl </span>ModelWeights {
-    <span class="kw">pub fn </span>from_ggml(
+<span class="kw">impl </span>ModelConfig::FromAdapterGGML <span class="kw">for </span>ModelWeights {
+    <span class="kw">fn </span>from_ggml(
         <span class="kw-2">mut </span>ct: ggml_file::Content,
         gqa: usize,
         lora_config: <span class="kw-2">&amp;</span>[((String, String), LoraConfig)],
@@ -1374,9 +1380,11 @@
             </span>mapper: <span class="prelude-val">None</span>,
         })
     }
+}
 
+<span class="kw">impl </span>ModelConfig::FromAdapterGGUF <span class="kw">for </span>ModelWeights {
     <span class="attr">#[allow(clippy::too_many_arguments)]
-    </span><span class="kw">pub fn </span>from_gguf&lt;R: std::io::Seek + std::io::Read&gt;(
+    </span><span class="kw">fn </span>from_gguf&lt;R: std::io::Seek + std::io::Read&gt;(
         ct: gguf_file::Content,
         reader: <span class="kw-2">&amp;mut </span>R,
         device: <span class="kw-2">&amp;</span>Device,
@@ -1644,7 +1652,9 @@
             mapper: <span class="prelude-val">Some</span>(mapper),
         })
     }
+}
 
+<span class="kw">impl </span>ModelWeights {
     <span class="kw">pub fn </span>activate_adapters(<span class="kw-2">&amp;mut </span><span class="self">self</span>, adapter_names: Vec&lt;String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>sum = <span class="number">0</span>;
         <span class="kw">for </span>layer <span class="kw">in </span><span class="self">self</span>.layers.iter_mut() {

@@ -434,6 +434,11 @@
 <a href="#432" id="432">432</a>
 <a href="#433" id="433">433</a>
 <a href="#434" id="434">434</a>
+<a href="#435" id="435">435</a>
+<a href="#436" id="436">436</a>
+<a href="#437" id="437">437</a>
+<a href="#438" id="438">438</a>
+<a href="#439" id="439">439</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::quantized::QMatMul;
@@ -446,6 +451,7 @@
     repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention,
 };
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, Cache};
+<span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
 
 <span class="kw">const </span>MAX_SEQ_LEN: u32 = <span class="number">4096</span>;
@@ -630,8 +636,8 @@
     mapper: <span class="prelude-ty">Option</span>&lt;Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;&gt;,
 }
 
-<span class="kw">impl </span>ModelWeights {
-    <span class="kw">pub fn </span>from_ggml(<span class="kw-2">mut </span>ct: ggml_file::Content, gqa: usize) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+<span class="kw">impl </span>ModelConfig::FromGGML <span class="kw">for </span>ModelWeights {
+    <span class="kw">fn </span>from_ggml(<span class="kw-2">mut </span>ct: ggml_file::Content, gqa: usize) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>head_dim = (ct.hparams.n_embd / ct.hparams.n_head) <span class="kw">as </span>usize;
         <span class="kw">let </span>rotary = RotaryEmbedding::new_partial(
             <span class="number">10000.</span>,
@@ -690,8 +696,10 @@
             </span>mapper: <span class="prelude-val">None</span>,
         })
     }
+}
 
-    <span class="kw">pub fn </span>from_gguf&lt;R: std::io::Seek + std::io::Read&gt;(
+<span class="kw">impl </span>ModelConfig::FromGGUF <span class="kw">for </span>ModelWeights {
+    <span class="kw">fn </span>from_gguf&lt;R: std::io::Seek + std::io::Read&gt;(
         ct: gguf_file::Content,
         reader: <span class="kw-2">&amp;mut </span>R,
         device: <span class="kw-2">&amp;</span>Device,
@@ -819,7 +827,9 @@
             mapper: <span class="prelude-val">Some</span>(mapper),
         })
     }
+}
 
+<span class="kw">impl </span>ModelWeights {
     <span class="kw">pub fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         x: <span class="kw-2">&amp;</span>Tensor,

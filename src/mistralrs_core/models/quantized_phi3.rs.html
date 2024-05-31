@@ -287,6 +287,9 @@
 <a href="#285" id="285">285</a>
 <a href="#286" id="286">286</a>
 <a href="#287" id="287">287</a>
+<a href="#288" id="288">288</a>
+<a href="#289" id="289">289</a>
+<a href="#290" id="290">290</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
@@ -294,6 +297,7 @@
     repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention,
 };
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::Cache;
+<span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
 <span class="kw">use </span>candle_core::quantized::gguf_file;
 <span class="kw">use </span>candle_core::quantized::QMatMul;
@@ -448,8 +452,8 @@
     <span class="prelude-val">Ok</span>((cos, sin))
 }
 
-<span class="kw">impl </span>ModelWeights {
-    <span class="kw">pub fn </span>from_gguf&lt;R: std::io::Seek + std::io::Read&gt;(
+<span class="kw">impl </span>ModelConfig::FromGGUF <span class="kw">for </span>ModelWeights {
+    <span class="kw">fn </span>from_gguf&lt;R: std::io::Seek + std::io::Read&gt;(
         ct: gguf_file::Content,
         reader: <span class="kw-2">&amp;mut </span>R,
         device: <span class="kw-2">&amp;</span>Device,
@@ -537,7 +541,9 @@
             max_seq_len: context_window,
         })
     }
+}
 
+<span class="kw">impl </span>ModelWeights {
     <span class="kw">pub fn </span>forward(<span class="kw-2">&amp;mut </span><span class="self">self</span>, input_ids: <span class="kw-2">&amp;</span>Tensor, seqlen_offsets: <span class="kw-2">&amp;</span>[usize]) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(_b_sz, seq_len) = input_ids.dims2()<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.tok_embeddings.forward(input_ids)<span class="question-mark">?</span>;
