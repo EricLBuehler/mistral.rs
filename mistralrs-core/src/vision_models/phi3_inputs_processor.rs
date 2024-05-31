@@ -11,7 +11,7 @@ use tokenizers::Tokenizer;
 use crate::{
     pipeline::{
         text_models_inputs_processor::{self, get_completion_input, get_prompt_input},
-        InputsProcessor, InputsProcessorType, Processor, ProcessorCreator,
+        InputsProcessor, InputsProcessorType, MessagesAction, Processor, ProcessorCreator,
     },
     sequence::Sequence,
     vision_models::image_processor::make_pixel_values,
@@ -54,6 +54,9 @@ impl Processor for Phi3Processor {
     }
     fn get_special_tokens(&self) -> &[&'static str] {
         &[]
+    }
+    fn template_action(&self) -> MessagesAction {
+        MessagesAction::FlattenOnlyText
     }
 }
 

@@ -19,6 +19,13 @@ pub trait ProcessorCreator {
     ) -> Arc<dyn Processor + Send + Sync>;
 }
 
+pub enum MessagesAction {
+    // For idefics2
+    Keep,
+    // For everything else
+    FlattenOnlyText,
+}
+
 /// Processor for messages.
 /// Also includes method to retrieve the input processor for processing inputs for the
 /// model.
@@ -29,7 +36,12 @@ pub trait Processor {
         messages: Vec<IndexMap<String, Content>>,
         add_generation_prompt: bool,
     ) -> Result<Vec<u32>> {
-        let prompt = apply_chat_template(pipeline, messages, add_generation_prompt)?;
+        let prompt = apply_chat_template(
+            pipeline,
+            messages,
+            add_generation_prompt,
+            self.template_action(),
+        )?;
         let encoding = pipeline
             .tokenizer()
             .encode(prompt, false)
@@ -38,13 +50,49 @@ pub trait Processor {
     }
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor>;
     fn get_special_tokens(&self) -> &[&'static str];
+    fn template_action(&self) -> MessagesAction;
 }
 
 pub(crate) fn apply_chat_template(
     pipeline: &dyn Pipeline,
     messages: Vec<IndexMap<String, Content>>,
     add_generation_prompt: bool,
+    action: MessagesAction,
 ) -> Result<String> {
+    let messages = match action {
+        MessagesAction::Keep => messages,
+        MessagesAction::FlattenOnlyText => {
+            // This is really only for image models. If they need to flatten it s.t. they only see
+            // the text, do that.
+            let mut new_messages = Vec::new();
+            for message in messages {
+                let mut new_message = IndexMap::new();
+                for (k, v) in message {
+                    if k == "content" {
+                        match v {
+                            Either::Left(lv) => {
+                                new_message.insert(k, Either::Left(lv));
+                            }
+                            Either::Right(rv) => {
+                                'outer: for content_row in rv {
+                                    for (content_k, content_v) in content_row {
+                                        if content_k == "text" {
+                                            new_message.insert(k, Either::Left(content_v));
+                                            break 'outer;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        new_message.insert(k, Either::Left(v.left().unwrap()));
+                    }
+                }
+                new_messages.push(new_message)
+            }
+            new_messages
+        }
+    };
     let chat_template = pipeline.get_chat_template();
     let template = chat_template.chat_template.as_ref().unwrap();
     let bos_tok = if let Some(ref bos) = pipeline.get_chat_template().bos_token {
@@ -89,5 +137,8 @@ impl Processor for BasicProcessor {
     }
     fn get_special_tokens(&self) -> &[&'static str] {
         &[]
+    }
+    fn template_action(&self) -> MessagesAction {
+        MessagesAction::FlattenOnlyText
     }
 }

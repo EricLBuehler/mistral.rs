@@ -31,7 +31,7 @@ pub use normal_loaders::{
     Phi2Loader, Phi3Loader, Phi3RopeScaling, Qwen2Loader,
 };
 pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths, XLoraPaths};
-pub(crate) use processing::{BasicProcessor, Processor, ProcessorCreator};
+pub(crate) use processing::{BasicProcessor, MessagesAction, Processor, ProcessorCreator};
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 use std::any::Any;
@@ -800,11 +800,11 @@ mod tests {
     /// ```
     fn test_image_chat_templates() {
         let templates = [
-            // HuggingFaceM4/idefics2-8b-chatty: first run, without images
+            // HuggingFaceM4/idefics2-8b-chatty
             (true, "<s>", "</s>", "<unk>", "{% for message in messages %}{{message['role'].capitalize()}}{% if message['content'][0]['type'] == 'image' %}{{':'}}{% else %}{{': '}}{% endif %}{% for line in message['content'] %}{% if line['type'] == 'text' %}{{line['text']}}{% elif line['type'] == 'image' %}{{ '<image>' }}{% endif %}{% endfor %}<end_of_utterance>\n{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"),
         ];
         let expected_outputs = [
-            // HuggingFaceM4/idefics2-8b-chatty: first run, without images
+            // HuggingFaceM4/idefics2-8b-chatty
             "System: You are a helpful assistant<end_of_utterance>\nUser:<image>Hello, please describe the above.<end_of_utterance>\nAssistant: Hi there<end_of_utterance>\nUser:<image>This is me, who are you<end_of_utterance>\nAssistant:    I am an assistant   <end_of_utterance>\nUser:<image>Another question, what is this?<end_of_utterance>\nAssistant:",
         ];
 
