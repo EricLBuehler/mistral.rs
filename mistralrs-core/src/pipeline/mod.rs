@@ -5,6 +5,8 @@ mod gguf;
 mod gguf_tokenizer;
 mod inputs_processor;
 mod isq;
+mod inputs_processor;
+mod isq;
 mod macros;
 mod normal;
 mod normal_loaders;
@@ -25,7 +27,14 @@ use core::fmt;
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 pub use isq::IsqModel;
+pub use isq::IsqModel;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
+pub use normal_loaders::{
+    GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, NormalModelLoader,
+    Phi2Loader, Phi3Loader, Qwen2Loader,
+};
+pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths, XLoraPaths};
+pub(crate) use processing::{BasicProcessor, Processor, ProcessorCreator};
 pub use normal_loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, NormalModelLoader,
     Phi2Loader, Phi3Loader, Qwen2Loader,
@@ -35,8 +44,10 @@ pub(crate) use processing::{BasicProcessor, Processor, ProcessorCreator};
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 use std::any::Any;
+use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::{collections::HashMap, path::PathBuf, str::FromStr};
 use std::{collections::HashMap, path::PathBuf, str::FromStr};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
