@@ -281,9 +281,126 @@
 <a href="#279" id="279">279</a>
 <a href="#280" id="280">280</a>
 <a href="#281" id="281">281</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#282" id="282">282</a>
+<a href="#283" id="283">283</a>
+<a href="#284" id="284">284</a>
+<a href="#285" id="285">285</a>
+<a href="#286" id="286">286</a>
+<a href="#287" id="287">287</a>
+<a href="#288" id="288">288</a>
+<a href="#289" id="289">289</a>
+<a href="#290" id="290">290</a>
+<a href="#291" id="291">291</a>
+<a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
+<a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a>
+<a href="#342" id="342">342</a>
+<a href="#343" id="343">343</a>
+<a href="#344" id="344">344</a>
+<a href="#345" id="345">345</a>
+<a href="#346" id="346">346</a>
+<a href="#347" id="347">347</a>
+<a href="#348" id="348">348</a>
+<a href="#349" id="349">349</a>
+<a href="#350" id="350">350</a>
+<a href="#351" id="351">351</a>
+<a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a>
+<a href="#354" id="354">354</a>
+<a href="#355" id="355">355</a>
+<a href="#356" id="356">356</a>
+<a href="#357" id="357">357</a>
+<a href="#358" id="358">358</a>
+<a href="#359" id="359">359</a>
+<a href="#360" id="360">360</a>
+<a href="#361" id="361">361</a>
+<a href="#362" id="362">362</a>
+<a href="#363" id="363">363</a>
+<a href="#364" id="364">364</a>
+<a href="#365" id="365">365</a>
+<a href="#366" id="366">366</a>
+<a href="#367" id="367">367</a>
+<a href="#368" id="368">368</a>
+<a href="#369" id="369">369</a>
+<a href="#370" id="370">370</a>
+<a href="#371" id="371">371</a>
+<a href="#372" id="372">372</a>
+<a href="#373" id="373">373</a>
+<a href="#374" id="374">374</a>
+<a href="#375" id="375">375</a>
+<a href="#376" id="376">376</a>
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a>
+<a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a>
+<a href="#382" id="382">382</a>
+<a href="#383" id="383">383</a>
+<a href="#384" id="384">384</a>
+<a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a>
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
+<a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
+<a href="#395" id="395">395</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>base64::{engine::general_purpose, Engine};
+<span class="kw">use </span>std::{
+    collections::HashMap,
     env,
     error::Error,
+    ops::Deref,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -291,7 +408,7 @@
 };
 <span class="kw">use </span>tokio::sync::mpsc::{channel, Receiver, Sender};
 
-<span class="kw">use </span><span class="kw">crate</span>::openai::{ChatCompletionRequest, Grammar, StopTokens};
+<span class="kw">use </span><span class="kw">crate</span>::openai::{ChatCompletionRequest, Grammar, MessageInnerContent, StopTokens};
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{Json, State},
@@ -426,11 +543,11 @@
     }
 }
 
-<span class="kw">fn </span>parse_request(
+<span class="kw">async fn </span>parse_request(
     oairequest: ChatCompletionRequest,
     state: Arc&lt;MistralRs&gt;,
     tx: Sender&lt;Response&gt;,
-) -&gt; (Request, bool) {
+) -&gt; <span class="prelude-ty">Result</span>&lt;(Request, bool)&gt; {
     <span class="kw">let </span>repr = serde_json::to_string(<span class="kw-2">&amp;</span>oairequest).expect(<span class="string">"Serialization of request failed."</span>);
     MistralRs::maybe_log_request(state.clone(), repr);
 
@@ -442,26 +559,130 @@
     <span class="kw">let </span>messages = <span class="kw">match </span>oairequest.messages {
         Either::Left(req_messages) =&gt; {
             <span class="kw">let </span><span class="kw-2">mut </span>messages = Vec::new();
+            <span class="kw">let </span><span class="kw-2">mut </span>image_urls = Vec::new();
             <span class="kw">for </span>message <span class="kw">in </span>req_messages {
-                <span class="kw">let </span><span class="kw-2">mut </span>message_map = IndexMap::new();
-                message_map.insert(<span class="string">"role"</span>.to_string(), message.role);
-                message_map.insert(<span class="string">"content"</span>.to_string(), message.content);
-                messages.push(message_map);
+                <span class="kw">match </span>message.content.deref() {
+                    Either::Left(content) =&gt; {
+                        <span class="kw">let </span><span class="kw-2">mut </span>message_map: IndexMap&lt;
+                            String,
+                            Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;,
+                        &gt; = IndexMap::new();
+                        message_map.insert(<span class="string">"role"</span>.to_string(), Either::Left(message.role));
+                        message_map
+                            .insert(<span class="string">"content"</span>.to_string(), Either::Left(content.to_string()));
+                        messages.push(message_map);
+                    }
+                    Either::Right(image_messages) =&gt; {
+                        <span class="kw">if </span>image_messages.len() != <span class="number">2 </span>{
+                            <span class="macro">anyhow::bail!</span>(
+                                <span class="string">"Expected 2 items for the content of a message with an image."
+                            </span>);
+                        }
+                        <span class="kw">if </span>message.role != <span class="string">"user" </span>{
+                            <span class="macro">anyhow::bail!</span>(
+                                <span class="string">"Role for an image message must be `user`, but it is {}"</span>,
+                                message.role
+                            );
+                        }
+
+                        <span class="kw">let </span><span class="kw-2">mut </span>items = Vec::new();
+                        <span class="kw">for </span>image_message <span class="kw">in </span>image_messages {
+                            <span class="kw">if </span>image_message.len() != <span class="number">2 </span>{
+                                <span class="macro">anyhow::bail!</span>(<span class="string">"Expected 2 items for the sub-content of a message with an image."</span>);
+                            }
+                            <span class="kw">if </span>!image_message.contains_key(<span class="string">"type"</span>) {
+                                <span class="macro">anyhow::bail!</span>(<span class="string">"Expected `type` key in input message."</span>);
+                            }
+                            <span class="kw">if </span>image_message[<span class="string">"type"</span>].is_right() {
+                                <span class="macro">anyhow::bail!</span>(<span class="string">"Expected string value in `type`."</span>);
+                            }
+                            items.push(image_message[<span class="string">"type"</span>].as_ref().unwrap_left().clone())
+                        }
+
+                        <span class="kw">fn </span>get_content_and_url(
+                            text_idx: usize,
+                            url_idx: usize,
+                            image_messages: <span class="kw-2">&amp;</span>[HashMap&lt;String, MessageInnerContent&gt;],
+                        ) -&gt; <span class="prelude-ty">Result</span>&lt;(String, String)&gt; {
+                            <span class="kw">if </span>image_messages[text_idx][<span class="string">"text"</span>].is_right() {
+                                <span class="macro">anyhow::bail!</span>(<span class="string">"Expected string value in `text`."</span>);
+                            }
+                            <span class="kw">let </span>content = image_messages[text_idx][<span class="string">"text"</span>]
+                                .as_ref()
+                                .unwrap_left()
+                                .clone();
+                            <span class="kw">if </span>image_messages[url_idx][<span class="string">"image_url"</span>].is_left()
+                                || !image_messages[url_idx][<span class="string">"image_url"</span>]
+                                    .as_ref()
+                                    .unwrap_right()
+                                    .contains_key(<span class="string">"url"</span>)
+                            {
+                                <span class="macro">anyhow::bail!</span>(<span class="string">"Expected content of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}"</span>)
+                            }
+                            <span class="kw">let </span>url = image_messages[url_idx][<span class="string">"image_url"</span>].as_ref().unwrap_right()
+                                [<span class="string">"url"</span>]
+                                .clone();
+                            <span class="prelude-val">Ok</span>((content, url))
+                        }
+                        <span class="kw">let </span><span class="kw-2">mut </span>message_map: IndexMap&lt;
+                            String,
+                            Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;,
+                        &gt; = IndexMap::new();
+                        message_map.insert(<span class="string">"role"</span>.to_string(), Either::Left(message.role));
+                        <span class="kw">let </span>(content, url) = <span class="kw">if </span>items[<span class="number">0</span>] == <span class="string">"text" </span>{
+                            get_content_and_url(<span class="number">0</span>, <span class="number">1</span>, image_messages)<span class="question-mark">?
+                        </span>} <span class="kw">else </span>{
+                            get_content_and_url(<span class="number">1</span>, <span class="number">0</span>, image_messages)<span class="question-mark">?
+                        </span>};
+
+                        <span class="kw">let </span><span class="kw-2">mut </span>content_map = Vec::new();
+                        <span class="kw">let </span><span class="kw-2">mut </span>content_image_map = IndexMap::new();
+                        content_image_map.insert(<span class="string">"type"</span>.to_string(), <span class="string">"image"</span>.to_string());
+                        content_map.push(content_image_map);
+                        <span class="kw">let </span><span class="kw-2">mut </span>content_text_map = IndexMap::new();
+                        content_text_map.insert(<span class="string">"type"</span>.to_string(), <span class="string">"text"</span>.to_string());
+                        content_text_map.insert(<span class="string">"text"</span>.to_string(), content);
+                        content_map.push(content_text_map);
+
+                        message_map.insert(<span class="string">"content"</span>.to_string(), Either::Right(content_map));
+                        messages.push(message_map);
+                        image_urls.push(url);
+                    }
+                }
             }
-            RequestMessage::Chat(messages)
+            <span class="kw">if </span>!image_urls.is_empty() {
+                <span class="kw">let </span><span class="kw-2">mut </span>images = Vec::new();
+                <span class="kw">for </span>url <span class="kw">in </span>image_urls {
+                    <span class="kw">let </span>bytes = <span class="kw">match </span>reqwest::get(url.clone()).<span class="kw">await </span>{
+                        <span class="prelude-val">Ok</span>(http_resp) =&gt; http_resp.bytes().<span class="kw">await</span><span class="question-mark">?</span>.to_vec(),
+                        <span class="prelude-val">Err</span>(e) =&gt; {
+                            <span class="kw">if </span>e.status().is_some_and(|code| code == StatusCode::NOT_FOUND) {
+                                general_purpose::STANDARD.decode(url)<span class="question-mark">?
+                            </span>} <span class="kw">else </span>{
+                                <span class="macro">anyhow::bail!</span>(e)
+                            }
+                        }
+                    };
+                    images.push(image::load_from_memory(<span class="kw-2">&amp;</span>bytes)<span class="question-mark">?</span>);
+                }
+                RequestMessage::VisionChat { messages, images }
+            } <span class="kw">else </span>{
+                RequestMessage::Chat(messages)
+            }
         }
         Either::Right(prompt) =&gt; {
             <span class="kw">let </span><span class="kw-2">mut </span>messages = Vec::new();
-            <span class="kw">let </span><span class="kw-2">mut </span>message_map = IndexMap::new();
-            message_map.insert(<span class="string">"role"</span>.to_string(), <span class="string">"user"</span>.to_string());
-            message_map.insert(<span class="string">"content"</span>.to_string(), prompt);
+            <span class="kw">let </span><span class="kw-2">mut </span>message_map: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;&gt; =
+                IndexMap::new();
+            message_map.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string()));
+            message_map.insert(<span class="string">"content"</span>.to_string(), Either::Left(prompt));
             messages.push(message_map);
             RequestMessage::Chat(messages)
         }
     };
 
     <span class="kw">let </span>is_streaming = oairequest.stream.unwrap_or(<span class="bool-val">false</span>);
-    (
+    <span class="prelude-val">Ok</span>((
         Request::Normal(NormalRequest {
             id: state.next_request_id(),
             messages,
@@ -489,7 +710,7 @@
             adapters: oairequest.adapters,
         }),
         is_streaming,
-    )
+    ))
 }
 
 <span class="attr">#[utoipa::path(
@@ -504,7 +725,14 @@
     Json(oairequest): Json&lt;ChatCompletionRequest&gt;,
 ) -&gt; ChatCompletionResponder {
     <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">10_000</span>);
-    <span class="kw">let </span>(request, is_streaming) = parse_request(oairequest, state.clone(), tx);
+    <span class="kw">let </span>(request, is_streaming) = <span class="kw">match </span>parse_request(oairequest, state.clone(), tx).<span class="kw">await </span>{
+        <span class="prelude-val">Ok</span>(x) =&gt; x,
+        <span class="prelude-val">Err</span>(e) =&gt; {
+            <span class="kw">let </span>e = anyhow::Error::msg(e.to_string());
+            MistralRs::maybe_log_error(state, <span class="kw-2">&amp;*</span>e);
+            <span class="kw">return </span>ChatCompletionResponder::InternalError(e.into());
+        }
+    };
     <span class="kw">let </span>sender = state.get_sender();
 
     <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = sender.send(request).<span class="kw">await </span>{

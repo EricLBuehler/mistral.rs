@@ -438,6 +438,9 @@
 <a href="#436" id="436">436</a>
 <a href="#437" id="437">437</a>
 <a href="#438" id="438">438</a>
+<a href="#439" id="439">439</a>
+<a href="#440" id="440">440</a>
+<a href="#441" id="441">441</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Phi model.
@@ -454,7 +457,7 @@
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, QLinear, ScaledDotProductAttention},
-    pipeline::{extract_logits, Cache, NormalModel},
+    pipeline::{extract_logits, Cache, IsqModel, NormalModel},
     DeviceMapMetadata,
 };
 
@@ -819,6 +822,22 @@
     }
 }
 
+<span class="kw">impl </span>IsqModel <span class="kw">for </span>Model {
+    <span class="kw">fn </span>get_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
+        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
+        tensors.push((<span class="self">self</span>.lm_head.inner(), <span class="prelude-val">None</span>));
+        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
+            tensors.push((layer.self_attn.q_proj.inner(), <span class="prelude-val">Some</span>(i)));
+            tensors.push((layer.self_attn.k_proj.inner(), <span class="prelude-val">Some</span>(i)));
+            tensors.push((layer.self_attn.v_proj.inner(), <span class="prelude-val">Some</span>(i)));
+            tensors.push((layer.self_attn.dense.inner(), <span class="prelude-val">Some</span>(i)));
+            tensors.push((layer.mlp.fc1.inner(), <span class="prelude-val">Some</span>(i)));
+            tensors.push((layer.mlp.fc2.inner(), <span class="prelude-val">Some</span>(i)));
+        }
+        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+    }
+}
+
 <span class="kw">impl </span>NormalModel <span class="kw">for </span>Model {
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
@@ -861,19 +880,6 @@
     </span>}
     <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="self">self</span>.max_seq_len
-    }
-    <span class="kw">fn </span>get_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
-        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
-        tensors.push((<span class="self">self</span>.lm_head.inner(), <span class="prelude-val">None</span>));
-        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
-            tensors.push((layer.self_attn.q_proj.inner(), <span class="prelude-val">Some</span>(i)));
-            tensors.push((layer.self_attn.k_proj.inner(), <span class="prelude-val">Some</span>(i)));
-            tensors.push((layer.self_attn.v_proj.inner(), <span class="prelude-val">Some</span>(i)));
-            tensors.push((layer.self_attn.dense.inner(), <span class="prelude-val">Some</span>(i)));
-            tensors.push((layer.mlp.fc1.inner(), <span class="prelude-val">Some</span>(i)));
-            tensors.push((layer.mlp.fc2.inner(), <span class="prelude-val">Some</span>(i)));
-        }
-        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
     }
 }
 </code></pre></div></section></main></body></html>

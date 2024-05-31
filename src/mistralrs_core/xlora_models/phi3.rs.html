@@ -736,6 +736,10 @@
 <a href="#734" id="734">734</a>
 <a href="#735" id="735">735</a>
 <a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a>
+<a href="#740" id="740">740</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
@@ -743,6 +747,7 @@
 </span><span class="kw">use crate</span>::{
     layers::ScaledDotProductAttention,
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
+    pipeline::IsqModel,
 };
 <span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::VarBuilder;
@@ -1142,7 +1147,7 @@
         <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
             <span class="kw">let </span>rotary_emb = Arc::new(PhiRotaryEmbedding::new(
                 vb.dtype(),
-                cfg,
+                cfg.clone(),
                 mapper.device_for(layer_idx, <span class="bool-val">false</span>).unwrap_or(<span class="kw-2">&amp;</span>real_device),
             )<span class="question-mark">?</span>);
             <span class="kw">let </span>layer = DecoderLayer::new(
@@ -1346,6 +1351,32 @@
     }
 }
 
+<span class="kw">impl </span>IsqModel <span class="kw">for </span>Model {
+    <span class="kw">fn </span>get_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
+        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
+        tensors.push((<span class="self">self</span>.lm_head.inner(), <span class="prelude-val">None</span>));
+        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
+            tensors.push((
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.qkv_proj).unwrap().inner(),
+                <span class="prelude-val">Some</span>(i),
+            ));
+            tensors.push((
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.o_proj).unwrap().inner(),
+                <span class="prelude-val">Some</span>(i),
+            ));
+            tensors.push((
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.down_proj).unwrap().inner(),
+                <span class="prelude-val">Some</span>(i),
+            ));
+            tensors.push((
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.gate_up_proj).unwrap().inner(),
+                <span class="prelude-val">Some</span>(i),
+            ));
+        }
+        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+    }
+}
+
 <span class="kw">impl </span>NormalModel <span class="kw">for </span>Model {
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
@@ -1394,29 +1425,6 @@
     </span>}
     <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="self">self</span>.max_seq_len
-    }
-    <span class="kw">fn </span>get_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
-        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
-        tensors.push((<span class="self">self</span>.lm_head.inner(), <span class="prelude-val">None</span>));
-        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
-            tensors.push((
-                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.qkv_proj).unwrap().inner(),
-                <span class="prelude-val">Some</span>(i),
-            ));
-            tensors.push((
-                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.o_proj).unwrap().inner(),
-                <span class="prelude-val">Some</span>(i),
-            ));
-            tensors.push((
-                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.down_proj).unwrap().inner(),
-                <span class="prelude-val">Some</span>(i),
-            ));
-            tensors.push((
-                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.gate_up_proj).unwrap().inner(),
-                <span class="prelude-val">Some</span>(i),
-            ));
-        }
-        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
     }
     <span class="kw">fn </span>activate_adapters(<span class="kw-2">&amp;mut </span><span class="self">self</span>, adapter_names: Vec&lt;String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>sum = <span class="number">0</span>;

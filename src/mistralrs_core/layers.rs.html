@@ -484,9 +484,21 @@
 <a href="#482" id="482">482</a>
 <a href="#483" id="483">483</a>
 <a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a>
+<a href="#491" id="491">491</a>
+<a href="#492" id="492">492</a>
+<a href="#493" id="493">493</a>
+<a href="#494" id="494">494</a>
+<a href="#495" id="495">495</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
+    collections::HashMap,
     ops::Mul,
     str::FromStr,
     sync::{
@@ -500,11 +512,12 @@
     DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor,
 };
 <span class="kw">use </span>candle_nn::{Linear, Module, VarBuilder};
+<span class="kw">use </span>either::Either;
 
 <span class="kw">pub use </span><span class="kw">crate</span>::layers_masker::CausalMasker;
 <span class="kw">pub use </span><span class="kw">crate</span>::layers_utils::{flash_attn, repeat_kv, verify_sanity_gguf};
 
-<span class="kw">use crate</span>::{cublaslt::CUBLASLT_HANDLE, models::phi3, INHIBIT_GEMM_F16};
+<span class="kw">use crate</span>::{cublaslt::CUBLASLT_HANDLE, INHIBIT_GEMM_F16};
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">pub struct </span>RmsNorm {
@@ -586,15 +599,24 @@
     scaling_type: ScaledRopeType,
 }
 
+<span class="kw">pub struct </span>PhiRopeConfig {
+    <span class="kw">pub </span>rope_scaling: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, Either&lt;Vec&lt;f32&gt;, String&gt;&gt;&gt;,
+    <span class="kw">pub </span>max_position_embeddings: usize,
+    <span class="kw">pub </span>original_max_position_embeddings: usize,
+    <span class="kw">pub </span>rope_theta: f64,
+    <span class="kw">pub </span>head_dim: usize,
+}
+
 <span class="kw">impl </span>PhiRotaryEmbedding {
-    <span class="kw">pub fn </span>new(dtype: DType, cfg: <span class="kw-2">&amp;</span>phi3::Config, dev: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">pub fn </span>new(dtype: DType, cfg: <span class="kw">impl </span>Into&lt;PhiRopeConfig&gt;, dev: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">let </span>cfg: PhiRopeConfig = cfg.into();
         <span class="kw">let </span>scaled_params = cfg.rope_scaling.as_ref().map(|r| ScaledRopeParams {
             short_factor: r[<span class="string">"short_factor"</span>].clone().left().unwrap(),
             long_factor: r[<span class="string">"long_factor"</span>].clone().left().unwrap(),
             scaling_type: r[<span class="string">"type"</span>].clone().right().unwrap().parse().unwrap(),
         });
         <span class="kw">let </span>max_seq_len = cfg.max_position_embeddings;
-        <span class="kw">let </span>dim = cfg.head_dim();
+        <span class="kw">let </span>dim = cfg.head_dim;
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(scaled_params) = scaled_params {
             <span class="comment">// Calculate scale

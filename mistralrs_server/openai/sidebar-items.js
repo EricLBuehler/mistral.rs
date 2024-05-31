@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["Grammar","StopTokens"],"fn":["default_1usize","default_false"],"struct":["ChatCompletionRequest","CompletionRequest","Message","ModelObject","ModelObjects"]};
+window.SIDEBAR_ITEMS = {"enum":["Grammar","StopTokens"],"fn":["default_1usize","default_false"],"struct":["ChatCompletionRequest","CompletionRequest","Message","MessageContent","MessageInnerContent","ModelObject","ModelObjects"]};

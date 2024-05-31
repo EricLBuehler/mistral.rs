@@ -528,7 +528,57 @@
 <a href="#526" id="526">526</a>
 <a href="#527" id="527">527</a>
 <a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
+<a href="#551" id="551">551</a>
+<a href="#552" id="552">552</a>
+<a href="#553" id="553">553</a>
+<a href="#554" id="554">554</a>
+<a href="#555" id="555">555</a>
+<a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+    any::Any,
     iter::zip,
     sync::{Arc, Mutex},
 };
@@ -550,9 +600,9 @@
 };
 
 <span class="kw">use super</span>::{
-    cache_manager::DefaultCacheManager, calculate_inputs, chat_template::ChatTemplate,
-    sampling::SpeculativeSample, CacheInstruction, CacheManager, GeneralMetadata, ModelInputs,
-    ModelPaths,
+    cache_manager::DefaultCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
+    AdapterActivationMixin, CacheInstruction, CacheManager, CacheManagerMixin, GeneralMetadata,
+    IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
 };
 
 <span class="kw">pub struct </span>SpeculativeLoader {
@@ -663,6 +713,7 @@
     gamma: usize,
     metadata: GeneralMetadata,
     latest_logit_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+    category: ModelCategory,
 }
 
 <span class="attr">#[derive(Copy, Clone)]
@@ -682,20 +733,129 @@
         {
             <span class="macro">candle_core::bail!</span>(<span class="string">"Target and draft models' tokenzier vocab do not match. This is required for speculative decoding."</span>);
         }
+        <span class="kw">if </span><span class="macro">get_mut_arcmutex!</span>(target).category() != <span class="macro">get_mut_arcmutex!</span>(draft).category() {
+            <span class="macro">candle_core::bail!</span>(<span class="string">"Target and draft models' category do not match. This is required for speculative decoding."</span>);
+        }
+        <span class="kw">if </span><span class="macro">get_mut_arcmutex!</span>(target)
+            .get_processor()
+            .inputs_processor()
+            .get_type()
+            != <span class="macro">get_mut_arcmutex!</span>(draft)
+                .get_processor()
+                .inputs_processor()
+                .get_type()
+        {
+            <span class="macro">candle_core::bail!</span>(<span class="string">"Target and draft models' input processors do not match. This is required for speculative decoding."</span>);
+        }
         <span class="kw">let </span>metadata = <span class="macro">get_mut_arcmutex!</span>(target).get_metadata().clone();
-        <span class="comment">// todo: some checks or relaxation here?
+        <span class="kw">let </span>category = <span class="macro">get_mut_arcmutex!</span>(target).category();
+        <span class="comment">// TODO: some checks or relaxation here?
         </span><span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             target,
             draft,
             gamma: config.gamma,
             metadata,
             latest_logit_cache: <span class="prelude-val">None</span>,
+            category,
         })
+    }
+}
+
+<span class="kw">impl </span>PreProcessingMixin <span class="kw">for </span>SpeculativePipeline {
+    <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;ChatTemplate&gt; {
+        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).get_chat_template()
+    }
+    <span class="kw">fn </span>get_input_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt; {
+        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).get_input_processor_config()
+    }
+}
+
+<span class="kw">impl </span>IsqPipelineMixin <span class="kw">for </span>SpeculativePipeline {
+    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: GgmlDType) -&gt; anyhow::Result&lt;()&gt; {
+        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).re_isq_model(dtype)<span class="question-mark">?</span>;
+        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).re_isq_model(dtype)
+    }
+}
+
+<span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>SpeculativePipeline {
+    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_in_cache(
+            <span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft),
+            seqs,
+            modify_draft_cache,
+        );
+        DefaultCacheManager.clone_in_cache(<span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target), seqs, <span class="bool-val">false</span>);
+    }
+    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_out_cache(
+            <span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft),
+            seqs,
+            modify_draft_cache,
+        );
+        DefaultCacheManager.clone_out_cache(<span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target), seqs, <span class="bool-val">false</span>);
+    }
+    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, reset_non_granular: bool, modify_draft_cache: bool) {
+        DefaultCacheManager.set_none_cache(<span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft), modify_draft_cache);
+        DefaultCacheManager.set_none_cache(<span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target), <span class="bool-val">false</span>);
+        <span class="kw">if </span>reset_non_granular {
+            <span class="self">self</span>.reset_non_granular_state()
+        }
+        <span class="self">self</span>.latest_logit_cache = <span class="prelude-val">None</span>;
+    }
+    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {
+        <span class="macro">unreachable!</span>()
+    }
+}
+
+<span class="kw">impl </span>AdapterActivationMixin <span class="kw">for </span>SpeculativePipeline {
+    <span class="doccomment">/// Returns the number of activated adapters.
+    </span><span class="kw">fn </span>activate_adapters(<span class="kw-2">&amp;mut </span><span class="self">self</span>, adapters: Vec&lt;String&gt;) -&gt; anyhow::Result&lt;usize&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>res = <span class="number">0</span>;
+        res += <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).activate_adapters(adapters.clone())<span class="question-mark">?</span>;
+        res += <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).activate_adapters(adapters)<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(res)
+    }
+}
+
+<span class="kw">impl </span>MetadataMixin <span class="kw">for </span>SpeculativePipeline {
+    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Device {
+        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).device()
+    }
+    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;Tokenizer&gt; {
+        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).tokenizer()
+    }
+    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+        <span class="macro">format!</span>(
+            <span class="string">"Speculative: tgt = `{}`, draft = `{}`, gamma = `{}`"</span>,
+            <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).name(),
+            <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).name(),
+            <span class="self">self</span>.gamma,
+        )
+    }
+    <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) {
+        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).reset_non_granular_state();
+        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).reset_non_granular_state();
+    }
+    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>GeneralMetadata {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.metadata
     }
 }
 
 <span class="attr">#[async_trait::async_trait]
 </span><span class="kw">impl </span>Pipeline <span class="kw">for </span>SpeculativePipeline {
+    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _inputs: Box&lt;<span class="kw">dyn </span>Any&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="macro">unreachable!</span>()
+    }
+    <span class="kw">async fn </span>sample(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
+        _logits: Tensor,
+        _prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
+        _disable_eos_stop: bool,
+        _rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="macro">unreachable!</span>()
+    }
     <span class="kw">async fn </span>step(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         input_seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
@@ -763,16 +923,21 @@
             <span class="kw">let </span>is_xlora = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).get_metadata().is_xlora;
             <span class="kw">let </span>device = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).device();
             <span class="kw">let </span>has_no_kv_cache = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).get_metadata().has_no_kv_cache;
-            <span class="kw">let </span>inputs = calculate_inputs(
-                <span class="kw-2">&amp;</span>[seq],
-                is_prompt &amp;&amp; i == <span class="number">0</span>, <span class="comment">// Only prompt (no kv cache) if first
-                </span>is_xlora,
-                <span class="kw-2">&amp;</span>device,
-                has_no_kv_cache,
-                <span class="prelude-val">None</span>,
-            )
-            .unwrap();
-            <span class="kw">let </span>logits = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).forward_inputs(inputs)<span class="question-mark">?</span>;
+            <span class="kw">let </span>inputs = <span class="self">self
+                </span>.get_processor()
+                .inputs_processor()
+                .process_inputs(
+                    <span class="self">self</span>.tokenizer(),
+                    <span class="kw-2">&amp;mut </span>[seq],
+                    is_prompt &amp;&amp; i == <span class="number">0</span>, <span class="comment">// Only prompt (no kv cache) if first
+                    </span>is_xlora,
+                    <span class="kw-2">&amp;</span>device,
+                    has_no_kv_cache,
+                    <span class="prelude-val">None</span>,
+                    <span class="prelude-val">None</span>,
+                )
+                .unwrap();
+            <span class="kw">let </span>logits = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).forward_inputs(Box::new(inputs))<span class="question-mark">?</span>;
 
             <span class="kw">let </span>sample = sample_sequence(
                 logits.clone(),
@@ -824,17 +989,22 @@
         <span class="kw">let </span>has_no_kv_cache = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target)
             .get_metadata()
             .has_no_kv_cache;
-        <span class="kw">let </span>inputs = calculate_inputs(
-            <span class="kw-2">&amp;</span>[seq],
-            <span class="bool-val">true</span>, <span class="comment">// use the "prefill" tokens
-            </span>is_xlora,
-            <span class="kw-2">&amp;</span>device,
-            has_no_kv_cache,
-            <span class="prelude-val">Some</span>((<span class="self">self</span>.gamma, initial_cache_len)), <span class="comment">// Get the last gamma, see above
-        </span>)
-        .unwrap();
+        <span class="kw">let </span>inputs = <span class="self">self
+            </span>.get_processor()
+            .inputs_processor()
+            .process_inputs(
+                <span class="self">self</span>.tokenizer(),
+                <span class="kw-2">&amp;mut </span>[seq],
+                <span class="bool-val">true</span>, <span class="comment">// use the "prefill" tokens
+                </span>is_xlora,
+                <span class="kw-2">&amp;</span>device,
+                has_no_kv_cache,
+                <span class="prelude-val">Some</span>((<span class="self">self</span>.gamma, initial_cache_len)), <span class="comment">// Get the last gamma, see above
+                </span><span class="prelude-val">None</span>,
+            )
+            .unwrap();
 
-        <span class="kw">let </span>logits = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).forward_inputs(inputs)<span class="question-mark">?</span>;
+        <span class="kw">let </span>logits = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).forward_inputs(Box::new(inputs))<span class="question-mark">?</span>;
 
         <span class="comment">// Reset the prefill tokens
         </span>seq.reset_prefill_toks();
@@ -980,80 +1150,8 @@
 
         </span><span class="prelude-val">Ok</span>(())
     }
-    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;mut </span><span class="self">self</span>, <span class="kw">_</span>: ModelInputs) -&gt; anyhow::Result&lt;Tensor, candle_core::Error&gt; {
-        <span class="macro">unreachable!</span>(<span class="string">"Speculative pipeline handles the forward pass in `.step`"</span>)
-    }
-    <span class="kw">async fn </span>sample(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
-        _logits: Tensor,
-        _prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
-        _disable_eos_stop: bool,
-        __rng: Arc&lt;Mutex&lt;Isaac64Rng&gt;&gt;,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="macro">unreachable!</span>(<span class="string">"Speculative pipeline handles sampling in `.step`"</span>)
-    }
-    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Device {
-        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).device()
-    }
-    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;Tokenizer&gt; {
-        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).tokenizer()
-    }
-    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
-        <span class="macro">format!</span>(
-            <span class="string">"Speculative: tgt = `{}`, draft = `{}`, gamma = `{}`"</span>,
-            <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).name(),
-            <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).name(),
-            <span class="self">self</span>.gamma,
-        )
-    }
-    <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;ChatTemplate&gt; {
-        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).get_chat_template()
-    }
-    <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) {
-        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).reset_non_granular_state();
-        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).reset_non_granular_state();
-    }
-    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: GgmlDType) -&gt; anyhow::Result&lt;()&gt; {
-        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).re_isq_model(dtype)<span class="question-mark">?</span>;
-        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).re_isq_model(dtype)
-    }
-    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>GeneralMetadata {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.metadata
-    }
-    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_in_cache(
-            <span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft),
-            seqs,
-            modify_draft_cache,
-        );
-        DefaultCacheManager.clone_in_cache(<span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target), seqs, <span class="bool-val">false</span>);
-    }
-    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_out_cache(
-            <span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft),
-            seqs,
-            modify_draft_cache,
-        );
-        DefaultCacheManager.clone_out_cache(<span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target), seqs, <span class="bool-val">false</span>);
-    }
-    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(<span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft), modify_draft_cache);
-        DefaultCacheManager.set_none_cache(<span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target), <span class="bool-val">false</span>);
-        <span class="kw">if </span>reset_non_granular {
-            <span class="self">self</span>.reset_non_granular_state()
-        }
-        <span class="self">self</span>.latest_logit_cache = <span class="prelude-val">None</span>;
-    }
-    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {
-        <span class="macro">unreachable!</span>()
-    }
-    <span class="doccomment">/// Returns the number of activated adapters.
-    </span><span class="kw">fn </span>activate_adapters(<span class="kw-2">&amp;mut </span><span class="self">self</span>, adapters: Vec&lt;String&gt;) -&gt; anyhow::Result&lt;usize&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>res = <span class="number">0</span>;
-        res += <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).activate_adapters(adapters.clone())<span class="question-mark">?</span>;
-        res += <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).activate_adapters(adapters)<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(res)
+    <span class="kw">fn </span>category(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelCategory {
+        <span class="self">self</span>.category
     }
 }
 </code></pre></div></section></main></body></html>

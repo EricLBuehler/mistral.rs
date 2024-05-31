@@ -142,14 +142,64 @@
 <a href="#140" id="140">140</a>
 <a href="#141" id="141">141</a>
 <a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a>
+<a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
+<a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
-<span class="kw">use </span>std::collections::HashMap;
+<span class="kw">use </span>std::{collections::HashMap, ops::Deref};
 <span class="kw">use </span>utoipa::ToSchema;
 
 <span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+</span><span class="kw">pub struct </span>MessageInnerContent(
+    <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span>Either&lt;String, HashMap&lt;String, String&gt;&gt;,
+);
+
+<span class="kw">impl </span>Deref <span class="kw">for </span>MessageInnerContent {
+    <span class="kw">type </span>Target = Either&lt;String, HashMap&lt;String, String&gt;&gt;;
+    <span class="kw">fn </span>deref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Target {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0
+    </span>}
+}
+
+<span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+</span><span class="kw">pub struct </span>MessageContent(
+    <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)]
+    </span>Either&lt;String, Vec&lt;HashMap&lt;String, MessageInnerContent&gt;&gt;&gt;,
+);
+
+<span class="kw">impl </span>Deref <span class="kw">for </span>MessageContent {
+    <span class="kw">type </span>Target = Either&lt;String, Vec&lt;HashMap&lt;String, MessageInnerContent&gt;&gt;&gt;;
+    <span class="kw">fn </span>deref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Target {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0
+    </span>}
+}
+
+<span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 </span><span class="kw">pub struct </span>Message {
-    <span class="kw">pub </span>content: String,
+    <span class="kw">pub </span>content: MessageContent,
     <span class="kw">pub </span>role: String,
     <span class="kw">pub </span>name: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }

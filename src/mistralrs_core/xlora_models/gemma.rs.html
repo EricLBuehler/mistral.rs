@@ -841,6 +841,10 @@
 <a href="#839" id="839">839</a>
 <a href="#840" id="840">840</a>
 <a href="#841" id="841">841</a>
+<a href="#842" id="842">842</a>
+<a href="#843" id="843">843</a>
+<a href="#844" id="844">844</a>
+<a href="#845" id="845">845</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -848,6 +852,7 @@
 <span class="kw">use crate</span>::{
     layers::ScaledDotProductAttention,
     lora::{linear_b <span class="kw">as </span>linear, LinearLayerLike, LoraConfig, Ordering},
+    pipeline::IsqModel,
 };
 <span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{RotaryEmbedding, VarBuilder};
@@ -1537,6 +1542,44 @@
     }
 }
 
+<span class="kw">impl </span>IsqModel <span class="kw">for </span>XLoraModel {
+    <span class="kw">fn </span>get_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
+        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
+        tensors.push((<span class="self">self</span>.lm_head.inner(), <span class="prelude-val">None</span>));
+        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
+            tensors.push((
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.q_proj).unwrap().inner(),
+                <span class="prelude-val">Some</span>(i),
+            ));
+            tensors.push((
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.k_proj).unwrap().inner(),
+                <span class="prelude-val">Some</span>(i),
+            ));
+            tensors.push((
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.v_proj).unwrap().inner(),
+                <span class="prelude-val">Some</span>(i),
+            ));
+            tensors.push((
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.o_proj).unwrap().inner(),
+                <span class="prelude-val">Some</span>(i),
+            ));
+            tensors.push((
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.down_proj).unwrap().inner(),
+                <span class="prelude-val">Some</span>(i),
+            ));
+            tensors.push((
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.gate_proj).unwrap().inner(),
+                <span class="prelude-val">Some</span>(i),
+            ));
+            tensors.push((
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.up_proj).unwrap().inner(),
+                <span class="prelude-val">Some</span>(i),
+            ));
+        }
+        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+    }
+}
+
 <span class="kw">impl </span>NormalModel <span class="kw">for </span>XLoraModel {
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
@@ -1584,41 +1627,6 @@
     </span>}
     <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="self">self</span>.max_seq_len
-    }
-    <span class="kw">fn </span>get_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
-        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
-        tensors.push((<span class="self">self</span>.lm_head.inner(), <span class="prelude-val">None</span>));
-        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
-            tensors.push((
-                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.q_proj).unwrap().inner(),
-                <span class="prelude-val">Some</span>(i),
-            ));
-            tensors.push((
-                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.k_proj).unwrap().inner(),
-                <span class="prelude-val">Some</span>(i),
-            ));
-            tensors.push((
-                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.v_proj).unwrap().inner(),
-                <span class="prelude-val">Some</span>(i),
-            ));
-            tensors.push((
-                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.o_proj).unwrap().inner(),
-                <span class="prelude-val">Some</span>(i),
-            ));
-            tensors.push((
-                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.down_proj).unwrap().inner(),
-                <span class="prelude-val">Some</span>(i),
-            ));
-            tensors.push((
-                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.gate_proj).unwrap().inner(),
-                <span class="prelude-val">Some</span>(i),
-            ));
-            tensors.push((
-                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.up_proj).unwrap().inner(),
-                <span class="prelude-val">Some</span>(i),
-            ));
-        }
-        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
     }
     <span class="kw">fn </span>activate_adapters(<span class="kw-2">&amp;mut </span><span class="self">self</span>, adapter_names: Vec&lt;String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>sum = <span class="number">0</span>;

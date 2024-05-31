@@ -545,6 +545,20 @@
 <a href="#543" id="543">543</a>
 <a href="#544" id="544">544</a>
 <a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
+<a href="#551" id="551">551</a>
+<a href="#552" id="552">552</a>
+<a href="#553" id="553">553</a>
+<a href="#554" id="554">554</a>
+<a href="#555" id="555">555</a>
+<a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::{HashMap, VecDeque},
     sync::{
@@ -846,7 +860,9 @@
 
         <span class="kw">let </span>best_of = <span class="kw">match </span>request.messages {
             RequestMessage::Completion { best_of, .. } =&gt; best_of,
-            RequestMessage::Chat(<span class="kw">_</span>) | RequestMessage::CompletionTokens(<span class="kw">_</span>) =&gt; <span class="number">1</span>,
+            RequestMessage::Chat(<span class="kw">_</span>)
+            | RequestMessage::CompletionTokens(<span class="kw">_</span>)
+            | RequestMessage::VisionChat { .. } =&gt; <span class="number">1</span>,
         };
         <span class="kw">if </span>is_chat
             &amp;&amp; !<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
@@ -861,23 +877,36 @@
             <span class="kw">return</span>;
         }
 
-        <span class="kw">let </span><span class="kw-2">mut </span>force_tokens = <span class="prelude-val">None</span>;
-        <span class="kw">let </span>formatted_prompt = <span class="kw">match </span>request.messages {
-            RequestMessage::Chat(messages) =&gt; {
-                <span class="kw">let </span>template = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).apply_chat_template(messages, <span class="bool-val">true</span>);
+        <span class="kw">let </span>images = <span class="kw">match </span>request.messages {
+            RequestMessage::VisionChat {
+                <span class="kw-2">ref </span>images,
+                messages: <span class="kw">_</span>,
+            } =&gt; <span class="prelude-val">Some</span>(images.clone()),
+            <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
+        };
+
+        <span class="kw">let </span><span class="kw-2">mut </span>prompt = <span class="kw">match </span>request.messages {
+            RequestMessage::Chat(messages)
+            | RequestMessage::VisionChat {
+                images: <span class="kw">_</span>,
+                messages,
+            } =&gt; {
+                <span class="kw">let </span>pipeline = <span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
+                <span class="kw">let </span>template = pipeline.get_processor().process(pipeline, messages, <span class="bool-val">true</span>);
                 <span class="macro">handle_seq_error!</span>(template, request.response)
             }
-            RequestMessage::Completion { text, .. } =&gt; text,
-            RequestMessage::CompletionTokens(it) =&gt; {
-                <span class="kw">let </span>res = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
+            RequestMessage::Completion { text, .. } =&gt; {
+                <span class="kw">let </span>prompt = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
                     .tokenizer()
-                    .decode(<span class="kw-2">&amp;</span>it, <span class="bool-val">false</span>)
-                    .expect(<span class="string">"cannot decode completion tokens"</span>);
-                force_tokens = <span class="prelude-val">Some</span>(it);
-                res
+                    .encode(text, <span class="bool-val">false</span>)
+                    .map_err(|e| anyhow::Error::msg(e.to_string()));
+                <span class="macro">handle_seq_error!</span>(prompt, request.response)
+                    .get_ids()
+                    .to_vec()
             }
+            RequestMessage::CompletionTokens(it) =&gt; it,
         };
-        <span class="kw">if </span>formatted_prompt.is_empty() {
+        <span class="kw">if </span>prompt.is_empty() {
             request
                 .response
                 .send(Response::ValidationError(
@@ -887,13 +916,6 @@
                 </span>.expect(<span class="string">"Expected receiver."</span>);
             <span class="kw">return</span>;
         }
-        <span class="kw">let </span><span class="kw-2">mut </span>prompt = <span class="kw">match </span>force_tokens {
-            <span class="prelude-val">Some</span>(tks) =&gt; tks,
-            <span class="prelude-val">None </span>=&gt; {
-                <span class="kw">let </span>prompt = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenize_prompt(<span class="kw-2">&amp;</span>formatted_prompt);
-                <span class="macro">handle_seq_error!</span>(prompt, request.response)
-            }
-        };
 
         <span class="kw">if </span>prompt.len() &gt; <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_metadata().max_seq_len {
             <span class="kw">if </span>!<span class="self">self</span>.truncate_sequence {
@@ -1070,11 +1092,17 @@
                 recognizer,
                 request.suffix.clone(),
                 <span class="kw">if </span>echo_prompt {
-                    <span class="prelude-val">Some</span>(formatted_prompt.clone())
+                    <span class="prelude-val">Some</span>(
+                        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
+                            .tokenizer()
+                            .decode(<span class="kw-2">&amp;</span>prompt, <span class="bool-val">false</span>)
+                            .expect(<span class="string">"cannot decode completion tokens"</span>),
+                    )
                 } <span class="kw">else </span>{
                     <span class="prelude-val">None
                 </span>},
                 request.adapters.clone(),
+                images.clone(),
             );
             <span class="kw">let </span>seq = <span class="kw">if let </span><span class="prelude-val">Some</span>(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(

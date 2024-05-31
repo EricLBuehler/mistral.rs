@@ -426,6 +426,22 @@
 <a href="#424" id="424">424</a>
 <a href="#425" id="425">425</a>
 <a href="#426" id="426">426</a>
+<a href="#427" id="427">427</a>
+<a href="#428" id="428">428</a>
+<a href="#429" id="429">429</a>
+<a href="#430" id="430">430</a>
+<a href="#431" id="431">431</a>
+<a href="#432" id="432">432</a>
+<a href="#433" id="433">433</a>
+<a href="#434" id="434">434</a>
+<a href="#435" id="435">435</a>
+<a href="#436" id="436">436</a>
+<a href="#437" id="437">437</a>
+<a href="#438" id="438">438</a>
+<a href="#439" id="439">439</a>
+<a href="#440" id="440">440</a>
+<a href="#441" id="441">441</a>
+<a href="#442" id="442">442</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
@@ -438,9 +454,10 @@
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
     layers::{
-        repeat_kv, CausalMasker, MatMul, PhiRotaryEmbedding, RmsNorm, ScaledDotProductAttention,
+        repeat_kv, CausalMasker, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm,
+        ScaledDotProductAttention,
     },
-    pipeline::{extract_logits, Cache, NormalModel},
+    pipeline::{extract_logits, Cache, IsqModel, NormalModel},
     DeviceMapMetadata,
 };
 
@@ -463,6 +480,18 @@
     <span class="kw">pub </span>use_flash_attn: bool,
     <span class="kw">pub </span>sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="kw">pub </span>original_max_position_embeddings: usize,
+}
+
+<span class="kw">impl </span>From&lt;Config&gt; <span class="kw">for </span>PhiRopeConfig {
+    <span class="kw">fn </span>from(val: Config) -&gt; <span class="self">Self </span>{
+        PhiRopeConfig {
+            rope_scaling: val.rope_scaling,
+            max_position_embeddings: val.max_position_embeddings,
+            original_max_position_embeddings: val.original_max_position_embeddings,
+            rope_theta: val.rope_theta,
+            head_dim: val.hidden_size / val.num_attention_heads,
+        }
+    }
 }
 
 <span class="kw">impl </span>Config {
@@ -722,7 +751,7 @@
         <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
             <span class="kw">let </span>rotary_emb = Arc::new(PhiRotaryEmbedding::new(
                 vb.dtype(),
-                cfg,
+                cfg.clone(),
                 mapper.device_for(layer_idx, <span class="bool-val">false</span>).unwrap_or(<span class="kw-2">&amp;</span>real_device),
             )<span class="question-mark">?</span>);
             <span class="kw">let </span>layer = DecoderLayer::new(
@@ -802,6 +831,20 @@
     }
 }
 
+<span class="kw">impl </span>IsqModel <span class="kw">for </span>Model {
+    <span class="kw">fn </span>get_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
+        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
+        tensors.push((<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head, <span class="prelude-val">None</span>));
+        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.self_attn.qkv_proj, <span class="prelude-val">Some</span>(i)));
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.self_attn.o_proj, <span class="prelude-val">Some</span>(i)));
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.mlp.gate_up_proj, <span class="prelude-val">Some</span>(i)));
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.mlp.down_proj, <span class="prelude-val">Some</span>(i)));
+        }
+        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+    }
+}
+
 <span class="kw">impl </span>NormalModel <span class="kw">for </span>Model {
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
@@ -839,17 +882,6 @@
     </span>}
     <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="self">self</span>.max_seq_len
-    }
-    <span class="kw">fn </span>get_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
-        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
-        tensors.push((<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head, <span class="prelude-val">None</span>));
-        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
-            tensors.push((<span class="kw-2">&amp;mut </span>layer.self_attn.qkv_proj, <span class="prelude-val">Some</span>(i)));
-            tensors.push((<span class="kw-2">&amp;mut </span>layer.self_attn.o_proj, <span class="prelude-val">Some</span>(i)));
-            tensors.push((<span class="kw-2">&amp;mut </span>layer.mlp.gate_up_proj, <span class="prelude-val">Some</span>(i)));
-            tensors.push((<span class="kw-2">&amp;mut </span>layer.mlp.down_proj, <span class="prelude-val">Some</span>(i)));
-        }
-        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
     }
 }
 </code></pre></div></section></main></body></html>

@@ -280,9 +280,27 @@
 <a href="#278" id="278">278</a>
 <a href="#279" id="279">279</a>
 <a href="#280" id="280">280</a>
+<a href="#281" id="281">281</a>
+<a href="#282" id="282">282</a>
+<a href="#283" id="283">283</a>
+<a href="#284" id="284">284</a>
+<a href="#285" id="285">285</a>
+<a href="#286" id="286">286</a>
+<a href="#287" id="287">287</a>
+<a href="#288" id="288">288</a>
+<a href="#289" id="289">289</a>
+<a href="#290" id="290">290</a>
+<a href="#291" id="291">291</a>
+<a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-</span><span class="kw">use </span>std::{collections::HashMap, sync::Mutex};
+</span><span class="kw">use </span>std::{collections::HashMap, ops::Add, sync::Mutex};
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor, WithDType};
 <span class="kw">use </span>once_cell::sync::Lazy;
@@ -326,6 +344,29 @@
             .flat_map(|i| (<span class="number">0</span>..offset).map(<span class="kw">move </span>|j| u8::from(j + tgt_len &gt; i + offset)))
             .collect();
         Tensor::from_slice(<span class="kw-2">&amp;</span>mask, (tgt_len, offset), device)
+    }
+
+    <span class="doccomment">/// Expands a mask from (bs, seq_len) to (bs, 1, tgt_len, seq_len)
+    /// If tgt_len is None, use seq_len
+    </span><span class="kw">pub fn </span>expand_mask(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        mask: <span class="kw-2">&amp;</span>Tensor,
+        dtype: DType,
+        tgt_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">let </span>(bs, src_len) = mask.dims2()<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>expanded_mask = mask.unsqueeze(<span class="number">1</span>)<span class="question-mark">?</span>.unsqueeze(<span class="number">1</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>expanded_mask = expanded_mask
+            .expand((bs, <span class="number">1</span>, tgt_len.unwrap_or(src_len), src_len))<span class="question-mark">?
+            </span>.to_dtype(dtype)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>inverted_mask = expanded_mask.neg()<span class="question-mark">?</span>.add(<span class="number">1.0f64</span>)<span class="question-mark">?</span>;
+        masked_fill(
+            <span class="kw-2">&amp;</span>inverted_mask,
+            <span class="kw-2">&amp;</span>inverted_mask.to_dtype(DType::U8)<span class="question-mark">?</span>,
+            f32::MIN,
+        )
     }
 
     <span class="kw">pub fn </span>calculate_past_kv_len(
@@ -534,12 +575,7 @@
         }
     }
 
-    <span class="attr">#[deprecated(
-        since = <span class="string">"0.1.10"</span>,
-        note = <span class="string">"use one of the `*_as_attn_bias` functions\
-                    to create an attention bias which can be added."
-    </span>)]
-    </span><span class="kw">pub fn </span>apply_mask(
+    <span class="kw">pub fn </span>apply_mask_one_and_zero(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         mask: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         att: Tensor,

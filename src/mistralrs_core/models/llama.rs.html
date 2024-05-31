@@ -412,6 +412,9 @@
 <a href="#410" id="410">410</a>
 <a href="#411" id="411">411</a>
 <a href="#412" id="412">412</a>
+<a href="#413" id="413">413</a>
+<a href="#414" id="414">414</a>
+<a href="#415" id="415">415</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, <span class="prelude-ty">Result</span>, Tensor};
@@ -424,7 +427,7 @@
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
-    pipeline::{extract_logits, NormalModel},
+    pipeline::{extract_logits, IsqModel, NormalModel},
     DeviceMapMetadata,
 };
 
@@ -766,6 +769,23 @@
     }
 }
 
+<span class="kw">impl </span>IsqModel <span class="kw">for </span>Llama {
+    <span class="kw">fn </span>get_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
+        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
+        tensors.push((<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head, <span class="prelude-val">None</span>));
+        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.blocks.iter_mut().enumerate() {
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.q_proj, <span class="prelude-val">Some</span>(i)));
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.k_proj, <span class="prelude-val">Some</span>(i)));
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.v_proj, <span class="prelude-val">Some</span>(i)));
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.o_proj, <span class="prelude-val">Some</span>(i)));
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.mlp.c_fc1, <span class="prelude-val">Some</span>(i)));
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.mlp.c_fc2, <span class="prelude-val">Some</span>(i)));
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.mlp.c_proj, <span class="prelude-val">Some</span>(i)));
+        }
+        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+    }
+}
+
 <span class="kw">impl </span>NormalModel <span class="kw">for </span>Llama {
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
@@ -808,20 +828,6 @@
     </span>}
     <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="self">self</span>.blocks[<span class="number">0</span>].attn.max_seq_len
-    }
-    <span class="kw">fn </span>get_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
-        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
-        tensors.push((<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head, <span class="prelude-val">None</span>));
-        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.blocks.iter_mut().enumerate() {
-            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.q_proj, <span class="prelude-val">Some</span>(i)));
-            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.k_proj, <span class="prelude-val">Some</span>(i)));
-            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.v_proj, <span class="prelude-val">Some</span>(i)));
-            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.o_proj, <span class="prelude-val">Some</span>(i)));
-            tensors.push((<span class="kw-2">&amp;mut </span>layer.mlp.c_fc1, <span class="prelude-val">Some</span>(i)));
-            tensors.push((<span class="kw-2">&amp;mut </span>layer.mlp.c_fc2, <span class="prelude-val">Some</span>(i)));
-            tensors.push((<span class="kw-2">&amp;mut </span>layer.mlp.c_proj, <span class="prelude-val">Some</span>(i)));
-        }
-        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
     }
 }
 </code></pre></div></section></main></body></html>

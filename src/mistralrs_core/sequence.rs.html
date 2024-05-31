@@ -603,6 +603,17 @@
 <a href="#601" id="601">601</a>
 <a href="#602" id="602">602</a>
 <a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a>
+<a href="#612" id="612">612</a>
+<a href="#613" id="613">613</a>
+<a href="#614" id="614">614</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fmt::Display,
     sync::{Arc, RwLock},
@@ -704,8 +715,9 @@
     stream_idx: usize,
     <span class="kw">pub </span>recognizer: SequenceRecognizer,
     scheduling_urgency: usize, <span class="comment">// The number of passes since scheduling
+    </span>input_images: <span class="prelude-ty">Option</span>&lt;Vec&lt;image::DynamicImage&gt;&gt;,
 
-    // GPU things
+    <span class="comment">// GPU things
     </span><span class="kw">pub </span>prompt_tok_per_sec: f32,
     <span class="kw">pub </span>prompt_timestamp: <span class="prelude-ty">Option</span>&lt;u128&gt;,
     group: Arc&lt;Mutex&lt;SequenceGroup&gt;&gt;,
@@ -733,6 +745,7 @@
         suffix: <span class="prelude-ty">Option</span>&lt;String&gt;,
         prefix: <span class="prelude-ty">Option</span>&lt;String&gt;,
         adapters: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
+        input_images: <span class="prelude-ty">Option</span>&lt;Vec&lt;image::DynamicImage&gt;&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>prompt_len = tokens.len();
         <span class="self">Self </span>{
@@ -774,6 +787,7 @@
             is_tmp: <span class="bool-val">false</span>,
             scheduling_urgency: <span class="number">0</span>,
             adapters,
+            input_images,
         }
     }
 
@@ -1088,6 +1102,14 @@
 
     <span class="kw">pub fn </span>get_adapters(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt; {
         <span class="self">self</span>.adapters.clone()
+    }
+
+    <span class="kw">pub fn </span>take_images(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;image::DynamicImage&gt;&gt; {
+        <span class="self">self</span>.input_images.take()
+    }
+
+    <span class="kw">pub fn </span>images(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[image::DynamicImage]&gt; {
+        <span class="self">self</span>.input_images.as_deref()
     }
 }
 

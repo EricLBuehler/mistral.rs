@@ -445,15 +445,43 @@
 <a href="#443" id="443">443</a>
 <a href="#444" id="444">444</a>
 <a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a>
+<a href="#450" id="450">450</a>
+<a href="#451" id="451">451</a>
+<a href="#452" id="452">452</a>
+<a href="#453" id="453">453</a>
+<a href="#454" id="454">454</a>
+<a href="#455" id="455">455</a>
+<a href="#456" id="456">456</a>
+<a href="#457" id="457">457</a>
+<a href="#458" id="458">458</a>
+<a href="#459" id="459">459</a>
+<a href="#460" id="460">460</a>
+<a href="#461" id="461">461</a>
+<a href="#462" id="462">462</a>
+<a href="#463" id="463">463</a>
+<a href="#464" id="464">464</a>
+<a href="#465" id="465">465</a>
+<a href="#466" id="466">466</a>
+<a href="#467" id="467">467</a>
+<a href="#468" id="468">468</a>
+<a href="#469" id="469">469</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
-<span class="kw">use </span><span class="kw">super</span>::loaders::{
+<span class="kw">use </span><span class="kw">super</span>::normal_loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
     Phi3Loader, Qwen2Loader,
 };
 <span class="kw">use super</span>::{
-    get_model_paths, get_xlora_paths, AdapterKind, CacheManager, GeneralMetadata, Loader,
-    ModelInputs, ModelKind, ModelPaths, NormalModel, NormalModelLoader, Pipeline, TokenSource,
-    XLoraPaths,
+    get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
+    CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
+    TokenSource, XLoraPaths,
+};
+<span class="kw">use super</span>::{
+    AdapterActivationMixin, CacheManagerMixin, IsqPipelineMixin, MetadataMixin, ModelCategory,
+    PreProcessingMixin,
 };
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
@@ -468,13 +496,14 @@
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
 <span class="kw">use crate</span>::{
     do_sample, get_mut_arcmutex, get_paths, lora_model_loader, normal_model_loader,
-    xlora_model_loader, DeviceMapMetadata, DEBUG,
+    xlora_model_loader, DeviceMapMetadata, Pipeline, DEBUG,
 };
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::quantized::GgmlDType;
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
+<span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::fs;
 <span class="kw">use </span>std::path::PathBuf;
 <span class="kw">use </span>std::str::FromStr;
@@ -743,7 +772,7 @@
             <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
         };
 
-        <span class="kw">let </span>tokenizer = get_tokenizer(paths.get_tokenizer_filename())<span class="question-mark">?</span>;
+        <span class="kw">let </span>tokenizer = get_tokenizer(paths.get_tokenizer_filename(), <span class="prelude-val">None</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>gen_conf: <span class="prelude-ty">Option</span>&lt;GenerationConfig&gt; = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap()).unwrap());
@@ -795,11 +824,75 @@
     }
 }
 
+<span class="kw">impl </span>PreProcessingMixin <span class="kw">for </span>NormalPipeline {
+    <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;ChatTemplate&gt; {
+        <span class="self">self</span>.chat_template.clone()
+    }
+    <span class="kw">fn </span>get_input_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt; {
+        <span class="prelude-val">None
+    </span>}
+}
+
+<span class="kw">impl </span>IsqPipelineMixin <span class="kw">for </span>NormalPipeline {
+    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: GgmlDType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">let </span>device = <span class="self">self</span>.device().clone();
+        <span class="self">self</span>.model
+            .quantize(dtype, device)
+            .map_err(anyhow::Error::msg)
+    }
+}
+
+<span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>NormalPipeline {
+    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_in_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+    }
+    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_out_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+    }
+    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, reset_non_granular: bool, modify_draft_cache: bool) {
+        DefaultCacheManager.set_none_cache(<span class="self">self</span>, modify_draft_cache);
+        <span class="kw">if </span>reset_non_granular {
+            <span class="self">self</span>.reset_non_granular_state()
+        }
+    }
+    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {
+        <span class="self">self</span>.model.cache()
+    }
+}
+
+<span class="kw">impl </span>AdapterActivationMixin <span class="kw">for </span>NormalPipeline {
+    <span class="kw">fn </span>activate_adapters(<span class="kw-2">&amp;mut </span><span class="self">self</span>, adapter_names: Vec&lt;String&gt;) -&gt; anyhow::Result&lt;usize&gt; {
+        <span class="self">self</span>.model
+            .activate_adapters(adapter_names)
+            .map_err(anyhow::Error::msg)
+    }
+}
+
+<span class="kw">impl </span>MetadataMixin <span class="kw">for </span>NormalPipeline {
+    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Device {
+        <span class="self">self</span>.model.device().clone()
+    }
+    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;Tokenizer&gt; {
+        <span class="self">self</span>.tokenizer.clone()
+    }
+    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+        <span class="self">self</span>.model_id.clone()
+    }
+    <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) {
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(s) = <span class="self">self</span>.non_granular_state.as_ref() {
+            <span class="kw-2">*</span><span class="self">self</span>.cache().get_scalings_cache() = <span class="prelude-val">None</span>;
+            <span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(s.non_granular_index) = <span class="number">0</span>;
+        }
+    }
+    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>GeneralMetadata {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.metadata
+    }
+}
+
 <span class="attr">#[async_trait::async_trait]
 </span><span class="kw">impl </span>Pipeline <span class="kw">for </span>NormalPipeline {
-    <span class="kw">fn </span>forward_inputs(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-        ModelInputs {
+    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;mut </span><span class="self">self</span>, inputs: Box&lt;<span class="kw">dyn </span>Any&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor, candle_core::Error&gt; {
+        <span class="kw">let </span>ModelInputs {
             input_ids,
             input_ids_full,
             seqlen_offsets,
@@ -808,8 +901,7 @@
             seqlen_offsets_kernel_full,
             context_lens,
             position_ids,
-        }: ModelInputs,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor, candle_core::Error&gt; {
+        } = <span class="kw-2">*</span>inputs.downcast().expect(<span class="string">"Downcast failed."</span>);
         <span class="kw">match </span><span class="self">self</span>.model.is_xlora() {
             <span class="bool-val">false </span>=&gt; <span class="self">self</span>.model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
@@ -842,52 +934,8 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(), candle_core::Error&gt; {
         <span class="macro">do_sample!</span>(<span class="self">self</span>, seqs, logits, prefix_cacher, disable_eos_stop, rng)
     }
-    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Device {
-        <span class="self">self</span>.model.device().clone()
-    }
-    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;Tokenizer&gt; {
-        <span class="self">self</span>.tokenizer.clone()
-    }
-    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
-        <span class="self">self</span>.model_id.clone()
-    }
-    <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;ChatTemplate&gt; {
-        <span class="self">self</span>.chat_template.clone()
-    }
-    <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(s) = <span class="self">self</span>.non_granular_state.as_ref() {
-            <span class="kw-2">*</span><span class="self">self</span>.cache().get_scalings_cache() = <span class="prelude-val">None</span>;
-            <span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(s.non_granular_index) = <span class="number">0</span>;
-        }
-    }
-    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: GgmlDType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">let </span>device = <span class="self">self</span>.device().clone();
-        <span class="self">self</span>.model
-            .quantize(dtype, device)
-            .map_err(anyhow::Error::msg)
-    }
-    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>GeneralMetadata {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.metadata
-    }
-    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_in_cache(<span class="self">self</span>, seqs, modify_draft_cache)
-    }
-    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_out_cache(<span class="self">self</span>, seqs, modify_draft_cache)
-    }
-    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(<span class="self">self</span>, modify_draft_cache);
-        <span class="kw">if </span>reset_non_granular {
-            <span class="self">self</span>.reset_non_granular_state()
-        }
-    }
-    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {
-        <span class="self">self</span>.model.cache()
-    }
-    <span class="kw">fn </span>activate_adapters(<span class="kw-2">&amp;mut </span><span class="self">self</span>, adapter_names: Vec&lt;String&gt;) -&gt; anyhow::Result&lt;usize&gt; {
-        <span class="self">self</span>.model
-            .activate_adapters(adapter_names)
-            .map_err(anyhow::Error::msg)
+    <span class="kw">fn </span>category(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelCategory {
+        ModelCategory::Text
     }
 }
 </code></pre></div></section></main></body></html>
