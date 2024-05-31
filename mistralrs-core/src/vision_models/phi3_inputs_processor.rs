@@ -378,8 +378,8 @@ impl ImagePreProcessor for Phi3InputsProcessor {
         let mut padded_images = Vec::new();
         let mut num_img_tokens = Vec::new();
         for image in images.iter_mut() {
-            // Convert to rgb
-            if config.do_convert_rgb {
+            // Convert to rgb, default to true
+            if config.do_convert_rgb.unwrap_or(true) {
                 *image = DynamicImage::ImageRgb8(image.to_rgb8());
             }
 

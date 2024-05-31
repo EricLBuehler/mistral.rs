@@ -7,7 +7,7 @@ use serde::Deserialize;
 #[derive(Deserialize, Debug, Clone)]
 #[allow(dead_code)]
 pub struct PreProcessorConfig {
-    pub(crate) do_convert_rgb: bool,
+    pub(crate) do_convert_rgb: Option<bool>,
     pub(crate) do_image_splitting: bool,
     pub(crate) do_normalize: bool,
     pub(crate) do_pad: bool,
