@@ -33,8 +33,9 @@ impl DeviceMapMetadata {
         device: &Device,
     ) -> Result<Box<dyn DeviceMapper + Send + Sync>> {
         // How many device layers
+        // Clamp to max of model layers
         let n_device_layers = if let Some(n) = self.device_layers {
-            n
+            n.clamp(0, model_layers)
         } else {
             return Ok(Box::new(DummyDeviceMapper {
                 nm_device: device.clone(),
