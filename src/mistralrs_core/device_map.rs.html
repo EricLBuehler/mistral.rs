@@ -150,6 +150,7 @@
 <a href="#148" id="148">148</a>
 <a href="#149" id="149">149</a>
 <a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::fmt::Debug;
 
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
@@ -185,8 +186,9 @@
         device: <span class="kw-2">&amp;</span>Device,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;&gt; {
         <span class="comment">// How many device layers
+        // Clamp to max of model layers
         </span><span class="kw">let </span>n_device_layers = <span class="kw">if let </span><span class="prelude-val">Some</span>(n) = <span class="self">self</span>.device_layers {
-            n
+            n.clamp(<span class="number">0</span>, model_layers)
         } <span class="kw">else </span>{
             <span class="kw">return </span><span class="prelude-val">Ok</span>(Box::new(DummyDeviceMapper {
                 nm_device: device.clone(),
