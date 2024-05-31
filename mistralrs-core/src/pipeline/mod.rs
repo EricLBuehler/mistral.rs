@@ -12,8 +12,6 @@ mod paths;
 mod processing;
 mod sampling;
 mod speculative;
-mod vision;
-mod vision_loaders;
 use crate::aici::toktree::TokTrie;
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
@@ -40,8 +38,6 @@ use std::sync::Arc;
 use std::{collections::HashMap, path::PathBuf, str::FromStr};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
-pub use vision_loaders::{VisionLoaderType, VisionModelLoader};
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -52,9 +48,7 @@ use crate::{
 };
 
 pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
-pub use self::inputs_processor::{
-    text_models_inputs_processor, InputsProcessor, InputsProcessorType,
-};
+pub use self::inputs_processor::{text_models_inputs_processor, InputsProcessor};
 
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
 /// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
@@ -439,7 +433,7 @@ pub enum CacheInstruction {
 
 pub trait PreProcessingMixin: MetadataMixin {
     fn get_processor(&self) -> Arc<dyn Processor> {
-        Arc::new(BasicProcessor)
+        BasicProcessor::new_processor()
     }
     fn get_chat_template(&self) -> Arc<ChatTemplate>;
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>>;
@@ -627,24 +621,6 @@ pub trait NormalModel: IsqModel {
             "Activating adapters is only supported for models fine-tuned with LoRA."
         );
     }
-}
-
-pub trait VisionModel: IsqModel {
-    // pixel_values and pixel_attention_mask only specified for prompt seqs
-    #[allow(clippy::too_many_arguments)]
-    fn forward(
-        &mut self,
-        input_ids: &Tensor,
-        pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
-        context_lens: Vec<(usize, usize)>,
-        position_ids: Vec<usize>,
-        model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
-    ) -> candle_core::Result<Tensor>;
-    fn device(&self) -> &Device;
-    fn cache(&self) -> &Cache;
-    fn max_seq_len(&self) -> usize;
 }
 
 pub(crate) fn extract_logits(

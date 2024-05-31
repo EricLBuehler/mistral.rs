@@ -4,17 +4,13 @@ use anyhow::Result;
 use either::Either;
 use indexmap::IndexMap;
 
-use crate::{
-    vision_models::{preprocessor_config::PreProcessorConfig, processor_config::ProcessorConfig},
-    Content, Pipeline,
-};
+use crate::{Content, Pipeline};
 
 use super::{chat_template::apply_chat_template_to, text_models_inputs_processor, InputsProcessor};
 
 /// Trait to create processors.
 pub trait ProcessorCreator {
-    fn new_processor(_: ProcessorConfig, _: PreProcessorConfig)
-        -> Arc<dyn Processor + Send + Sync>;
+    fn new_processor() -> Arc<dyn Processor + Send + Sync>;
 }
 
 /// Processor for messages.
@@ -80,6 +76,12 @@ pub(crate) fn apply_chat_template(
 }
 
 pub struct BasicProcessor;
+
+impl ProcessorCreator for BasicProcessor {
+    fn new_processor() -> Arc<dyn Processor + Send + Sync> {
+        Arc::new(Self)
+    }
+}
 
 impl Processor for BasicProcessor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {

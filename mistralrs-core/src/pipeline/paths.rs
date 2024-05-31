@@ -307,29 +307,12 @@ pub(crate) fn get_chat_template(
     {
         panic!("Template filename {template_filename:?} must end with `.json`.");
     }
-
-    let mut template: ChatTemplate =
-        serde_json::from_str(&fs::read_to_string(&template_filename).unwrap()).unwrap();
-    let processor_conf: Option<crate::vision_models::processor_config::ProcessorConfig> = paths
-        .get_processor_config()
-        .as_ref()
-        .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
-    if let Some(processor_conf) = processor_conf {
-        if processor_conf.chat_template.is_some() {
-            template.chat_template = processor_conf.chat_template;
-        }
-    }
-
     #[derive(Debug, serde::Deserialize)]
     struct SpecifiedTemplate {
         chat_template: String,
         bos_token: Option<String>,
         eos_token: Option<String>,
     }
-
-    if template.chat_template.is_some() {
-        return template;
-    };
 
     info!("`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
     let mut deser: HashMap<String, Value> =

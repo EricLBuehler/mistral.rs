@@ -1,12 +1,8 @@
 use clap::Subcommand;
 
-use crate::pipeline::{NormalLoaderType, VisionLoaderType};
+use crate::pipeline::NormalLoaderType;
 
 fn parse_arch(x: &str) -> Result<NormalLoaderType, String> {
-    x.parse()
-}
-
-fn parse_vision_arch(x: &str) -> Result<VisionLoaderType, String> {
     x.parse()
 }
 
@@ -287,24 +283,5 @@ pub enum ModelSelected {
         /// GQA value
         #[arg(short, long, default_value_t = 1)]
         gqa: usize,
-    },
-
-    /// Select a vision plain model, without quantization or adapters
-    VisionPlain {
-        /// Model ID to load from. This may be a HF hub repo or a local path.
-        #[arg(short, long)]
-        model_id: String,
-
-        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
-        #[arg(short, long)]
-        tokenizer_json: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
-        /// The architecture of the model.
-        #[arg(short, long, value_parser = parse_vision_arch)]
-        arch: VisionLoaderType,
     },
 }

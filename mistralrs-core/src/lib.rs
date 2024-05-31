@@ -39,7 +39,6 @@ mod scheduler;
 mod sequence;
 mod toml_selector;
 mod utils;
-mod vision_models;
 mod xlora_models;
 
 pub use device_map::{DeviceMapMetadata, LayerDeviceMapper};
@@ -48,8 +47,7 @@ pub use pipeline::{
     GGUFSpecificConfig, GemmaLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader,
     MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
     NormalSpecificConfig, Phi2Loader, Phi3Loader, Qwen2Loader, SpeculativeConfig,
-    SpeculativeLoader, SpeculativePipeline, TokenSource, VisionLoader, VisionLoaderBuilder,
-    VisionModelLoader, VisionSpecificConfig,
+    SpeculativeLoader, SpeculativePipeline, TokenSource,
 };
 pub use request::{Constraint, Content, NormalRequest, Request, RequestMessage};
 pub use response::Response;
