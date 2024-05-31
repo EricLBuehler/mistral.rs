@@ -4,8 +4,9 @@ use super::loaders::{
     Phi3Loader, Qwen2Loader,
 };
 use super::{
-    get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
-    ModelKind, ModelPaths, NormalModel, NormalModelLoader, Pipeline, TokenSource, XLoraPaths,
+    get_model_paths, get_xlora_paths, AdapterKind, CacheManager, GeneralMetadata, Loader,
+    ModelInputs, ModelKind, ModelPaths, NormalModel, NormalModelLoader, Pipeline, TokenSource,
+    XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -130,7 +131,9 @@ impl NormalLoaderBuilder {
         no_kv_cache: bool,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
-        self.kind = ModelKind::XLoraNormal;
+        self.kind = ModelKind::Adapter {
+            adapter: AdapterKind::XLora,
+        };
         self.with_adapter(
             xlora_model_id,
             xlora_order,
@@ -140,7 +143,9 @@ impl NormalLoaderBuilder {
     }
 
     pub fn with_lora(mut self, lora_model_id: String, lora_order: Ordering) -> Self {
-        self.kind = ModelKind::LoraNormal;
+        self.kind = ModelKind::Adapter {
+            adapter: AdapterKind::Lora,
+        };
         self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
@@ -242,7 +247,7 @@ impl Loader for NormalLoader {
             Device::Cpu
         };
 
-        let is_lora = self.kind.is_adapted_and(|a| a.is_lora());
+        let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
 
         let mut model = match self.kind {
             ModelKind::Normal => normal_model_loader!(
@@ -258,7 +263,9 @@ impl Loader for NormalLoader {
                 in_situ_quant.is_some(),
                 device.clone()
             ),
-            ModelKind::XLoraNormal => xlora_model_loader!(
+            ModelKind::Adapter {
+                adapter: AdapterKind::XLora,
+            } => xlora_model_loader!(
                 paths,
                 dtype,
                 default_dtype,
@@ -271,7 +278,9 @@ impl Loader for NormalLoader {
                 in_situ_quant.is_some(),
                 device.clone()
             ),
-            ModelKind::LoraNormal => lora_model_loader!(
+            ModelKind::Adapter {
+                adapter: AdapterKind::Lora,
+            } => lora_model_loader!(
                 paths,
                 dtype,
                 default_dtype,
@@ -284,13 +293,7 @@ impl Loader for NormalLoader {
                 in_situ_quant.is_some(),
                 device.clone()
             ),
-            ModelKind::QuantizedGGUF
-            | ModelKind::QuantizedGGML
-            | ModelKind::XLoraGGUF
-            | ModelKind::XLoraGGML
-            | ModelKind::LoraGGUF
-            | ModelKind::LoraGGML
-            | ModelKind::Speculative { .. } => unreachable!(),
+            _ => unreachable!(),
         };
 
         let tokenizer = get_tokenizer(paths.get_tokenizer_filename())?;
@@ -305,7 +308,6 @@ impl Loader for NormalLoader {
 
         let max_seq_len = model.max_seq_len();
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
-        let is_xlora = model.is_xlora() && !is_lora;
         let num_hidden_layers = model.cache().lock().len();
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         Ok(Arc::new(Mutex::new(NormalPipeline {
@@ -326,10 +328,10 @@ impl Loader for NormalLoader {
                 repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
                 has_no_kv_cache: self.no_kv_cache,
-                is_xlora,
                 num_hidden_layers,
                 eos_tok: eos,
-                is_lora,
+                kind: self.kind.clone(),
+                is_xlora,
             },
         })))
     }

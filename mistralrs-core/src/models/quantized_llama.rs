@@ -10,6 +10,7 @@ use crate::layers::{
     repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention,
 };
 use crate::pipeline::{extract_logits, Cache};
+use crate::utils::model_config as ModelConfig;
 use crate::DeviceMapMetadata;
 
 const MAX_SEQ_LEN: u32 = 4096;
@@ -194,8 +195,8 @@ pub struct ModelWeights {
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
 }
 
-impl ModelWeights {
-    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
+impl ModelConfig::FromGGML for ModelWeights {
+    fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
         let rotary = RotaryEmbedding::new_partial(
             10000.,
@@ -254,8 +255,10 @@ impl ModelWeights {
             mapper: None,
         })
     }
+}
 
-    pub fn from_gguf<R: std::io::Seek + std::io::Read>(
+impl ModelConfig::FromGGUF for ModelWeights {
+    fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
@@ -383,7 +386,9 @@ impl ModelWeights {
             mapper: Some(mapper),
         })
     }
+}
 
+impl ModelWeights {
     pub fn forward(
         &mut self,
         x: &Tensor,
