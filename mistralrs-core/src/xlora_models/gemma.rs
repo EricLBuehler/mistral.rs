@@ -776,7 +776,7 @@ impl NormalModel for XLoraModel {
         &self.device
     }
     fn is_xlora(&self) -> bool {
-        false
+        true
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
