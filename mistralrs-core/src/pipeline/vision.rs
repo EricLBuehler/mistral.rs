@@ -167,8 +167,6 @@ impl Loader for VisionLoader {
         };
 
         let mut model = match self.kind {
-            ModelKind::QuantizedGGUF => unreachable!(),
-            ModelKind::QuantizedGGML => unreachable!(),
             ModelKind::Normal => vision_normal_model_loader!(
                 paths,
                 dtype,
@@ -182,16 +180,7 @@ impl Loader for VisionLoader {
                 in_situ_quant.is_some(),
                 device.clone()
             ),
-            ModelKind::XLoraNormal => unreachable!(),
-            ModelKind::LoraNormal => unreachable!(),
-            ModelKind::XLoraGGUF => unreachable!(),
-            ModelKind::XLoraGGML => unreachable!(),
-            ModelKind::LoraGGUF => unreachable!(),
-            ModelKind::LoraGGML => unreachable!(),
-            ModelKind::Speculative {
-                target: _,
-                draft: _,
-            } => unreachable!(),
+            _ => unreachable!(),
         };
 
         let preprocessor_config: PreProcessorConfig = serde_json::from_str(
@@ -250,7 +239,7 @@ impl Loader for VisionLoader {
                 is_xlora: false,
                 num_hidden_layers,
                 eos_tok: eos,
-                is_lora: false,
+                kind: self.kind.clone(),
                 has_no_kv_cache: false,
             },
             processor,

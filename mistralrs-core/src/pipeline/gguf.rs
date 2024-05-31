@@ -1,7 +1,8 @@
 use super::cache_manager::DefaultCacheManager;
 use super::{
-    get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, CacheManager,
-    GeneralMetadata, Loader, ModelKind, ModelPaths, TokenSource, XLoraPaths,AdapterKind,PrettyName,QuantizationKind
+    get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
+    CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind,
+    TokenSource, XLoraPaths,
 };
 use super::{
     AdapterActivationMixin, CacheManagerMixin, IsqPipelineMixin, MetadataMixin, ModelCategory,

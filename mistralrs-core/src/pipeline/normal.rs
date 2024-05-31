@@ -4,9 +4,9 @@ use super::normal_loaders::{
     Phi3Loader, Qwen2Loader,
 };
 use super::{
-    get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, CacheManager,
-    GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader, TokenSource,
-    XLoraPaths,AdapterKind
+    get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
+    CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
+    TokenSource, XLoraPaths,
 };
 use super::{
     AdapterActivationMixin, CacheManagerMixin, IsqPipelineMixin, MetadataMixin, ModelCategory,
