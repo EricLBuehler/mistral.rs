@@ -581,8 +581,8 @@ impl NormalModelLoader for Phi2Loader {
 
 // ======================== Phi3 loader
 
-#[derive(Deserialize)]
-struct RopeScaling(#[serde(with = "either::serde_untagged")] Either<Vec<f32>, String>);
+#[derive(Deserialize, Debug, Clone)]
+pub struct Phi3RopeScaling(#[serde(with = "either::serde_untagged")] pub Either<Vec<f32>, String>);
 
 #[derive(Deserialize)]
 struct Phi3BasicConfig {
@@ -597,7 +597,7 @@ struct Phi3BasicConfig {
     rope_theta: f64,
     bos_token_id: Option<u32>,
     eos_token_id: Option<u32>,
-    rope_scaling: Option<HashMap<String, RopeScaling>>,
+    rope_scaling: Option<HashMap<String, Phi3RopeScaling>>,
     max_position_embeddings: usize,
     original_max_position_embeddings: usize,
     sliding_window: Option<usize>,
@@ -619,11 +619,7 @@ impl Phi3BasicConfig {
             rms_norm_eps: basic_config.rms_norm_eps,
             eos_token_id: basic_config.eos_token_id,
             bos_token_id: basic_config.bos_token_id,
-            rope_scaling: basic_config.rope_scaling.map(|s| {
-                s.into_iter()
-                    .map(|(k, v)| (k, v.0))
-                    .collect::<HashMap<_, _>>()
-            }),
+            rope_scaling: basic_config.rope_scaling,
             original_max_position_embeddings: basic_config.original_max_position_embeddings,
             use_flash_attn,
             sliding_window: basic_config.sliding_window,

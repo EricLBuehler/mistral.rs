@@ -92,7 +92,7 @@ impl VisionLoaderBuilder {
 
     pub fn build(self, loader: VisionLoaderType) -> Box<dyn Loader> {
         let loader: Box<dyn VisionModelLoader> = match loader {
-            VisionLoaderType::Phi3 => Box::new(Phi3Loader),
+            VisionLoaderType::Phi3V => Box::new(Phi3Loader),
         };
         Box::new(VisionLoader {
             inner: loader,

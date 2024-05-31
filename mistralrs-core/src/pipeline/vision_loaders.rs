@@ -40,15 +40,15 @@ pub trait VisionModelLoader {
 #[derive(Clone, Debug, Deserialize)]
 /// The architecture to load the vision model as.
 pub enum VisionLoaderType {
-    #[serde(rename = "phi3")]
-    Phi3,
+    #[serde(rename = "phi3v")]
+    Phi3V,
 }
 
 impl FromStr for VisionLoaderType {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "phi3" => Ok(Self::Phi3),
+            "phi3v" => Ok(Self::Phi3V),
             a => Err(format!("Unknown architecture `{a}`")),
         }
     }

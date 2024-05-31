@@ -17,7 +17,7 @@ use crate::{
         repeat_kv, CausalMasker, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm,
         ScaledDotProductAttention,
     },
-    pipeline::{extract_logits, Cache, IsqModel, VisionModel},
+    pipeline::{extract_logits, Cache, IsqModel, Phi3RopeScaling, VisionModel},
     serde_default_fn,
     vision_models::clip::{Activation, ClipConfig, ClipVisionTransformer},
     DeviceMapMetadata,
@@ -55,7 +55,7 @@ pub struct Config {
     pub rope_theta: f64,
     pub bos_token_id: Option<u32>,
     pub eos_token_id: Option<u32>,
-    pub rope_scaling: Option<HashMap<String, Either<Vec<f32>, String>>>,
+    pub rope_scaling: Option<HashMap<String, Phi3RopeScaling>>,
     pub max_position_embeddings: usize,
     #[serde(default = "d_flash_attn")]
     pub use_flash_attn: bool,

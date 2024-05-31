@@ -15,12 +15,11 @@ use candle_core::{
     DType, Device, IndexOp, Result, Tensor,
 };
 use candle_nn::{Linear, Module, VarBuilder};
-use either::Either;
 
 pub use crate::layers_masker::CausalMasker;
 pub use crate::layers_utils::{flash_attn, repeat_kv, verify_sanity_gguf};
 
-use crate::{cublaslt::CUBLASLT_HANDLE, INHIBIT_GEMM_F16};
+use crate::{cublaslt::CUBLASLT_HANDLE, pipeline::Phi3RopeScaling, INHIBIT_GEMM_F16};
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
@@ -103,7 +102,7 @@ struct ScaledRopeParams {
 }
 
 pub struct PhiRopeConfig {
-    pub rope_scaling: Option<HashMap<String, Either<Vec<f32>, String>>>,
+    pub rope_scaling: Option<HashMap<String, Phi3RopeScaling>>,
     pub max_position_embeddings: usize,
     pub original_max_position_embeddings: usize,
     pub rope_theta: f64,
@@ -114,9 +113,9 @@ impl PhiRotaryEmbedding {
     pub fn new(dtype: DType, cfg: impl Into<PhiRopeConfig>, dev: &Device) -> Result<Self> {
         let cfg: PhiRopeConfig = cfg.into();
         let scaled_params = cfg.rope_scaling.as_ref().map(|r| ScaledRopeParams {
-            short_factor: r["short_factor"].clone().left().unwrap(),
-            long_factor: r["long_factor"].clone().left().unwrap(),
-            scaling_type: r["type"].clone().right().unwrap().parse().unwrap(),
+            short_factor: r["short_factor"].clone().0.left().unwrap(),
+            long_factor: r["long_factor"].clone().0.left().unwrap(),
+            scaling_type: r["type"].clone().0.right().unwrap().parse().unwrap(),
         });
         let max_seq_len = cfg.max_position_embeddings;
         let dim = cfg.head_dim;
