@@ -386,13 +386,11 @@ impl ImagePreProcessor for Phi3InputsProcessor {
             *image = Self::hd_transform(image, config.num_crops.expect("Need `num_crops`"))?;
 
             // Normalize
-            if config.do_normalize {
-                *image = self.normalize(
-                    image,
-                    config.image_mean.unwrap_or(Self::DEFAULT_MEAN),
-                    config.image_std.unwrap_or(Self::DEFAULT_STD),
-                );
-            }
+            *image = self.normalize(
+                image,
+                config.image_mean.unwrap_or(Self::DEFAULT_MEAN),
+                config.image_std.unwrap_or(Self::DEFAULT_STD),
+            );
 
             // Resize with bicubic interpolation
             let global_image = image.resize(336, 336, FilterType::Triangle);

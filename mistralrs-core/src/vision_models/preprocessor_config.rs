@@ -8,16 +8,16 @@ use serde::Deserialize;
 #[allow(dead_code)]
 pub struct PreProcessorConfig {
     pub(crate) do_convert_rgb: Option<bool>,
-    pub(crate) do_image_splitting: bool,
-    pub(crate) do_normalize: bool,
-    pub(crate) do_pad: bool,
-    pub(crate) do_rescale: bool,
-    pub(crate) do_resize: bool,
+    pub(crate) do_image_splitting: Option<bool>,
+    pub(crate) do_normalize: Option<bool>,
+    pub(crate) do_pad: Option<bool>,
+    pub(crate) do_rescale: Option<bool>,
+    pub(crate) do_resize: Option<bool>,
     pub(crate) image_mean: Option<[f64; 3]>,
     pub(crate) image_std: Option<[f64; 3]>,
-    pub(crate) rescale_factor: f64,
+    pub(crate) rescale_factor: Option<f64>,
     pub(crate) resampling: Option<usize>,
-    pub(crate) size: HashMap<String, u32>,
+    pub(crate) size: Option<HashMap<String, u32>>,
     pub(crate) num_img_tokens: Option<usize>,
     pub(crate) num_crops: Option<usize>,
 }
