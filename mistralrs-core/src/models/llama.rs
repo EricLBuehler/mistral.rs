@@ -10,7 +10,7 @@ use std::sync::Arc;
 use crate::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
-    pipeline::{extract_logits, NormalModel},
+    pipeline::{extract_logits, IsqModel, NormalModel},
     DeviceMapMetadata,
 };
 
@@ -352,6 +352,23 @@ impl Llama {
     }
 }
 
+impl IsqModel for Llama {
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+        let mut tensors = Vec::new();
+        tensors.push((&mut self.lm_head, None));
+        for (i, layer) in self.blocks.iter_mut().enumerate() {
+            tensors.push((&mut layer.attn.q_proj, Some(i)));
+            tensors.push((&mut layer.attn.k_proj, Some(i)));
+            tensors.push((&mut layer.attn.v_proj, Some(i)));
+            tensors.push((&mut layer.attn.o_proj, Some(i)));
+            tensors.push((&mut layer.mlp.c_fc1, Some(i)));
+            tensors.push((&mut layer.mlp.c_fc2, Some(i)));
+            tensors.push((&mut layer.mlp.c_proj, Some(i)));
+        }
+        (tensors, &*self.mapper)
+    }
+}
+
 impl NormalModel for Llama {
     fn forward(
         &mut self,
@@ -394,19 +411,5 @@ impl NormalModel for Llama {
     }
     fn max_seq_len(&self) -> usize {
         self.blocks[0].attn.max_seq_len
-    }
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.blocks.iter_mut().enumerate() {
-            tensors.push((&mut layer.attn.q_proj, Some(i)));
-            tensors.push((&mut layer.attn.k_proj, Some(i)));
-            tensors.push((&mut layer.attn.v_proj, Some(i)));
-            tensors.push((&mut layer.attn.o_proj, Some(i)));
-            tensors.push((&mut layer.mlp.c_fc1, Some(i)));
-            tensors.push((&mut layer.mlp.c_fc2, Some(i)));
-            tensors.push((&mut layer.mlp.c_proj, Some(i)));
-        }
-        (tensors, &*self.mapper)
     }
 }

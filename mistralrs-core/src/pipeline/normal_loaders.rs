@@ -11,7 +11,35 @@ use pyo3::pyclass;
 
 use serde::Deserialize;
 
-use super::{NormalModel, NormalModelLoader};
+pub trait NormalModelLoader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        device: Device,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>>;
+    #[allow(clippy::too_many_arguments)]
+    fn load_xlora(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        lora_config: &[((String, String), LoraConfig)],
+        xlora_config: Option<XLoraConfig>,
+        xlora_ordering: Ordering,
+        mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        device: Device,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>>;
+    fn is_gptx(&self) -> bool;
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
+}
+
+use super::NormalModel;
 use crate::{
     models,
     xlora_models::{self, XLoraConfig},

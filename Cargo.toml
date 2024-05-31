@@ -35,6 +35,7 @@ clap = { version = "4.5.1", features = ["derive"] }
 pyo3 = { version = "0.21.0", features = ["full", "extension-module"] }
 tokio = { version = "1.36.0", features = ["full", "rt-multi-thread"] }
 once_cell = "1.19.0"
+image = "0.25.1"
 
 [profile.profiling]
 inherits = "release"

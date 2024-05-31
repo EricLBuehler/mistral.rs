@@ -1,6 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use std::{
+    collections::HashMap,
     ops::Mul,
     str::FromStr,
     sync::{
@@ -14,11 +15,12 @@ use candle_core::{
     DType, Device, IndexOp, Result, Tensor,
 };
 use candle_nn::{Linear, Module, VarBuilder};
+use either::Either;
 
 pub use crate::layers_masker::CausalMasker;
 pub use crate::layers_utils::{flash_attn, repeat_kv, verify_sanity_gguf};
 
-use crate::{cublaslt::CUBLASLT_HANDLE, models::phi3, INHIBIT_GEMM_F16};
+use crate::{cublaslt::CUBLASLT_HANDLE, INHIBIT_GEMM_F16};
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
@@ -100,15 +102,24 @@ struct ScaledRopeParams {
     scaling_type: ScaledRopeType,
 }
 
+pub struct PhiRopeConfig {
+    pub rope_scaling: Option<HashMap<String, Either<Vec<f32>, String>>>,
+    pub max_position_embeddings: usize,
+    pub original_max_position_embeddings: usize,
+    pub rope_theta: f64,
+    pub head_dim: usize,
+}
+
 impl PhiRotaryEmbedding {
-    pub fn new(dtype: DType, cfg: &phi3::Config, dev: &Device) -> Result<Self> {
+    pub fn new(dtype: DType, cfg: impl Into<PhiRopeConfig>, dev: &Device) -> Result<Self> {
+        let cfg: PhiRopeConfig = cfg.into();
         let scaled_params = cfg.rope_scaling.as_ref().map(|r| ScaledRopeParams {
             short_factor: r["short_factor"].clone().left().unwrap(),
             long_factor: r["long_factor"].clone().left().unwrap(),
             scaling_type: r["type"].clone().right().unwrap().parse().unwrap(),
         });
         let max_seq_len = cfg.max_position_embeddings;
-        let dim = cfg.head_dim();
+        let dim = cfg.head_dim;
 
         if let Some(scaled_params) = scaled_params {
             // Calculate scale

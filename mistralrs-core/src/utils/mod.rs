@@ -231,3 +231,12 @@ macro_rules! sample_async {
         }
     };
 }
+
+#[macro_export]
+macro_rules! serde_default_fn {
+    ($t:ty, $name:ident, $v:expr) => {
+        fn $name() -> $t {
+            $v
+        }
+    };
+}

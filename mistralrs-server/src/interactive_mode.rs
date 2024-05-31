@@ -1,7 +1,8 @@
+use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    Constraint, MistralRs, NormalRequest, Request, RequestMessage, Response, SamplingParams,
-    TERMINATE_ALL_NEXT_STEP,
+    Constraint, Content, MistralRs, NormalRequest, Request, RequestMessage, Response,
+    SamplingParams, TERMINATE_ALL_NEXT_STEP,
 };
 use once_cell::sync::Lazy;
 use std::{
@@ -24,7 +25,7 @@ static CTRLC_HANDLER: Lazy<Mutex<&'static (dyn Fn() + Sync)>> =
 
 pub async fn interactive_mode(mistralrs: Arc<MistralRs>) {
     let sender = mistralrs.get_sender();
-    let mut messages = Vec::new();
+    let mut messages: Vec<IndexMap<String, Content>> = Vec::new();
 
     let sampling_params = SamplingParams {
         temperature: Some(0.1),
@@ -63,9 +64,9 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>) {
         // Set the handler to terminate all seqs, so allowing cancelling running
         *CTRLC_HANDLER.lock().unwrap() = &terminate_handler;
 
-        let mut user_message = IndexMap::new();
-        user_message.insert("role".to_string(), "user".to_string());
-        user_message.insert("content".to_string(), prompt);
+        let mut user_message: IndexMap<String, Content> = IndexMap::new();
+        user_message.insert("role".to_string(), Either::Left("user".to_string()));
+        user_message.insert("content".to_string(), Either::Left(prompt));
         messages.push(user_message);
 
         let (tx, mut rx) = channel(10_000);
@@ -115,9 +116,10 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>) {
                 Response::CompletionModelError(_, _) => unreachable!(),
             }
         }
-        let mut assistant_message = IndexMap::new();
-        assistant_message.insert("role".to_string(), "assistant".to_string());
-        assistant_message.insert("content".to_string(), assistant_output);
+        let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+            IndexMap::new();
+        assistant_message.insert("role".to_string(), Either::Left("assistant".to_string()));
+        assistant_message.insert("content".to_string(), Either::Left(assistant_output));
         messages.push(assistant_message);
         println!();
     }

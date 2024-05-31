@@ -466,23 +466,30 @@ impl Runner {
                         for message in messages {
                             let role = message.get("role").expect("Expected role");
                             let content = message.get("content").expect("Expected role");
-                            let mut message_map = IndexMap::new();
+                            let mut message_map: IndexMap<
+                                String,
+                                Either<String, Vec<IndexMap<String, String>>>,
+                            > = IndexMap::new();
                             if !["user", "assistant", "system"].contains(&role.as_str()) {
                                 return Err(PyValueError::new_err(
                                     "Only `user`, `assistant`, `system` roles supported.",
                                 ));
                             }
-                            message_map.insert("role".to_string(), role.to_string());
-                            message_map.insert("content".to_string(), content.clone());
+                            message_map.insert("role".to_string(), Either::Left(role.to_string()));
+                            message_map
+                                .insert("content".to_string(), Either::Left(content.clone()));
                             messages_vec.push(message_map);
                         }
                         RequestMessage::Chat(messages_vec)
                     }
                     Either::Right(ref prompt) => {
                         let mut messages = Vec::new();
-                        let mut message_map = IndexMap::new();
-                        message_map.insert("role".to_string(), "user".to_string());
-                        message_map.insert("content".to_string(), prompt.to_string());
+                        let mut message_map: IndexMap<
+                            String,
+                            Either<String, Vec<IndexMap<String, String>>>,
+                        > = IndexMap::new();
+                        message_map.insert("role".to_string(), Either::Left("user".to_string()));
+                        message_map.insert("content".to_string(), Either::Left(prompt.to_string()));
                         messages.push(message_map);
                         RequestMessage::Chat(messages)
                     }

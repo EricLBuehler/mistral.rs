@@ -3,6 +3,7 @@
 use crate::{
     layers::ScaledDotProductAttention,
     lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering},
+    pipeline::IsqModel,
 };
 use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
 use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
@@ -648,6 +649,38 @@ impl XLoraLlama {
     }
 }
 
+impl IsqModel for XLoraLlama {
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+        let mut tensors = Vec::new();
+        tensors.push((self.lm_head.inner(), None));
+        for (i, layer) in self.blocks.iter_mut().enumerate() {
+            tensors.push((
+                Arc::get_mut(&mut layer.attn.q_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.attn.k_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.attn.v_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.attn.o_proj).unwrap().inner(),
+                Some(i),
+            ));
+            tensors.push((Arc::get_mut(&mut layer.mlp.c_fc1).unwrap().inner(), Some(i)));
+            tensors.push((Arc::get_mut(&mut layer.mlp.c_fc2).unwrap().inner(), Some(i)));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.c_proj).unwrap().inner(),
+                Some(i),
+            ));
+        }
+        (tensors, &*self.mapper)
+    }
+}
+
 impl NormalModel for XLoraLlama {
     fn forward(
         &mut self,
@@ -695,35 +728,6 @@ impl NormalModel for XLoraLlama {
     }
     fn max_seq_len(&self) -> usize {
         self.blocks[0].attn.max_seq_len
-    }
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
-        let mut tensors = Vec::new();
-        tensors.push((self.lm_head.inner(), None));
-        for (i, layer) in self.blocks.iter_mut().enumerate() {
-            tensors.push((
-                Arc::get_mut(&mut layer.attn.q_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.attn.k_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.attn.v_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.attn.o_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((Arc::get_mut(&mut layer.mlp.c_fc1).unwrap().inner(), Some(i)));
-            tensors.push((Arc::get_mut(&mut layer.mlp.c_fc2).unwrap().inner(), Some(i)));
-            tensors.push((
-                Arc::get_mut(&mut layer.mlp.c_proj).unwrap().inner(),
-                Some(i),
-            ));
-        }
-        (tensors, &*self.mapper)
     }
     fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
         let mut sum = 0;
