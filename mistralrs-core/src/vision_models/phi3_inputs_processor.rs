@@ -342,6 +342,7 @@ impl Phi3InputsProcessor {
         while (scale * (scale / ratio).ceil()) as usize <= num_crops {
             scale += 1.0;
         }
+        let scale = scale - 1.;
         let new_w = (scale * 336.) as u32;
         let new_h = (new_w as f32 / ratio) as u32;
 
@@ -386,26 +387,26 @@ impl ImagePreProcessor for Phi3InputsProcessor {
                 *image = DynamicImage::ImageRgb8(image.to_rgb8());
             }
 
-            *image = Self::hd_transform(image, config.num_crops.expect("Need `num_crops`"))?;
+            let elem = Self::hd_transform(image, config.num_crops.expect("Need `num_crops`"))?;
 
             // Normalize
-            *image = self.normalize(
-                image,
+            let hd_image = self.normalize(
+                &elem,
                 config.image_mean.unwrap_or(Self::DEFAULT_MEAN),
                 config.image_std.unwrap_or(Self::DEFAULT_STD),
             );
 
             // Resize with bicubic interpolation
-            let global_image = image.resize(336, 336, FilterType::Triangle);
+            let global_image = hd_image.resize(336, 336, FilterType::Triangle);
             let global_image = make_pixel_values(&global_image, device)?.unsqueeze(0)?;
 
-            let (w, h) = image.dimensions();
+            let (w, h) = hd_image.dimensions();
             let num_image_tokens =
                 (h as f32 / 336. * w as f32 / 336. + 1. + ((h as f32 / 336.) + 1.) * 12.) as usize;
 
             // (3,336,336)
-            let image = make_pixel_values(image, device)?;
-            let hd_image_reshape = image
+            let hd_image = make_pixel_values(&hd_image, device)?;
+            let hd_image_reshape = hd_image
                 .reshape((
                     1,
                     3,
