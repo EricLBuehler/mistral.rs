@@ -92,9 +92,7 @@ trait LoadTensors {
         // Take the filtered list of tensors to load, store with derived lookup key:
         let mut loaded_tensors = HashMap::new();
         for (load_name, key_name) in iter.with_progress(is_silent) {
-            let tensor = tensors
-                .load(&load_name, device)?
-                .to_dtype(dtype)?;
+            let tensor = tensors.load(&load_name, device)?.to_dtype(dtype)?;
 
             loaded_tensors.insert(key_name, tensor);
         }
