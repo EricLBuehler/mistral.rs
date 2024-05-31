@@ -70,7 +70,7 @@ jobs:
               uses: docker/build-push-action@v4
               with:
                 context: .
-                file: Dockerfile-cuda-all
+                file: Dockerfile.cuda-all
                 push: ${{ github.event_name != 'pull_request' }}
                 platforms: 'linux/amd64'
                 tags: ${{ steps.meta-cuda.outputs.tags }}
