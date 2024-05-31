@@ -5,7 +5,7 @@ use candle_core::Tensor;
 pub(crate) mod clip;
 pub(crate) mod image_processor;
 pub(crate) mod phi3;
-pub(crate) mod phi3_image_processor;
+pub(crate) mod phi3_inputs_processor;
 pub(crate) mod preprocessor_config;
 pub(crate) mod processor_config;
 

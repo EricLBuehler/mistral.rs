@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use super::{Processor, ProcessorCreator, VisionModel};
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3};
-use crate::vision_models::phi3_image_processor::Phi3Processor;
+use crate::vision_models::phi3_inputs_processor::Phi3Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::DeviceMapMetadata;
