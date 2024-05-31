@@ -55,6 +55,9 @@ once_cell.workspace = true
 toml = "0.8.12"
 strum = { version = "0.26", features = ["derive"] }
 derive_more = { version = "0.99.17", default-features = false, features = ["from"] }
+akin = "0.4.0"
+variantly = "0.4.0"
+buildstructor = "0.5.4"
 tracing-subscriber.workspace = true
 reqwest = { version = "0.12.4", features = ["blocking"] }
 
