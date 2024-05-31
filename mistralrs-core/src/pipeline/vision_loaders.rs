@@ -31,7 +31,7 @@ pub trait VisionModelLoader {
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
     fn get_processor(
         &self,
-        processor_config: ProcessorConfig,
+        processor_config: Option<ProcessorConfig>,
         preprocessor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync>;
 }
@@ -89,7 +89,7 @@ impl VisionModelLoader for Phi3Loader {
     }
     fn get_processor(
         &self,
-        processor_config: ProcessorConfig,
+        processor_config: Option<ProcessorConfig>,
         preprocessor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync> {
         Phi3Processor::new_processor(processor_config, preprocessor_config)

@@ -36,7 +36,7 @@ pub struct Phi3Processor {
 
 impl ProcessorCreator for Phi3Processor {
     fn new_processor(
-        _: ProcessorConfig,
+        _: Option<ProcessorConfig>,
         _: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(Self {

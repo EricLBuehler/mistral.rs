@@ -193,16 +193,10 @@ impl Loader for VisionLoader {
             .unwrap(),
         )
         .unwrap();
-        let processor_config: ProcessorConfig = serde_json::from_str(
-            &fs::read_to_string(
-                paths
-                    .get_processor_config()
-                    .as_ref()
-                    .expect("Need preprocessor config"),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+        let processor_config: Option<ProcessorConfig> = paths
+            .get_processor_config()
+            .as_ref()
+            .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
 
         let processor = self
             .inner

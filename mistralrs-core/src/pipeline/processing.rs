@@ -13,8 +13,10 @@ use super::{chat_template::apply_chat_template_to, text_models_inputs_processor,
 
 /// Trait to create processors.
 pub trait ProcessorCreator {
-    fn new_processor(_: ProcessorConfig, _: PreProcessorConfig)
-        -> Arc<dyn Processor + Send + Sync>;
+    fn new_processor(
+        _: Option<ProcessorConfig>,
+        _: PreProcessorConfig,
+    ) -> Arc<dyn Processor + Send + Sync>;
 }
 
 /// Processor for messages.
