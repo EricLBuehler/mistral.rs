@@ -34,7 +34,7 @@ accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
 tracing.workspace = true
 rand = "0.8.5"
-regex-automata = "0.4.6"
+regex-automata = { version = "0.4.6", features = ["meta"] }
 rustc-hash = "1.1.0"
 vob = "3.0.3"
 cfgrammar = "0.13.3"
@@ -58,6 +58,7 @@ image.workspace = true
 derive_more = { version = "0.99.17", default-features = false, features = ["from"] }
 tracing-subscriber.workspace = true
 reqwest = { version = "0.12.4", features = ["blocking"] }
+itertools = "0.13.0"
 
 [features]
 pyo3_macros = ["pyo3"]

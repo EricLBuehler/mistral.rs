@@ -348,6 +348,7 @@ impl Pipeline for SpeculativePipeline {
                 .get_processor()
                 .inputs_processor()
                 .process_inputs(
+                    self.tokenizer(),
                     &mut [seq],
                     is_prompt && i == 0, // Only prompt (no kv cache) if first
                     is_xlora,
@@ -413,6 +414,7 @@ impl Pipeline for SpeculativePipeline {
             .get_processor()
             .inputs_processor()
             .process_inputs(
+                self.tokenizer(),
                 &mut [seq],
                 true, // use the "prefill" tokens
                 is_xlora,

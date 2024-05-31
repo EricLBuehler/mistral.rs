@@ -10,7 +10,7 @@ use pyo3::pyclass;
 
 use serde::Deserialize;
 
-use super::{Processor, VisionModel};
+use super::{Processor, ProcessorCreator, VisionModel};
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3};
 use crate::vision_models::phi3_image_processor::Phi3Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
@@ -92,6 +92,6 @@ impl VisionModelLoader for Phi3Loader {
         processor_config: ProcessorConfig,
         preprocessor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync> {
-        Arc::new(Phi3Processor::new(processor_config, preprocessor_config))
+        Phi3Processor::new_processor(processor_config, preprocessor_config)
     }
 }

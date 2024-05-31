@@ -4,17 +4,17 @@ use std::{any::Any, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView, RgbImage, RgbaImage};
-use indexmap::IndexMap;
+use itertools::Itertools;
+use regex_automata::meta::Regex;
+use tokenizers::Tokenizer;
 
 use crate::{
     pipeline::{
-        apply_chat_template,
         text_models_inputs_processor::{self, get_completion_input, get_prompt_input},
-        InputsProcessor, InputsProcessorType, Processor,
+        InputsProcessor, InputsProcessorType, Processor, ProcessorCreator,
     },
     sequence::Sequence,
     vision_models::image_processor::make_pixel_values,
-    Content, Pipeline,
 };
 
 use super::{
@@ -26,46 +26,44 @@ use super::{
 };
 
 // Input processor
-pub struct Phi3ImageProcessor;
+pub struct Phi3InputsProcessor {
+    image_tag_splitter: Regex,
+}
 // Processor
 pub struct Phi3Processor {
-    num_img_tokens: usize,
+    inputs_processor: Arc<Phi3InputsProcessor>,
 }
 
-impl Phi3Processor {
-    pub fn new(_: ProcessorConfig, preprocessor_config: PreProcessorConfig) -> Self {
-        Self {
-            num_img_tokens: preprocessor_config
-                .num_img_tokens
-                .expect("Require `num_img_tokens` for phi3 preprocessor config."),
-        }
+impl ProcessorCreator for Phi3Processor {
+    fn new_processor(
+        _: ProcessorConfig,
+        _: PreProcessorConfig,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        Arc::new(Self {
+            inputs_processor: Arc::new(Phi3InputsProcessor {
+                image_tag_splitter: Regex::new(r"<\|image_\d+\|>")
+                    .expect("Failed to compile split regex."),
+            }),
+        })
     }
 }
 
 impl Processor for Phi3Processor {
-    fn process(
-        &self,
-        pipeline: &dyn Pipeline,
-        messages: Vec<IndexMap<String, Content>>,
-        add_generation_prompt: bool,
-    ) -> anyhow::Result<Vec<u32>> {
-        let _prompt = apply_chat_template(pipeline, messages, add_generation_prompt)?;
-        todo!()
-    }
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
-        Arc::new(Phi3ImageProcessor)
+        self.inputs_processor.clone()
     }
     fn get_special_tokens(&self) -> &[&'static str] {
         &[]
     }
 }
 
-impl InputsProcessor for Phi3ImageProcessor {
+impl InputsProcessor for Phi3InputsProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
     }
     fn process_inputs(
         &self,
+        tokenizer: Arc<Tokenizer>,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,
@@ -80,18 +78,10 @@ impl InputsProcessor for Phi3ImageProcessor {
         if no_kv_cache {
             anyhow::bail!("Vision model must have kv cache.");
         }
-        let text_models_inputs_processor::InputMetadata {
-            input,
-            positions,
-            positions_kernel,
-            context_lens,
-            position_ids,
-        } = if is_prompt {
-            get_prompt_input(input_seqs, device, last_n_context_len)?
-        } else {
-            get_completion_input(input_seqs, device, no_kv_cache, last_n_context_len)?
-        };
-        let config = other_config.expect("Need a PreProcessorConfig config.");
+
+        let config = other_config
+            .clone()
+            .expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
         let (pixel_values, image_sizes, num_img_tokens) = if is_prompt {
@@ -113,7 +103,7 @@ impl InputsProcessor for Phi3ImageProcessor {
                 let image_sizes = image_sizes.unwrap();
                 pixel_values_accum.push(pixel_values.unsqueeze(0)?);
                 image_sizes_accum.push(image_sizes);
-                num_img_tokens_accum.push(num_img_tokens);
+                num_img_tokens_accum.push(num_img_tokens.unwrap());
             }
             (
                 Some(Tensor::cat(&pixel_values_accum, 0)?),
@@ -121,8 +111,102 @@ impl InputsProcessor for Phi3ImageProcessor {
                 Some(num_img_tokens_accum),
             )
         } else {
-            (None, None, None)
+            return text_models_inputs_processor::TextInputsProcessor.process_inputs(
+                tokenizer,
+                input_seqs,
+                is_prompt,
+                is_xlora,
+                device,
+                no_kv_cache,
+                last_n_context_len,
+                other_config,
+            );
         };
+
+        let mut toks = Vec::new();
+        let detokenized = tokenizer
+            .decode_batch(
+                &input_seqs
+                    .iter()
+                    .map(|seq| seq.get_toks())
+                    .collect::<Vec<_>>(),
+                false,
+            )
+            .map_err(anyhow::Error::msg)?;
+
+        let num_img_tokens = num_img_tokens.unwrap();
+        for (detokenized, seq) in detokenized.into_iter().zip(input_seqs.iter()) {
+            let splits = self
+                .image_tag_splitter
+                .split(&detokenized)
+                .map(|span| &detokenized[span.range()])
+                .collect::<Vec<_>>();
+            let prompt_chunks = tokenizer
+                .encode_batch(splits, true)
+                .map_err(anyhow::Error::msg)?
+                .into_iter()
+                .map(|enc| enc.get_ids().to_vec())
+                .collect::<Vec<_>>();
+
+            let image_tags = self.image_tag_splitter.find_iter(&detokenized);
+            let image_ids = image_tags
+                .into_iter()
+                .map(|s| {
+                    let s = &detokenized[s.range()];
+                    s.split('|')
+                        .nth(1)
+                        .unwrap()
+                        .split('_')
+                        .nth(1)
+                        .unwrap()
+                        .parse::<u32>()
+                        .expect("Failed to parse image id to u32")
+                })
+                .collect::<Vec<_>>();
+            let unique_image_ids = image_ids
+                .iter()
+                .copied()
+                .unique()
+                .sorted()
+                .collect::<Vec<_>>();
+            // `image_ids` must start from 1, and must be continuous int, e.g. [1, 2, 3], cannot be [1, 4, 5]
+            assert_eq!(
+                unique_image_ids,
+                (1u32..unique_image_ids.len() as u32 + 1).collect::<Vec<_>>()
+            );
+            // Total images must be the same as the number of image tags
+            assert_eq!(unique_image_ids.len(), seq.images().unwrap().len());
+
+            // Use the TryInto + unwrap_or to handle case when id==0
+            let image_ids_pad = image_ids
+                .iter()
+                .map(|id| {
+                    [*id].repeat(
+                        num_img_tokens[TryInto::<usize>::try_into(*id as isize - 1)
+                            .unwrap_or(num_img_tokens.len() - 1)],
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            let mut input_ids: Vec<u32> = Vec::new();
+            for item in prompt_chunks.iter().interleave(&image_ids_pad) {
+                input_ids.extend(item);
+            }
+            toks.push(input_ids);
+        }
+
+        let text_models_inputs_processor::InputMetadata {
+            input,
+            positions,
+            positions_kernel,
+            context_lens,
+            position_ids,
+        } = if is_prompt {
+            get_prompt_input(toks, input_seqs, device, last_n_context_len)?
+        } else {
+            get_completion_input(toks, input_seqs, device, no_kv_cache, last_n_context_len)?
+        };
+
         Ok(Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
@@ -241,7 +325,7 @@ fn pad_336(image: &DynamicImage, trans: bool) -> DynamicImage {
     }
 }
 
-impl Phi3ImageProcessor {
+impl Phi3InputsProcessor {
     fn hd_transform(image: &DynamicImage, num_crops: usize) -> Result<DynamicImage> {
         let (mut w, mut h) = image.dimensions();
         let trans = if w < h {
@@ -278,7 +362,7 @@ fn pad_to_max_num_crops_tensor(image: &Tensor, max_crops: usize) -> Result<Tenso
     }
 }
 
-impl ImagePreProcessor for Phi3ImageProcessor {
+impl ImagePreProcessor for Phi3InputsProcessor {
     #[allow(clippy::excessive_precision)]
     const DEFAULT_MEAN: [f64; 3] = [0.48145466, 0.4578275, 0.40821073];
     #[allow(clippy::excessive_precision)]

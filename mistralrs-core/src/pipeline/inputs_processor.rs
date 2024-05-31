@@ -2,6 +2,7 @@ use std::{any::Any, sync::Arc};
 
 use anyhow::Result;
 use candle_core::Device;
+use tokenizers::Tokenizer;
 
 use crate::sequence::Sequence;
 
@@ -20,6 +21,7 @@ pub trait InputsProcessor {
     #[allow(clippy::too_many_arguments)]
     fn process_inputs(
         &self,
+        tokenizer: Arc<Tokenizer>,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,
@@ -39,6 +41,7 @@ pub mod text_models_inputs_processor {
 
     use anyhow::Result;
     use candle_core::{Device, Tensor};
+    use tokenizers::Tokenizer;
 
     use crate::{layers::set_use_matmul_via_f16, sequence::Sequence};
 
@@ -53,6 +56,7 @@ pub mod text_models_inputs_processor {
     }
 
     pub(crate) fn get_prompt_input(
+        toks: Vec<Vec<u32>>,
         input_seqs: &[&mut Sequence],
         device: &Device,
         last_n_context_len: Option<(usize, usize)>,
@@ -68,8 +72,7 @@ pub mod text_models_inputs_processor {
         let mut seqlen_offsets = Vec::new();
         let mut context_lens = Vec::new();
         let mut position_ids = Vec::new();
-        for seq in input_seqs.iter() {
-            let mut ctxt = seq.get_toks().to_vec();
+        for (seq, mut ctxt) in input_seqs.iter().zip(toks) {
             let offset = if let Some((_, offset)) = last_n_context_len {
                 offset
             } else {
@@ -125,22 +128,23 @@ pub mod text_models_inputs_processor {
     }
 
     pub(crate) fn get_completion_input(
+        toks: Vec<Vec<u32>>,
         input_seqs: &[&mut Sequence],
         device: &Device,
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
     ) -> Result<InputMetadata> {
         if no_kv_cache {
-            return get_prompt_input(input_seqs, device, last_n_context_len);
+            return get_prompt_input(toks, input_seqs, device, last_n_context_len);
         }
         // Pad each sequence by the padding token to the max len.
         let mut seqs_tensors = Vec::new();
         let mut seqlen_offsets = Vec::new();
         let mut context_lens = Vec::new();
         let mut position_ids = Vec::new();
-        for seq in input_seqs.iter() {
-            let start_pos = seq.get_toks().len().saturating_sub(1);
-            let ctxt = seq.get_toks()[start_pos..].to_vec();
+        for (seq, ctxt) in input_seqs.iter().zip(toks) {
+            let start_pos = ctxt.len().saturating_sub(1);
+            let ctxt = ctxt[start_pos..].to_vec();
             seqlen_offsets.push(start_pos);
             context_lens.push((0, 1));
             position_ids.push(seq.len());
@@ -182,6 +186,7 @@ pub mod text_models_inputs_processor {
     impl InputsProcessor for TextInputsProcessor {
         fn process_inputs(
             &self,
+            _: Arc<Tokenizer>,
             input_seqs: &mut [&mut Sequence],
             is_prompt: bool,
             is_xlora: bool,
@@ -197,14 +202,31 @@ pub mod text_models_inputs_processor {
                     positions_kernel: seqlen_offsets_kernel_full,
                     context_lens: _,
                     position_ids,
-                } = get_prompt_input(input_seqs, device, last_n_context_len)?;
+                } = get_prompt_input(
+                    input_seqs
+                        .iter()
+                        .map(|seq| seq.get_toks().to_vec())
+                        .collect::<Vec<_>>(),
+                    input_seqs,
+                    device,
+                    last_n_context_len,
+                )?;
                 let InputMetadata {
                     input: input_ids,
                     positions: seqlen_offsets,
                     positions_kernel: seqlen_offsets_kernel,
                     context_lens,
                     position_ids: _,
-                } = get_completion_input(input_seqs, device, no_kv_cache, last_n_context_len)?;
+                } = get_completion_input(
+                    input_seqs
+                        .iter()
+                        .map(|seq| seq.get_toks().to_vec())
+                        .collect::<Vec<_>>(),
+                    input_seqs,
+                    device,
+                    no_kv_cache,
+                    last_n_context_len,
+                )?;
                 Ok(Box::new(ModelInputs {
                     input_ids,
                     input_ids_full: Some(input_ids_full),
@@ -222,7 +244,15 @@ pub mod text_models_inputs_processor {
                     positions_kernel: seqlen_offsets_kernel,
                     context_lens,
                     position_ids,
-                } = get_prompt_input(input_seqs, device, last_n_context_len)?;
+                } = get_prompt_input(
+                    input_seqs
+                        .iter()
+                        .map(|seq| seq.get_toks().to_vec())
+                        .collect::<Vec<_>>(),
+                    input_seqs,
+                    device,
+                    last_n_context_len,
+                )?;
                 Ok(Box::new(ModelInputs {
                     input_ids: input_ids.clone(),
                     input_ids_full: Some(input_ids),
@@ -240,7 +270,15 @@ pub mod text_models_inputs_processor {
                     positions_kernel: seqlen_offsets_kernel,
                     context_lens,
                     position_ids,
-                } = get_prompt_input(input_seqs, device, last_n_context_len)?;
+                } = get_prompt_input(
+                    input_seqs
+                        .iter()
+                        .map(|seq| seq.get_toks().to_vec())
+                        .collect::<Vec<_>>(),
+                    input_seqs,
+                    device,
+                    last_n_context_len,
+                )?;
                 Ok(Box::new(ModelInputs {
                     input_ids,
                     input_ids_full: None,
@@ -258,7 +296,16 @@ pub mod text_models_inputs_processor {
                     positions_kernel: seqlen_offsets_kernel,
                     context_lens,
                     position_ids,
-                } = get_completion_input(input_seqs, device, no_kv_cache, last_n_context_len)?;
+                } = get_completion_input(
+                    input_seqs
+                        .iter()
+                        .map(|seq| seq.get_toks().to_vec())
+                        .collect::<Vec<_>>(),
+                    input_seqs,
+                    device,
+                    no_kv_cache,
+                    last_n_context_len,
+                )?;
                 Ok(Box::new(ModelInputs {
                     input_ids,
                     input_ids_full: None,

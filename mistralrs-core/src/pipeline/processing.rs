@@ -4,9 +4,18 @@ use anyhow::Result;
 use either::Either;
 use indexmap::IndexMap;
 
-use crate::{Content, Pipeline};
+use crate::{
+    vision_models::{preprocessor_config::PreProcessorConfig, processor_config::ProcessorConfig},
+    Content, Pipeline,
+};
 
 use super::{chat_template::apply_chat_template_to, text_models_inputs_processor, InputsProcessor};
+
+/// Trait to create processors.
+pub trait ProcessorCreator {
+    fn new_processor(_: ProcessorConfig, _: PreProcessorConfig)
+        -> Arc<dyn Processor + Send + Sync>;
+}
 
 /// Processor for messages.
 /// Also includes method to retrieve the input processor for processing inputs for the
@@ -17,7 +26,14 @@ pub trait Processor {
         pipeline: &dyn Pipeline,
         messages: Vec<IndexMap<String, Content>>,
         add_generation_prompt: bool,
-    ) -> Result<Vec<u32>>;
+    ) -> Result<Vec<u32>> {
+        let prompt = apply_chat_template(pipeline, messages, add_generation_prompt)?;
+        let encoding = pipeline
+            .tokenizer()
+            .encode(prompt, false)
+            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
+        Ok(encoding.get_ids().to_vec())
+    }
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor>;
     fn get_special_tokens(&self) -> &[&'static str];
 }
@@ -66,19 +82,6 @@ pub(crate) fn apply_chat_template(
 pub struct BasicProcessor;
 
 impl Processor for BasicProcessor {
-    fn process(
-        &self,
-        pipeline: &dyn Pipeline,
-        messages: Vec<IndexMap<String, Content>>,
-        add_generation_prompt: bool,
-    ) -> Result<Vec<u32>> {
-        let prompt = apply_chat_template(pipeline, messages, add_generation_prompt)?;
-        let encoding = pipeline
-            .tokenizer()
-            .encode(prompt, false)
-            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
-        Ok(encoding.get_ids().to_vec())
-    }
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
         Arc::new(text_models_inputs_processor::TextInputsProcessor)
     }
