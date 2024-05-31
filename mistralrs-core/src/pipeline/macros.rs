@@ -134,6 +134,32 @@ macro_rules! get_paths {
             None
         };
 
+        let preprocessor_config = if $crate::api_dir_list!(api, model_id)
+            .collect::<Vec<_>>()
+            .contains(&"preprocessor_config.json".to_string())
+        {
+            Some($crate::api_get_file!(
+                api,
+                "preprocessor_config.json",
+                model_id
+            ))
+        } else {
+            None
+        };
+
+        let processor_config = if $crate::api_dir_list!(api, model_id)
+            .collect::<Vec<_>>()
+            .contains(&"processor_config.json".to_string())
+        {
+            Some($crate::api_get_file!(
+                api,
+                "processor_config.json",
+                model_id
+            ))
+        } else {
+            None
+        };
+
         let template_filename = $crate::api_get_file!(api, "tokenizer_config.json", model_id);
 
         Ok(Box::new($path_name {
@@ -148,6 +174,8 @@ macro_rules! get_paths {
             template_filename,
             gen_conf,
             lora_preload_adapter_info,
+            preprocessor_config,
+            processor_config,
         }))
     }};
 }
@@ -221,6 +249,32 @@ macro_rules! get_paths_gguf {
             None
         };
 
+        let preprocessor_config = if $crate::api_dir_list!(api, model_id)
+            .collect::<Vec<_>>()
+            .contains(&"preprocessor_config.json".to_string())
+        {
+            Some($crate::api_get_file!(
+                api,
+                "preprocessor_config.json",
+                model_id
+            ))
+        } else {
+            None
+        };
+
+        let processor_config = if $crate::api_dir_list!(api, model_id)
+            .collect::<Vec<_>>()
+            .contains(&"processor_config.json".to_string())
+        {
+            Some($crate::api_get_file!(
+                api,
+                "processor_config.json",
+                model_id
+            ))
+        } else {
+            None
+        };
+
         let tokenizer_filename = if $this.model_id.is_some() {
             $crate::api_get_file!(api, "tokenizer.json", model_id)
         } else {
@@ -239,12 +293,36 @@ macro_rules! get_paths_gguf {
             template_filename: chat_template,
             gen_conf,
             lora_preload_adapter_info,
+            preprocessor_config,
+            processor_config
         }))
     }};
 }
 
 #[macro_export]
 macro_rules! normal_model_loader {
+    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
+        let vb = from_mmaped_safetensors(
+            $paths.get_weight_filenames().to_vec(),
+            Vec::new(),
+            $dtype.unwrap_or($default_dtype),
+            $device,
+            $silent,
+        )?;
+
+        $loader.load(
+            &$config,
+            $use_flash_attn,
+            vb,
+            $mapper,
+            $loading_isq,
+            $real_device,
+        )?
+    }};
+}
+
+#[macro_export]
+macro_rules! vision_normal_model_loader {
     ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
         let vb = from_mmaped_safetensors(
             $paths.get_weight_filenames().to_vec(),

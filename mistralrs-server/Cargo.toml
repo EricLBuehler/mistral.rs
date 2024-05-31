@@ -22,7 +22,7 @@ axum = { version = "0.7.4", features = ["tokio"] }
 tower-http = { version = "0.5.1", features = ["cors"]}
 utoipa = { version = "4.2", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "7.1.0", features = ["axum"]}
-mistralrs-core = { version = "0.1.11", path = "../mistralrs-core" }
+mistralrs-core = { version = "0.1.12", path = "../mistralrs-core" }
 dyn-fmt = "0.4.0"
 indexmap.workspace = true
 accelerate-src = { workspace = true, optional = true }
@@ -33,6 +33,9 @@ tokio.workspace = true
 either.workspace = true
 clap.workspace = true
 once_cell.workspace=true
+reqwest = "0.12.4"
+image.workspace = true
+base64 = "0.22.1"
 
 [features]
 cuda = ["mistralrs-core/cuda"]

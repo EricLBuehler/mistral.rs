@@ -49,7 +49,7 @@ pub use pipeline::{
     NormalSpecificConfig, Phi2Loader, Phi3Loader, Qwen2Loader, SpeculativeConfig,
     SpeculativeLoader, SpeculativePipeline, TokenSource,
 };
-pub use request::{Constraint, NormalRequest, Request, RequestMessage};
+pub use request::{Constraint, Content, NormalRequest, Request, RequestMessage};
 pub use response::Response;
 pub use response::*;
 pub use sampler::{SamplingParams, StopTokens, TopLogprob};

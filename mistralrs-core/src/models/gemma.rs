@@ -8,7 +8,7 @@ use candle_nn::{linear_b as linear, Activation, RotaryEmbedding, VarBuilder};
 use crate::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, QLinear, ScaledDotProductAttention},
-    pipeline::{extract_logits, Cache, NormalModel},
+    pipeline::{extract_logits, Cache, IsqModel, NormalModel},
     DeviceMapMetadata,
 };
 
@@ -408,6 +408,23 @@ impl Model {
     }
 }
 
+impl IsqModel for Model {
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+        let mut tensors = Vec::new();
+        tensors.push((&mut self.lm_head, None));
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            tensors.push((layer.self_attn.q_proj.inner(), Some(i)));
+            tensors.push((layer.self_attn.k_proj.inner(), Some(i)));
+            tensors.push((layer.self_attn.v_proj.inner(), Some(i)));
+            tensors.push((layer.self_attn.o_proj.inner(), Some(i)));
+            tensors.push((layer.mlp.down_proj.inner(), Some(i)));
+            tensors.push((layer.mlp.gate_proj.inner(), Some(i)));
+            tensors.push((layer.mlp.up_proj.inner(), Some(i)));
+        }
+        (tensors, &*self.mapper)
+    }
+}
+
 impl NormalModel for Model {
     fn forward(
         &mut self,
@@ -450,19 +467,5 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
-    }
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((layer.self_attn.q_proj.inner(), Some(i)));
-            tensors.push((layer.self_attn.k_proj.inner(), Some(i)));
-            tensors.push((layer.self_attn.v_proj.inner(), Some(i)));
-            tensors.push((layer.self_attn.o_proj.inner(), Some(i)));
-            tensors.push((layer.mlp.down_proj.inner(), Some(i)));
-            tensors.push((layer.mlp.gate_proj.inner(), Some(i)));
-            tensors.push((layer.mlp.up_proj.inner(), Some(i)));
-        }
-        (tensors, &*self.mapper)
     }
 }

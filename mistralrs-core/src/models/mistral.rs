@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
-    pipeline::{extract_logits, Cache, NormalModel},
+    pipeline::{extract_logits, Cache, IsqModel, NormalModel},
     DeviceMapMetadata,
 };
 
@@ -284,8 +284,29 @@ impl Model {
         loading_isq: bool,
         real_device: Device,
     ) -> Result<Self> {
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
         let vb_m = vb.pp("model");
+        let vb_lm_head = vb.pp("lm_head");
+        Self::new_inner(
+            cfg,
+            vb_m,
+            vb_lm_head,
+            is_gptx,
+            mapper,
+            loading_isq,
+            real_device,
+        )
+    }
+
+    pub fn new_inner(
+        cfg: &Config,
+        vb_m: VarBuilder,
+        vb_lm_head: VarBuilder,
+        is_gptx: bool,
+        mapper: DeviceMapMetadata,
+        loading_isq: bool,
+        real_device: Device,
+    ) -> Result<Self> {
+        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -301,7 +322,7 @@ impl Model {
                 cfg.max_position_embeddings,
                 mapper.device_for(layer_idx, false).unwrap_or(&real_device),
                 is_gptx,
-                vb.dtype(),
+                vb_m.dtype(),
             )?);
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
@@ -321,7 +342,7 @@ impl Model {
         let lm_head = linear_no_bias(
             cfg.hidden_size,
             cfg.vocab_size,
-            mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
+            mapper.set_nm_device(vb_lm_head, loading_isq),
         )?;
         Ok(Self {
             embed_tokens,
@@ -343,7 +364,24 @@ impl Model {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
-        let mut xs = self.embed_tokens.forward(input_ids)?;
+        self.forward_embeds(
+            input_ids,
+            self.embed_tokens.forward(input_ids)?,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+        )
+    }
+
+    pub fn forward_embeds(
+        &mut self,
+        input_ids: &Tensor,
+        input_embeds: Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+    ) -> Result<Tensor> {
+        let mut xs = input_embeds;
         let mut cache = self.cache.lock();
         let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
@@ -371,6 +409,23 @@ impl Model {
             xs = xs.to_dtype(DType::F32)?;
         }
         extract_logits(&MatMul.qmatmul(&xs, &self.lm_head)?, context_lens)
+    }
+}
+
+impl IsqModel for Model {
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+        let mut tensors = Vec::new();
+        tensors.push((&mut self.lm_head, None));
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
+            tensors.push((&mut layer.mlp.down_proj, Some(i)));
+            tensors.push((&mut layer.mlp.up_proj, Some(i)));
+            tensors.push((&mut layer.mlp.gate_proj, Some(i)));
+        }
+        (tensors, &*self.mapper)
     }
 }
 
@@ -416,19 +471,5 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
-    }
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            tensors.push((&mut layer.mlp.down_proj, Some(i)));
-            tensors.push((&mut layer.mlp.up_proj, Some(i)));
-            tensors.push((&mut layer.mlp.gate_proj, Some(i)));
-        }
-        (tensors, &*self.mapper)
     }
 }
