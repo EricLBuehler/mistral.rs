@@ -601,7 +601,7 @@ impl ImageEmbedding {
                     let B_ = h * w;
 
                     // 1 x (24x24) x 1024
-                    let global_img_feature = img_features.i((bs_, ..(img_features.dim(1)? - 1)))?;
+                    let global_img_feature = img_features.i((bs_, ..1))?;
 
                     // 1 x 12 x 12 x 4096
                     let glb_img = global_img_feature
@@ -625,7 +625,7 @@ impl ImageEmbedding {
                     let sub_img = img_features.i((bs_, 1..))?;
                     // 16x574x1024
                     // Get rid of padding sub_img
-                    let sub_img = sub_img.i(..(sub_img.dim(0)? - B_))?;
+                    let sub_img = sub_img.i(..B_)?;
 
                     // (num_crops, 12, 2, 12, 2, 1024) -> (num_crops, 12, 12, 2, 2, 1024) -> (num_crops, 12*12, 4*1024)
                     let sub_img = sub_img
@@ -633,7 +633,7 @@ impl ImageEmbedding {
                         .reshape((B_, H / 2, 2, H / 2, 2, C))?
                         .contiguous()?
                         .permute((0, 1, 3, 2, 4, 5))?
-                        .reshape((B_, 1, 4 * C))?
+                        .reshape((B_, (), 4 * C))?
                         .contiguous()?;
                     let sub_img = sub_img
                         .reshape(BigShapeWithOneHole((1usize, h, w, 12usize, 12usize, ())))?
