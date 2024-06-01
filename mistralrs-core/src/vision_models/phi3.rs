@@ -355,8 +355,8 @@ const MAX_INPUT_ID: f64 = 1e9;
 /// torch.nonzero(lt & gt, as_tuple=False)
 fn nonzero_between_as_tuple_false(lt: &Tensor, gt: &Tensor) -> Result<Tensor> {
     let dev = lt.device();
-    let lt = lt.to_vec2::<u32>()?;
-    let gt = gt.to_vec2::<u32>()?;
+    let lt = lt.to_vec2::<u8>()?;
+    let gt = gt.to_vec2::<u8>()?;
     // lt & gt
     let res = lt
         .par_iter()
