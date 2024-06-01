@@ -564,7 +564,7 @@ impl ImageEmbedding {
         let input_ids = input_ids.reshape(((), input_ids.dim(D::Minus1)?))?;
 
         let input_ids_lt = input_ids.lt(0.0f64)?;
-        let input_ids_gt = input_ids.lt(-MAX_INPUT_ID)?;
+        let input_ids_gt = input_ids.gt(-MAX_INPUT_ID)?;
         // positions = torch.nonzero((input_ids < 0) & (input_ids > -MAX_INPUT_ID), as_tuple=False)
         let positions = nonzero_between_as_tuple_false(&input_ids_lt, &input_ids_gt)?;
 
