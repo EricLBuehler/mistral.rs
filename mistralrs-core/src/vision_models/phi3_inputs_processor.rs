@@ -348,12 +348,15 @@ impl ImagePreProcessor for Phi3InputsProcessor {
             );
 
             // Resize with bicubic interpolation
-            let global_image = DynamicImage::ImageRgba8(imageops::resize(
-                &hd_image,
-                336,
-                336,
-                FilterType::Triangle,
-            ));
+            let global_image = DynamicImage::ImageRgb8(
+                DynamicImage::ImageRgba8(imageops::resize(
+                    &hd_image,
+                    336,
+                    336,
+                    FilterType::Triangle,
+                ))
+                .to_rgb8(),
+            );
             let global_image = make_pixel_values(&global_image, device)?.unsqueeze(0)?;
 
             let (w, h) = hd_image.dimensions();
