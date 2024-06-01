@@ -28,7 +28,7 @@ fn default_32001() -> usize {
     32001
 }
 fn default_4096() -> usize {
-    4006
+    4096
 }
 fn default_14336() -> usize {
     14336
