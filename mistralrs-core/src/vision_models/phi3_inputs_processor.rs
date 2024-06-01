@@ -106,7 +106,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                     device,
                 )?;
                 let image_sizes = image_sizes.unwrap();
-                pixel_values_accum.push(pixel_values.unsqueeze(0)?);
+                pixel_values_accum.push(pixel_values);
                 image_sizes_accum.push(image_sizes);
                 num_img_tokens_accum.push(num_img_tokens.unwrap());
             }
