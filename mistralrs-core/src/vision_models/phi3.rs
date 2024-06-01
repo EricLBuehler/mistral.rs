@@ -643,7 +643,7 @@ impl ImageEmbedding {
                         .sub_gn
                         .as_ref()
                         .expect("Need `sub_gn` if `use_hd_transform`")
-                        .repeat((1, H * 12, 1, 1))?;
+                        .repeat((1, h * 12, 1, 1))?;
                     let sub_img =
                         Tensor::cat(&[sub_img, temp_sub_gn], 2)?.reshape((1, (), 4 * C))?;
                     // (1, num_img_tokens, 1024*4)
