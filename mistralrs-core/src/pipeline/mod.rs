@@ -479,7 +479,7 @@ pub trait MetadataMixin {
 #[derive(PartialEq, Copy, Clone)]
 pub enum ModelCategory {
     Text,
-    Vision,
+    Vision { has_conv2d: bool },
 }
 
 #[async_trait::async_trait]
@@ -645,6 +645,7 @@ pub trait VisionModel: IsqModel {
     fn device(&self) -> &Device;
     fn cache(&self) -> &Cache;
     fn max_seq_len(&self) -> usize;
+    fn has_conv2d(&self) -> bool;
 }
 
 pub(crate) fn extract_logits(
