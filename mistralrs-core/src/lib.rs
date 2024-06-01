@@ -4,6 +4,7 @@ use cublaslt::setup_cublas_lt_wrapper;
 use engine::Engine;
 pub use engine::TERMINATE_ALL_NEXT_STEP;
 pub use lora::Ordering;
+use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
 use std::{
     cell::RefCell,
@@ -201,7 +202,11 @@ impl MistralRs {
             gemm_full_precision_f16,
         } = config;
 
-        if !gemm_full_precision_f16.unwrap_or(false) {
+        let model_supports_reduced_gemm = match pipeline.try_lock().unwrap().category() {
+            ModelCategory::Text => true,
+            ModelCategory::Vision { has_conv2d } => !has_conv2d,
+        };
+        if !gemm_full_precision_f16.unwrap_or(false) && model_supports_reduced_gemm {
             set_gemm_reduced_precision_f16();
         }
         setup_cublas_lt_wrapper();
