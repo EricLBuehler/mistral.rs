@@ -3,7 +3,10 @@
 use std::{any::Any, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
-use image::{imageops::FilterType, DynamicImage, GenericImage, GenericImageView, Rgba};
+use image::{
+    imageops::{self, FilterType},
+    DynamicImage, GenericImage, GenericImageView, Rgba,
+};
 use itertools::Itertools;
 use regex_automata::meta::Regex;
 use tokenizers::Tokenizer;
@@ -236,7 +239,7 @@ impl Phi3InputsProcessor {
         let new_height = image.height() + top + bottom;
 
         // Create a new image with the new dimensions and fill it with the pad color
-        let mut new_image = DynamicImage::new_rgba8(new_width, new_height);
+        let mut new_image = DynamicImage::new_rgb8(new_width, new_height);
         for x in 0..new_width {
             for y in 0..new_height {
                 new_image.put_pixel(x, y, pad_color);
@@ -345,7 +348,12 @@ impl ImagePreProcessor for Phi3InputsProcessor {
             );
 
             // Resize with bicubic interpolation
-            let global_image = hd_image.resize(336, 336, FilterType::Triangle);
+            let global_image = DynamicImage::ImageRgba8(imageops::resize(
+                &hd_image,
+                336,
+                336,
+                FilterType::Triangle,
+            ));
             let global_image = make_pixel_values(&global_image, device)?.unsqueeze(0)?;
 
             let (w, h) = hd_image.dimensions();
