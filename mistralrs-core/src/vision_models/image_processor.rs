@@ -103,11 +103,22 @@ pub(crate) fn make_pixel_values(image: &DynamicImage, device: &Device) -> Result
         image.dimensions().1 as usize,
         image.dimensions().0 as usize,
     );
+    let num_channels = match image.color() {
+        image::ColorType::L8 | image::ColorType::L16 => 1usize, // Grayscale
+        image::ColorType::La8 | image::ColorType::La16 => 2,    // Grayscale + Alpha
+        image::ColorType::Rgb8 | image::ColorType::Rgb16 => 3,  // RGB
+        image::ColorType::Rgba8 | image::ColorType::Rgba16 => 4, // RGBA
+        _ => panic!("Unsupported color type"),
+    };
     let mut accum = Vec::new();
     for row in data {
         let mut row_accum = Vec::new();
         for item in row {
-            row_accum.push(Tensor::from_slice(&item, (1, item.len()), &Device::Cpu)?)
+            row_accum.push(Tensor::from_slice(
+                &item[..num_channels],
+                (1, num_channels),
+                &Device::Cpu,
+            )?)
         }
         let row = Tensor::cat(&row_accum, 0)?;
         accum.push(row.reshape((row.dim(1)?, ()))?.unsqueeze(1)?);
