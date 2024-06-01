@@ -3,7 +3,7 @@
 use std::{any::Any, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
-use image::{imageops::FilterType, DynamicImage, GenericImageView, RgbImage, RgbaImage};
+use image::{imageops::FilterType, DynamicImage, GenericImage, GenericImageView, Rgba};
 use itertools::Itertools;
 use regex_automata::meta::Regex;
 use tokenizers::Tokenizer;
@@ -18,7 +18,7 @@ use crate::{
 };
 
 use super::{
-    image_processor::{get_pixel_data, ImagePreProcessor, PreprocessedImages},
+    image_processor::{ImagePreProcessor, PreprocessedImages},
     phi3::Phi3VisionSpecificArgs,
     preprocessor_config::PreProcessorConfig,
     processor_config::ProcessorConfig,
@@ -222,137 +222,85 @@ impl InputsProcessor for Phi3InputsProcessor {
     }
 }
 
-pub(crate) fn from_pixel_data_top_bottom(
-    mut data: Vec<Vec<Vec<u8>>>,
-    h: usize,
-    w: usize,
-    fill: u8,
-    pad_top: usize,
-    pad_bottom: usize,
-) -> DynamicImage {
-    let channels = data[0][0].len();
-    let cur_w = data[0].len();
-
-    let mut flat_data: Vec<u8> = Vec::with_capacity(w * h * channels);
-    // Add top padding
-    for _ in 0..pad_top {
-        data.insert(0, vec![vec![fill; channels]; cur_w]);
-    }
-    // Add the bottom padding
-    data.extend(vec![vec![vec![fill; channels]; cur_w]; pad_bottom]);
-    for row in data {
-        for pixel in row {
-            flat_data.extend_from_slice(&pixel);
-        }
-    }
-
-    if channels == 3 {
-        DynamicImage::ImageRgb8(
-            RgbImage::from_raw(w as u32, h as u32, flat_data).expect("Unable to create RgbaImage"),
-        )
-    } else {
-        DynamicImage::ImageRgba8(
-            RgbaImage::from_raw(w as u32, h as u32, flat_data).expect("Unable to create RgbaImage"),
-        )
-    }
-}
-
-pub(crate) fn from_pixel_data_left_right(
-    data: Vec<Vec<Vec<u8>>>,
-    h: usize,
-    w: usize,
-    fill: u8,
-    pad_left: usize,
-    pad_right: usize,
-) -> DynamicImage {
-    let channels = data[0][0].len();
-
-    let mut flat_data: Vec<u8> = Vec::with_capacity(w * h * channels);
-    for mut row in data {
-        // Add left padding
-        for _ in 0..pad_left {
-            row.insert(0, vec![fill; channels]);
-        }
-        // Add the right padding
-        row.extend(vec![vec![fill; channels]; pad_right]);
-        for pixel in row {
-            flat_data.extend_from_slice(&pixel);
-        }
-    }
-
-    if channels == 3 {
-        DynamicImage::ImageRgb8(
-            RgbImage::from_raw(w as u32, h as u32, flat_data).expect("Unable to create RgbaImage"),
-        )
-    } else {
-        DynamicImage::ImageRgba8(
-            RgbaImage::from_raw(w as u32, h as u32, flat_data).expect("Unable to create RgbaImage"),
-        )
-    }
-}
-
-/// Pad image, left and right if transposed, and top to bottom if not
-fn pad_336(image: &DynamicImage, trans: bool) -> DynamicImage {
-    let (mut w, mut h) = image.dimensions();
-    if w < h {
-        std::mem::swap(&mut w, &mut h);
-    }
-
-    let tar = ((h as f32 / 336.).ceil() * 336.) as u32;
-    let top_pad = ((tar - h) as f32 / 2.) as u32; // also right if transposed
-    let bottom_pad = tar - h - top_pad; // also left if transposed
-
-    let data = get_pixel_data(
-        image,
-        image.dimensions().1 as usize,
-        image.dimensions().0 as usize,
-    );
-    if trans {
-        from_pixel_data_top_bottom(
-            data,
-            (h + top_pad + bottom_pad) as usize,
-            w as usize,
-            255,
-            top_pad as usize,
-            bottom_pad as usize,
-        )
-    } else {
-        from_pixel_data_left_right(
-            data,
-            h as usize,
-            (w + top_pad + bottom_pad) as usize,
-            255,
-            top_pad as usize,
-            bottom_pad as usize,
-        )
-    }
-}
-
 impl Phi3InputsProcessor {
-    fn hd_transform(image: &DynamicImage, num_crops: usize) -> Result<DynamicImage> {
-        let (mut w, mut h) = image.dimensions();
-        let trans = if w < h {
-            std::mem::swap(&mut w, &mut h);
-            true
+    fn pad_image(
+        image: &DynamicImage,
+        top: u32,
+        bottom: u32,
+        left: u32,
+        right: u32,
+        pad_color: Rgba<u8>,
+    ) -> DynamicImage {
+        // Calculate the new dimensions
+        let new_width = image.width() + left + right;
+        let new_height = image.height() + top + bottom;
+
+        // Create a new image with the new dimensions and fill it with the pad color
+        let mut new_image = DynamicImage::new_rgba8(new_width, new_height);
+        for x in 0..new_width {
+            for y in 0..new_height {
+                new_image.put_pixel(x, y, pad_color);
+            }
+        }
+
+        // Paste the original image into the center of the new image
+        new_image
+            .copy_from(image, left, top)
+            .expect("Failed to copy image");
+
+        new_image
+    }
+
+    fn padding_336(img: &DynamicImage) -> DynamicImage {
+        let (_width, height) = img.dimensions();
+        let tar = ((height as f64 / 336.0).ceil() * 336.0) as u32;
+        let top_padding = ((tar as f64 - height as f64) / 2.) as u32;
+        let bottom_padding = tar - height - top_padding;
+        let left_padding = 0u32;
+        let right_padding = 0u32;
+        Self::pad_image(
+            &img,
+            top_padding,
+            bottom_padding,
+            left_padding,
+            right_padding,
+            Rgba([255u8, 255, 255, 255]),
+        )
+    }
+
+    fn hd_transform(img: &DynamicImage, hd_num: usize) -> DynamicImage {
+        let (mut width, mut height) = img.dimensions();
+        let mut transposed = false;
+
+        let img = if width < height {
+            let img = img.rotate90();
+            transposed = true;
+            width = img.width();
+            height = img.height();
+            img
         } else {
-            false
+            // NOTE: Don't love the clone.
+            img.clone()
         };
-        let ratio = w as f32 / h as f32;
+
+        let ratio = width as f64 / height as f64;
         let mut scale = 1.0;
-        while (scale * (scale / ratio).ceil()) as usize <= num_crops {
+        while (scale * (scale / ratio).ceil()) <= hd_num as f64 {
             scale += 1.0;
         }
-        let scale = scale - 1.;
-        let new_w = (scale * 336.) as u32;
-        let new_h = (new_w as f32 / ratio) as u32;
+        scale -= 1.0;
 
-        // torchvision.transforms.functional.resize's default interpolation mode is bilinear
-        let img = image.resize(
-            if trans { new_h } else { new_w },
-            if trans { new_w } else { new_h },
-            FilterType::Triangle,
-        );
-        Ok(pad_336(&img, trans))
+        let new_width = (scale * 336.0) as u32;
+        let new_height = (new_width as f64 / ratio) as u32;
+
+        let resized_img = img.resize(new_width, new_height, FilterType::Nearest);
+        let padded_img = Self::padding_336(&resized_img);
+
+        if transposed {
+            return padded_img.rotate270();
+        }
+
+        padded_img
     }
 }
 
@@ -387,7 +335,7 @@ impl ImagePreProcessor for Phi3InputsProcessor {
                 *image = DynamicImage::ImageRgb8(image.to_rgb8());
             }
 
-            let elem = Self::hd_transform(image, config.num_crops.expect("Need `num_crops`"))?;
+            let elem = Self::hd_transform(image, config.num_crops.expect("Need `num_crops`"));
 
             // Normalize
             let hd_image = self.normalize(
