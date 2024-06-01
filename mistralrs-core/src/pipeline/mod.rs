@@ -5,8 +5,13 @@ mod gguf;
 mod gguf_tokenizer;
 mod inputs_processor;
 mod isq;
+mod inputs_processor;
+mod isq;
 mod macros;
 mod normal;
+mod normal_loaders;
+mod paths;
+mod processing;
 mod normal_loaders;
 mod paths;
 mod processing;
@@ -26,22 +31,16 @@ pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 pub use isq::IsqModel;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
-pub use normal_loaders::{
-    GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, NormalModelLoader,
-    Phi2Loader, Phi3Loader, Qwen2Loader,
-};
-pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths, XLoraPaths};
-pub(crate) use processing::{apply_chat_template, Processor};
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
-use std::any::Any;
 use std::fmt::{Debug, Display};
+use std::path::Path;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::{collections::HashMap, path::PathBuf, str::FromStr};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
-pub use vision_loaders::{VisionLoaderType, VisionModelLoader};
+use tracing::{info, warn};
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -52,10 +51,6 @@ use crate::{
 };
 
 pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
-pub use self::inputs_processor::{
-    text_models_inputs_processor, InputsProcessor, InputsProcessorType,
-};
-use self::processing::BasicProcessor;
 
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
 /// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
@@ -245,31 +240,12 @@ impl fmt::Display for TokenSource {
     }
 }
 
-#[derive(Clone, Default)]
 /// The kind of model to build.
+#[derive(Clone, Default, derive_more::From, strum::Display)]
 pub enum ModelKind {
     #[default]
-    Normal,
-    XLoraNormal,
-    XLoraGGUF,
-    XLoraGGML,
-    QuantizedGGUF,
-    QuantizedGGML,
-    LoraGGUF,
-    LoraGGML,
-    LoraNormal,
-    Speculative {
-        target: Box<ModelKind>,
-        draft: Box<ModelKind>,
-    },
-}
-
-// TODO: Future replacement for `ModelKind` above:
-#[derive(Default, derive_more::From, strum::Display)]
-pub enum ModelKindB {
-    #[default]
     #[strum(to_string = "normal (no quant, no adapters)")]
-    Plain,
+    Normal,
 
     #[strum(to_string = "quantized from {quant} (no adapters)")]
     Quantized { quant: QuantizationKind },
@@ -283,8 +259,6 @@ pub enum ModelKindB {
         quant: QuantizationKind,
     },
 
-    // TODO: This would need to be later changed to reference `Self`, but this current way
-    // avoids having to handle the conversion logic with `ModelKind`.
     #[strum(to_string = "speculative: target: `{target}`, draft: `{draft}`")]
     Speculative {
         target: Box<ModelKind>,
@@ -292,21 +266,40 @@ pub enum ModelKindB {
     },
 }
 
-#[derive(Clone, Copy, strum::Display, strum::EnumIs)]
+#[derive(Clone, Copy, strum::Display, strum::EnumIs, strum::EnumMessage)]
 #[strum(serialize_all = "kebab-case")]
 pub enum QuantizationKind {
+    /// GGML
     Ggml,
+    /// GGUF
     Gguf,
 }
 
-#[derive(Clone, Copy, strum::Display, strum::EnumIs)]
+#[derive(Clone, Copy, strum::Display, strum::EnumIs, strum::EnumMessage)]
 #[strum(serialize_all = "kebab-case")]
 pub enum AdapterKind {
+    /// LoRA
     Lora,
+    /// X-LoRA
     XLora,
 }
 
-impl ModelKindB {
+// For the proper name as formatted via doc comment for a variant
+pub trait PrettyName: strum::EnumMessage + ToString {
+    fn pretty_name(&self) -> String {
+        match self.get_documentation() {
+            Some(s) => s.to_string(),
+            // Instead of panic via expect(),
+            // fallback to default kebab-case:
+            None => self.to_string(),
+        }
+    }
+}
+
+impl PrettyName for AdapterKind {}
+impl PrettyName for QuantizationKind {}
+
+impl ModelKind {
     // Quantized helpers:
     pub fn is_quantized(&self) -> bool {
         self.quantized_kind().iter().any(|q| q.is_some())
@@ -317,14 +310,14 @@ impl ModelKindB {
     }
 
     pub fn quantized_kind(&self) -> Vec<Option<QuantizationKind>> {
-        use ModelKindB::*;
+        use ModelKind::*;
 
         match self {
-            Plain | Adapter { .. } => vec![None],
+            Normal | Adapter { .. } => vec![None],
             Quantized { quant } | AdapterQuantized { quant, .. } => vec![Some(*quant)],
             Speculative { target, draft } => {
-                let t = ModelKindB::from(*target.clone());
-                let d = ModelKindB::from(*draft.clone());
+                let t = *target.clone();
+                let d = *draft.clone();
 
                 [t.quantized_kind(), d.quantized_kind()].concat()
             }
@@ -341,76 +334,17 @@ impl ModelKindB {
     }
 
     pub fn adapted_kind(&self) -> Vec<Option<AdapterKind>> {
-        use ModelKindB::*;
+        use ModelKind::*;
 
         match self {
-            Plain | Quantized { .. } => vec![None],
+            Normal | Quantized { .. } => vec![None],
             Adapter { adapter } | AdapterQuantized { adapter, .. } => vec![Some(*adapter)],
             Speculative { target, draft } => {
-                let t = ModelKindB::from(*target.clone());
-                let d = ModelKindB::from(*draft.clone());
+                let t = *target.clone();
+                let d = *draft.clone();
 
                 [t.adapted_kind(), d.adapted_kind()].concat()
             }
-        }
-    }
-}
-
-// TODO: Temporary compatibility layers follow (until a future PR follow-up introduces a breaking change)
-impl Display for ModelKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", ModelKindB::from(self.clone()))
-    }
-}
-
-// Delegate to `ModelKindB` methods:
-impl ModelKind {
-    // Quantized helpers:
-    pub fn is_quantized(&self) -> bool {
-        let k = ModelKindB::from(self.clone());
-        k.is_quantized()
-    }
-
-    pub fn is_quantized_and(&self, f: impl FnMut(QuantizationKind) -> bool) -> bool {
-        let k = ModelKindB::from(self.clone());
-        k.is_quantized_and(f)
-    }
-
-    pub fn quantized_kind(&self) -> Vec<Option<QuantizationKind>> {
-        let k = ModelKindB::from(self.clone());
-        k.quantized_kind()
-    }
-
-    // Adapter helpers:
-    pub fn is_adapted(&self) -> bool {
-        let k = ModelKindB::from(self.clone());
-        k.is_adapted()
-    }
-
-    pub fn is_adapted_and(&self, f: impl FnMut(AdapterKind) -> bool) -> bool {
-        let k = ModelKindB::from(self.clone());
-        k.is_adapted_and(f)
-    }
-
-    pub fn adapted_kind(&self) -> Vec<Option<AdapterKind>> {
-        let k = ModelKindB::from(self.clone());
-        k.adapted_kind()
-    }
-}
-
-impl From<ModelKind> for ModelKindB {
-    fn from(kind: ModelKind) -> Self {
-        match kind {
-            ModelKind::Normal => ModelKindB::Plain,
-            ModelKind::QuantizedGGML => (QuantizationKind::Ggml).into(),
-            ModelKind::QuantizedGGUF => (QuantizationKind::Gguf).into(),
-            ModelKind::XLoraNormal => (AdapterKind::XLora).into(),
-            ModelKind::XLoraGGML => (AdapterKind::XLora, QuantizationKind::Ggml).into(),
-            ModelKind::XLoraGGUF => (AdapterKind::XLora, QuantizationKind::Gguf).into(),
-            ModelKind::LoraNormal => (AdapterKind::Lora).into(),
-            ModelKind::LoraGGML => (AdapterKind::Lora, QuantizationKind::Ggml).into(),
-            ModelKind::LoraGGUF => (AdapterKind::Lora, QuantizationKind::Gguf).into(),
-            ModelKind::Speculative { target, draft } => (target, draft).into(),
         }
     }
 }
@@ -477,10 +411,11 @@ pub struct GeneralMetadata {
     pub repeat_last_n: usize,
     pub tok_trie: Arc<TokTrie>,
     pub has_no_kv_cache: bool,
-    pub is_xlora: bool,
     pub num_hidden_layers: usize,
     pub eos_tok: Vec<u32>,
-    pub is_lora: bool,
+    pub kind: ModelKind,
+    // TODO: Replace is_xlora queries to check via kind instead:
+    pub is_xlora: bool,
 }
 
 pub enum AdapterInstruction {
@@ -682,7 +617,10 @@ pub trait NormalModel: IsqModel {
     fn cache(&self) -> &Cache;
     fn max_seq_len(&self) -> usize;
     fn activate_adapters(&mut self, _: Vec<String>) -> candle_core::Result<usize> {
-        candle_core::bail!("Unable to activate adapters for model without adapters");
+        // NOTE: While X-LoRA shares a similar name, it is not equivalent. Its adapter set must remain the same.
+        candle_core::bail!(
+            "Activating adapters is only supported for models fine-tuned with LoRA."
+        );
     }
 }
 

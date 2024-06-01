@@ -1,7 +1,7 @@
 use super::cache_manager::DefaultCacheManager;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, CacheManager,
-    GeneralMetadata, Loader, ModelKind, ModelPaths, TokenSource, XLoraPaths,
+    GeneralMetadata, Loader, ModelKind, ModelPaths, TokenSource, XLoraPaths, AdapterKind, QuantizationKind
 };
 use super::{
     AdapterActivationMixin, CacheManagerMixin, IsqPipelineMixin, MetadataMixin, ModelCategory,
@@ -15,8 +15,8 @@ use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
+use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
-use crate::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 use crate::xlora_models::NonGranularState;
 use crate::{do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, Pipeline, DEBUG};
 use crate::{
@@ -101,12 +101,16 @@ impl GGMLLoaderBuilder {
         quantized_model_id: String,
         quantized_filename: String,
     ) -> Self {
+        let kind = ModelKind::Quantized {
+            quant: QuantizationKind::Ggml,
+        };
+
         Self {
             config,
             chat_template,
             tokenizer_json,
             model_id,
-            kind: ModelKind::QuantizedGGML,
+            kind,
             quantized_filename,
             quantized_model_id,
             ..Default::default()
@@ -143,7 +147,8 @@ impl GGMLLoaderBuilder {
         no_kv_cache: bool,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
-        self.kind = ModelKind::XLoraGGML;
+        self.kind = (AdapterKind::XLora, QuantizationKind::Ggml).into();
+
         self.with_adapter(
             xlora_model_id,
             xlora_order,
@@ -153,7 +158,8 @@ impl GGMLLoaderBuilder {
     }
 
     pub fn with_lora(mut self, lora_model_id: String, lora_order: Ordering) -> Self {
-        self.kind = ModelKind::LoraGGML;
+        self.kind = (AdapterKind::Lora, QuantizationKind::Ggml).into();
+
         self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
@@ -241,7 +247,7 @@ impl Loader for GGMLLoader {
 
         if in_situ_quant.is_some() {
             anyhow::bail!(
-                "You are trying to in-situ quantize a GGUF model. This will not do anything."
+                "You are trying to in-situ quantize a GGML model. This will not do anything."
             );
         }
         if !mapper.is_dummy() {
@@ -272,69 +278,33 @@ impl Loader for GGMLLoader {
             info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_ggml_tensors.txt`.");
         }
 
-        let mut is_lora = false;
-        let model = match self.kind {
-            ModelKind::QuantizedGGML => Model::Llama(QLlama::from_ggml(model, self.config.gqa)?),
-            ModelKind::XLoraGGML => {
-                let vb = from_mmaped_safetensors(
-                    vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()],
-                    paths
-                        .get_adapter_filenames()
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(|(_, x)| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    DType::F32,
-                    device,
-                    silent,
-                )?;
+        let has_adapter = self.kind.is_adapted();
+        let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
 
-                Model::XLoraLlama(XLoraQLlama::from_ggml(
-                    model,
-                    self.config.gqa,
-                    paths.get_adapter_configs().as_ref().unwrap(),
-                    &vb,
-                    paths.get_ordering().as_ref().unwrap(),
-                    Some(paths.get_classifier_config().as_ref().unwrap().clone()),
-                    &load_preload_adapters(
-                        paths.get_lora_preload_adapter_info(),
-                        DType::F32,
-                        device,
-                        silent,
-                    )?,
-                )?)
+        let model_config = {
+            // Base config (quantization only):
+            let quant = ModelConfig::ParamsGGML((model, self.config.gqa).into());
+
+            // With optional adapter config:
+            let mut adapter = None;
+            if has_adapter {
+                adapter.replace(ModelConfig::Adapter::try_new(
+                    paths, device, silent, is_xlora,
+                )?);
             }
-            ModelKind::LoraGGML => {
-                is_lora = true;
-                let vb = from_mmaped_safetensors(
-                    vec![],
-                    paths
-                        .get_adapter_filenames()
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(|(_, x)| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    DType::F32,
-                    device,
-                    silent,
-                )?;
 
-                Model::XLoraLlama(XLoraQLlama::from_ggml(
-                    model,
-                    self.config.gqa,
-                    paths.get_adapter_configs().as_ref().unwrap(),
-                    &vb,
-                    paths.get_ordering().as_ref().unwrap(),
-                    None,
-                    &load_preload_adapters(
-                        paths.get_lora_preload_adapter_info(),
-                        DType::F32,
-                        device,
-                        silent,
-                    )?,
-                )?)
+            ModelConfig::ModelParams::builder()
+                .quant(quant)
+                .and_adapter(adapter)
+                .build()
+        };
+
+        // Config into model:
+        // NOTE: No architecture to infer like GGUF, Llama model is implicitly matched
+        let model = match self.kind {
+            ModelKind::Quantized { .. } => Model::Llama(QLlama::try_from(model_config)?),
+            ModelKind::AdapterQuantized { .. } => {
+                Model::XLoraLlama(XLoraQLlama::try_from(model_config)?)
             }
             _ => unreachable!(),
         };
@@ -350,10 +320,6 @@ impl Loader for GGMLLoader {
             Model::XLoraLlama(ref xl) => xl.max_seq_len,
         };
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
-        let is_xlora = match &model {
-            Model::Llama(_) => false,
-            Model::XLoraLlama(_) => !is_lora,
-        };
         let num_hidden_layers = match model {
             Model::Llama(ref model) => model.cache.lock().len(),
             Model::XLoraLlama(ref model) => model.cache.lock().len(),
@@ -377,10 +343,10 @@ impl Loader for GGMLLoader {
                 repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
                 has_no_kv_cache: self.no_kv_cache,
-                is_xlora,
                 num_hidden_layers,
                 eos_tok: eos,
-                is_lora,
+                kind: self.kind.clone(),
+                is_xlora,
             },
         })))
     }
@@ -539,6 +505,8 @@ impl Pipeline for GGMLPipeline {
     ) -> Result<(), candle_core::Error> {
         do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
     }
+    fn category(&self) -> ModelCategory {
+        ModelCategory::Text
     fn category(&self) -> ModelCategory {
         ModelCategory::Text
     }
