@@ -5,13 +5,8 @@ mod gguf;
 mod gguf_tokenizer;
 mod inputs_processor;
 mod isq;
-mod inputs_processor;
-mod isq;
 mod macros;
 mod normal;
-mod normal_loaders;
-mod paths;
-mod processing;
 mod normal_loaders;
 mod paths;
 mod processing;
@@ -31,16 +26,22 @@ pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 pub use isq::IsqModel;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
+pub use normal_loaders::{
+    GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, NormalModelLoader,
+    Phi2Loader, Phi3Loader, Qwen2Loader,
+};
+pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths, XLoraPaths};
+pub(crate) use processing::{apply_chat_template, BasicProcessor, Processor, ProcessorCreator};
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
-use std::fmt::{Debug, Display};
-use std::path::Path;
-use std::sync::atomic::AtomicUsize;
+use std::any::Any;
+use std::fmt::Debug;
 use std::sync::Arc;
 use std::{collections::HashMap, path::PathBuf, str::FromStr};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
+pub use vision_loaders::{VisionLoaderType, VisionModelLoader};
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -51,6 +52,9 @@ use crate::{
 };
 
 pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
+pub use self::inputs_processor::{
+    text_models_inputs_processor, InputsProcessor, InputsProcessorType,
+};
 
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
 /// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
@@ -435,7 +439,7 @@ pub enum CacheInstruction {
 
 pub trait PreProcessingMixin: MetadataMixin {
     fn get_processor(&self) -> Arc<dyn Processor> {
-        Arc::new(BasicProcessor)
+        BasicProcessor::new_processor()
     }
     fn get_chat_template(&self) -> Arc<ChatTemplate>;
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>>;
@@ -475,7 +479,7 @@ pub trait MetadataMixin {
 #[derive(PartialEq, Copy, Clone)]
 pub enum ModelCategory {
     Text,
-    Vision,
+    Vision { has_conv2d: bool },
 }
 
 #[async_trait::async_trait]
@@ -505,6 +509,7 @@ pub trait Pipeline:
             .get_processor()
             .inputs_processor()
             .process_inputs(
+                self.tokenizer(),
                 input_seqs,
                 is_prompt,
                 self.get_metadata().is_xlora,
@@ -635,11 +640,12 @@ pub trait VisionModel: IsqModel {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
-        pixel_attention_mask: Option<Tensor>,
+        model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
     ) -> candle_core::Result<Tensor>;
     fn device(&self) -> &Device;
     fn cache(&self) -> &Cache;
     fn max_seq_len(&self) -> usize;
+    fn has_conv2d(&self) -> bool;
 }
 
 pub(crate) fn extract_logits(

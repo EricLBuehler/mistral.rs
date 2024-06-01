@@ -7,7 +7,7 @@ use candle_nn::{
 };
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::Deserialize;
-use std::ops::Mul;
+use std::{any::Any, ops::Mul};
 
 use crate::{
     device_map::DeviceMapper,
@@ -999,8 +999,11 @@ impl VisionModel for Idefics2 {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         _: Vec<usize>, // Ignore, it is for phi3
-        pixel_attention_mask: Option<Tensor>,
+        model_specific_args: Box<dyn Any>,
     ) -> candle_core::Result<Tensor> {
+        let pixel_attention_mask: Option<Tensor> = *model_specific_args
+            .downcast()
+            .expect("Cannot downcast into `Option<Tensor>`");
         self.forward_inner(
             input_ids,
             pixel_values,
@@ -1018,5 +1021,8 @@ impl VisionModel for Idefics2 {
     }
     fn max_seq_len(&self) -> usize {
         self.text_model.max_seq_len() // Is this correct?
+    }
+    fn has_conv2d(&self) -> bool {
+        true
     }
 }

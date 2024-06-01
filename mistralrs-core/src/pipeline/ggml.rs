@@ -1,7 +1,8 @@
 use super::cache_manager::DefaultCacheManager;
 use super::{
-    get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, CacheManager,
-    GeneralMetadata, Loader, ModelKind, ModelPaths, TokenSource, XLoraPaths, AdapterKind, QuantizationKind
+    get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
+    CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, QuantizationKind, TokenSource,
+    XLoraPaths,
 };
 use super::{
     AdapterActivationMixin, CacheManagerMixin, IsqPipelineMixin, MetadataMixin, ModelCategory,
@@ -426,14 +427,16 @@ impl CacheManagerMixin for GGMLPipeline {
 
 impl AdapterActivationMixin for GGMLPipeline {
     fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
-        if !self.metadata.is_lora {
-            anyhow::bail!("Cannot activate adapters non-LoRA models.")
+        let is_lora = self.metadata.kind.is_adapted_and(|a| a.is_lora());
+        if !is_lora {
+            anyhow::bail!("Activating adapters is only supported for models fine-tuned with LoRA.")
         }
+
         match self.model {
-            Model::Llama(_) => unreachable!(),
             Model::XLoraLlama(ref mut model) => model
                 .activate_adapters(adapter_names)
                 .map_err(anyhow::Error::msg),
+            _ => unreachable!(),
         }
     }
 }
@@ -505,8 +508,6 @@ impl Pipeline for GGMLPipeline {
     ) -> Result<(), candle_core::Error> {
         do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
     }
-    fn category(&self) -> ModelCategory {
-        ModelCategory::Text
     fn category(&self) -> ModelCategory {
         ModelCategory::Text
     }

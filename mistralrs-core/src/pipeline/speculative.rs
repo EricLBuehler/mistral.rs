@@ -1,6 +1,5 @@
 use std::{
     any::Any,
-    any::Any,
     iter::zip,
     sync::{Arc, Mutex},
 };
@@ -22,9 +21,6 @@ use crate::{
 };
 
 use super::{
-    cache_manager::DefaultCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
-    AdapterActivationMixin, CacheInstruction, CacheManager, CacheManagerMixin, GeneralMetadata,
-    IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
     cache_manager::DefaultCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
     AdapterActivationMixin, CacheInstruction, CacheManager, CacheManagerMixin, GeneralMetadata,
     IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
@@ -139,7 +135,6 @@ pub struct SpeculativePipeline {
     metadata: GeneralMetadata,
     latest_logit_cache: Option<Tensor>,
     category: ModelCategory,
-    category: ModelCategory,
 }
 
 #[derive(Copy, Clone)]
@@ -173,23 +168,7 @@ impl SpeculativePipeline {
         {
             candle_core::bail!("Target and draft models' input processors do not match. This is required for speculative decoding.");
         }
-        if get_mut_arcmutex!(target).category() != get_mut_arcmutex!(draft).category() {
-            candle_core::bail!("Target and draft models' category do not match. This is required for speculative decoding.");
-        }
-        if get_mut_arcmutex!(target)
-            .get_processor()
-            .inputs_processor()
-            .get_type()
-            != get_mut_arcmutex!(draft)
-                .get_processor()
-                .inputs_processor()
-                .get_type()
-        {
-            candle_core::bail!("Target and draft models' input processors do not match. This is required for speculative decoding.");
-        }
         let metadata = get_mut_arcmutex!(target).get_metadata().clone();
-        let category = get_mut_arcmutex!(target).category();
-        // TODO: some checks or relaxation here?
         let category = get_mut_arcmutex!(target).category();
         // TODO: some checks or relaxation here?
         Ok(Self {
@@ -199,88 +178,7 @@ impl SpeculativePipeline {
             metadata,
             latest_logit_cache: None,
             category,
-            category,
         })
-    }
-}
-
-impl PreProcessingMixin for SpeculativePipeline {
-    fn get_chat_template(&self) -> Arc<ChatTemplate> {
-        get_mut_arcmutex!(self.target).get_chat_template()
-    }
-    fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
-        get_mut_arcmutex!(self.target).get_input_processor_config()
-    }
-}
-
-impl IsqPipelineMixin for SpeculativePipeline {
-    fn re_isq_model(&mut self, dtype: GgmlDType) -> anyhow::Result<()> {
-        get_mut_arcmutex!(self.target).re_isq_model(dtype)?;
-        get_mut_arcmutex!(self.draft).re_isq_model(dtype)
-    }
-}
-
-impl CacheManagerMixin for SpeculativePipeline {
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_in_cache(
-            &mut *get_mut_arcmutex!(self.draft),
-            seqs,
-            modify_draft_cache,
-        );
-        DefaultCacheManager.clone_in_cache(&mut *get_mut_arcmutex!(self.target), seqs, false);
-    }
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_out_cache(
-            &mut *get_mut_arcmutex!(self.draft),
-            seqs,
-            modify_draft_cache,
-        );
-        DefaultCacheManager.clone_out_cache(&mut *get_mut_arcmutex!(self.target), seqs, false);
-    }
-    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(&mut *get_mut_arcmutex!(self.draft), modify_draft_cache);
-        DefaultCacheManager.set_none_cache(&mut *get_mut_arcmutex!(self.target), false);
-        if reset_non_granular {
-            self.reset_non_granular_state()
-        }
-        self.latest_logit_cache = None;
-    }
-    fn cache(&self) -> &Cache {
-        unreachable!()
-    }
-}
-
-impl AdapterActivationMixin for SpeculativePipeline {
-    /// Returns the number of activated adapters.
-    fn activate_adapters(&mut self, adapters: Vec<String>) -> anyhow::Result<usize> {
-        let mut res = 0;
-        res += get_mut_arcmutex!(self.draft).activate_adapters(adapters.clone())?;
-        res += get_mut_arcmutex!(self.target).activate_adapters(adapters)?;
-        Ok(res)
-    }
-}
-
-impl MetadataMixin for SpeculativePipeline {
-    fn device(&self) -> Device {
-        get_mut_arcmutex!(self.target).device()
-    }
-    fn tokenizer(&self) -> Arc<Tokenizer> {
-        get_mut_arcmutex!(self.target).tokenizer()
-    }
-    fn name(&self) -> String {
-        format!(
-            "Speculative: tgt = `{}`, draft = `{}`, gamma = `{}`",
-            get_mut_arcmutex!(self.target).name(),
-            get_mut_arcmutex!(self.draft).name(),
-            self.gamma,
-        )
-    }
-    fn reset_non_granular_state(&self) {
-        get_mut_arcmutex!(self.target).reset_non_granular_state();
-        get_mut_arcmutex!(self.draft).reset_non_granular_state();
-    }
-    fn get_metadata(&self) -> &GeneralMetadata {
-        &self.metadata
     }
 }
 
@@ -450,6 +348,7 @@ impl Pipeline for SpeculativePipeline {
                 .get_processor()
                 .inputs_processor()
                 .process_inputs(
+                    self.tokenizer(),
                     &mut [seq],
                     is_prompt && i == 0, // Only prompt (no kv cache) if first
                     is_xlora,
@@ -515,6 +414,7 @@ impl Pipeline for SpeculativePipeline {
             .get_processor()
             .inputs_processor()
             .process_inputs(
+                self.tokenizer(),
                 &mut [seq],
                 true, // use the "prefill" tokens
                 is_xlora,
@@ -525,7 +425,6 @@ impl Pipeline for SpeculativePipeline {
             )
             .unwrap();
 
-        let logits = get_mut_arcmutex!(self.target).forward_inputs(Box::new(inputs))?;
         let logits = get_mut_arcmutex!(self.target).forward_inputs(Box::new(inputs))?;
 
         // Reset the prefill tokens

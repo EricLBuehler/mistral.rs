@@ -31,7 +31,7 @@ pub trait VisionModelLoader {
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
     fn get_processor(
         &self,
-        processor_config: ProcessorConfig,
+        processor_config: Option<ProcessorConfig>,
         preprocessor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync>;
 }
@@ -89,11 +89,11 @@ impl VisionModelLoader for Idefics2Loader {
     }
     fn get_processor(
         &self,
-        processor_config: ProcessorConfig,
+        processor_config: Option<ProcessorConfig>,
         preprocessor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(Idefics2Processor::new(
-            processor_config,
+            processor_config.unwrap(),
             preprocessor_config,
         ))
     }

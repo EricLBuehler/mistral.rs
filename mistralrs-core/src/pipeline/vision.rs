@@ -18,7 +18,7 @@ use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
-    do_sample, get_paths, vision_normal_model_loader, DeviceMapMetadata, Ordering, Pipeline,
+    do_sample, get_paths, vision_normal_model_loader, DeviceMapMetadata, Ordering, Pipeline, DEBUG,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
@@ -33,6 +33,8 @@ use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::info;
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::EnvFilter;
 
 pub struct VisionPipeline {
     model: Box<dyn VisionModel + Send + Sync>,
@@ -141,6 +143,20 @@ impl Loader for VisionLoader {
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let is_debug = std::env::var("MISTRALRS_DEBUG")
+            .unwrap_or_default()
+            .contains('1');
+        DEBUG.store(is_debug, std::sync::atomic::Ordering::Relaxed);
+
+        let filter = EnvFilter::builder()
+            .with_default_directive(if is_debug {
+                LevelFilter::INFO.into()
+            } else {
+                LevelFilter::DEBUG.into()
+            })
+            .from_env_lossy();
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         let default_dtype = if device.is_cuda() && mapper.is_dummy() {
             DType::BF16
@@ -167,8 +183,6 @@ impl Loader for VisionLoader {
         };
 
         let mut model = match self.kind {
-            ModelKind::QuantizedGGUF => unreachable!(),
-            ModelKind::QuantizedGGML => unreachable!(),
             ModelKind::Normal => vision_normal_model_loader!(
                 paths,
                 dtype,
@@ -182,16 +196,7 @@ impl Loader for VisionLoader {
                 in_situ_quant.is_some(),
                 device.clone()
             ),
-            ModelKind::XLoraNormal => unreachable!(),
-            ModelKind::LoraNormal => unreachable!(),
-            ModelKind::XLoraGGUF => unreachable!(),
-            ModelKind::XLoraGGML => unreachable!(),
-            ModelKind::LoraGGUF => unreachable!(),
-            ModelKind::LoraGGML => unreachable!(),
-            ModelKind::Speculative {
-                target: _,
-                draft: _,
-            } => unreachable!(),
+            _ => unreachable!(),
         };
 
         let preprocessor_config: PreProcessorConfig = serde_json::from_str(
@@ -204,16 +209,10 @@ impl Loader for VisionLoader {
             .unwrap(),
         )
         .unwrap();
-        let processor_config: ProcessorConfig = serde_json::from_str(
-            &fs::read_to_string(
-                paths
-                    .get_processor_config()
-                    .as_ref()
-                    .expect("Need preprocessor config"),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+        let processor_config: Option<ProcessorConfig> = paths
+            .get_processor_config()
+            .as_ref()
+            .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
 
         let processor = self
             .inner
@@ -223,6 +222,7 @@ impl Loader for VisionLoader {
             paths.get_tokenizer_filename(),
             Some(processor.get_special_tokens()),
         )?;
+
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
@@ -249,7 +249,7 @@ impl Loader for VisionLoader {
                 is_xlora: false,
                 num_hidden_layers,
                 eos_tok: eos,
-                is_lora: false,
+                kind: self.kind.clone(),
                 has_no_kv_cache: false,
             },
             processor,
@@ -337,7 +337,7 @@ impl Pipeline for VisionPipeline {
             context_lens,
             position_ids,
             pixel_values,
-            pixel_attention_mask,
+            model_specific_args,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
         self.model.forward(
             &input_ids,
@@ -346,7 +346,7 @@ impl Pipeline for VisionPipeline {
             seqlen_offsets_kernel,
             context_lens,
             position_ids,
-            pixel_attention_mask,
+            model_specific_args,
         )
     }
     async fn sample(
@@ -360,6 +360,8 @@ impl Pipeline for VisionPipeline {
         do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
     }
     fn category(&self) -> ModelCategory {
-        ModelCategory::Vision
+        ModelCategory::Vision {
+            has_conv2d: self.model.has_conv2d(),
+        }
     }
 }

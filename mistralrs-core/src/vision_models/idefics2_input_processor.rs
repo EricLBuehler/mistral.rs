@@ -5,6 +5,7 @@ use std::{any::Any, sync::Arc};
 use candle_core::{Device, Result, Tensor};
 use image::{DynamicImage, GenericImageView};
 use indexmap::IndexMap;
+use tokenizers::Tokenizer;
 
 use crate::{
     pipeline::{
@@ -139,6 +140,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
     }
     fn process_inputs(
         &self,
+        _: Arc<Tokenizer>,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,
@@ -160,9 +162,26 @@ impl InputsProcessor for Idefics2ImageProcessor {
             context_lens,
             position_ids,
         } = if is_prompt {
-            get_prompt_input(input_seqs, device, last_n_context_len)?
+            get_prompt_input(
+                input_seqs
+                    .iter()
+                    .map(|seq| seq.get_toks().to_vec())
+                    .collect::<Vec<_>>(),
+                input_seqs,
+                device,
+                last_n_context_len,
+            )?
         } else {
-            get_completion_input(input_seqs, device, no_kv_cache, last_n_context_len)?
+            get_completion_input(
+                input_seqs
+                    .iter()
+                    .map(|seq| seq.get_toks().to_vec())
+                    .collect::<Vec<_>>(),
+                input_seqs,
+                device,
+                no_kv_cache,
+                last_n_context_len,
+            )?
         };
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
@@ -198,7 +217,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
             context_lens,
             position_ids,
             pixel_values,
-            pixel_attention_mask,
+            model_specific_args: Box::new(pixel_attention_mask),
         }))
     }
 }
