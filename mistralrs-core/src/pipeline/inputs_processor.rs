@@ -40,7 +40,7 @@ pub mod text_models_inputs_processor {
     use std::{any::Any, iter::repeat, sync::Arc};
 
     use anyhow::Result;
-    use candle_core::{Device, Tensor};
+    use candle_core::{Device, Tensor, WithDType};
     use tokenizers::Tokenizer;
 
     use crate::{layers::set_use_matmul_via_f16, sequence::Sequence};
@@ -55,8 +55,8 @@ pub mod text_models_inputs_processor {
         pub position_ids: Vec<usize>,
     }
 
-    pub(crate) fn get_prompt_input(
-        toks: Vec<Vec<u32>>,
+    pub(crate) fn get_prompt_input<T: WithDType>(
+        toks: Vec<Vec<T>>,
         input_seqs: &[&mut Sequence],
         device: &Device,
         last_n_context_len: Option<(usize, usize)>,
@@ -66,7 +66,7 @@ pub mod text_models_inputs_processor {
             .map(|seq| seq.len())
             .max()
             .expect("No sequences");
-        let padding_tok = 0;
+        let padding_tok = T::zero();
         // Pad each sequence by the padding token to the max len.
         let mut seqs_tensors = Vec::new();
         let mut seqlen_offsets = Vec::new();
@@ -127,8 +127,8 @@ pub mod text_models_inputs_processor {
         })
     }
 
-    pub(crate) fn get_completion_input(
-        toks: Vec<Vec<u32>>,
+    pub(crate) fn get_completion_input<T: WithDType>(
+        toks: Vec<Vec<T>>,
         input_seqs: &[&mut Sequence],
         device: &Device,
         no_kv_cache: bool,

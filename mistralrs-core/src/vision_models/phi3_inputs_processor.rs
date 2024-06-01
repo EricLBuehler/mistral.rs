@@ -189,15 +189,19 @@ impl InputsProcessor for Phi3InputsProcessor {
             let image_ids_pad = image_ids
                 .iter()
                 .map(|id| {
-                    [*id].repeat(
+                    [-(*id as i64)].repeat(
                         num_img_tokens[TryInto::<usize>::try_into(*id as isize - 1)
                             .unwrap_or(num_img_tokens.len() - 1)],
                     )
                 })
                 .collect::<Vec<_>>();
 
-            let mut input_ids: Vec<u32> = Vec::new();
-            for item in prompt_chunks.iter().interleave(&image_ids_pad) {
+            let mut input_ids: Vec<i64> = Vec::new();
+            for item in prompt_chunks
+                .iter()
+                .map(|x| x.iter().map(|x| *x as i64).collect::<Vec<_>>())
+                .interleave(image_ids_pad)
+            {
                 input_ids.extend(item);
             }
             toks.push(input_ids);
