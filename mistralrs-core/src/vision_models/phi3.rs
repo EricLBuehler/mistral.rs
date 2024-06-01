@@ -376,9 +376,9 @@ fn nonzero_between_as_tuple_false(lt: &Tensor, gt: &Tensor) -> Result<Tensor> {
                 })
                 .collect::<Vec<_>>()
         })
-        .map(|x| Tensor::from_slice(&x, (x.len(), 1), dev))
+        .map(|x| Tensor::from_slice(&x, (x.len(),), dev))
         .collect::<Result<Vec<_>>>()?;
-    Tensor::cat(&res, D::Minus1)
+    Tensor::stack(&res, 0)
 }
 
 #[derive(Debug)]
@@ -948,5 +948,49 @@ impl VisionModel for Model {
     }
     fn has_conv2d(&self) -> bool {
         true
+    }
+}
+
+mod tests {
+
+    #[test]
+    fn nonzero() {
+        use super::nonzero_between_as_tuple_false;
+        use candle_core::{Device, Tensor};
+
+        let input1 = Tensor::from_vec(
+            vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7],
+            (10,),
+            &Device::Cpu,
+        )
+        .unwrap();
+        let input2 = Tensor::from_vec(
+            vec![-1i64, 2, 3, -1, 1, -1, -1, 4, 5, 7],
+            (10,),
+            &Device::Cpu,
+        )
+        .unwrap();
+        let input = Tensor::stack(&[input1, input2], 0).unwrap();
+
+        let lt = input.lt(0.0).unwrap();
+        let gt = input.gt(-10.0).unwrap();
+        let res = nonzero_between_as_tuple_false(&lt, &gt)
+            .unwrap()
+            .to_vec2::<u32>()
+            .unwrap();
+
+        assert_eq!(
+            res,
+            [
+                [0, 3],
+                [0, 4],
+                [0, 5],
+                [0, 6],
+                [1, 0],
+                [1, 3],
+                [1, 5],
+                [1, 6]
+            ]
+        );
     }
 }
