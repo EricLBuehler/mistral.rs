@@ -116,16 +116,38 @@ impl InputsProcessor for Phi3InputsProcessor {
                 Some(num_img_tokens_accum),
             )
         } else {
-            return text_models_inputs_processor::TextInputsProcessor.process_inputs(
-                tokenizer,
-                input_seqs,
-                is_prompt,
-                is_xlora,
-                device,
-                no_kv_cache,
-                last_n_context_len,
-                other_config,
-            );
+            let text_models_inputs_processor::ModelInputs {
+                input_ids,
+                input_ids_full: _,
+                seqlen_offsets,
+                seqlen_offsets_full: _,
+                seqlen_offsets_kernel,
+                seqlen_offsets_kernel_full: _,
+                context_lens,
+                position_ids,
+            } = *text_models_inputs_processor::TextInputsProcessor
+                .process_inputs(
+                    tokenizer,
+                    input_seqs,
+                    is_prompt,
+                    is_xlora,
+                    device,
+                    no_kv_cache,
+                    last_n_context_len,
+                    other_config,
+                )?
+                .downcast::<text_models_inputs_processor::ModelInputs>()
+                .expect("Downcast failed.");
+
+            return Ok(Box::new(ModelInputs {
+                input_ids,
+                seqlen_offsets,
+                seqlen_offsets_kernel,
+                context_lens,
+                position_ids,
+                pixel_values: None,
+                model_specific_args: Box::new(Phi3VisionSpecificArgs { image_sizes: None }),
+            }));
         };
 
         let mut toks = Vec::new();
