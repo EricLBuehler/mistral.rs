@@ -259,7 +259,7 @@ impl Phi3InputsProcessor {
         let left_padding = 0u32;
         let right_padding = 0u32;
         Self::pad_image(
-            &img,
+            img,
             top_padding,
             bottom_padding,
             left_padding,
@@ -361,6 +361,7 @@ impl ImagePreProcessor for Phi3InputsProcessor {
                     (h as f32 / 336.) as usize,
                     336,
                     (w as f32 / 336.) as usize,
+                    336,
                 ))?
                 .permute((0, 2, 4, 1, 3, 5))?
                 .reshape(((), 3, 336, 336))?;
