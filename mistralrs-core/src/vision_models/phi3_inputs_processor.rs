@@ -89,7 +89,6 @@ impl InputsProcessor for Phi3InputsProcessor {
             .clone()
             .expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
-
         let (pixel_values, image_sizes, num_img_tokens) = if is_prompt {
             let mut pixel_values_accum = Vec::new();
             let mut image_sizes_accum = Vec::new();
@@ -141,7 +140,7 @@ impl InputsProcessor for Phi3InputsProcessor {
             .map_err(anyhow::Error::msg)?;
 
         let num_img_tokens = num_img_tokens.unwrap();
-        for (detokenized, seq) in detokenized.into_iter().zip(input_seqs.iter()) {
+        for detokenized in detokenized.into_iter() {
             let splits = self
                 .image_tag_splitter
                 .split(&detokenized)
@@ -181,7 +180,10 @@ impl InputsProcessor for Phi3InputsProcessor {
                 (1u32..unique_image_ids.len() as u32 + 1).collect::<Vec<_>>()
             );
             // Total images must be the same as the number of image tags
-            assert_eq!(unique_image_ids.len(), seq.images().unwrap().len());
+            assert_eq!(
+                unique_image_ids.len(),
+                1, // One image per seq
+            );
 
             // Use the TryInto + unwrap_or to handle case when id==0
             let image_ids_pad = image_ids
