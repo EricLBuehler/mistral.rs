@@ -89,7 +89,12 @@ impl InputsProcessor for Phi3InputsProcessor {
             .clone()
             .expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
-        let (pixel_values, image_sizes, num_img_tokens) = if is_prompt {
+        let (pixel_values, image_sizes, num_img_tokens) = if is_prompt
+            && input_seqs
+                .iter()
+                .map(|seq| seq.images().is_some())
+                .all(|x| x)
+        {
             let mut pixel_values_accum = Vec::new();
             let mut image_sizes_accum = Vec::new();
             let mut num_img_tokens_accum = Vec::new();
