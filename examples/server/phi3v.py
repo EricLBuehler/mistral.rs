@@ -54,7 +54,7 @@ completion = openai.chat.completions.create(
             ],
         },
     ],
-    max_tokens=256,
+    max_tokens=32,
     frequency_penalty=1.0,
     top_p=0.1,
     temperature=0,

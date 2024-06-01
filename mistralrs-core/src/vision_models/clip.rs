@@ -323,15 +323,14 @@ impl ClipVisionTransformer {
             .apply(&self.pre_layer_norm)?;
 
         // TODO(EricLBuehler): evaluate if these are the correct hidden states
-        let (encoder_outputs, hidden_states) = self
+        let (encoder_outputs, mut hidden_states) = self
             .encoder
             .forward_get_hidden_states(&hidden_states, None)?;
         // https://github.com/huggingface/transformers/blob/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip/modeling_clip.py#L787
         // pooled_output = encoder_outputs[:, 0, :]
         let pooled_output = encoder_outputs.i((.., 0, ..))?;
-        Ok((
-            self.final_layer_norm.forward(&pooled_output)?,
-            hidden_states,
-        ))
+        let res = self.final_layer_norm.forward(&pooled_output)?;
+        hidden_states.push(res.clone());
+        Ok((res, hidden_states))
     }
 }
