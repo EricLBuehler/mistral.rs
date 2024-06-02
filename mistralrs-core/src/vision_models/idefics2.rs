@@ -292,12 +292,6 @@ impl VisionEmbeddings {
             (bs, max_nb_patches_h * max_nb_patches_w),
             pixel_values.device(),
         )?;
-        let p_attn_mask = patch_attention_mask.flatten_all()?;
-        let mask_true = p_attn_mask.to_dtype(DType::U32)?.eq(&Tensor::arange(
-            0u32,
-            p_attn_mask.dims()[0] as u32,
-            p_attn_mask.device(),
-        )?)?;
 
         let mut new_position_ids = Vec::new();
         for (b_idx, p_attn_mask) in patch_attention_mask.chunk(bs, 0)?.iter().enumerate() {
@@ -330,6 +324,12 @@ impl VisionEmbeddings {
                 .flatten_all()?;
 
             let position_ids_b = position_ids.i(b_idx)?;
+            let p_attn_mask = p_attn_mask.flatten_all()?;
+            let mask_true = p_attn_mask.to_dtype(DType::U32)?.eq(&Tensor::arange(
+                0u32,
+                p_attn_mask.dims()[0] as u32,
+                p_attn_mask.device(),
+            )?)?;
             // position_ids[batch_idx][p_attn_mask.view(-1).cpu()] = pos_ids
             new_position_ids.push(mask_true.where_cond(&pos_ids, &position_ids_b)?);
         }
