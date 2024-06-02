@@ -1,5 +1,5 @@
 use crate::utils::{get_pixel_data, n_channels};
-use candle_core::{Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use image::{
     imageops::{self, FilterType},
     DynamicImage, GenericImageView,
@@ -17,11 +17,10 @@ impl ToTensor {
         for row in data {
             let mut row_accum = Vec::new();
             for item in row {
-                row_accum.push(Tensor::from_slice(
-                    &item[..channels],
-                    (1, channels),
-                    &Device::Cpu,
-                )?)
+                row_accum.push(
+                    Tensor::from_slice(&item[..channels], (1, channels), &Device::Cpu)?
+                        .to_dtype(DType::F32)?,
+                )
             }
             let row = Tensor::cat(&row_accum, 0)?;
             accum.push(row.reshape((row.dim(1)?, ()))?.unsqueeze(1)?);

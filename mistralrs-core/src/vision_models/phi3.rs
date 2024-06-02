@@ -854,8 +854,11 @@ impl Model {
         image_sizes: Option<Vec<(usize, usize)>>,
     ) -> Result<Tensor> {
         let mut xs = if let Some(ref pixel_values) = pixel_values {
-            self.vision_embed_tokens
-                .forward(input_ids, pixel_values, image_sizes)?
+            self.vision_embed_tokens.forward(
+                input_ids,
+                &pixel_values.to_dtype(self.embed_tokens.embeddings().dtype())?,
+                image_sizes,
+            )?
         } else {
             self.embed_tokens.forward(input_ids)?
         };
