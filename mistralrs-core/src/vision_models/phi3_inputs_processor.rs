@@ -394,7 +394,8 @@ impl ImagePreProcessor for Phi3InputsProcessor {
 
             let (w, h) = hd_image.dimensions();
             let num_image_tokens = ((h as f32 / 336. * w as f32 / 336. + 1.) * 144.
-                + ((h as f32 / 336.) + 1.) * 12.) as usize;
+                + ((h as f32 / 336.) + 1.) * 12.
+                + 1.) as usize;
 
             // (3,336,336)
             let hd_image = make_pixel_values(&hd_image, device)?;
