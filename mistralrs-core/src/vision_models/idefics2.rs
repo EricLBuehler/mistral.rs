@@ -209,7 +209,7 @@ struct VisionEmbeddings {
 
 /// torch.bucketize with right=True
 /// Returns a 1d tensor of shape (xs.len(),) on the CPU
-fn bucketize_right(xs: &[f64], boundaries: &[f64], device: &Device) -> Result<Tensor> {
+fn bucketize_right(xs: &[f32], boundaries: &[f32], device: &Device) -> Result<Tensor> {
     let accum = xs
         .par_iter()
         .map(|x| {
@@ -281,19 +281,19 @@ impl VisionEmbeddings {
         let (max_nb_patches_h, max_nb_patches_w) =
             (max_im_h / self.patch_size, max_im_w / self.patch_size);
         let boundaries = Tensor::arange_step(
-            1.0 / self.num_patches_per_side as f64,
+            1.0 / self.num_patches_per_side as f32,
             1.0,
-            1.0 / self.num_patches_per_side as f64,
+            1.0 / self.num_patches_per_side as f32,
             pixel_values.device(),
         )?
-        .to_vec1::<f64>()?;
+        .to_vec1::<f32>()?;
         let position_ids = Tensor::full(
             0u32,
             (bs, max_nb_patches_h * max_nb_patches_w),
             pixel_values.device(),
         )?;
         let p_attn_mask = patch_attention_mask.flatten_all()?;
-        let mask_true = p_attn_mask.eq(&Tensor::arange(
+        let mask_true = p_attn_mask.to_dtype(DType::U32)?.eq(&Tensor::arange(
             0u32,
             p_attn_mask.dims()[0] as u32,
             p_attn_mask.device(),
@@ -310,23 +310,23 @@ impl VisionEmbeddings {
                 1.0 / nb_patches_h.to_dtype(DType::F32)?.to_scalar::<f32>()?,
                 pixel_values.device(),
             )?
-            .to_vec1::<f64>()?;
+            .to_vec1::<f32>()?;
             let fractional_coords_w = Tensor::arange_step(
                 0.0,
                 1.0 - 1e-6,
                 1.0 / nb_patches_w.to_dtype(DType::F32)?.to_scalar::<f32>()?,
                 pixel_values.device(),
             )?
-            .to_vec1::<f64>()?;
+            .to_vec1::<f32>()?;
 
             let bucket_coords_h =
                 bucketize_right(&fractional_coords_h, &boundaries, pixel_values.device())?;
             let bucket_coords_w =
                 bucketize_right(&fractional_coords_w, &boundaries, pixel_values.device())?;
-            let pos_ids = (bucket_coords_h
+            let pos_ids = bucket_coords_h
                 .unsqueeze(D::Minus1)?
                 .mul(self.num_patches_per_side as f64)?
-                + &bucket_coords_w)?
+                .broadcast_add(&bucket_coords_w)?
                 .flatten_all()?;
 
             let position_ids_b = position_ids.i(b_idx)?;
@@ -335,7 +335,7 @@ impl VisionEmbeddings {
         }
         let position_ids = Tensor::cat(&new_position_ids, 0)?;
         let position_ids = position_ids.to_device(self.position_embedding.embeddings().device())?;
-        embeddings + self.position_embedding.forward(&position_ids)?
+        embeddings.broadcast_add(&self.position_embedding.forward(&position_ids)?)
     }
 }
 
