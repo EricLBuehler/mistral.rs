@@ -76,7 +76,7 @@ impl ImageTransform for Normalize {
     }
 }
 
-/// Do what `ToTensor` does, but also resize the image without preseving
+/// Do what `ToTensor` does, but also resize the image without preserving
 /// aspect ratio.
 pub struct ToTensorAndResize {
     pub target_w: usize,
