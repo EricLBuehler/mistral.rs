@@ -394,8 +394,9 @@ impl ImagePreProcessor for Phi3InputsProcessor {
 
             // Resize with bicubic interpolation
             // (3,336,336)
-            let global_image = hd_image.apply(transforms_global, device)?;
+            let global_image = hd_image.apply(transforms_global, device)?.unsqueeze(0)?;
 
+            // (3,h,w)
             let hd_image = hd_image.apply(transforms_hd, device)?;
 
             let (_, h, w) = hd_image.dims3()?;
