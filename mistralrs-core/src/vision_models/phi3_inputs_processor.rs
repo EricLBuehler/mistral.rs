@@ -3,11 +3,9 @@
 use std::{any::Any, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
-use image::{
-    imageops::{self, FilterType},
-    DynamicImage, GenericImage, GenericImageView, Rgba,
-};
+use image::{imageops::FilterType, DynamicImage, GenericImage, GenericImageView, Rgba};
 use itertools::Itertools;
+use mistralrs_vision::{ApplyTransforms, Normalize, ToTensor, ToTensorAndResize, Transforms};
 use regex_automata::meta::Regex;
 use tokenizers::Tokenizer;
 
@@ -17,7 +15,6 @@ use crate::{
         InputsProcessor, InputsProcessorType, MessagesAction, Processor, ProcessorCreator,
     },
     sequence::Sequence,
-    vision_models::image_processor::make_pixel_values,
 };
 
 use super::{
@@ -371,34 +368,41 @@ impl ImagePreProcessor for Phi3InputsProcessor {
                 *image = DynamicImage::ImageRgb8(image.to_rgb8());
             }
 
-            let elem = Self::hd_transform(image, config.num_crops.expect("Need `num_crops`"));
+            let hd_image = Self::hd_transform(image, config.num_crops.expect("Need `num_crops`"));
 
-            // Normalize
-            let hd_image = self.normalize(
-                &elem,
-                config.image_mean.unwrap_or(Self::DEFAULT_MEAN),
-                config.image_std.unwrap_or(Self::DEFAULT_STD),
-            );
+            // Both hd and global have a normalization
+            // Transforms for the HD image
+            let transforms_hd = Transforms {
+                input: &ToTensor,
+                inner_transforms: &[&Normalize {
+                    mean: config.image_mean.unwrap_or(Self::DEFAULT_MEAN).to_vec(),
+                    std: config.image_std.unwrap_or(Self::DEFAULT_STD).to_vec(),
+                }],
+            };
+            // Transforms for the global image (after HD transform, resized)
+            let transforms_global = Transforms {
+                input: &ToTensorAndResize {
+                    target_h: 336,
+                    target_w: 336,
+                    filter: FilterType::Triangle,
+                },
+                inner_transforms: &[&Normalize {
+                    mean: config.image_mean.unwrap_or(Self::DEFAULT_MEAN).to_vec(),
+                    std: config.image_std.unwrap_or(Self::DEFAULT_STD).to_vec(),
+                }],
+            };
 
             // Resize with bicubic interpolation
-            let global_image = DynamicImage::ImageRgb8(
-                DynamicImage::ImageRgba8(imageops::resize(
-                    &hd_image,
-                    336,
-                    336,
-                    FilterType::Triangle,
-                ))
-                .to_rgb8(),
-            );
-            let global_image = make_pixel_values(&global_image, device)?.unsqueeze(0)?;
+            // (3,336,336)
+            let global_image = hd_image.apply(transforms_global, device)?;
 
-            let (w, h) = hd_image.dimensions();
+            let hd_image = hd_image.apply(transforms_hd, device)?;
+
+            let (_, h, w) = hd_image.dims3()?;
             let num_image_tokens = ((h as f32 / 336. * w as f32 / 336. + 1.) * 144.
                 + ((h as f32 / 336.) + 1.) * 12.
                 + 1.) as usize;
 
-            // (3,336,336)
-            let hd_image = make_pixel_values(&hd_image, device)?;
             let hd_image_reshape = hd_image
                 .reshape((
                     1,
@@ -427,7 +431,7 @@ impl ImagePreProcessor for Phi3InputsProcessor {
 
         Ok(PreprocessedImages {
             pixel_values: Tensor::stack(&padded_images, 0)?,
-            image_sizes: Some((image_sizes.0 as usize, image_sizes.1 as usize)),
+            image_sizes: Some((image_sizes.0, image_sizes.1)),
             pixel_attention_mask: None,
             num_img_tokens: Some(num_img_tokens),
         })
