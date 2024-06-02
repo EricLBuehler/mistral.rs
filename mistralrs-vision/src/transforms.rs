@@ -70,7 +70,7 @@ impl ImageTransform for Normalize {
         }
         let mut accum = Vec::new();
         for (i, channel) in x.chunk(num_channels, 0)?.iter().enumerate() {
-            accum.push(((channel - self.mean[i])? / self.std[i])?.unsqueeze(0)?);
+            accum.push(((channel - self.mean[i])? / self.std[i])?);
         }
         Tensor::cat(&accum, 0)
     }
