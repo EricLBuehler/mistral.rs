@@ -90,7 +90,6 @@ impl ImageTransform for ToTensorAndResize {
 
     fn map(&self, x: &Self::Input, device: &Device) -> Result<Self::Output> {
         let n_channels = n_channels(x);
-        x.to_rgba8();
         let img = imageops::resize(x, self.target_w as u32, self.target_h as u32, self.filter);
         let data = get_pixel_data(n_channels, img, self.target_h, self.target_w);
         ToTensor::to_tensor(device, n_channels, data)

@@ -11,11 +11,8 @@ pub(crate) fn get_pixel_data(
     w: usize,
 ) -> Vec<Vec<Vec<u8>>> {
     let mut pixel_data = empty_image(h, w);
-    let pixels = pixels.pixels();
-    for (n, pixel) in pixels.into_iter().enumerate() {
-        let x = n % w;
-        let y = n / h;
-        pixel_data[y][x] = pixel.channels()[..n_channels].to_vec()
+    for (x, y, pixel) in pixels.enumerate_pixels() {
+        pixel_data[y as usize][x as usize] = pixel.channels()[..n_channels].to_vec()
     }
     pixel_data
 }
