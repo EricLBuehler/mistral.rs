@@ -6,7 +6,7 @@ use candle_core::{
     quantized::QMatMul, shape::ShapeWithOneHole, DType, Device, IndexOp, Module, Result, Shape,
     Tensor, D,
 };
-use candle_nn::{linear_b, linear_no_bias, Linear, VarBuilder};
+use candle_nn::{linear_b, linear_no_bias, Embedding, Linear, VarBuilder};
 use either::Either;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
@@ -408,6 +408,7 @@ pub struct ImageEmbedding {
     hd_transform_order: String,
     use_hd_transform: bool,
     vocab_size: usize,
+    original_dtype: DType,
 }
 
 impl ImageEmbedding {
@@ -417,6 +418,9 @@ impl ImageEmbedding {
         embed_config: &EmbedLayerConfig,
         vb: VarBuilder,
     ) -> Result<Self> {
+        let original_dtype = vb.dtype();
+
+        let vb = vb.set_dtype(DType::F32);
         let hidden_size = config.hidden_size;
         if config.img_processor.name != "clip_vision_model" {
             candle_core::bail!(
@@ -524,7 +528,7 @@ impl ImageEmbedding {
             .unwrap_or("patch".to_string());
 
         Ok(Self {
-            wte,
+            wte: Embedding::new(wte.embeddings().to_dtype(DType::F32)?, wte.hidden_size()),
             image_dim_out,
             num_img_tokens,
             glb_gn,
@@ -536,15 +540,16 @@ impl ImageEmbedding {
             hd_transform_order,
             use_hd_transform,
             vocab_size: config.vocab_size,
+            original_dtype,
         })
     }
 
-    fn get_image_features(&self, pixel_values: &Tensor, dtype: DType) -> Result<Tensor> {
+    fn get_image_features(&self, pixel_values: &Tensor) -> Result<Tensor> {
         let hidden_states = self
             .image_processor
             .forward_get_hidden_states(pixel_values)?;
-        let img_feature = hidden_states[(hidden_states.len() as isize + self.layer_idx) as usize]
-            .to_dtype(dtype)?;
+        let img_feature =
+            hidden_states[(hidden_states.len() as isize + self.layer_idx) as usize].clone();
         if self.type_feature == "patch" {
             img_feature.i((.., 1..))
         } else if self.type_feature == "cls_patch" {
@@ -581,10 +586,7 @@ impl ImageEmbedding {
             if self.use_hd_transform && image_sizes.is_some() {
                 assert_eq!(pixel_values.dims().len(), 5);
                 let bs = pixel_values.dim(0)?;
-                let img_features = self.get_image_features(
-                    &pixel_values.flatten(0, 1)?,
-                    self.wte.embeddings().dtype(),
-                )?;
+                let img_features = self.get_image_features(&pixel_values.flatten(0, 1)?)?;
                 let base_feat_dim = (img_features.dims()[1] as f32).sqrt() as usize;
                 assert_eq!(base_feat_dim, 24);
 
@@ -698,7 +700,7 @@ impl ImageEmbedding {
                 image_set_tensor = Some(Either::Left(image_set_tensor_inner));
             } else if pixel_values.dims().len() == 4 {
                 let tt = self
-                    .get_image_features(pixel_values, self.wte.embeddings().dtype())?
+                    .get_image_features(pixel_values)?
                     .to_device(target_dev)?
                     .to_dtype(target_dtype)?
                     .reshape(((), self.image_dim_out))?;
@@ -762,7 +764,7 @@ impl ImageEmbedding {
             }
         }
 
-        Ok(hidden_states)
+        hidden_states.to_dtype(self.original_dtype)
     }
 }
 
