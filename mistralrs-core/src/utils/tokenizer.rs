@@ -16,10 +16,7 @@ pub(crate) fn get_tokenizer<P: AsRef<Path> + Clone>(
     p: P,
     processor_added_tokens: Option<&[&str]>,
 ) -> Result<Tokenizer> {
-    let fixed_path = format!("{}_mistralrs_fixed", p.as_ref().display());
-    let fixed_path = Path::new(&fixed_path);
-
-    if !fixed_path.exists() {
+    let mut tokenizer = {
         let raw = std::fs::read(p.clone()).map_err(anyhow::Error::msg)?;
         let mut tokenizer: Value = serde_json::from_slice(&raw).unwrap();
         let added_tokens: Vec<AddedToken> =
@@ -37,10 +34,8 @@ pub(crate) fn get_tokenizer<P: AsRef<Path> + Clone>(
             }
         }
         let raw_fixed = serde_json::to_vec_pretty(&tokenizer).unwrap();
-        std::fs::write(fixed_path, raw_fixed).unwrap();
-    }
-
-    let mut tokenizer = Tokenizer::from_file(fixed_path).map_err(anyhow::Error::msg)?;
+        Tokenizer::from_bytes(&raw_fixed).map_err(anyhow::Error::msg)?
+    };
     if let Some(added_tokens) = processor_added_tokens {
         tokenizer.add_special_tokens(
             &added_tokens
