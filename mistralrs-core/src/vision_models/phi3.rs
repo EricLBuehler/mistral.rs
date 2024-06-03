@@ -408,7 +408,6 @@ pub struct ImageEmbedding {
     hd_transform_order: String,
     use_hd_transform: bool,
     vocab_size: usize,
-    original_dtype: DType,
 }
 
 impl ImageEmbedding {
@@ -418,9 +417,6 @@ impl ImageEmbedding {
         embed_config: &EmbedLayerConfig,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let original_dtype = vb.dtype();
-
-        let vb = vb.set_dtype(DType::F32);
         let hidden_size = config.hidden_size;
         if config.img_processor.name != "clip_vision_model" {
             candle_core::bail!(
@@ -540,7 +536,6 @@ impl ImageEmbedding {
             hd_transform_order,
             use_hd_transform,
             vocab_size: config.vocab_size,
-            original_dtype,
         })
     }
 
@@ -764,7 +759,7 @@ impl ImageEmbedding {
             }
         }
 
-        hidden_states.to_dtype(self.original_dtype)
+        Ok(hidden_states)
     }
 }
 
