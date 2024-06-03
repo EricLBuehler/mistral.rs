@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::Path};
 use anyhow::Result;
 use serde::Deserialize;
 use serde_json::Value;
-use tokenizers::Tokenizer;
+use tokenizers::{tokenizer, Tokenizer};
 
 #[derive(Deserialize)]
 struct AddedToken {
@@ -12,7 +12,10 @@ struct AddedToken {
 }
 
 /// May fix the tokenizer according to: https://gist.github.com/jneuff/682d47b786329f19291d166957b3274a
-pub(crate) fn get_tokenizer<P: AsRef<Path> + Clone>(p: P) -> Result<Tokenizer> {
+pub(crate) fn get_tokenizer<P: AsRef<Path> + Clone>(
+    p: P,
+    processor_added_tokens: Option<&[&str]>,
+) -> Result<Tokenizer> {
     let fixed_path = format!("{}_mistralrs_fixed", p.as_ref().display());
     let fixed_path = Path::new(&fixed_path);
 
@@ -37,5 +40,14 @@ pub(crate) fn get_tokenizer<P: AsRef<Path> + Clone>(p: P) -> Result<Tokenizer> {
         std::fs::write(fixed_path, raw_fixed).unwrap();
     }
 
-    Tokenizer::from_file(fixed_path).map_err(anyhow::Error::msg)
+    let mut tokenizer = Tokenizer::from_file(fixed_path).map_err(anyhow::Error::msg)?;
+    if let Some(added_tokens) = processor_added_tokens {
+        tokenizer.add_special_tokens(
+            &added_tokens
+                .iter()
+                .map(|x| tokenizer::AddedToken::from(x.to_string(), true))
+                .collect::<Vec<_>>(),
+        );
+    }
+    Ok(tokenizer)
 }

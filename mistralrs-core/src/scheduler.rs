@@ -64,6 +64,7 @@ pub trait BucketingManager<Backer: FcfsBacker> {
     ) -> BucketedSeqs<Backer>;
 }
 
+// (adapters, cache length)
 type BucketKey = (Option<Vec<String>>, usize);
 
 struct FixedBucketingManager;

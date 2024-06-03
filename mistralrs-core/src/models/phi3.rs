@@ -10,9 +10,10 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     device_map::DeviceMapper,
     layers::{
-        repeat_kv, CausalMasker, MatMul, PhiRotaryEmbedding, RmsNorm, ScaledDotProductAttention,
+        repeat_kv, CausalMasker, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm,
+        ScaledDotProductAttention,
     },
-    pipeline::{extract_logits, Cache, NormalModel},
+    pipeline::{extract_logits, Cache, IsqModel, NormalModel},
     DeviceMapMetadata,
 };
 
@@ -35,6 +36,18 @@ pub struct Config {
     pub use_flash_attn: bool,
     pub sliding_window: Option<usize>,
     pub original_max_position_embeddings: usize,
+}
+
+impl From<Config> for PhiRopeConfig {
+    fn from(val: Config) -> Self {
+        PhiRopeConfig {
+            rope_scaling: val.rope_scaling,
+            max_position_embeddings: val.max_position_embeddings,
+            original_max_position_embeddings: val.original_max_position_embeddings,
+            rope_theta: val.rope_theta,
+            head_dim: val.hidden_size / val.num_attention_heads,
+        }
+    }
 }
 
 impl Config {
@@ -294,7 +307,7 @@ impl Model {
         for layer_idx in 0..cfg.num_hidden_layers {
             let rotary_emb = Arc::new(PhiRotaryEmbedding::new(
                 vb.dtype(),
-                cfg,
+                cfg.clone(),
                 mapper.device_for(layer_idx, false).unwrap_or(&real_device),
             )?);
             let layer = DecoderLayer::new(
@@ -374,6 +387,20 @@ impl Model {
     }
 }
 
+impl IsqModel for Model {
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+        let mut tensors = Vec::new();
+        tensors.push((&mut self.lm_head, None));
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            tensors.push((&mut layer.self_attn.qkv_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
+            tensors.push((&mut layer.mlp.gate_up_proj, Some(i)));
+            tensors.push((&mut layer.mlp.down_proj, Some(i)));
+        }
+        (tensors, &*self.mapper)
+    }
+}
+
 impl NormalModel for Model {
     fn forward(
         &mut self,
@@ -411,16 +438,5 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
-    }
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.self_attn.qkv_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            tensors.push((&mut layer.mlp.gate_up_proj, Some(i)));
-            tensors.push((&mut layer.mlp.down_proj, Some(i)));
-        }
-        (tensors, &*self.mapper)
     }
 }

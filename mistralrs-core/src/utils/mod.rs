@@ -1,3 +1,4 @@
+pub(crate) mod model_config;
 pub(crate) mod tokenizer;
 pub(crate) mod tokens;
 pub(crate) mod varbuilder_utils;
@@ -227,6 +228,15 @@ macro_rules! sample_async {
                 $rng,
                 $sample_speculative,
             )?
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! serde_default_fn {
+    ($t:ty, $name:ident, $v:expr) => {
+        fn $name() -> $t {
+            $v
         }
     };
 }

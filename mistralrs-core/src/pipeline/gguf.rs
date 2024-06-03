@@ -1,7 +1,12 @@
 use super::cache_manager::DefaultCacheManager;
 use super::{
-    get_model_paths, get_xlora_paths, CacheManager, GeneralMetadata, Loader, ModelInputs,
-    ModelKind, ModelPaths, Pipeline, TokenSource, XLoraPaths,
+    get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
+    CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind,
+    TokenSource, XLoraPaths,
+};
+use super::{
+    AdapterActivationMixin, CacheManagerMixin, IsqPipelineMixin, MetadataMixin, ModelCategory,
+    PreProcessingMixin,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -12,10 +17,10 @@ use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
+use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
-use crate::utils::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 use crate::xlora_models::NonGranularState;
-use crate::{do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, DEBUG};
+use crate::{do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, Pipeline, DEBUG};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
     models::quantized_phi2::ModelWeights as QPhi,
@@ -32,6 +37,7 @@ use candle_core::{DType, Device, Tensor};
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
+use std::any::Any;
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -134,11 +140,15 @@ impl GGUFLoaderBuilder {
         quantized_model_id: String,
         quantized_filename: String,
     ) -> Self {
+        let kind = ModelKind::Quantized {
+            quant: QuantizationKind::Gguf,
+        };
+
         Self {
             config,
             chat_template,
             model_id: tok_model_id,
-            kind: ModelKind::QuantizedGGUF,
+            kind,
             quantized_filename,
             quantized_model_id,
             ..Default::default()
@@ -175,7 +185,8 @@ impl GGUFLoaderBuilder {
         no_kv_cache: bool,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
-        self.kind = ModelKind::XLoraGGUF;
+        self.kind = (AdapterKind::XLora, QuantizationKind::Gguf).into();
+
         self.with_adapter(
             xlora_model_id,
             xlora_order,
@@ -185,7 +196,8 @@ impl GGUFLoaderBuilder {
     }
 
     pub fn with_lora(mut self, lora_model_id: String, lora_order: Ordering) -> Self {
-        self.kind = ModelKind::LoraGGUF;
+        self.kind = (AdapterKind::Lora, QuantizationKind::Gguf).into();
+
         self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
@@ -369,130 +381,50 @@ impl Loader for GGUFLoader {
             convert_ggml_to_hf_tokenizer(&model)?
         } else {
             ConversionResult {
-                tokenizer: get_tokenizer(paths.get_tokenizer_filename())?,
+                tokenizer: get_tokenizer(paths.get_tokenizer_filename(), None)?,
                 bos: None,
                 eos: None,
                 unk: None,
             }
         };
 
-        let mut is_lora = false;
+        let has_adapter = self.kind.is_adapted();
+        let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
+
+        let model_config = {
+            // Base config (quantization only):
+            let quant = ModelConfig::ParamsGGUF((model, &mut file).into(), (device, mapper).into());
+
+            // With optional adapter config:
+            let mut adapter = None;
+            if has_adapter {
+                adapter.replace(ModelConfig::Adapter::try_new(
+                    paths, device, silent, is_xlora,
+                )?);
+            }
+
+            ModelConfig::ModelParams::builder()
+                .quant(quant)
+                .and_adapter(adapter)
+                .build()
+        };
+
+        // Config into model:
         let model = match self.kind {
-            ModelKind::QuantizedGGUF => match arch {
-                GGUFArchitecture::Llama => {
-                    Model::Llama(QLlama::from_gguf(model, &mut file, device, mapper)?)
-                }
-                GGUFArchitecture::Phi2 => {
-                    Model::Phi2(QPhi::from_gguf(model, &mut file, device, mapper)?)
-                }
-                GGUFArchitecture::Phi3 => {
-                    Model::Phi3(QPhi3::from_gguf(model, &mut file, device, mapper)?)
-                }
-                a => bail!("Unsupported architecture `{a:?}`"),
+            ModelKind::Quantized { .. } => match arch {
+                GGUFArchitecture::Llama => Model::Llama(QLlama::try_from(model_config)?),
+                GGUFArchitecture::Phi2 => Model::Phi2(QPhi::try_from(model_config)?),
+                GGUFArchitecture::Phi3 => Model::Phi3(QPhi3::try_from(model_config)?),
+                a => bail!("Unsupported architecture `{a:?}` for GGUF"),
             },
-            ModelKind::XLoraGGUF => {
-                let vb = from_mmaped_safetensors(
-                    vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()],
-                    paths
-                        .get_adapter_filenames()
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(|(_, x)| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    DType::F32,
-                    device,
-                    silent,
-                )?;
-
-                match arch {
-                    GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::from_gguf(
-                        model,
-                        &mut file,
-                        device,
-                        paths.get_adapter_configs().as_ref().unwrap(),
-                        &vb,
-                        paths.get_ordering().as_ref().unwrap(),
-                        Some(paths.get_classifier_config().as_ref().unwrap().clone()),
-                        mapper,
-                        &load_preload_adapters(
-                            paths.get_lora_preload_adapter_info(),
-                            DType::F32,
-                            device,
-                            silent,
-                        )?,
-                    )?),
-                    GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::from_gguf(
-                        model,
-                        &mut file,
-                        device,
-                        paths.get_adapter_configs().as_ref().unwrap(),
-                        &vb,
-                        paths.get_ordering().as_ref().unwrap(),
-                        Some(paths.get_classifier_config().as_ref().unwrap().clone()),
-                        mapper,
-                        &load_preload_adapters(
-                            paths.get_lora_preload_adapter_info(),
-                            DType::F32,
-                            device,
-                            silent,
-                        )?,
-                    )?),
-                    a => bail!("Unsupported architecture for GGUF X-LoRA `{a:?}`"),
-                }
-            }
-            ModelKind::LoraGGUF => {
-                is_lora = true;
-                let vb = from_mmaped_safetensors(
-                    vec![],
-                    paths
-                        .get_adapter_filenames()
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(|(_, x)| (*x).to_owned())
-                        .collect::<Vec<_>>(),
-                    DType::F32,
-                    device,
-                    silent,
-                )?;
-
-                match arch {
-                    GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::from_gguf(
-                        model,
-                        &mut file,
-                        device,
-                        paths.get_adapter_configs().as_ref().unwrap(),
-                        &vb,
-                        paths.get_ordering().as_ref().unwrap(),
-                        None,
-                        mapper,
-                        &load_preload_adapters(
-                            paths.get_lora_preload_adapter_info(),
-                            DType::F32,
-                            device,
-                            silent,
-                        )?,
-                    )?),
-                    GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::from_gguf(
-                        model,
-                        &mut file,
-                        device,
-                        paths.get_adapter_configs().as_ref().unwrap(),
-                        &vb,
-                        paths.get_ordering().as_ref().unwrap(),
-                        None,
-                        mapper,
-                        &load_preload_adapters(
-                            paths.get_lora_preload_adapter_info(),
-                            DType::F32,
-                            device,
-                            silent,
-                        )?,
-                    )?),
-                    a => bail!("Unsupported architecture for GGUF LoRA `{a:?}`"),
-                }
-            }
+            ModelKind::AdapterQuantized { adapter, .. } => match arch {
+                GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::try_from(model_config)?),
+                GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::try_from(model_config)?),
+                a => bail!(
+                    "Unsupported architecture `{a:?}` for GGUF {kind}",
+                    kind = adapter.pretty_name()
+                ),
+            },
             _ => unreachable!(),
         };
 
@@ -509,10 +441,6 @@ impl Loader for GGUFLoader {
             Model::XLoraPhi3(ref p) => p.max_seq_len,
         };
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
-        let is_xlora = match &model {
-            Model::Llama(_) | Model::Phi2(_) | Model::Phi3(_) => false,
-            Model::XLoraLlama(_) | Model::XLoraPhi3(_) => !is_lora,
-        };
         let num_hidden_layers = match model {
             Model::Llama(ref model) => model.cache.lock().len(),
             Model::Phi2(ref model) => model.cache.lock().len(),
@@ -553,10 +481,10 @@ impl Loader for GGUFLoader {
                 repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
                 has_no_kv_cache: self.no_kv_cache,
-                is_xlora,
                 num_hidden_layers,
                 eos_tok: eos,
-                is_lora,
+                kind: self.kind.clone(),
+                is_xlora,
             },
         })))
     }
@@ -573,11 +501,97 @@ impl Loader for GGUFLoader {
     }
 }
 
+impl PreProcessingMixin for GGUFPipeline {
+    fn get_chat_template(&self) -> Arc<ChatTemplate> {
+        self.chat_template.clone()
+    }
+    fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
+        None
+    }
+}
+
+impl IsqPipelineMixin for GGUFPipeline {
+    fn re_isq_model(&mut self, _dtype: GgmlDType) -> Result<()> {
+        anyhow::bail!(
+            "You are trying to in-situ requantize a GGML model. This will not do anything."
+        )
+    }
+}
+
+impl CacheManagerMixin for GGUFPipeline {
+    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+    }
+    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+    }
+    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
+        DefaultCacheManager.set_none_cache(self, modify_draft_cache);
+        if reset_non_granular {
+            self.reset_non_granular_state()
+        }
+    }
+    fn cache(&self) -> &Cache {
+        match self.model {
+            Model::Llama(ref model) => &model.cache,
+            Model::Phi2(ref model) => &model.cache,
+            Model::XLoraLlama(ref model) => &model.cache,
+            Model::Phi3(ref model) => &model.cache,
+            Model::XLoraPhi3(ref model) => &model.cache,
+        }
+    }
+}
+
+impl AdapterActivationMixin for GGUFPipeline {
+    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
+        let is_lora = self.metadata.kind.is_adapted_and(|a| a.is_lora());
+        if !is_lora {
+            anyhow::bail!("Activating adapters is only supported for models fine-tuned with LoRA.")
+        }
+
+        match self.model {
+            Model::XLoraLlama(ref mut model) => model
+                .activate_adapters(adapter_names)
+                .map_err(anyhow::Error::msg),
+            Model::XLoraPhi3(ref mut model) => model
+                .activate_adapters(adapter_names)
+                .map_err(anyhow::Error::msg),
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl MetadataMixin for GGUFPipeline {
+    fn device(&self) -> Device {
+        match self.model {
+            Model::Llama(ref model) => model.device.clone(),
+            Model::Phi2(ref model) => model.device.clone(),
+            Model::XLoraLlama(ref model) => model.device.clone(),
+            Model::Phi3(ref model) => model.device.clone(),
+            Model::XLoraPhi3(ref model) => model.device.clone(),
+        }
+    }
+    fn tokenizer(&self) -> Arc<Tokenizer> {
+        self.tokenizer.clone()
+    }
+    fn name(&self) -> String {
+        self.model_id.clone()
+    }
+    fn reset_non_granular_state(&self) {
+        if let Some(s) = self.non_granular_state.as_ref() {
+            *self.cache().get_scalings_cache() = None;
+            *get_mut_arcmutex!(s.non_granular_index) = 0;
+        }
+    }
+    fn get_metadata(&self) -> &GeneralMetadata {
+        &self.metadata
+    }
+}
+
 #[async_trait::async_trait]
 impl Pipeline for GGUFPipeline {
-    fn forward_inputs(
-        &mut self,
-        ModelInputs {
+    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+        let ModelInputs {
             input_ids,
             input_ids_full,
             seqlen_offsets,
@@ -586,8 +600,7 @@ impl Pipeline for GGUFPipeline {
             seqlen_offsets_kernel_full,
             context_lens,
             position_ids: _, // NOTE(EricLBuehler): ignore, it is for phi3
-        }: ModelInputs,
-    ) -> Result<Tensor, candle_core::Error> {
+        } = *inputs.downcast().expect("Downcast failed.");
         match self.model {
             Model::Llama(ref mut model) => model.forward(
                 &input_ids,
@@ -631,73 +644,7 @@ impl Pipeline for GGUFPipeline {
     ) -> Result<(), candle_core::Error> {
         do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
     }
-    fn device(&self) -> Device {
-        match self.model {
-            Model::Llama(ref model) => model.device.clone(),
-            Model::Phi2(ref model) => model.device.clone(),
-            Model::XLoraLlama(ref model) => model.device.clone(),
-            Model::Phi3(ref model) => model.device.clone(),
-            Model::XLoraPhi3(ref model) => model.device.clone(),
-        }
-    }
-    fn tokenizer(&self) -> Arc<Tokenizer> {
-        self.tokenizer.clone()
-    }
-    fn name(&self) -> String {
-        self.model_id.clone()
-    }
-    fn get_chat_template(&self) -> Arc<ChatTemplate> {
-        self.chat_template.clone()
-    }
-    fn reset_non_granular_state(&self) {
-        if let Some(s) = self.non_granular_state.as_ref() {
-            *self.cache().get_scalings_cache() = None;
-            *get_mut_arcmutex!(s.non_granular_index) = 0;
-        }
-    }
-    fn re_isq_model(&mut self, _dtype: GgmlDType) -> Result<()> {
-        anyhow::bail!(
-            "You are trying to in-situ requantize a GGML model. This will not do anything."
-        )
-    }
-    fn get_metadata(&self) -> &GeneralMetadata {
-        &self.metadata
-    }
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
-    }
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
-    }
-    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(self, modify_draft_cache);
-        if reset_non_granular {
-            self.reset_non_granular_state()
-        }
-    }
-    fn cache(&self) -> &Cache {
-        match self.model {
-            Model::Llama(ref model) => &model.cache,
-            Model::Phi2(ref model) => &model.cache,
-            Model::XLoraLlama(ref model) => &model.cache,
-            Model::Phi3(ref model) => &model.cache,
-            Model::XLoraPhi3(ref model) => &model.cache,
-        }
-    }
-    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
-        if !self.metadata.is_lora {
-            anyhow::bail!("Cannot activate adapters non-LoRA models.")
-        }
-        match self.model {
-            Model::Llama(_) => unreachable!(),
-            Model::Phi2(_) => unreachable!(),
-            Model::Phi3(_) => unreachable!(),
-            Model::XLoraLlama(ref mut model) => model
-                .activate_adapters(adapter_names)
-                .map_err(anyhow::Error::msg),
-            Model::XLoraPhi3(ref mut model) => model
-                .activate_adapters(adapter_names)
-                .map_err(anyhow::Error::msg),
-        }
+    fn category(&self) -> ModelCategory {
+        ModelCategory::Text
     }
 }

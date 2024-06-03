@@ -9,6 +9,7 @@ use crate::device_map::DeviceMapper;
 use crate::layers::ScaledDotProductAttention;
 use crate::layers::{repeat_kv, CausalMasker, QLinear};
 use crate::pipeline::{extract_logits, Cache};
+use crate::utils::model_config as ModelConfig;
 use crate::DeviceMapMetadata;
 
 pub const MAX_SEQ_LEN: usize = 4096;
@@ -141,8 +142,8 @@ fn layer_norm(w: QTensor, b: QTensor, eps: f64) -> Result<LayerNorm> {
     Ok(ln)
 }
 
-impl ModelWeights {
-    pub fn from_gguf<R: std::io::Seek + std::io::Read>(
+impl ModelConfig::FromGGUF for ModelWeights {
+    fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
@@ -211,7 +212,9 @@ impl ModelWeights {
             mapper,
         })
     }
+}
 
+impl ModelWeights {
     pub fn forward(
         &mut self,
         input_ids: &Tensor,

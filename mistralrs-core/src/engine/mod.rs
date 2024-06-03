@@ -299,7 +299,9 @@ impl Engine {
 
         let best_of = match request.messages {
             RequestMessage::Completion { best_of, .. } => best_of,
-            RequestMessage::Chat(_) | RequestMessage::CompletionTokens(_) => 1,
+            RequestMessage::Chat(_)
+            | RequestMessage::CompletionTokens(_)
+            | RequestMessage::VisionChat { .. } => 1,
         };
         if is_chat
             && !get_mut_arcmutex!(self.pipeline)
@@ -314,23 +316,36 @@ impl Engine {
             return;
         }
 
-        let mut force_tokens = None;
-        let formatted_prompt = match request.messages {
-            RequestMessage::Chat(messages) => {
-                let template = get_mut_arcmutex!(self.pipeline).apply_chat_template(messages, true);
+        let images = match request.messages {
+            RequestMessage::VisionChat {
+                ref images,
+                messages: _,
+            } => Some(images.clone()),
+            _ => None,
+        };
+
+        let mut prompt = match request.messages {
+            RequestMessage::Chat(messages)
+            | RequestMessage::VisionChat {
+                images: _,
+                messages,
+            } => {
+                let pipeline = &*get_mut_arcmutex!(self.pipeline);
+                let template = pipeline.get_processor().process(pipeline, messages, true);
                 handle_seq_error!(template, request.response)
             }
-            RequestMessage::Completion { text, .. } => text,
-            RequestMessage::CompletionTokens(it) => {
-                let res = get_mut_arcmutex!(self.pipeline)
+            RequestMessage::Completion { text, .. } => {
+                let prompt = get_mut_arcmutex!(self.pipeline)
                     .tokenizer()
-                    .decode(&it, false)
-                    .expect("cannot decode completion tokens");
-                force_tokens = Some(it);
-                res
+                    .encode(text, false)
+                    .map_err(|e| anyhow::Error::msg(e.to_string()));
+                handle_seq_error!(prompt, request.response)
+                    .get_ids()
+                    .to_vec()
             }
+            RequestMessage::CompletionTokens(it) => it,
         };
-        if formatted_prompt.is_empty() {
+        if prompt.is_empty() {
             request
                 .response
                 .send(Response::ValidationError(
@@ -340,13 +355,6 @@ impl Engine {
                 .expect("Expected receiver.");
             return;
         }
-        let mut prompt = match force_tokens {
-            Some(tks) => tks,
-            None => {
-                let prompt = get_mut_arcmutex!(self.pipeline).tokenize_prompt(&formatted_prompt);
-                handle_seq_error!(prompt, request.response)
-            }
-        };
 
         if prompt.len() > get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len {
             if !self.truncate_sequence {
@@ -535,11 +543,17 @@ impl Engine {
                 recognizer,
                 request.suffix.clone(),
                 if echo_prompt {
-                    Some(formatted_prompt.clone()) // TODO(EricLBuehler): this is probably wrong when using the prefix cacher.
+                    Some(
+                        get_mut_arcmutex!(self.pipeline)
+                            .tokenizer()
+                            .decode(&prompt, false)
+                            .expect("cannot decode completion tokens"),
+                    )
                 } else {
                     None
                 },
                 request.adapters.clone(),
+                images.clone(),
             );
             let seq = if let Some((normal, xlora, remaining_toks)) = prefill {
                 seq.prefill(normal, xlora, remaining_toks)
