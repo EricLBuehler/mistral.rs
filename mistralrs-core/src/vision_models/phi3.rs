@@ -6,7 +6,7 @@ use candle_core::{
     quantized::QMatMul, shape::ShapeWithOneHole, DType, Device, IndexOp, Module, Result, Shape,
     Tensor, D,
 };
-use candle_nn::{linear_b, linear_no_bias, Embedding, Linear, VarBuilder};
+use candle_nn::{linear_b, linear_no_bias, Linear, VarBuilder};
 use either::Either;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
@@ -524,7 +524,7 @@ impl ImageEmbedding {
             .unwrap_or("patch".to_string());
 
         Ok(Self {
-            wte: Embedding::new(wte.embeddings().to_dtype(DType::F32)?, wte.hidden_size()),
+            wte,
             image_dim_out,
             num_img_tokens,
             glb_gn,
@@ -542,7 +542,7 @@ impl ImageEmbedding {
     fn get_image_features(&self, pixel_values: &Tensor) -> Result<Tensor> {
         let hidden_states = self
             .image_processor
-            .forward_get_hidden_states(pixel_values)?;
+            .forward_get_hidden_states(&pixel_values.to_dtype(self.wte.embeddings().dtype())?)?;
         let img_feature =
             hidden_states[(hidden_states.len() as isize + self.layer_idx) as usize].clone();
         if self.type_feature == "patch" {
