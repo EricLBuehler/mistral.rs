@@ -327,17 +327,13 @@ pub(crate) fn get_chat_template(
         eos_token: Option<String>,
     }
 
-    if template.chat_template.is_some() {
-        return template;
-    };
-
-    info!("`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
-    let mut deser: HashMap<String, Value> =
-        serde_json::from_str(&fs::read_to_string(&template_filename).unwrap()).unwrap();
-
     match &template.chat_template {
         Some(_) => template,
         None => {
+            info!("`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
+            let mut deser: HashMap<String, Value> =
+                serde_json::from_str(&fs::read_to_string(&template_filename).unwrap()).unwrap();
+
             match chat_template.clone() {
                 Some(t) => {
                     if t.ends_with(".json") {
