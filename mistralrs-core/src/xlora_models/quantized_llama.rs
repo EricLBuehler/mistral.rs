@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use crate::lora::{
     get_lora_cfg, AdapterSwapper, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear,
 };
+use crate::utils::max_seq_len::get_gguf_max_seq_len;
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
@@ -486,9 +487,8 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
             .unwrap_or(10000f32);
         let head_dim = embedding_length / head_count;
 
-        let max_seq_len = md_get("llama.context_length")
-            .and_then(|m| m.to_u64())
-            .unwrap_or(MAX_SEQ_LEN as u64) as usize;
+        let max_seq_len =
+            get_gguf_max_seq_len(md_get("llama.context_length"), MAX_SEQ_LEN as u64) as usize;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
