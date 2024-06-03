@@ -10,6 +10,7 @@ use crate::layers::{
     repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention,
 };
 use crate::pipeline::{extract_logits, Cache};
+use crate::utils::max_seq_len::get_gguf_max_seq_len;
 use crate::utils::model_config as ModelConfig;
 use crate::DeviceMapMetadata;
 
@@ -288,9 +289,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
         // Strangely this value is generally 1e-6 in GGUF file but used to be 1e-5 by default.
         let rms_norm_eps = md_get("llama.attention.layer_norm_rms_epsilon")?.to_f32()?;
 
-        let max_seq_len = md_get("llama.context_length")
-            .and_then(|m| m.to_u64())
-            .unwrap_or(MAX_SEQ_LEN as u64) as usize;
+        let max_seq_len =
+            get_gguf_max_seq_len(md_get("llama.context_length"), MAX_SEQ_LEN as u64) as usize;
 
         let rope_freq_base = md_get("llama.rope.freq_base")
             .and_then(|m| m.to_f32())
