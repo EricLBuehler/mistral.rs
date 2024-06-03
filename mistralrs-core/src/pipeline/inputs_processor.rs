@@ -75,6 +75,8 @@ pub mod text_models_inputs_processor {
         for (seq, mut ctxt) in input_seqs.iter().zip(toks) {
             let offset = if let Some((_, offset)) = last_n_context_len {
                 offset
+            } else if let Some((_, x)) = &seq.cache()[0] {
+                x.dims()[2] + 1
             } else {
                 0
             };

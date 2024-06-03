@@ -274,8 +274,12 @@ impl Sequence {
         &self.completion_bytes
     }
 
-    pub fn cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
+    pub fn cache_mut(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
         &mut self.cache
+    }
+
+    pub fn cache(&self) -> &Vec<Option<(Tensor, Tensor)>> {
+        &self.cache
     }
 
     pub fn draft_cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {

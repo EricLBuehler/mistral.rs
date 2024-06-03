@@ -81,7 +81,7 @@ impl PrefixCacheManager {
         if self.no_prefix_cache {
             return;
         }
-        let cache = Arc::new(Mutex::new(seq.cache().clone()));
+        let cache = Arc::new(Mutex::new(seq.cache_mut().clone()));
         self.caches
             .insert(seq.get_toks().to_vec().into(), cache.clone());
         if seq.is_xlora() {
