@@ -539,12 +539,12 @@ impl ImageEmbedding {
         })
     }
 
-    fn get_image_features(&self, pixel_values: &Tensor) -> Result<Tensor> {
+    fn get_image_features(&self, pixel_values: &Tensor, dtype: DType) -> Result<Tensor> {
         let hidden_states = self
             .image_processor
             .forward_get_hidden_states(pixel_values)?;
-        let img_feature =
-            hidden_states[(hidden_states.len() as isize + self.layer_idx) as usize].clone();
+        let img_feature = hidden_states[(hidden_states.len() as isize + self.layer_idx) as usize]
+            .to_dtype(dtype)?;
         if self.type_feature == "patch" {
             img_feature.i((.., 1..))
         } else if self.type_feature == "cls_patch" {
@@ -581,7 +581,10 @@ impl ImageEmbedding {
             if self.use_hd_transform && image_sizes.is_some() {
                 assert_eq!(pixel_values.dims().len(), 5);
                 let bs = pixel_values.dim(0)?;
-                let img_features = self.get_image_features(&pixel_values.flatten(0, 1)?)?;
+                let img_features = self.get_image_features(
+                    &pixel_values.flatten(0, 1)?,
+                    self.wte.embeddings().dtype(),
+                )?;
                 let base_feat_dim = (img_features.dims()[1] as f32).sqrt() as usize;
                 assert_eq!(base_feat_dim, 24);
 
@@ -695,7 +698,7 @@ impl ImageEmbedding {
                 image_set_tensor = Some(Either::Left(image_set_tensor_inner));
             } else if pixel_values.dims().len() == 4 {
                 let tt = self
-                    .get_image_features(pixel_values)?
+                    .get_image_features(pixel_values, self.wte.embeddings().dtype())?
                     .to_device(target_dev)?
                     .to_dtype(target_dtype)?
                     .reshape(((), self.image_dim_out))?;
@@ -853,11 +856,8 @@ impl Model {
         image_sizes: Option<Vec<(usize, usize)>>,
     ) -> Result<Tensor> {
         let mut xs = if let Some(ref pixel_values) = pixel_values {
-            self.vision_embed_tokens.forward(
-                input_ids,
-                &pixel_values.to_dtype(self.embed_tokens.embeddings().dtype())?,
-                image_sizes,
-            )?
+            self.vision_embed_tokens
+                .forward(input_ids, pixel_values, image_sizes)?
         } else {
             self.embed_tokens.forward(input_ids)?
         };

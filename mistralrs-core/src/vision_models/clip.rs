@@ -302,6 +302,7 @@ impl ClipVisionTransformer {
     /// Create a CLIP vision transformer model. Expects the vb to point to the root (not model)
     /// where (for example) `.pp("embeddings")` is valid.
     pub fn new(vb: candle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
+        let vb = vb.set_dtype(DType::F32);
         let embeddings = ClipVisionEmbeddings::new(vb.pp("embeddings"), c)?;
         let pre_layer_norm = candle_nn::layer_norm(c.hidden_size, 1e-5, vb.pp("pre_layrnorm"))?;
         let encoder = ClipEncoder::new(vb.pp("encoder"), c)?;
