@@ -1,3 +1,4 @@
+pub(crate) mod max_seq_len;
 pub(crate) mod model_config;
 pub(crate) mod tokenizer;
 pub(crate) mod tokens;
