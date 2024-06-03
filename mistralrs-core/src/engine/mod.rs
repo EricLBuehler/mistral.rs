@@ -513,6 +513,7 @@ impl Engine {
                 }
             };
 
+            let initial_prompt = prompt.clone();
             let (prefill, prompt) = if let Some(prefill_cache) = prefill_cache.clone() {
                 (
                     Some((
@@ -546,7 +547,7 @@ impl Engine {
                     Some(
                         get_mut_arcmutex!(self.pipeline)
                             .tokenizer()
-                            .decode(&prompt, false)
+                            .decode(&initial_prompt, false)
                             .expect("cannot decode completion tokens"),
                     )
                 } else {
