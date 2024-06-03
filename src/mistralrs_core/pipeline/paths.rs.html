@@ -689,13 +689,13 @@
         eos_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
     }
 
-    <span class="macro">info!</span>(<span class="string">"`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template."</span>);
-    <span class="kw">let </span><span class="kw-2">mut </span>deser: HashMap&lt;String, Value&gt; =
-        serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(<span class="kw-2">&amp;</span>template_filename).unwrap()).unwrap();
-
     <span class="kw">match </span><span class="kw-2">&amp;</span>template.chat_template {
         <span class="prelude-val">Some</span>(<span class="kw">_</span>) =&gt; template,
         <span class="prelude-val">None </span>=&gt; {
+            <span class="macro">info!</span>(<span class="string">"`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template."</span>);
+            <span class="kw">let </span><span class="kw-2">mut </span>deser: HashMap&lt;String, Value&gt; =
+                serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(<span class="kw-2">&amp;</span>template_filename).unwrap()).unwrap();
+
             <span class="kw">match </span>chat_template.clone() {
                 <span class="prelude-val">Some</span>(t) =&gt; {
                     <span class="kw">if </span>t.ends_with(<span class="string">".json"</span>) {
