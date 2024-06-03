@@ -540,7 +540,7 @@ impl ImageEmbedding {
     }
 
     fn get_image_features(&self, pixel_values: &Tensor) -> Result<Tensor> {
-        let (_, hidden_states) = self
+        let hidden_states = self
             .image_processor
             .forward_get_hidden_states(pixel_values)?;
         let img_feature =
