@@ -451,6 +451,7 @@
     repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention,
 };
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, Cache};
+<span class="kw">use </span><span class="kw">crate</span>::utils::max_seq_len::get_gguf_max_seq_len;
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
 
@@ -729,9 +730,8 @@
         <span class="comment">// Strangely this value is generally 1e-6 in GGUF file but used to be 1e-5 by default.
         </span><span class="kw">let </span>rms_norm_eps = md_get(<span class="string">"llama.attention.layer_norm_rms_epsilon"</span>)<span class="question-mark">?</span>.to_f32()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>max_seq_len = md_get(<span class="string">"llama.context_length"</span>)
-            .and_then(|m| m.to_u64())
-            .unwrap_or(MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize;
+        <span class="kw">let </span>max_seq_len =
+            get_gguf_max_seq_len(md_get(<span class="string">"llama.context_length"</span>), MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize;
 
         <span class="kw">let </span>rope_freq_base = md_get(<span class="string">"llama.rope.freq_base"</span>)
             .and_then(|m| m.to_f32())

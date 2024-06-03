@@ -251,6 +251,7 @@
 <a href="#249" id="249">249</a>
 <a href="#250" id="250">250</a>
 <a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::quantized::gguf_file;
@@ -262,6 +263,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::layers::ScaledDotProductAttention;
 <span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, CausalMasker, QLinear};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, Cache};
+<span class="kw">use </span><span class="kw">crate</span>::utils::max_seq_len::get_gguf_max_seq_len;
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
 
@@ -414,9 +416,9 @@
         <span class="kw">let </span>embedding_length = md_get(<span class="string">"phi2.embedding_length"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
         <span class="kw">let </span>rope_dim = md_get(<span class="string">"phi2.rope.dimension_count"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
         <span class="kw">let </span>ln_eps = md_get(<span class="string">"phi2.attention.layer_norm_epsilon"</span>)<span class="question-mark">?</span>.to_f32()<span class="question-mark">? </span><span class="kw">as </span>f64;
-        <span class="kw">let </span>max_seq_len = md_get(<span class="string">"phi2.context_length"</span>)
-            .and_then(|m| m.to_u64())
-            .unwrap_or(MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize;
+        <span class="kw">let </span>max_seq_len =
+            get_gguf_max_seq_len(md_get(<span class="string">"phi2.context_length"</span>), MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize;
+
         <span class="kw">let </span>(cos, sin) = precomput_freqs_cis(rope_dim, <span class="number">10_000.</span>, device, max_seq_len)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>tok_embeddings = ct.tensor(reader, <span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;

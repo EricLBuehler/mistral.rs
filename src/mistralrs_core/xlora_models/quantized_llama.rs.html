@@ -944,6 +944,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::lora::{
     get_lora_cfg, AdapterSwapper, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear,
 };
+<span class="kw">use </span><span class="kw">crate</span>::utils::max_seq_len::get_gguf_max_seq_len;
 <span class="kw">use </span>candle_core::quantized::QMatMul;
 <span class="kw">use </span>candle_core::quantized::{ggml_file, gguf_file};
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
@@ -1425,9 +1426,8 @@
             .unwrap_or(<span class="number">10000f32</span>);
         <span class="kw">let </span>head_dim = embedding_length / head_count;
 
-        <span class="kw">let </span>max_seq_len = md_get(<span class="string">"llama.context_length"</span>)
-            .and_then(|m| m.to_u64())
-            .unwrap_or(MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize;
+        <span class="kw">let </span>max_seq_len =
+            get_gguf_max_seq_len(md_get(<span class="string">"llama.context_length"</span>), MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize;
 
         <span class="kw">let </span>tok_embeddings = ct.tensor(reader, <span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(device)<span class="question-mark">?</span>;
