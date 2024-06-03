@@ -12,7 +12,7 @@ fn normalize() {
             std: vec![0.5, 0.5, 0.5],
         }],
     };
-    let transformed = (&image).apply(transforms, &Device::Cpu).unwrap();
+    let transformed = image.apply(transforms, &Device::Cpu).unwrap();
     assert_eq!(transformed.dims(), &[3, 4, 3]);
 }
 
@@ -30,6 +30,6 @@ fn normalize_and_resize() {
             std: vec![0.5, 0.5, 0.5],
         }],
     };
-    let transformed = (&image).apply(transforms, &Device::Cpu).unwrap();
+    let transformed = image.apply(transforms, &Device::Cpu).unwrap();
     assert_eq!(transformed.dims(), &[3, 300, 300]);
 }

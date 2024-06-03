@@ -581,8 +581,7 @@ impl ImageEmbedding {
             if self.use_hd_transform && image_sizes.is_some() {
                 assert_eq!(pixel_values.dims().len(), 5);
                 let bs = pixel_values.dim(0)?;
-                let img_features =
-                    self.get_image_features(&pixel_values.flatten(0, 1)?.to_dtype(DType::BF16)?)?;
+                let img_features = self.get_image_features(&pixel_values.flatten(0, 1)?)?;
                 let base_feat_dim = (img_features.dims()[1] as f32).sqrt() as usize;
                 assert_eq!(base_feat_dim, 24);
 
