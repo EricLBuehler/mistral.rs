@@ -259,6 +259,10 @@ impl Sequence {
         &self.tokens
     }
 
+    pub(crate) fn set_toks(&mut self, toks: Vec<u32>) {
+        self.tokens = toks;
+    }
+
     pub fn completion_bytes(&self) -> &[u8] {
         &self.completion_bytes
     }

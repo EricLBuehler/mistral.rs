@@ -164,7 +164,7 @@ impl InputsProcessor for Phi3InputsProcessor {
             .map_err(anyhow::Error::msg)?;
 
         let num_img_tokens = num_img_tokens.unwrap();
-        for detokenized in detokenized.into_iter() {
+        for (detokenized, seq) in detokenized.into_iter().zip(input_seqs.iter_mut()) {
             let splits = self
                 .image_tag_splitter
                 .split(&detokenized)
@@ -228,6 +228,10 @@ impl InputsProcessor for Phi3InputsProcessor {
             {
                 input_ids.extend(item);
             }
+
+            // NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
+            seq.set_toks(input_ids.iter().map(|x| *x as u32).collect::<Vec<_>>());
+
             toks.push(input_ids);
         }
 
