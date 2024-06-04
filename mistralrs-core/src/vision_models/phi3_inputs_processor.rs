@@ -230,7 +230,12 @@ impl InputsProcessor for Phi3InputsProcessor {
             }
 
             // NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
-            seq.set_toks(input_ids.iter().map(|x| *x as u32).collect::<Vec<_>>());
+            seq.set_toks(
+                input_ids
+                    .iter()
+                    .map(|x| if *x < 0 { 0u32 } else { *x as u32 })
+                    .collect::<Vec<_>>(),
+            );
 
             toks.push(input_ids);
         }
