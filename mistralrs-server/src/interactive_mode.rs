@@ -24,7 +24,7 @@ static CTRLC_HANDLER: Lazy<Mutex<&'static (dyn Fn() + Sync)>> =
     Lazy::new(|| Mutex::new(&exit_handler));
 
 pub async fn interactive_mode(mistralrs: Arc<MistralRs>) {
-    let sender = mistralrs.get_sender();
+    let sender = mistralrs.get_sender().unwrap();
     let mut messages: Vec<IndexMap<String, Content>> = Vec::new();
 
     let sampling_params = SamplingParams {

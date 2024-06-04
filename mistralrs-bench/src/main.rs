@@ -63,7 +63,7 @@ fn run_bench(
         logits_bias: None,
         n_choices: 1,
     };
-    let sender = mistralrs.get_sender();
+    let sender = mistralrs.get_sender().unwrap();
     let (tx, mut rx) = channel(10_000);
 
     let req = Request::Normal(NormalRequest {
@@ -221,7 +221,7 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         logits_bias: None,
         n_choices: 1,
     };
-    let sender = mistralrs.get_sender();
+    let sender = mistralrs.get_sender().unwrap();
     let (tx, mut rx) = channel(10_000);
 
     let req = Request::Normal(NormalRequest {

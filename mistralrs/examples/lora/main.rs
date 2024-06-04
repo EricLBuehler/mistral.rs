@@ -62,9 +62,9 @@ fn main() -> anyhow::Result<()> {
 
     // Example: Make adapter_3 the active adapter
     mistralrs
-        .get_sender()
+        .get_sender()?
         .blocking_send(Request::ActivateAdapters(vec!["adapter_3".to_string()]))?;
-    mistralrs.get_sender().blocking_send(request)?;
+    mistralrs.get_sender()?.blocking_send(request)?;
 
     let response = rx.blocking_recv().unwrap();
     match response {

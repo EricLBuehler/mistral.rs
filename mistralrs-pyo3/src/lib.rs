@@ -515,7 +515,7 @@ impl Runner {
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
-            let sender = self.runner.get_sender();
+            let sender = self.runner.get_sender()?;
             sender.blocking_send(model_request).unwrap();
 
             if request.stream {
@@ -604,7 +604,7 @@ impl Runner {
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
-            let sender = self.runner.get_sender();
+            let sender = self.runner.get_sender()?;
             sender.blocking_send(model_request).unwrap();
             let response = rx.blocking_recv().unwrap();
 
@@ -628,14 +628,18 @@ impl Runner {
     fn send_re_isq(&self, dtype: String) -> PyResult<()> {
         let request =
             _Request::ReIsq(parse_isq(&dtype).map_err(|e| PyValueError::new_err(e.to_string()))?);
-        self.runner.get_sender().blocking_send(request).unwrap();
+        self.runner.get_sender()?.blocking_send(request).unwrap();
         Ok(())
     }
 
     /// Send a request to make the specified adapters the active adapters for the model.
     fn activate_adapters(&self, adapter_names: Vec<String>) {
         let request = _Request::ActivateAdapters(adapter_names);
-        self.runner.get_sender().blocking_send(request).unwrap();
+        self.runner
+            .get_sender()
+            .unwrap()
+            .blocking_send(request)
+            .unwrap();
     }
 }
 

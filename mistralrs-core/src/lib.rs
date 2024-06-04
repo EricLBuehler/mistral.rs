@@ -10,7 +10,7 @@ use std::{
     error::Error,
     fs::OpenOptions,
     io::Write,
-    sync::{atomic::AtomicBool, Arc, Mutex},
+    sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -66,11 +66,23 @@ pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
 /// `Sender` and `Receiver` primitives to send and receive requests to the
 /// engine.
 pub struct MistralRs {
-    sender: Sender<Request>,
+    sender: RwLock<Sender<Request>>,
     log: Option<String>,
     id: String,
     creation_time: u64,
     next_request_id: Mutex<RefCell<usize>>,
+    reboot_state: RebootState,
+}
+
+#[derive(Clone)]
+struct RebootState {
+    pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
+    method: SchedulerMethod,
+    truncate_sequence: bool,
+    no_kv_cache: bool,
+    no_prefix_cache: bool,
+    prefix_cache_n: usize,
+    disable_eos_stop: bool,
 }
 
 /// The MistralRsBuilder takes the pipeline and a scheduler method and constructs
@@ -202,10 +214,22 @@ impl MistralRs {
         let prefix_cache_n = prefix_cache_n.unwrap_or(16);
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
 
+        let reboot_state = RebootState {
+            pipeline: pipeline.clone(),
+            method: method.clone(),
+            truncate_sequence,
+            no_kv_cache,
+            no_prefix_cache,
+            prefix_cache_n,
+            disable_eos_stop,
+        };
+
         let (tx, rx) = channel(10_000);
 
+        let sender = RwLock::new(tx);
+
         let this = Arc::new(Self {
-            sender: tx,
+            sender,
             log,
             id: pipeline.try_lock().unwrap().name(),
             creation_time: SystemTime::now()
@@ -213,6 +237,7 @@ impl MistralRs {
                 .expect("Time travel has occurred!")
                 .as_secs(),
             next_request_id: Mutex::new(RefCell::new(0)),
+            reboot_state,
         });
         thread::spawn(move || {
             let rt = Runtime::new().unwrap();
@@ -234,8 +259,66 @@ impl MistralRs {
         this
     }
 
-    pub fn get_sender(&self) -> Sender<Request> {
-        self.sender.clone()
+    /// attempts to reboot the engine, if the sender (only way to communicate with
+    /// the engine) is closed
+    /// TODO: GS don't use anyhow for these errors?
+    pub fn reboot_engine(&self) -> anyhow::Result<()> {
+        tracing::info!("attempting to reboot");
+        // only start a new runtime if the reciever was closed. this implies
+        // that it was dropped, and therefore the tokio runtime is down.
+        if self.get_sender()?.is_closed() {
+            tracing::info!("sender is closed, rebooting");
+            let (tx, rx) = channel(10_000);
+            self.update_sender(tx)?;
+
+            let reboot_state = self.reboot_state.clone();
+
+            thread::spawn(move || {
+                let rt = Runtime::new().unwrap();
+                rt.block_on(async move {
+                    let mut engine = Engine::new(
+                        rx,
+                        reboot_state.pipeline.clone(),
+                        reboot_state.method,
+                        reboot_state.truncate_sequence,
+                        reboot_state.no_kv_cache,
+                        reboot_state.no_prefix_cache,
+                        reboot_state.prefix_cache_n,
+                        reboot_state.disable_eos_stop,
+                    );
+                    engine.run().await;
+                });
+            });
+            Ok(())
+        } else {
+            Err(anyhow::Error::msg("Did not reboot, sender not closed"))
+        }
+    }
+
+    /// TODO: GS don't use anyhow for these errors?
+    fn update_sender(&self, new_sender: Sender<Request>) -> anyhow::Result<()> {
+        tracing::info!("Trying to update sender");
+
+        match self.sender.write() {
+            Ok(mut sender) => {
+                *sender = new_sender;
+                Ok(())
+            }
+            Err(err) => Err(anyhow::Error::msg(format!(
+                "Couldn't update sender, {}",
+                err.to_string(),
+            ))),
+        }
+    }
+
+    pub fn get_sender(&self) -> anyhow::Result<Sender<Request>> {
+        match self.sender.read() {
+            Ok(sender) => Ok(sender.clone()),
+            Err(err) => {
+                let err_msg = format!("could not get sender read lock: {}", err.to_string());
+                Err(anyhow::Error::msg(err_msg))
+            }
+        }
     }
 
     pub fn get_id(&self) -> String {
