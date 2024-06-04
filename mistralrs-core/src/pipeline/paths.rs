@@ -2,7 +2,6 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    str::FromStr,
 };
 
 use anyhow::Result;
@@ -251,14 +250,16 @@ pub fn get_model_paths(
     revision: String,
     token_source: &TokenSource,
     quantized_model_id: &Option<String>,
-    quantized_filename: &Option<String>,
+    quantized_filename: &Option<Vec<String>>,
     api: &ApiRepo,
     model_id: &Path,
 ) -> Result<Vec<PathBuf>> {
     match &quantized_filename {
-        Some(name) => match quantized_model_id.as_ref().unwrap().as_str() {
-            "" => Ok(vec![PathBuf::from_str(name).unwrap()]),
-            id => {
+        Some(names) => {
+            let id = quantized_model_id.as_ref().unwrap();
+            let mut files = Vec::new();
+
+            for name in names {
                 let qapi = ApiBuilder::new()
                     .with_progress(true)
                     .with_token(get_token(token_source)?)
@@ -269,9 +270,10 @@ pub fn get_model_paths(
                     revision.clone(),
                 ));
                 let model_id = Path::new(&id);
-                Ok(vec![api_get_file!(qapi, name, model_id)])
+                files.push(api_get_file!(qapi, name, model_id));
             }
-        },
+            Ok(files)
+        }
         None => {
             let mut filenames = vec![];
             for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {

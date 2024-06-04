@@ -71,7 +71,7 @@ pub struct GGUFLoader {
     model_id: Option<String>,
     config: GGUFSpecificConfig,
     quantized_model_id: String,
-    quantized_filename: String,
+    quantized_filename: Vec<String>,
     xlora_model_id: Option<String>,
     xlora_order: Option<Ordering>,
     no_kv_cache: bool,
@@ -120,7 +120,7 @@ pub struct GGUFLoaderBuilder {
     model_id: Option<String>,
     config: GGUFSpecificConfig,
     quantized_model_id: String,
-    quantized_filename: String,
+    quantized_filename: Vec<String>,
     xlora_model_id: Option<String>,
     kind: ModelKind,
     xlora_order: Option<Ordering>,
@@ -138,7 +138,7 @@ impl GGUFLoaderBuilder {
         chat_template: Option<String>,
         tok_model_id: Option<String>,
         quantized_model_id: String,
-        quantized_filename: String,
+        quantized_filename: Vec<String>,
     ) -> Self {
         let kind = ModelKind::Quantized {
             quant: QuantizationKind::Gguf,
@@ -223,7 +223,7 @@ impl GGUFLoader {
         model_id: Option<String>,
         config: GGUFSpecificConfig,
         quantized_model_id: String,
-        quantized_filename: String,
+        quantized_filename: Vec<String>,
         xlora_model_id: Option<String>,
         kind: ModelKind,
         xlora_order: Option<Ordering>,
@@ -324,7 +324,7 @@ impl Loader for GGUFLoader {
         let content = Content::from_readers(&mut files)?;
         let arch = content.arch();
 
-        // Set bos/eos/unk to None to avoid the G
+        // Set bos/eos/unk to None to avoid the overrride
         let GgufTokenizerConversion {
             tokenizer,
             bos,

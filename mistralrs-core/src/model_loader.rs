@@ -6,6 +6,7 @@ use crate::{
         NormalSpecificConfig,
     },
     Loader, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector,
+    GGUF_MULTI_FILE_DELIMITER,
 };
 
 pub struct LoaderBuilder {
@@ -158,7 +159,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
         )
         .build(),
         ModelSelected::XLoraGGUF {
@@ -174,7 +178,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
         )
         .with_xlora(
             xlora_model_id,
@@ -198,7 +205,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
         )
         .with_lora(
             adapters_model_id,
