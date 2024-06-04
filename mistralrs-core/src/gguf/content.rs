@@ -63,7 +63,7 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
             candle_core::bail!("Multiple contents have multiple `split.count` fields");
         }
         #[allow(clippy::cast_possible_truncation)]
-        if n_readers != n_splits[0] as usize {
+        if !n_splits.is_empty() && n_readers != n_splits[0] as usize {
             candle_core::bail!("Number of readers does not match the number of splits.");
         }
 
