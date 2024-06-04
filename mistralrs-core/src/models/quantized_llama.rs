@@ -1,16 +1,16 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use candle_core::quantized::ggml_file;
 use candle_core::quantized::QMatMul;
-use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 
 use crate::device_map::DeviceMapper;
+use crate::gguf::Content;
 use crate::layers::{
     repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention,
 };
 use crate::pipeline::{extract_logits, Cache};
-use crate::utils::max_seq_len::get_gguf_max_seq_len;
 use crate::utils::model_config as ModelConfig;
 use crate::DeviceMapMetadata;
 
@@ -260,49 +260,50 @@ impl ModelConfig::FromGGML for ModelWeights {
 
 impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
-        ct: gguf_file::Content,
-        reader: &mut R,
+        mut ct: Content<'_, R>,
         device: &Device,
         mapper: DeviceMapMetadata,
     ) -> Result<Self> {
-        let md_get = |s: &str| match ct.metadata.get(s) {
-            None => candle_core::bail!("cannot find {s} in metadata"),
-            Some(v) => Ok(v),
-        };
         verify_sanity_gguf(
-            md_get("general.architecture")?.to_string().unwrap(),
+            ct.get_metadata("general.architecture")?
+                .to_string()
+                .unwrap(),
             "llama",
         )?;
 
         // Parameter extraction from metadata.
-        let n_expert = md_get("llama.expert_count")
+        let n_expert = ct
+            .get_metadata("llama.expert_count")
             .and_then(|v| v.to_u32())
             .unwrap_or(0) as usize;
-        let n_expert_used = md_get("llama.expert_used_count")
+        let n_expert_used = ct
+            .get_metadata("llama.expert_used_count")
             .and_then(|v| v.to_u32())
             .unwrap_or(0) as usize;
-        let head_count = md_get("llama.attention.head_count")?.to_u32()? as usize;
-        let head_count_kv = md_get("llama.attention.head_count_kv")?.to_u32()? as usize;
-        let block_count = md_get("llama.block_count")?.to_u32()? as usize;
-        let embedding_length = md_get("llama.embedding_length")?.to_u32()? as usize;
-        let rope_dim = md_get("llama.rope.dimension_count")?.to_u32()? as usize;
+        let head_count = ct.get_metadata("llama.attention.head_count")?.to_u32()? as usize;
+        let head_count_kv = ct.get_metadata("llama.attention.head_count_kv")?.to_u32()? as usize;
+        let block_count = ct.get_metadata("llama.block_count")?.to_u32()? as usize;
+        let embedding_length = ct.get_metadata("llama.embedding_length")?.to_u32()? as usize;
+        let rope_dim = ct.get_metadata("llama.rope.dimension_count")?.to_u32()? as usize;
         // Strangely this value is generally 1e-6 in GGUF file but used to be 1e-5 by default.
-        let rms_norm_eps = md_get("llama.attention.layer_norm_rms_epsilon")?.to_f32()?;
+        let rms_norm_eps = ct
+            .get_metadata("llama.attention.layer_norm_rms_epsilon")?
+            .to_f32()?;
 
-        let max_seq_len =
-            get_gguf_max_seq_len(md_get("llama.context_length"), MAX_SEQ_LEN as u64) as usize;
+        let max_seq_len = ct
+            .get_metadata("llama.context_length")?
+            .to_u64()
+            .unwrap_or(MAX_SEQ_LEN as u64) as usize;
 
-        let rope_freq_base = md_get("llama.rope.freq_base")
+        let rope_freq_base = ct
+            .get_metadata("llama.rope.freq_base")
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
         let head_dim = embedding_length / head_count;
-        let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
+        let tok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
-        let norm = QRmsNorm::new(
-            ct.tensor(reader, "output_norm.weight", device)?,
-            rms_norm_eps,
-        )?;
-        let output = ct.tensor(reader, "output.weight", device)?;
+        let norm = QRmsNorm::new(ct.tensor("output_norm.weight", device)?, rms_norm_eps)?;
+        let output = ct.tensor("output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
         let mapper = mapper.into_mapper(block_count, device)?;
         for layer_idx in 0..block_count {
@@ -318,18 +319,14 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 DType::F32,
             )?;
 
-            let attention_wq = ct.tensor(reader, &format!("{prefix}.attn_q.weight"), device)?;
-            let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"), device)?;
-            let attention_wv = ct.tensor(reader, &format!("{prefix}.attn_v.weight"), device)?;
-            let attention_wo =
-                ct.tensor(reader, &format!("{prefix}.attn_output.weight"), device)?;
+            let attention_wq = ct.tensor(&format!("{prefix}.attn_q.weight"), device)?;
+            let attention_wk = ct.tensor(&format!("{prefix}.attn_k.weight"), device)?;
+            let attention_wv = ct.tensor(&format!("{prefix}.attn_v.weight"), device)?;
+            let attention_wo = ct.tensor(&format!("{prefix}.attn_output.weight"), device)?;
             let mlp_or_moe = if n_expert <= 1 {
-                let feed_forward_w1 =
-                    ct.tensor(reader, &format!("{prefix}.ffn_gate.weight"), device)?;
-                let feed_forward_w2 =
-                    ct.tensor(reader, &format!("{prefix}.ffn_down.weight"), device)?;
-                let feed_forward_w3 =
-                    ct.tensor(reader, &format!("{prefix}.ffn_up.weight"), device)?;
+                let feed_forward_w1 = ct.tensor(&format!("{prefix}.ffn_gate.weight"), device)?;
+                let feed_forward_w2 = ct.tensor(&format!("{prefix}.ffn_down.weight"), device)?;
+                let feed_forward_w3 = ct.tensor(&format!("{prefix}.ffn_up.weight"), device)?;
                 MlpOrMoe::Mlp(Mlp {
                     feed_forward_w1: QMatMul::from_qtensor(feed_forward_w1)?,
                     feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2)?,
@@ -337,15 +334,15 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 })
             } else {
                 let feed_forward_gate_inp =
-                    ct.tensor(reader, &format!("{prefix}.ffn_gate_inp.weight"), device)?;
+                    ct.tensor(&format!("{prefix}.ffn_gate_inp.weight"), device)?;
                 let mut experts = Vec::with_capacity(n_expert);
                 for i in 0..n_expert {
                     let feed_forward_w1 =
-                        ct.tensor(reader, &format!("{prefix}.ffn_gate.{i}.weight"), device)?;
+                        ct.tensor(&format!("{prefix}.ffn_gate.{i}.weight"), device)?;
                     let feed_forward_w2 =
-                        ct.tensor(reader, &format!("{prefix}.ffn_down.{i}.weight"), device)?;
+                        ct.tensor(&format!("{prefix}.ffn_down.{i}.weight"), device)?;
                     let feed_forward_w3 =
-                        ct.tensor(reader, &format!("{prefix}.ffn_up.{i}.weight"), device)?;
+                        ct.tensor(&format!("{prefix}.ffn_up.{i}.weight"), device)?;
                     experts.push(Mlp {
                         feed_forward_w1: QMatMul::from_qtensor(feed_forward_w1)?,
                         feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2)?,
@@ -358,9 +355,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     experts,
                 }
             };
-            let attention_norm =
-                ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?;
-            let ffn_norm = ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?;
+            let attention_norm = ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?;
+            let ffn_norm = ct.tensor(&format!("{prefix}.ffn_norm.weight"), device)?;
             layers.push(LayerWeights {
                 attention_wq: QMatMul::from_qtensor(attention_wq)?,
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,

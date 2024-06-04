@@ -10,6 +10,7 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
+use crate::gguf::Content;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
 use crate::pipeline::{get_chat_template, Cache};
@@ -30,10 +31,7 @@ use crate::{
 };
 use crate::{do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, Pipeline, DEBUG};
 use anyhow::{bail, Context, Result};
-use candle_core::quantized::{
-    gguf_file::{self, Value as GgufValue},
-    GgmlDType,
-};
+use candle_core::quantized::GgmlDType;
 use candle_core::{DType, Device, Tensor};
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -82,9 +80,9 @@ pub struct GGUFLoader {
     tgt_non_granular_index: Option<usize>,
 }
 
-#[derive(Debug, EnumString)]
+#[derive(Copy, Clone, Debug, EnumString)]
 #[strum(serialize_all = "kebab-case")]
-enum GGUFArchitecture {
+pub enum GGUFArchitecture {
     Llama,
     Mpt,
     Gptneox,
@@ -102,7 +100,8 @@ enum GGUFArchitecture {
 // - Case-insensitive variant matching (TODO: is this desirable?)
 // - Customized error until potential upstream support: https://github.com/Peternator7/strum/issues/332
 impl GGUFArchitecture {
-    fn from_value<T: AsRef<str> + std::fmt::Display>(value: T) -> Result<Self> {
+    /// GGUF architecture from a kebab-case representation.
+    pub fn from_value<T: AsRef<str> + std::fmt::Display>(value: T) -> Result<Self> {
         Self::from_str(&value.as_ref().to_ascii_lowercase())
             .with_context(|| format!("Unknown GGUF architecture `{value}`"))
             .map_err(anyhow::Error::msg)
@@ -258,28 +257,6 @@ impl GGUFLoader {
     }
 }
 
-fn parse_gguf_value(value: &GgufValue) -> String {
-    match value {
-        GgufValue::Array(vs) => vs
-            .iter()
-            .map(parse_gguf_value)
-            .collect::<Vec<String>>()
-            .join(", "),
-        GgufValue::Bool(b) => b.to_string(),
-        GgufValue::F32(x) => x.to_string(),
-        GgufValue::F64(x) => x.to_string(),
-        GgufValue::I8(x) => x.to_string(),
-        GgufValue::I16(x) => x.to_string(),
-        GgufValue::I32(x) => x.to_string(),
-        GgufValue::I64(x) => x.to_string(),
-        GgufValue::String(x) => x.to_string(),
-        GgufValue::U8(x) => x.to_string(),
-        GgufValue::U16(x) => x.to_string(),
-        GgufValue::U32(x) => x.to_string(),
-        GgufValue::U64(x) => x.to_string(),
-    }
-}
-
 impl Loader for GGUFLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_hf(
@@ -338,40 +315,14 @@ impl Loader for GGUFLoader {
             info!("Loading model `{}` on {device:?}...", self.get_id());
         }
 
-        let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
-        let model = gguf_file::Content::read(&mut file)
-            .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
-        let arch = model.metadata["general.architecture"]
-            .to_string()
-            .context("Model metadata should have declared an architecture")
-            .and_then(GGUFArchitecture::from_value)?;
-
-        info!("Model config:");
-        let mut sorted_keys = model.metadata.keys().collect::<Vec<_>>();
-        sorted_keys.sort();
-        for name in sorted_keys {
-            if !name.contains("tokenizer") {
-                let value = parse_gguf_value(&model.metadata[name]);
-                println!("{name}: {}", value);
-            }
+        let mut files = Vec::new();
+        for weight_filename in paths.get_weight_filenames() {
+            files.push(std::fs::File::open(weight_filename)?);
         }
+        let mut files = files.iter_mut().collect::<Vec<_>>();
 
-        if DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
-            let mut tensors = Vec::new();
-            for (name, info) in &model.tensor_infos {
-                tensors.push(format!(
-                    "name = `{name}`, shape = {:?}, dtype = {:?}",
-                    info.shape.clone(),
-                    info.ggml_dtype
-                ));
-            }
-            fs::write(
-                "mistralrs_gguf_tensors.txt",
-                serde_json::to_string_pretty(&tensors).expect("Serialization failed."),
-            )?;
-
-            info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_gguf_tensors.txt`.");
-        }
+        let content = Content::from_readers(&mut files)?;
+        let arch = content.arch();
 
         // Set bos/eos/unk to None to avoid the G
         let GgufTokenizerConversion {
@@ -380,7 +331,7 @@ impl Loader for GGUFLoader {
             eos,
             unk,
         } = if paths.get_tokenizer_filename().to_string_lossy().is_empty() {
-            convert_gguf_to_hf_tokenizer(&model)?
+            convert_gguf_to_hf_tokenizer(&content)?
         } else {
             GgufTokenizerConversion {
                 tokenizer: get_tokenizer(paths.get_tokenizer_filename(), None)?,
@@ -395,7 +346,7 @@ impl Loader for GGUFLoader {
 
         let model_config = {
             // Base config (quantization only):
-            let quant = ModelConfig::ParamsGGUF((model, &mut file).into(), (device, mapper).into());
+            let quant = ModelConfig::ParamsGGUF(content, (device, mapper).into());
 
             // With optional adapter config:
             let mut adapter = None;

@@ -26,7 +26,7 @@ mod model_selected;
 pub use model_selected::ModelSelected;
 
 mod cublaslt;
-mod gguf;
+pub mod gguf;
 pub mod layers;
 mod layers_masker;
 mod layers_utils;
@@ -45,10 +45,10 @@ mod xlora_models;
 pub use device_map::{DeviceMapMetadata, LayerDeviceMapper};
 pub use gguf::{convert_gguf_to_hf_tokenizer, GgufTokenizerConversion};
 pub use pipeline::{
-    GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder,
-    GGUFSpecificConfig, GemmaLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader,
-    MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, Phi2Loader, Phi3Loader, Qwen2Loader, SpeculativeConfig,
+    GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFArchitecture, GGUFLoader,
+    GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader, LlamaLoader, Loader, LocalModelPaths,
+    MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder,
+    NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Qwen2Loader, SpeculativeConfig,
     SpeculativeLoader, SpeculativePipeline, TokenSource,
 };
 pub use request::{Constraint, Content, NormalRequest, Request, RequestMessage};

@@ -1,7 +1,6 @@
 use std::sync::atomic::Ordering;
 
 use anyhow::Result;
-use candle_core::quantized::gguf_file::Content;
 use tokenizers::{
     decoders::{self, byte_fallback::ByteFallback, fuse::Fuse, strip::Strip},
     models::unigram::Unigram,
@@ -12,6 +11,8 @@ use tracing::info;
 
 use crate::DEBUG;
 
+use super::Content;
+
 pub struct GgufTokenizerConversion {
     pub tokenizer: Tokenizer,
     pub bos: Option<String>,
@@ -20,20 +21,23 @@ pub struct GgufTokenizerConversion {
 }
 
 // Convert GGUF tokenizer to tokenizer and metadata
-pub fn convert_gguf_to_hf_tokenizer(content: &Content) -> Result<GgufTokenizerConversion> {
-    let model = content.metadata["tokenizer.ggml.model"]
+pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
+    content: &Content<'_, R>,
+) -> Result<GgufTokenizerConversion> {
+    let model = content
+        .get_metadata("tokenizer.ggml.model")?
         .to_string()
         .expect("GGUF tokenizer model is not a string.")
         .clone();
-    let tokens = content.metadata["tokenizer.ggml.tokens"]
+    let tokens = content
+        .get_metadata("tokenizer.ggml.tokens")?
         .to_vec()
         .expect("GGUF tokenizer tokens is not a vec.")
         .iter()
         .map(|t| t.to_string().expect("GGUF token is not a string.").clone())
         .collect::<Vec<_>>();
     let added_tokens = content
-        .metadata
-        .get("tokenizer.ggml.added_tokens")
+        .get_metadata("tokenizer.ggml.added_tokens")
         .map(|items| {
             items
                 .to_vec()
@@ -46,7 +50,7 @@ pub fn convert_gguf_to_hf_tokenizer(content: &Content) -> Result<GgufTokenizerCo
                 })
                 .collect::<Vec<_>>()
         });
-    let scores = content.metadata.get("tokenizer.ggml.scores").map(|items| {
+    let scores = content.get_metadata("tokenizer.ggml.scores").map(|items| {
         items
             .to_vec()
             .expect("GGUF tokenizer scores is not a vec.")
@@ -54,7 +58,7 @@ pub fn convert_gguf_to_hf_tokenizer(content: &Content) -> Result<GgufTokenizerCo
             .map(|t| t.to_f32().expect("GGUF score is not a f32."))
             .collect::<Vec<_>>()
     });
-    let merges = content.metadata.get("tokenizer.ggml.merges").map(|items| {
+    let merges = content.get_metadata("tokenizer.ggml.merges").map(|items| {
         items
             .to_vec()
             .expect("GGUF tokenizer merges is not a vec.")
@@ -64,15 +68,16 @@ pub fn convert_gguf_to_hf_tokenizer(content: &Content) -> Result<GgufTokenizerCo
     });
 
     let unk = content
-        .metadata
-        .get("tokenizer.ggml.unknown_token_id")
+        .get_metadata("tokenizer.ggml.unknown_token_id")
         .map(|t| t.to_u32().expect("GGUF unk token is not u32"));
 
-    let eos = content.metadata["tokenizer.ggml.eos_token_id"]
+    let eos = content
+        .get_metadata("tokenizer.ggml.eos_token_id")?
         .to_u32()
         .expect("GGUF unk token is not u32");
 
-    let bos = content.metadata["tokenizer.ggml.bos_token_id"]
+    let bos = content
+        .get_metadata("tokenizer.ggml.bos_token_id")?
         .to_u32()
         .expect("GGUF unk token is not u32");
 
@@ -138,8 +143,8 @@ pub fn convert_gguf_to_hf_tokenizer(content: &Content) -> Result<GgufTokenizerCo
 }
 
 mod tests {
+    use crate::gguf::Content;
     use anyhow::Result;
-    use candle_core::quantized::gguf_file::Content;
     use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
     use tokenizers::Tokenizer;
 
@@ -169,7 +174,7 @@ mod tests {
                 let filename = api.get("mistral-7b-instruct-v0.1.Q2_K.gguf").unwrap();
                 let mut file = std::fs::File::open(&filename)?;
                 convert_gguf_to_hf_tokenizer(
-                    &Content::read(&mut file)
+                    &Content::from_readers(&mut [&mut file])
                         .map_err(|e| e.with_path(filename))
                         .map_err(anyhow::Error::msg)?,
                 )

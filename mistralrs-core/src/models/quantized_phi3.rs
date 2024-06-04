@@ -1,13 +1,13 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::device_map::DeviceMapper;
+use crate::gguf::Content;
 use crate::layers::{
     repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention,
 };
 use crate::pipeline::Cache;
 use crate::utils::model_config as ModelConfig;
 use crate::DeviceMapMetadata;
-use candle_core::quantized::gguf_file;
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
@@ -162,71 +162,63 @@ fn precomput_freqs_cis(
 
 impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
-        ct: gguf_file::Content,
-        reader: &mut R,
+        mut ct: Content<'_, R>,
         device: &Device,
         mapper: DeviceMapMetadata,
     ) -> Result<Self> {
-        let md_get = |s: &str| match ct.metadata.get(s) {
-            None => candle_core::bail!("cannot find {s} in metadata"),
-            Some(v) => Ok(v),
-        };
-        verify_sanity_gguf(md_get("general.architecture")?.to_string().unwrap(), "phi3")?;
+        verify_sanity_gguf(
+            ct.get_metadata("general.architecture")?
+                .to_string()
+                .unwrap(),
+            "phi3",
+        )?;
 
         // Parameter extraction from metadata.
-        let head_count = md_get("phi3.attention.head_count")?.to_u32()? as usize;
-        let head_count_kv = md_get("phi3.attention.head_count_kv")?.to_u32()? as usize;
-        let block_count = md_get("phi3.block_count")?.to_u32()? as usize;
-        let embedding_length = md_get("phi3.embedding_length")?.to_u32()? as usize;
-        let i_size = md_get("phi3.feed_forward_length")?.to_u32()? as usize;
-        let rope_dim = md_get("phi3.rope.dimension_count")?.to_u32()? as usize;
-        let rms_eps = md_get("phi3.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
-        let context_window = md_get("phi3.context_length")?.to_u32()? as usize;
+        let head_count = ct.get_metadata("phi3.attention.head_count")?.to_u32()? as usize;
+        let head_count_kv = ct.get_metadata("phi3.attention.head_count_kv")?.to_u32()? as usize;
+        let block_count = ct.get_metadata("phi3.block_count")?.to_u32()? as usize;
+        let embedding_length = ct.get_metadata("phi3.embedding_length")?.to_u32()? as usize;
+        let i_size = ct.get_metadata("phi3.feed_forward_length")?.to_u32()? as usize;
+        let rope_dim = ct.get_metadata("phi3.rope.dimension_count")?.to_u32()? as usize;
+        let rms_eps = ct
+            .get_metadata("phi3.attention.layer_norm_rms_epsilon")?
+            .to_f32()? as f64;
+        let context_window = ct.get_metadata("phi3.context_length")?.to_u32()? as usize;
         let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, context_window)?;
 
-        let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
+        let tok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
-        let output_norm = rms_norm(ct.tensor(reader, "output_norm.weight", device)?, rms_eps)?;
-        let output = QMatMul::from_qtensor(ct.tensor(reader, "output.weight", device)?)?;
+        let output_norm = rms_norm(ct.tensor("output_norm.weight", device)?, rms_eps)?;
+        let output = QMatMul::from_qtensor(ct.tensor("output.weight", device)?)?;
         let mut layers = Vec::with_capacity(block_count);
         let mapper = mapper.into_mapper(block_count, device)?;
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
-            let ffn_up = QMatMul::from_qtensor(ct.tensor(
-                reader,
-                &format!("{prefix}.ffn_up.weight"),
-                device,
-            )?)?;
-            let ffn_down = QMatMul::from_qtensor(ct.tensor(
-                reader,
-                &format!("{prefix}.ffn_down.weight"),
-                device,
-            )?)?;
+            let ffn_up =
+                QMatMul::from_qtensor(ct.tensor(&format!("{prefix}.ffn_up.weight"), device)?)?;
+            let ffn_down =
+                QMatMul::from_qtensor(ct.tensor(&format!("{prefix}.ffn_down.weight"), device)?)?;
             let mlp = Mlp {
                 ffn_up,
                 ffn_down,
                 i_size,
             };
             let attn_norm = rms_norm(
-                ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?,
+                ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?,
                 rms_eps,
             )?;
             let ffn_norm = rms_norm(
-                ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?,
+                ct.tensor(&format!("{prefix}.ffn_norm.weight"), device)?,
                 rms_eps,
             )?;
             layers.push(LayerWeights {
-                attn_qkv: QMatMul::from_qtensor(ct.tensor(
-                    reader,
-                    &format!("{prefix}.attn_qkv.weight"),
-                    device,
-                )?)?,
-                attn_output: QMatMul::from_qtensor(ct.tensor(
-                    reader,
-                    &format!("{prefix}.attn_output.weight"),
-                    device,
-                )?)?,
+                attn_qkv: QMatMul::from_qtensor(
+                    ct.tensor(&format!("{prefix}.attn_qkv.weight"), device)?,
+                )?,
+                attn_output: QMatMul::from_qtensor(
+                    ct.tensor(&format!("{prefix}.attn_output.weight"), device)?,
+                )?,
                 attn_norm,
                 ffn_norm,
                 mlp,

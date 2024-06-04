@@ -11,7 +11,7 @@ use std::{
 };
 
 use candle_core::{
-    quantized::{gguf_file, QMatMul, QTensor},
+    quantized::{QMatMul, QTensor},
     DType, Device, IndexOp, Result, Tensor,
 };
 use candle_nn::{Linear, Module, VarBuilder};
@@ -20,7 +20,7 @@ use either::Either;
 pub use crate::layers_masker::CausalMasker;
 pub use crate::layers_utils::{flash_attn, repeat_kv, verify_sanity_gguf};
 
-use crate::{cublaslt::CUBLASLT_HANDLE, INHIBIT_GEMM_F16};
+use crate::{cublaslt::CUBLASLT_HANDLE, gguf::Content, INHIBIT_GEMM_F16};
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
@@ -407,13 +407,12 @@ pub struct QLinear {
 
 impl QLinear {
     pub fn new<R: std::io::Read + std::io::Seek>(
-        ct: &gguf_file::Content,
-        r: &mut R,
+        ct: &mut Content<'_, R>,
         name: &str,
         device: &Device,
     ) -> Result<Self> {
-        let w = ct.tensor(r, &format!("{name}.weight"), device)?;
-        let b = ct.tensor(r, &format!("{name}.bias"), device)?;
+        let w = ct.tensor(&format!("{name}.weight"), device)?;
+        let b = ct.tensor(&format!("{name}.bias"), device)?;
         let inner = QMatMul::from_qtensor(w)?;
         let bias = b.dequantize(device)?;
         Ok(Self {
