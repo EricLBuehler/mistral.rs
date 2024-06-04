@@ -196,6 +196,7 @@ mod tests {
     }
 
     fn get_test_passage() -> String {
+        // TODO: Why is it necessary to depend on this for a multi-line test string?
         let passage = reqwest::blocking::get("https://loripsum.net/api")
             .expect("Failed to download sample text")
             .bytes()
