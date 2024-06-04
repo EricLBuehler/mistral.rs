@@ -204,40 +204,36 @@ mod tests {
         String::from_utf8(passage.to_vec()).expect("Failed to convert sample text to string.")
     }
 
+    // The provided passage should encode and decode back into the same passage string:
+    fn codec_roundtrip(tokenizer: &Tokenizer, passage: &str, add_special_tokens: bool) -> Result<String> {
+        let tokenized = tokenizer
+            .encode(passage, add_special_tokens)
+            .map_err(anyhow::Error::msg)?;
+
+        // NOTE: The special tokens bool param meaning differs between encode() / decode():
+        decode(tokenizer, tokenized.get_ids(), !add_special_tokens)
+    }
+
+    fn decode(tokenizer: &Tokenizer, token_ids: &[u32], skip_special_tokens: bool) -> Result<String> {
+        tokenizer
+            .decode(&token_ids, skip_special_tokens)
+            .map_err(anyhow::Error::msg)
+    }
+
     #[test]
     fn test_encode_llama() -> Result<()> {
         let passage = get_test_passage();
         let hf_tokenizer = get_hf_tokenizer(TokenizerType::Llama)?;
         let gguf_tokenizer = get_gguf_tokenizer(TokenizerType::Llama)?;
 
-        // Without special tokens
-        let hf_tokenized = hf_tokenizer
-            .encode(passage.as_str(), false)
-            .map_err(anyhow::Error::msg)?;
-        let gguf_tokenized = gguf_tokenizer
-            .encode(passage.as_str(), false)
-            .map_err(anyhow::Error::msg)?;
-        let hf_decoded = hf_tokenizer
-            .decode(hf_tokenized.get_ids(), false)
-            .map_err(anyhow::Error::msg)?;
-        let gguf_decoded = gguf_tokenizer
-            .decode(gguf_tokenized.get_ids(), false)
-            .map_err(anyhow::Error::msg)?;
+        // Without adding special tokens
+        let hf_decoded = codec_roundtrip(&hf_tokenizer, passage.as_str(), false)?;
+        let gguf_decoded = codec_roundtrip(&gguf_tokenizer, passage.as_str(), false)?;
         assert_eq!(hf_decoded, gguf_decoded);
 
-        // With special tokens
-        let hf_tokenized = hf_tokenizer
-            .encode(passage.as_str(), true)
-            .map_err(anyhow::Error::msg)?;
-        let gguf_tokenized = gguf_tokenizer
-            .encode(passage.as_str(), true)
-            .map_err(anyhow::Error::msg)?;
-        let hf_decoded = hf_tokenizer
-            .decode(hf_tokenized.get_ids(), true)
-            .map_err(anyhow::Error::msg)?;
-        let gguf_decoded = gguf_tokenizer
-            .decode(gguf_tokenized.get_ids(), true)
-            .map_err(anyhow::Error::msg)?;
+        // With special tokens added
+        let hf_decoded = codec_roundtrip(&hf_tokenizer, passage.as_str(), true)?;
+        let gguf_decoded = codec_roundtrip(&gguf_tokenizer, passage.as_str(), true)?;
         assert_eq!(hf_decoded, gguf_decoded);
 
         Ok(())
@@ -256,21 +252,13 @@ mod tests {
         tokens.shuffle(&mut thread_rng());
 
         // Without skipping special tokens
-        let hf_decoded = hf_tokenizer
-            .decode(&tokens, false)
-            .map_err(anyhow::Error::msg)?;
-        let gguf_decoded = gguf_tokenizer
-            .decode(&tokens, false)
-            .map_err(anyhow::Error::msg)?;
+        let hf_decoded = decode(&hf_tokenizer, &tokens, false)?;
+        let gguf_decoded = decode(&gguf_tokenizer, &tokens, false)?;
         assert_eq!(hf_decoded, gguf_decoded);
 
         // With skipping special tokens
-        let hf_decoded = hf_tokenizer
-            .decode(&tokens, true)
-            .map_err(anyhow::Error::msg)?;
-        let gguf_decoded = gguf_tokenizer
-            .decode(&tokens, true)
-            .map_err(anyhow::Error::msg)?;
+        let hf_decoded = decode(&hf_tokenizer, &tokens, true)?;
+        let gguf_decoded = decode(&gguf_tokenizer, &tokens, true)?;
         assert_eq!(hf_decoded, gguf_decoded);
 
         Ok(())
