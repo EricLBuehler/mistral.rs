@@ -280,15 +280,12 @@ async fn main() -> Result<()> {
     )?;
     info!("Model loaded.");
 
-    let mistralrs = MistralRsBuilder::new(
-        pipeline,
-        SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
-    )
-    .with_opt_log(args.log)
-    .with_truncate_sequence(args.truncate_sequence)
-    .with_no_kv_cache(args.no_kv_cache)
-    .with_prefix_cache_n(args.prefix_cache_n)
-    .build();
+    let mistralrs = MistralRsBuilder::new(pipeline, SchedulerMethod::Fixed(args.max_seqs))
+        .with_opt_log(args.log)
+        .with_truncate_sequence(args.truncate_sequence)
+        .with_no_kv_cache(args.no_kv_cache)
+        .with_prefix_cache_n(args.prefix_cache_n)
+        .build();
 
     if args.interactive_mode {
         interactive_mode(mistralrs).await;

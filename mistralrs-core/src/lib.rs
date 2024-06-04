@@ -264,7 +264,7 @@ impl MistralRs {
     /// TODO: GS don't use anyhow for these errors?
     pub fn reboot_engine(&self) -> anyhow::Result<()> {
         tracing::info!("attempting to reboot");
-        // only start a new runtime if the reciever was closed. this implies
+        // only start a new runtime if the receiver was closed. this implies
         // that it was dropped, and therefore the tokio runtime is down.
         if self.get_sender()?.is_closed() {
             tracing::info!("sender is closed, rebooting");
@@ -306,7 +306,7 @@ impl MistralRs {
             }
             Err(err) => Err(anyhow::Error::msg(format!(
                 "Couldn't update sender, {}",
-                err.to_string(),
+                err,
             ))),
         }
     }
@@ -315,7 +315,7 @@ impl MistralRs {
         match self.sender.read() {
             Ok(sender) => Ok(sender.clone()),
             Err(err) => {
-                let err_msg = format!("could not get sender read lock: {}", err.to_string());
+                let err_msg = format!("could not get sender read lock: {}", err);
                 Err(anyhow::Error::msg(err_msg))
             }
         }
