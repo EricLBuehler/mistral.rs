@@ -136,6 +136,7 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<ConversionResul
     })
 }
 
+#[cfg(test)]
 mod tests {
     use anyhow::Result;
     use candle_core::quantized::gguf_file::Content;
@@ -144,7 +145,6 @@ mod tests {
 
     use super::convert_ggml_to_hf_tokenizer;
 
-    #[allow(dead_code)]
     #[derive(Debug)]
     enum TokenizerType {
         /// Mistral v0.1 tokenizer
@@ -154,7 +154,6 @@ mod tests {
         Rwkv,
     }
 
-    #[allow(dead_code)]
     fn get_gguf_tokenizer(tokenizer: TokenizerType) -> Result<Tokenizer> {
         match tokenizer {
             TokenizerType::Llama => {
@@ -179,7 +178,6 @@ mod tests {
         }
     }
 
-    #[allow(dead_code)]
     fn get_hf_tokenizer(tokenizer: TokenizerType) -> Result<Tokenizer> {
         match tokenizer {
             TokenizerType::Llama => {
@@ -197,12 +195,12 @@ mod tests {
         }
     }
 
-    #[allow(dead_code)]
     fn get_test_passage() -> String {
         let passage = reqwest::blocking::get("https://loripsum.net/api")
             .expect("Failed to download sample text")
             .bytes()
             .expect("Failed to get bytes");
+
         String::from_utf8(passage.to_vec()).expect("Failed to convert sample text to string.")
     }
 
@@ -241,6 +239,7 @@ mod tests {
             .decode(gguf_tokenized.get_ids(), true)
             .map_err(anyhow::Error::msg)?;
         assert_eq!(hf_decoded, gguf_decoded);
+
         Ok(())
     }
 
@@ -273,6 +272,7 @@ mod tests {
             .decode(&tokens, true)
             .map_err(anyhow::Error::msg)?;
         assert_eq!(hf_decoded, gguf_decoded);
+
         Ok(())
     }
 }
