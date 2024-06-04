@@ -95,13 +95,13 @@ class Which(Enum):
     class GGUF:
         tok_model_id: str
         quantized_model_id: str
-        quantized_filename: str
+        quantized_filename: str | list[str]
         repeat_last_n: int = 64
     @dataclass
     class XLoraGGUF:
         tok_model_id: str
         quantized_model_id: str
-        quantized_filename: str
+        quantized_filename: str | list[str]
         xlora_model_id: str
         order: str
         tgt_non_granular_index: int | None = None
@@ -110,7 +110,7 @@ class Which(Enum):
     class LoraGGUF:
         tok_model_id: str
         quantized_model_id: str
-        quantized_filename: str
+        quantized_filename: str | list[str]
         adapters_model_id: str
         order: str
         repeat_last_n: int = 64

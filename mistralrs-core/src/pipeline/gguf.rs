@@ -324,7 +324,7 @@ impl Loader for GGUFLoader {
         let content = Content::from_readers(&mut files)?;
         let arch = content.arch();
 
-        // Set bos/eos/unk to None to avoid the overrride
+        // Set bos/eos/unk to None to avoid the override
         let GgufTokenizerConversion {
             tokenizer,
             bos,

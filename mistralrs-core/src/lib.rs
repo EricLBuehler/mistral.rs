@@ -62,7 +62,7 @@ pub use toml_selector::{TomlLoaderArgs, TomlSelector};
 
 /// `true` if `MISTRALRS_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
-/// Delimeter for GGUF multiple files in the CLI.
+/// Delimiter for GGUF multiple files in the CLI.
 pub const GGUF_MULTI_FILE_DELIMITER: &str = " ";
 
 /// The MistralRs struct handles sending requests to the engine.
