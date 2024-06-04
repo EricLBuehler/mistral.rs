@@ -2,7 +2,6 @@ mod cache_manager;
 mod chat_template;
 mod ggml;
 mod gguf;
-mod gguf_tokenizer;
 mod inputs_processor;
 mod isq;
 mod macros;

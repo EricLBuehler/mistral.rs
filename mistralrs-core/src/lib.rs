@@ -26,6 +26,7 @@ mod model_selected;
 pub use model_selected::ModelSelected;
 
 mod cublaslt;
+mod gguf;
 pub mod layers;
 mod layers_masker;
 mod layers_utils;
@@ -42,6 +43,7 @@ mod utils;
 mod xlora_models;
 
 pub use device_map::{DeviceMapMetadata, LayerDeviceMapper};
+pub use gguf::{convert_gguf_to_hf_tokenizer, GgufTokenizerConversion};
 pub use pipeline::{
     GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder,
     GGUFSpecificConfig, GemmaLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader,

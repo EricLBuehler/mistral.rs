@@ -12,14 +12,15 @@ use tracing::info;
 
 use crate::DEBUG;
 
-pub struct ConversionResult {
+pub struct GgufTokenizerConversion {
     pub tokenizer: Tokenizer,
     pub bos: Option<String>,
     pub eos: Option<String>,
     pub unk: Option<String>,
 }
 
-pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<ConversionResult> {
+// Convert GGUF tokenizer to tokenizer and metadata
+pub fn convert_gguf_to_hf_tokenizer(content: &Content) -> Result<GgufTokenizerConversion> {
     let model = content.metadata["tokenizer.ggml.model"]
         .to_string()
         .expect("GGUF tokenizer model is not a string.")
@@ -128,7 +129,7 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<ConversionResul
     if DEBUG.load(Ordering::Relaxed) {
         info!("Tokenizer: {tokenizer:?}");
     }
-    Ok(ConversionResult {
+    Ok(GgufTokenizerConversion {
         tokenizer,
         bos: Some(bos_str),
         eos: Some(eos_str),
@@ -142,7 +143,7 @@ mod tests {
     use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
     use tokenizers::Tokenizer;
 
-    use super::convert_ggml_to_hf_tokenizer;
+    use super::convert_gguf_to_hf_tokenizer;
 
     #[allow(dead_code)]
     #[derive(Debug)]
@@ -167,7 +168,7 @@ mod tests {
 
                 let filename = api.get("mistral-7b-instruct-v0.1.Q2_K.gguf").unwrap();
                 let mut file = std::fs::File::open(&filename)?;
-                convert_ggml_to_hf_tokenizer(
+                convert_gguf_to_hf_tokenizer(
                     &Content::read(&mut file)
                         .map_err(|e| e.with_path(filename))
                         .map_err(anyhow::Error::msg)?,

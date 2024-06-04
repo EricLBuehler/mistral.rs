@@ -12,7 +12,6 @@ use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
-use crate::pipeline::gguf_tokenizer::{convert_ggml_to_hf_tokenizer, ConversionResult};
 use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
@@ -20,14 +19,16 @@ use crate::sequence::Sequence;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
-use crate::{do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, Pipeline, DEBUG};
 use crate::{
+    convert_gguf_to_hf_tokenizer,
     models::quantized_llama::ModelWeights as QLlama,
     models::quantized_phi2::ModelWeights as QPhi,
     models::quantized_phi3::ModelWeights as QPhi3,
     utils::tokens::get_token,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
+    GgufTokenizerConversion,
 };
+use crate::{do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, Pipeline, DEBUG};
 use anyhow::{bail, Context, Result};
 use candle_core::quantized::{
     gguf_file::{self, Value as GgufValue},
@@ -372,15 +373,16 @@ impl Loader for GGUFLoader {
             info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_gguf_tensors.txt`.");
         }
 
-        let ConversionResult {
+        // Set bos/eos/unk to None to avoid the G
+        let GgufTokenizerConversion {
             tokenizer,
             bos,
             eos,
             unk,
         } = if paths.get_tokenizer_filename().to_string_lossy().is_empty() {
-            convert_ggml_to_hf_tokenizer(&model)?
+            convert_gguf_to_hf_tokenizer(&model)?
         } else {
-            ConversionResult {
+            GgufTokenizerConversion {
                 tokenizer: get_tokenizer(paths.get_tokenizer_filename(), None)?,
                 bos: None,
                 eos: None,
