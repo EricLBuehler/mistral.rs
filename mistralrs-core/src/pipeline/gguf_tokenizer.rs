@@ -10,6 +10,7 @@ use tokenizers::{
 };
 use tracing::info;
 
+use crate::utils::gguf_metadata::MetadataContext;
 use crate::DEBUG;
 
 pub struct ConversionResult {
@@ -19,61 +20,61 @@ pub struct ConversionResult {
     pub unk: Option<String>,
 }
 
+struct PropsGGUF {
+    model: String,
+    tokens: Vec<String>,
+    added_tokens: Option<Vec<String>>,
+    scores: Option<Vec<f32>>,
+    merges: Option<Vec<String>>,
+    unk: Option<u32>,
+    eos: u32,
+    bos: u32,
+}
+
+impl TryFrom<MetadataContext<'_>> for PropsGGUF {
+    type Error = anyhow::Error;
+
+    fn try_from(c: MetadataContext) -> Result<Self, Self::Error> {
+        let required = ["model", "tokens", "eos_token_id", "bos_token_id"];
+        c.has_required_keys(&required)?;
+
+        let tokenizer_ggml = PropsGGUF {
+            model: c.get_value("model")?,
+            tokens: c.get_value("tokens")?,
+            added_tokens: c.get_value("added_tokens").ok(),
+            scores: c.get_value("scores").ok(),
+            merges: c.get_value("merges").ok(),
+            unk: c.get_value("unknown_token_id").ok(),
+            eos: c.get_value("eos_token_id")?,
+            bos: c.get_value("bos_token_id")?,
+        };
+
+        Ok(tokenizer_ggml)
+    }
+}
+
 pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<ConversionResult> {
-    let model = content.metadata["tokenizer.ggml.model"]
-        .to_string()
-        .expect("GGUF tokenizer model is not a string.")
-        .clone();
-    let tokens = content.metadata["tokenizer.ggml.tokens"]
-        .to_vec()
-        .expect("GGUF tokenizer tokens is not a vec.")
-        .iter()
-        .map(|t| t.to_string().expect("GGUF token is not a string.").clone())
-        .collect::<Vec<_>>();
-    let added_tokens = content
-        .metadata
-        .get("tokenizer.ggml.added_tokens")
-        .map(|items| {
-            items
-                .to_vec()
-                .expect("GGUF tokenizer added_tokens is not a vec.")
-                .iter()
-                .map(|t| {
-                    t.to_string()
-                        .expect("GGUF added_token is not a string.")
-                        .clone()
-                })
-                .collect::<Vec<_>>()
-        });
-    let scores = content.metadata.get("tokenizer.ggml.scores").map(|items| {
-        items
-            .to_vec()
-            .expect("GGUF tokenizer scores is not a vec.")
-            .iter()
-            .map(|t| t.to_f32().expect("GGUF score is not a f32."))
-            .collect::<Vec<_>>()
-    });
-    let merges = content.metadata.get("tokenizer.ggml.merges").map(|items| {
-        items
-            .to_vec()
-            .expect("GGUF tokenizer merges is not a vec.")
-            .iter()
-            .map(|t| t.to_string().expect("GGUF merges is not a string.").clone())
-            .collect::<Vec<_>>()
-    });
+    let metadata = MetadataContext {
+        path_prefix: "tokenizer.ggml".to_string(),
+        metadata: &content.metadata,
+    };
+    let props = PropsGGUF::try_from(metadata)?;
 
-    let unk = content
-        .metadata
-        .get("tokenizer.ggml.unknown_token_id")
-        .map(|t| t.to_u32().expect("GGUF unk token is not u32"));
+    let PropsGGUF {
+        model,
+        tokens,
+        added_tokens,
+        scores,
+        merges,
+        ..
+    } = props;
 
-    let eos = content.metadata["tokenizer.ggml.eos_token_id"]
-        .to_u32()
-        .expect("GGUF unk token is not u32");
-
-    let bos = content.metadata["tokenizer.ggml.bos_token_id"]
-        .to_u32()
-        .expect("GGUF unk token is not u32");
+    let PropsGGUF {
+        unk,
+        eos,
+        bos,
+        ..
+    } = props;
 
     let bos_str = tokens[bos as usize].clone();
     let eos_str = tokens[eos as usize].clone();
@@ -91,10 +92,10 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<ConversionResul
             }
 
             // Unigram (sentencepiece) default UNK is 0
-            let unk = unk.map(|x| x as usize).unwrap_or(0);
-            unk_str = tokens[unk].clone();
+            let unk = unk.unwrap_or(0);
+            unk_str = tokens[unk as usize].clone();
 
-            let unigram = Unigram::from(vocab, Some(unk), true).map_err(anyhow::Error::msg)?;
+            let unigram = Unigram::from(vocab, Some(unk as usize), true).map_err(anyhow::Error::msg)?;
             let mut tokenizer = Tokenizer::new(ModelWrapper::Unigram(unigram));
             tokenizer.with_decoder(decoders::sequence::Sequence::new(vec![
                 DecoderWrapper::Replace(Replace::new("▁", " ").map_err(anyhow::Error::msg)?),
@@ -107,9 +108,9 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<ConversionResul
                 NormalizerWrapper::Replace(Replace::new(" ", "▁").map_err(anyhow::Error::msg)?),
             ]));
 
-            tokenizer.add_special_tokens(&[AddedToken::from(tokens[bos as usize].clone(), true)]);
-            tokenizer.add_special_tokens(&[AddedToken::from(tokens[eos as usize].clone(), true)]);
-            tokenizer.add_special_tokens(&[AddedToken::from(tokens[unk].clone(), true)]);
+            for token_id in [bos, eos, unk] {
+                tokenizer.add_special_tokens(&[AddedToken::from(tokens[token_id as usize].clone(), true)]);
+            }
 
             (tokenizer, "unigram")
         }

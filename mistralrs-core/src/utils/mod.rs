@@ -1,3 +1,4 @@
+pub(crate) mod gguf_metadata;
 pub(crate) mod model_config;
 pub(crate) mod tokenizer;
 pub(crate) mod tokens;
