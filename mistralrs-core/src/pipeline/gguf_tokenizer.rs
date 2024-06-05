@@ -135,10 +135,6 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<ConversionResul
                 .map_err(anyhow::Error::msg)?;
             let mut tokenizer = Tokenizer::new(ModelWrapper::BPE(bpe));
             tokenizer.with_decoder(decoders::byte_level::ByteLevel::new(true, true, true));
-            tokenizer.with_normalizer(normalizers::Sequence::new(vec![
-                NormalizerWrapper::Prepend(Prepend::new("▁".to_string())),
-                NormalizerWrapper::Replace(Replace::new(" ", "▁").map_err(anyhow::Error::msg)?),
-            ]));
 
             tokenizer.add_special_tokens(&[AddedToken::from(tokens[bos as usize].clone(), true)]);
             tokenizer.add_special_tokens(&[AddedToken::from(tokens[eos as usize].clone(), true)]);
