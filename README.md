@@ -283,6 +283,14 @@ please consider using the method demonstrated in examples below, where the token
 **Supported GGUF tokenizer types**
 - `llama`
 
+Some GGUF models are very large and are sharded into multiple files. Mistral.rs supports this, and to use it, delimit the `.gguf` filenames with a space as such:
+
+```bash
+./mistralrs-server --chat-template <chat_template> gguf -m . -f "a.gguf b.gguf"
+```
+
+For the Python API, a list of strings is also accepted for this case.
+
 ## Run
 
 To start a server serving Mistral GGUF on `localhost:1234`, 

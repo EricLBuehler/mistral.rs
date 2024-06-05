@@ -2,7 +2,6 @@ mod cache_manager;
 mod chat_template;
 mod ggml;
 mod gguf;
-mod gguf_tokenizer;
 mod inputs_processor;
 mod isq;
 mod macros;
@@ -23,7 +22,7 @@ use candle_core::quantized::GgmlDType;
 use chat_template::ChatTemplate;
 use core::fmt;
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
-pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
+pub use gguf::{GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 pub use isq::IsqModel;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 pub use normal_loaders::{
