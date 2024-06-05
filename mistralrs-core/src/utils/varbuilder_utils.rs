@@ -67,7 +67,7 @@ pub(crate) fn from_mmaped_safetensors<'a>(
             let loader = Common::new();
             loader.load_tensors_from_path(&path, &device, dtype, silent)
         };
-        ws.extend(res);
+        ws.extend(res?);
     }
     for (i, path) in xlora_paths.into_iter().enumerate() {
         let device = device.clone();
@@ -75,7 +75,7 @@ pub(crate) fn from_mmaped_safetensors<'a>(
             let loader = XLora::new(i + 1);
             loader.load_tensors_from_path(&path, &device, dtype, silent)
         };
-        ws.extend(res);
+        ws.extend(res?);
     }
 
     Ok(VarBuilder::from_tensors(ws, dtype, device))
