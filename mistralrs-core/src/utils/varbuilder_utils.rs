@@ -1,20 +1,22 @@
 //! Utilities for creating a VarBuilder from a VarMap loaded from tensor storage formats.
 
-use std::{collections::HashMap, path::PathBuf, thread};
+use std::{collections::HashMap, path::PathBuf, thread::JoinHandle};
 
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{
     var_builder::{SimpleBackend, VarBuilderArgs},
     VarBuilder,
 };
+use either::Either;
 
 use crate::lora::LoraConfig;
 use crate::utils::progress::IterWithProgress;
 use derive_new::new;
 
+use super::progress::{Joinable, NonThreadingHandle, Parellelize};
+
 /// Load tensors into a VarBuilder backed by a VarMap using MmapedSafetensors.
 /// Set `silent` to not show a progress bar.
-#[cfg(not(feature = "metal"))]
 pub(crate) fn from_mmaped_safetensors<'a>(
     paths: Vec<PathBuf>,
     xlora_paths: Vec<PathBuf>,
@@ -22,21 +24,29 @@ pub(crate) fn from_mmaped_safetensors<'a>(
     device: &Device,
     silent: bool,
 ) -> Result<VarBuilderArgs<'a, Box<dyn SimpleBackend>>> {
-    let mut handles = Vec::new();
+    let mut handles: Vec<
+        Either<
+            JoinHandle<Result<HashMap<String, Tensor>>>,
+            NonThreadingHandle<
+                Result<HashMap<String, Tensor>>,
+                Box<dyn FnOnce() -> Result<HashMap<String, Tensor>> + Send + 'static>,
+            >,
+        >,
+    > = Vec::new();
 
     for path in paths {
         let device = device.clone();
-        handles.push(thread::spawn(move || {
+        handles.push(Parellelize::spawn(Box::new(move || {
             let loader = Common::new();
             loader.load_tensors_from_path(&path, &device, dtype, silent)
-        }));
+        })));
     }
     for (i, path) in xlora_paths.into_iter().enumerate() {
         let device = device.clone();
-        handles.push(thread::spawn(move || {
+        handles.push(Parellelize::spawn(Box::new(move || {
             let loader = XLora::new(i + 1);
             loader.load_tensors_from_path(&path, &device, dtype, silent)
-        }));
+        })));
     }
 
     let mut ws = HashMap::new();
@@ -44,38 +54,6 @@ pub(crate) fn from_mmaped_safetensors<'a>(
     while !handles.iter().all(|h| h.is_finished()) {}
     for h in handles {
         ws.extend(h.join().unwrap()?);
-    }
-
-    Ok(VarBuilder::from_tensors(ws, dtype, device))
-}
-
-/// Load tensors into a VarBuilder backed by a VarMap using MmapedSafetensors.
-/// Set `silent` to not show a progress bar.
-#[cfg(feature = "metal")]
-pub(crate) fn from_mmaped_safetensors<'a>(
-    paths: Vec<PathBuf>,
-    xlora_paths: Vec<PathBuf>,
-    dtype: DType,
-    device: &Device,
-    silent: bool,
-) -> Result<VarBuilderArgs<'a, Box<dyn SimpleBackend>>> {
-    let mut ws = HashMap::new();
-
-    for path in paths {
-        let device = device.clone();
-        let res = {
-            let loader = Common::new();
-            loader.load_tensors_from_path(&path, &device, dtype, silent)
-        };
-        ws.extend(res?);
-    }
-    for (i, path) in xlora_paths.into_iter().enumerate() {
-        let device = device.clone();
-        let res = {
-            let loader = XLora::new(i + 1);
-            loader.load_tensors_from_path(&path, &device, dtype, silent)
-        };
-        ws.extend(res?);
     }
 
     Ok(VarBuilder::from_tensors(ws, dtype, device))
