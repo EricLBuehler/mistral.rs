@@ -282,16 +282,6 @@
 <a href="#280" id="280">280</a>
 <a href="#281" id="281">281</a>
 <a href="#282" id="282">282</a>
-<a href="#283" id="283">283</a>
-<a href="#284" id="284">284</a>
-<a href="#285" id="285">285</a>
-<a href="#286" id="286">286</a>
-<a href="#287" id="287">287</a>
-<a href="#288" id="288">288</a>
-<a href="#289" id="289">289</a>
-<a href="#290" id="290">290</a>
-<a href="#291" id="291">291</a>
-<a href="#292" id="292">292</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::fs::{<span class="self">self</span>, File};
 
 <span class="kw">use crate</span>::{
@@ -300,7 +290,6 @@
         NormalSpecificConfig,
     },
     Loader, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector,
-    GGUF_MULTI_FILE_DELIMITER,
 };
 
 <span class="kw">pub struct </span>LoaderBuilder {
@@ -453,10 +442,7 @@
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename
-                .split(GGUF_MULTI_FILE_DELIMITER)
-                .map(|s| s.to_string())
-                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+            quantized_filename,
         )
         .build(),
         ModelSelected::XLoraGGUF {
@@ -472,10 +458,7 @@
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename
-                .split(GGUF_MULTI_FILE_DELIMITER)
-                .map(|s| s.to_string())
-                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+            quantized_filename,
         )
         .with_xlora(
             xlora_model_id,
@@ -499,10 +482,7 @@
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename
-                .split(GGUF_MULTI_FILE_DELIMITER)
-                .map(|s| s.to_string())
-                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+            quantized_filename,
         )
         .with_lora(
             adapters_model_id,

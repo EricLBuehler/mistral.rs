@@ -315,14 +315,21 @@
 <a href="#313" id="313">313</a>
 <a href="#314" id="314">314</a>
 <a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 <span class="kw">use </span>anyhow::Result;
-<span class="kw">use </span>candle_core::quantized::ggml_file;
+<span class="kw">use </span>candle_core::quantized::{ggml_file, gguf_file};
 <span class="kw">use </span>candle_nn::VarBuilder;
 <span class="kw">use </span>std::{collections::HashMap, path::PathBuf};
 
 <span class="kw">use crate</span>::{
-    gguf::Content,
     lora::{LoraConfig, Ordering},
     pipeline::ModelPaths,
     xlora_models::XLoraConfig,
@@ -333,6 +340,12 @@
 </span><span class="kw">pub struct </span>FileGGML {
     <span class="kw">pub </span>ct: ggml_file::Content,
     <span class="kw">pub </span>gqa: usize,
+}
+
+<span class="attr">#[derive(derive_more::From)]
+</span><span class="kw">pub struct </span>FileGGUF&lt;<span class="lifetime">'a</span>&gt; {
+    <span class="kw">pub </span>ct: gguf_file::Content,
+    <span class="kw">pub </span>reader: <span class="kw-2">&amp;</span><span class="lifetime">'a </span><span class="kw-2">mut </span>std::fs::File,
 }
 
 <span class="attr">#[derive(derive_more::From)]
@@ -406,7 +419,7 @@
 
 <span class="comment">// New type wrappers that segment the distinct parameter sets used by `from_ggml()` + `from_gguf()` methods:
 </span><span class="kw">pub struct </span>ParamsGGML(<span class="kw">pub </span>FileGGML);
-<span class="kw">pub struct </span>ParamsGGUF&lt;<span class="lifetime">'a</span>, R: std::io::Seek + std::io::Read&gt;(<span class="kw">pub </span>Content&lt;<span class="lifetime">'a</span>, R&gt;, <span class="kw">pub </span>Device&lt;<span class="lifetime">'a</span>&gt;);
+<span class="kw">pub struct </span>ParamsGGUF&lt;<span class="lifetime">'a</span>&gt;(<span class="kw">pub </span>FileGGUF&lt;<span class="lifetime">'a</span>&gt;, <span class="kw">pub </span>Device&lt;<span class="lifetime">'a</span>&gt;);
 
 <span class="comment">// A `None` type vs the `Some` type (`Adapter&lt;'a&gt;`)
 </span><span class="kw">pub struct </span>NoAdapter {}
@@ -415,7 +428,7 @@
 // (required workaround to support impl on subtypes, otherwise would use an enum)
 </span><span class="kw">pub trait </span>QuantParams {}
 <span class="kw">impl </span>QuantParams <span class="kw">for </span>ParamsGGML {}
-<span class="kw">impl</span>&lt;R: std::io::Seek + std::io::Read&gt; QuantParams <span class="kw">for </span>ParamsGGUF&lt;<span class="lifetime">'_</span>, R&gt; {}
+<span class="kw">impl </span>QuantParams <span class="kw">for </span>ParamsGGUF&lt;<span class="lifetime">'_</span>&gt; {}
 
 <span class="comment">// Emulates `Option&lt;Adapter&gt;` but is compatible as a type bound in `impl&lt;T&gt;` for Some vs None
 </span><span class="kw">pub trait </span>MaybeAdapter {}
@@ -467,7 +480,8 @@
 
 <span class="kw">pub trait </span>FromGGUF {
     <span class="kw">fn </span>from_gguf&lt;R: std::io::Seek + std::io::Read&gt;(
-        ct: Content&lt;<span class="lifetime">'_</span>, R&gt;,
+        ct: gguf_file::Content,
+        reader: <span class="kw-2">&amp;mut </span>R,
         device: <span class="kw-2">&amp;</span>candle_core::Device,
         mapper: DeviceMapMetadata,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, candle_core::Error&gt;
@@ -492,7 +506,8 @@
 <span class="kw">pub trait </span>FromAdapterGGUF {
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>from_gguf&lt;R: std::io::Seek + std::io::Read&gt;(
-        ct: Content&lt;<span class="lifetime">'_</span>, R&gt;,
+        ct: gguf_file::Content,
+        reader: <span class="kw-2">&amp;mut </span>R,
         device: <span class="kw-2">&amp;</span>candle_core::Device,
         lora_config: <span class="kw-2">&amp;</span>[((String, String), LoraConfig)],
         vb: <span class="kw-2">&amp;</span>VarBuilder,
@@ -542,20 +557,20 @@
     }
 }
 
-<span class="kw">impl</span>&lt;R: std::io::Seek + std::io::Read&gt; Config&lt;ParamsGGUF&lt;<span class="lifetime">'_</span>, R&gt;, NoAdapter&gt; {
+<span class="kw">impl </span>Config&lt;ParamsGGUF&lt;<span class="lifetime">'_</span>&gt;, NoAdapter&gt; {
     <span class="kw">pub fn </span>try_into_model&lt;T: FromGGUF&gt;(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;T, candle_core::Error&gt; {
         <span class="comment">// Destructure props:
-        </span><span class="kw">let </span>ParamsGGUF(content, Device { device, mapper }) = <span class="self">self</span>.quant;
+        </span><span class="kw">let </span>ParamsGGUF(FileGGUF { ct, reader }, Device { device, mapper }) = <span class="self">self</span>.quant;
 
         <span class="comment">// Forwards all structured fields above into the required flattened param sequence:
-        </span>T::from_gguf(content, device, mapper)
+        </span>T::from_gguf(ct, reader, device, mapper)
     }
 }
 
-<span class="kw">impl</span>&lt;R: std::io::Seek + std::io::Read&gt; Config&lt;ParamsGGUF&lt;<span class="lifetime">'_</span>, R&gt;, Adapter&lt;<span class="lifetime">'_</span>&gt;&gt; {
+<span class="kw">impl </span>Config&lt;ParamsGGUF&lt;<span class="lifetime">'_</span>&gt;, Adapter&lt;<span class="lifetime">'_</span>&gt;&gt; {
     <span class="kw">pub fn </span>try_into_model&lt;T: FromAdapterGGUF&gt;(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;T, candle_core::Error&gt; {
         <span class="comment">// Destructure props:
-        </span><span class="kw">let </span>ParamsGGUF(content, Device { device, mapper }) = <span class="self">self</span>.quant;
+        </span><span class="kw">let </span>ParamsGGUF(FileGGUF { ct, reader }, Device { device, mapper }) = <span class="self">self</span>.quant;
 
         <span class="kw">let </span>Adapter {
             xlora_config,
@@ -567,7 +582,8 @@
 
         <span class="comment">// Forwards all structured fields above into the required flattened param sequence:
         </span>T::from_gguf(
-            content,
+            ct,
+            reader,
             device,
             lora_config,
             <span class="kw-2">&amp;</span>vb,
@@ -608,10 +624,10 @@
 <span class="macro">akin!</span> {
     <span class="kw">let </span><span class="kw-2">&amp;</span>models_gguf = [QLlama, QPhi, QPhi3];
 
-    <span class="kw">impl</span>&lt;R: std::io::Seek + std::io::Read&gt; TryFrom&lt;ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGUF&lt;<span class="lifetime">'_</span>, R&gt;&gt;&gt; <span class="kw">for </span><span class="kw-2">*</span>models_gguf {
+    <span class="kw">impl </span>TryFrom&lt;ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGUF&lt;<span class="lifetime">'_</span>&gt;&gt;&gt; <span class="kw">for </span><span class="kw-2">*</span>models_gguf {
         <span class="kw">type </span>Error = candle_core::Error;
 
-        <span class="kw">fn </span>try_from(params: ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGUF&lt;<span class="lifetime">'_</span>, R&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Error&gt; {
+        <span class="kw">fn </span>try_from(params: ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGUF&lt;<span class="lifetime">'_</span>&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Error&gt; {
             <span class="kw">let </span>config = params.expect_quantized(<span class="string">"`Config` should be GGUF Quantized"</span>);
             config.try_into_model()
         }
@@ -621,10 +637,10 @@
 <span class="macro">akin!</span> {
     <span class="kw">let </span><span class="kw-2">&amp;</span>models_gguf_a = [XLoraQLlama, XLoraQPhi3];
 
-    <span class="kw">impl</span>&lt;R: std::io::Seek + std::io::Read&gt; TryFrom&lt;ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGUF&lt;<span class="lifetime">'_</span>, R&gt;&gt;&gt; <span class="kw">for </span><span class="kw-2">*</span>models_gguf_a {
+    <span class="kw">impl </span>TryFrom&lt;ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGUF&lt;<span class="lifetime">'_</span>&gt;&gt;&gt; <span class="kw">for </span><span class="kw-2">*</span>models_gguf_a {
         <span class="kw">type </span>Error = candle_core::Error;
 
-        <span class="kw">fn </span>try_from(params: ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGUF&lt;<span class="lifetime">'_</span>, R&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Error&gt; {
+        <span class="kw">fn </span>try_from(params: ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGUF&lt;<span class="lifetime">'_</span>&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Error&gt; {
             <span class="kw">let </span>config = params.expect_adapted(<span class="string">"`Config` should be GGUF Quantized with an Adapter"</span>);
             config.try_into_model()
         }

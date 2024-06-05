@@ -494,6 +494,7 @@
 <a href="#492" id="492">492</a>
 <a href="#493" id="493">493</a>
 <a href="#494" id="494">494</a>
+<a href="#495" id="495">495</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -507,7 +508,7 @@
 };
 
 <span class="kw">use </span>candle_core::{
-    quantized::{QMatMul, QTensor},
+    quantized::{gguf_file, QMatMul, QTensor},
     DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor,
 };
 <span class="kw">use </span>candle_nn::{Linear, Module, VarBuilder};
@@ -516,7 +517,7 @@
 <span class="kw">pub use </span><span class="kw">crate</span>::layers_masker::CausalMasker;
 <span class="kw">pub use </span><span class="kw">crate</span>::layers_utils::{flash_attn, repeat_kv, verify_sanity_gguf};
 
-<span class="kw">use crate</span>::{cublaslt::CUBLASLT_HANDLE, gguf::Content, INHIBIT_GEMM_F16};
+<span class="kw">use crate</span>::{cublaslt::CUBLASLT_HANDLE, INHIBIT_GEMM_F16};
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">pub struct </span>RmsNorm {
@@ -903,12 +904,13 @@
 
 <span class="kw">impl </span>QLinear {
     <span class="kw">pub fn </span>new&lt;R: std::io::Read + std::io::Seek&gt;(
-        ct: <span class="kw-2">&amp;mut </span>Content&lt;<span class="lifetime">'_</span>, R&gt;,
+        ct: <span class="kw-2">&amp;</span>gguf_file::Content,
+        r: <span class="kw-2">&amp;mut </span>R,
         name: <span class="kw-2">&amp;</span>str,
         device: <span class="kw-2">&amp;</span>Device,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>w = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{name}.weight"</span>), device)<span class="question-mark">?</span>;
-        <span class="kw">let </span>b = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{name}.bias"</span>), device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>w = ct.tensor(r, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{name}.weight"</span>), device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>b = ct.tensor(r, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{name}.bias"</span>), device)<span class="question-mark">?</span>;
         <span class="kw">let </span>inner = QMatMul::from_qtensor(w)<span class="question-mark">?</span>;
         <span class="kw">let </span>bias = b.dequantize(device)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{

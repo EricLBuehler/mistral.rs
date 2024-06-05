@@ -877,10 +877,12 @@
 <a href="#875" id="875">875</a>
 <a href="#876" id="876">876</a>
 <a href="#877" id="877">877</a>
+<a href="#878" id="878">878</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>cache_manager;
 <span class="kw">mod </span>chat_template;
 <span class="kw">mod </span>ggml;
 <span class="kw">mod </span>gguf;
+<span class="kw">mod </span>gguf_tokenizer;
 <span class="kw">mod </span>inputs_processor;
 <span class="kw">mod </span>isq;
 <span class="kw">mod </span>macros;
@@ -899,7 +901,7 @@
 <span class="kw">use </span>chat_template::ChatTemplate;
 <span class="kw">use </span>core::fmt;
 <span class="kw">pub use </span>ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
-<span class="kw">pub use </span>gguf::{GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
+<span class="kw">pub use </span>gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 <span class="kw">pub use </span>isq::IsqModel;
 <span class="kw">pub use </span>normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 <span class="kw">pub use </span>normal_loaders::{

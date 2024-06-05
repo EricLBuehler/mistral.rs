@@ -543,14 +543,11 @@
 <a href="#541" id="541">541</a>
 <a href="#542" id="542">542</a>
 <a href="#543" id="543">543</a>
-<a href="#544" id="544">544</a>
-<a href="#545" id="545">545</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
-<span class="kw">use </span><span class="kw">crate</span>::gguf::Content;
 <span class="kw">use </span><span class="kw">crate</span>::layers::repeat_kv;
 <span class="kw">use </span><span class="kw">crate</span>::layers::verify_sanity_gguf;
 <span class="kw">use </span><span class="kw">crate</span>::layers::CausalMasker;
@@ -566,6 +563,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::lora::QLoraLinear;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::extract_logits;
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
+<span class="kw">use </span>candle_core::quantized::gguf_file;
 <span class="kw">use </span>candle_core::quantized::QMatMul;
 <span class="kw">use </span>candle_core::quantized::QTensor;
 <span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -763,7 +761,8 @@
 <span class="kw">impl </span>ModelConfig::FromAdapterGGUF <span class="kw">for </span>ModelWeights {
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>from_gguf&lt;R: std::io::Seek + std::io::Read&gt;(
-        <span class="kw-2">mut </span>ct: Content&lt;<span class="lifetime">'_</span>, R&gt;,
+        ct: gguf_file::Content,
+        reader: <span class="kw-2">&amp;mut </span>R,
         device: <span class="kw-2">&amp;</span>Device,
         lora_config: <span class="kw-2">&amp;</span>[((String, String), LoraConfig)],
         vb: <span class="kw-2">&amp;</span>VarBuilder,
@@ -772,39 +771,36 @@
         mapper: DeviceMapMetadata,
         preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        verify_sanity_gguf(
-            ct.get_metadata(<span class="string">"general.architecture"</span>)<span class="question-mark">?
-                </span>.to_string()
-                .unwrap(),
-            <span class="string">"phi3"</span>,
-        )<span class="question-mark">?</span>;
+        <span class="kw">let </span>md_get = |s: <span class="kw-2">&amp;</span>str| <span class="kw">match </span>ct.metadata.get(s) {
+            <span class="prelude-val">None </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"cannot find {s} in metadata"</span>),
+            <span class="prelude-val">Some</span>(v) =&gt; <span class="prelude-val">Ok</span>(v),
+        };
+        verify_sanity_gguf(md_get(<span class="string">"general.architecture"</span>)<span class="question-mark">?</span>.to_string().unwrap(), <span class="string">"phi3"</span>)<span class="question-mark">?</span>;
         verify_sanity_adapters(ordering, <span class="kw-2">&amp;</span>SUPPORTED_LAYERS)<span class="question-mark">?</span>;
 
         <span class="comment">// Parameter extraction from metadata.
-        </span><span class="kw">let </span>head_count = ct.get_metadata(<span class="string">"phi3.attention.head_count"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="kw">let </span>head_count_kv = ct.get_metadata(<span class="string">"phi3.attention.head_count_kv"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="kw">let </span>block_count = ct.get_metadata(<span class="string">"phi3.block_count"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="kw">let </span>embedding_length = ct.get_metadata(<span class="string">"phi3.embedding_length"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="kw">let </span>i_size = ct.get_metadata(<span class="string">"phi3.feed_forward_length"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="kw">let </span>rope_dim = ct.get_metadata(<span class="string">"phi3.rope.dimension_count"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="kw">let </span>rms_eps = ct
-            .get_metadata(<span class="string">"phi3.attention.layer_norm_rms_epsilon"</span>)<span class="question-mark">?
-            </span>.to_f32()<span class="question-mark">? </span><span class="kw">as </span>f64;
-        <span class="kw">let </span>context_window = ct.get_metadata(<span class="string">"phi3.context_length"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
+        </span><span class="kw">let </span>head_count = md_get(<span class="string">"phi3.attention.head_count"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
+        <span class="kw">let </span>head_count_kv = md_get(<span class="string">"phi3.attention.head_count_kv"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
+        <span class="kw">let </span>block_count = md_get(<span class="string">"phi3.block_count"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
+        <span class="kw">let </span>embedding_length = md_get(<span class="string">"phi3.embedding_length"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
+        <span class="kw">let </span>i_size = md_get(<span class="string">"phi3.feed_forward_length"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
+        <span class="kw">let </span>rope_dim = md_get(<span class="string">"phi3.rope.dimension_count"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
+        <span class="kw">let </span>rms_eps = md_get(<span class="string">"phi3.attention.layer_norm_rms_epsilon"</span>)<span class="question-mark">?</span>.to_f32()<span class="question-mark">? </span><span class="kw">as </span>f64;
+        <span class="kw">let </span>context_window = md_get(<span class="string">"phi3.context_length"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
         <span class="kw">let </span>(cos, sin) = precomput_freqs_cis(rope_dim, <span class="number">10_000.</span>, device, context_window)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>tok_embeddings = ct.tensor(<span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>tok_embeddings = ct.tensor(reader, <span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(device)<span class="question-mark">?</span>;
-        <span class="kw">let </span>output_norm = rms_norm(ct.tensor(<span class="string">"output_norm.weight"</span>, device)<span class="question-mark">?</span>, rms_eps)<span class="question-mark">?</span>;
-        <span class="kw">let </span>output = QMatMul::from_qtensor(ct.tensor(<span class="string">"output.weight"</span>, device)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>output_norm = rms_norm(ct.tensor(reader, <span class="string">"output_norm.weight"</span>, device)<span class="question-mark">?</span>, rms_eps)<span class="question-mark">?</span>;
+        <span class="kw">let </span>output = QMatMul::from_qtensor(ct.tensor(reader, <span class="string">"output.weight"</span>, device)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(block_count);
         <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>count = <span class="number">0</span>;
         <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..block_count {
             <span class="kw">let </span>prefix = <span class="macro">format!</span>(<span class="string">"blk.{layer_idx}"</span>);
             <span class="kw">let </span>device = mapper.device_for(layer_idx, <span class="bool-val">false</span>).unwrap_or(device);
-            <span class="kw">let </span>ffn_up = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_up.weight"</span>), device)<span class="question-mark">?</span>;
-            <span class="kw">let </span>ffn_down = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_down.weight"</span>), device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>ffn_up = ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_up.weight"</span>), device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>ffn_down = ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_down.weight"</span>), device)<span class="question-mark">?</span>;
             <span class="kw">let </span>cfg_up = get_lora_cfg(<span class="kw-2">&amp;</span>ffn_up);
             <span class="kw">let </span>cfg_down = get_lora_cfg(<span class="kw-2">&amp;</span>ffn_down);
             <span class="kw">let </span>mlp = Mlp {
@@ -831,15 +827,15 @@
                 i_size,
             };
             <span class="kw">let </span>attn_norm = rms_norm(
-                ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_norm.weight"</span>), device)<span class="question-mark">?</span>,
+                ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_norm.weight"</span>), device)<span class="question-mark">?</span>,
                 rms_eps,
             )<span class="question-mark">?</span>;
             <span class="kw">let </span>ffn_norm = rms_norm(
-                ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_norm.weight"</span>), device)<span class="question-mark">?</span>,
+                ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_norm.weight"</span>), device)<span class="question-mark">?</span>,
                 rms_eps,
             )<span class="question-mark">?</span>;
-            <span class="kw">let </span>qkv = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_qkv.weight"</span>), device)<span class="question-mark">?</span>;
-            <span class="kw">let </span>output = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_output.weight"</span>), device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>qkv = ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_qkv.weight"</span>), device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>output = ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_output.weight"</span>), device)<span class="question-mark">?</span>;
             <span class="kw">let </span>cfg_qkv = get_lora_cfg(<span class="kw-2">&amp;</span>qkv);
             <span class="kw">let </span>cfg_out = get_lora_cfg(<span class="kw-2">&amp;</span>output);
             layers.push(LayerWeights {

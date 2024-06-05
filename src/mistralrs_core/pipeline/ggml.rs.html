@@ -891,7 +891,7 @@
             revision,
             <span class="self">self</span>,
             <span class="self">self</span>.quantized_model_id,
-            <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="self">self</span>.quantized_filename.as_ref().unwrap().clone()]),
+            <span class="self">self</span>.quantized_filename,
             silent
         );
         <span class="self">self</span>.load_model_from_path(<span class="kw-2">&amp;</span>paths<span class="question-mark">?</span>, _dtype, device, silent, mapper, in_situ_quant)
