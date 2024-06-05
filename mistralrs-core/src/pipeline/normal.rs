@@ -20,6 +20,7 @@ use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
+use crate::utils::debug::setup_logger_and_debug;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
@@ -155,6 +156,8 @@ impl NormalLoaderBuilder {
     }
 
     pub fn build(self, loader: NormalLoaderType) -> Box<dyn Loader> {
+        setup_logger_and_debug();
+
         let loader: Box<dyn NormalModelLoader> = match loader {
             NormalLoaderType::Mistral => Box::new(MistralLoader),
             NormalLoaderType::Gemma => Box::new(GemmaLoader),

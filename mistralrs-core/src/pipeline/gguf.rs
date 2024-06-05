@@ -17,6 +17,7 @@ use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
+use crate::utils::debug::setup_logger_and_debug;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
@@ -29,7 +30,7 @@ use crate::{
     xlora_models::{XLoraQLlama, XLoraQPhi3},
     GgufTokenizerConversion,
 };
-use crate::{do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, Pipeline, DEBUG};
+use crate::{do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, Pipeline};
 use anyhow::{bail, Context, Result};
 use candle_core::quantized::GgmlDType;
 use candle_core::{DType, Device, Tensor};
@@ -45,8 +46,6 @@ use strum::EnumString;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::info;
-use tracing::level_filters::LevelFilter;
-use tracing_subscriber::EnvFilter;
 
 enum Model {
     Llama(QLlama),
@@ -231,6 +230,8 @@ impl GGUFLoader {
         chat_template: Option<String>,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
+        setup_logger_and_debug();
+
         let model_id = if let Some(id) = model_id {
             Some(id)
         } else if let Some(xlora_order) = xlora_order.clone() {
@@ -291,20 +292,6 @@ impl Loader for GGUFLoader {
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let is_debug = std::env::var("MISTRALRS_DEBUG")
-            .unwrap_or_default()
-            .contains('1');
-        DEBUG.store(is_debug, std::sync::atomic::Ordering::Relaxed);
-
-        let filter = EnvFilter::builder()
-            .with_default_directive(if is_debug {
-                LevelFilter::INFO.into()
-            } else {
-                LevelFilter::DEBUG.into()
-            })
-            .from_env_lossy();
-        tracing_subscriber::fmt().with_env_filter(filter).init();
-
         if in_situ_quant.is_some() {
             anyhow::bail!(
                 "You are trying to in-situ quantize a GGUF model. This will not do anything."
