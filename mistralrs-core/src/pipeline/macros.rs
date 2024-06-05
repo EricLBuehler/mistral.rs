@@ -210,7 +210,7 @@ macro_rules! get_paths_gguf {
                 PathBuf::from_str("")?
             }
         } else {
-            info!("Loading `tokenizer_config.json` at `{}`", this_model_id);
+            info!("Loading `tokenizer_config.json` at `{}` because no chat template file was specified.", this_model_id);
             $crate::api_get_file!(
                 api,
                 "tokenizer_config.json",

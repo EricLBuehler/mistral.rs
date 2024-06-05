@@ -154,7 +154,7 @@ fn set_gemm_reduced_precision_f16() {
     let a = Tensor::zeros((2, 2), DType::BF16, &Device::new_cuda(0).unwrap()).unwrap();
     candle_core::cuda::set_gemm_reduced_precision_bf16(true);
     match a.matmul(&a) {
-        Ok(_) => (),
+        Ok(_) => tracing::info!("Enabling GEMM reduced precision in BF16."),
         Err(e) => {
             if format!("{e:?}").contains("CUBLAS_STATUS_NOT_SUPPORTED") {
                 tracing::info!("GEMM reduced precision in BF16 not supported.");
@@ -167,7 +167,7 @@ fn set_gemm_reduced_precision_f16() {
     let a = Tensor::zeros((2, 2), DType::F16, &Device::new_cuda(0).unwrap()).unwrap();
     candle_core::cuda::set_gemm_reduced_precision_f16(true);
     match a.matmul(&a) {
-        Ok(_) => (),
+        Ok(_) => tracing::info!("Enabling GEMM reduced precision in F16."),
         Err(e) => {
             if format!("{e:?}").contains("CUBLAS_STATUS_NOT_SUPPORTED") {
                 tracing::info!("GEMM reduced precision in F16 not supported.");
