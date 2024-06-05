@@ -6,8 +6,7 @@ use crate::{
         NormalSpecificConfig,
     },
     Loader, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector, VisionLoaderBuilder,
-    VisionSpecificConfig,
-    GGUF_MULTI_FILE_DELIMITER,
+    VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
 };
 
 pub struct LoaderBuilder {

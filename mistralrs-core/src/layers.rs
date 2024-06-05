@@ -19,7 +19,9 @@ use candle_nn::{Linear, Module, VarBuilder};
 pub use crate::layers_masker::CausalMasker;
 pub use crate::layers_utils::{flash_attn, repeat_kv, verify_sanity_gguf};
 
-use crate::{cublaslt::CUBLASLT_HANDLE, gguf::Content, pipeline::Phi3RopeScaling, INHIBIT_GEMM_F16};
+use crate::{
+    cublaslt::CUBLASLT_HANDLE, gguf::Content, pipeline::Phi3RopeScaling, INHIBIT_GEMM_F16,
+};
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
