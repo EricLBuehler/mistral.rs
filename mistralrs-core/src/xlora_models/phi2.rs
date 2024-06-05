@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     layers::ScaledDotProductAttention,
     lora::{linear, LinearLayerLike, LoraConfig, Ordering},
-    pipeline::IsqModel,
+    pipeline::{IsqModel, NormalLoadingMetadata},
 };
 /// Phi model.
 /// https://huggingface.co/microsoft/phi-2
@@ -24,7 +24,6 @@ use crate::{
     layers::{repeat_kv, CausalMasker, QLinear},
     models::phi2::Config,
     pipeline::{extract_logits, NormalModel},
-    DeviceMapMetadata,
 };
 
 use super::{classifier::XLoraClassifier, Cache, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -427,13 +426,13 @@ impl Model {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         is_gptx: bool,
-        mapper: DeviceMapMetadata,
-        loading_isq: bool,
-        real_device: Device,
+        normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
+        let mapper = normal_loading_metadata
+            .mapper
+            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
         let embed_tokens = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -454,7 +453,9 @@ impl Model {
                 cfg.head_dim(),
                 (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
                 cfg.max_position_embeddings,
-                mapper.device_for(layer_idx, false).unwrap_or(&real_device),
+                mapper
+                    .device_for(layer_idx, false)
+                    .unwrap_or(&normal_loading_metadata.real_device),
                 is_gptx,
                 vb.dtype(),
             )?;
@@ -466,7 +467,7 @@ impl Model {
                 &xlora_ordering,
                 &*mapper,
                 layer_idx,
-                loading_isq,
+                normal_loading_metadata.loading_isq,
                 rotary_emb,
                 preload_adapters,
             )?;
@@ -496,7 +497,7 @@ impl Model {
         let lm_head = candle_nn::linear(
             cfg.hidden_size,
             cfg.vocab_size,
-            mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
+            mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
         )?;
         Ok(Self {
             embed_tokens,
@@ -504,7 +505,7 @@ impl Model {
             final_layernorm,
             lm_head: QLinear::from_linear(lm_head),
             cache: Cache::new(cfg.num_hidden_layers, true),
-            device: real_device,
+            device: normal_loading_metadata.real_device,
             max_seq_len: cfg.max_position_embeddings,
             dtype: vb.dtype(),
             xlora_classifier: xlora_config.map(|xlora_config| {
