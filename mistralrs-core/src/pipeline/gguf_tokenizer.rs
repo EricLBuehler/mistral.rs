@@ -77,7 +77,7 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<ConversionResul
 
     let bos_str = tokens[bos as usize].clone();
     let eos_str = tokens[eos as usize].clone();
-    let unk_str;
+    let mut unk_str = None;
 
     let (tokenizer, ty) = match model.as_str() {
         "llama" | "replit" => {
@@ -92,7 +92,7 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<ConversionResul
 
             // Unigram (sentencepiece) default UNK is 0
             let unk = unk.map(|x| x as usize).unwrap_or(0);
-            unk_str = tokens[unk].clone();
+            unk_str = Some(tokens[unk].clone());
 
             let unigram = Unigram::from(vocab, Some(unk), true).map_err(anyhow::Error::msg)?;
             let mut tokenizer = Tokenizer::new(ModelWrapper::Unigram(unigram));
@@ -143,7 +143,7 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<ConversionResul
             tokenizer.add_special_tokens(&[AddedToken::from(tokens[bos as usize].clone(), true)]);
             tokenizer.add_special_tokens(&[AddedToken::from(tokens[eos as usize].clone(), true)]);
 
-            todo!()
+            (tokenizer, "bpe")
         }
         other => {
             anyhow::bail!("Tokenizer model `{other}` not supported.");
@@ -164,7 +164,7 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<ConversionResul
         tokenizer,
         bos: Some(bos_str),
         eos: Some(eos_str),
-        unk: Some(unk_str),
+        unk: unk_str,
     })
 }
 
