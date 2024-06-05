@@ -12,9 +12,9 @@ pub(crate) fn setup_logger_and_debug() {
 
     let filter = EnvFilter::builder()
         .with_default_directive(if is_debug {
-            LevelFilter::INFO.into()
-        } else {
             LevelFilter::DEBUG.into()
+        } else {
+            LevelFilter::INFO.into()
         })
         .from_env_lossy();
     tracing_subscriber::fmt().with_env_filter(filter).init();
