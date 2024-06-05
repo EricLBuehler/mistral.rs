@@ -4,8 +4,7 @@ use candle_core::{
     quantized::{GgmlDType, QMatMul, QTensor},
     Device, Tensor,
 };
-use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use indicatif::{ProgressBar, ProgressStyle};
 use tracing::{info, warn};
 
 use crate::device_map::DeviceMapper;
@@ -54,6 +53,26 @@ fn get_quantization_behaviour(tensor: &Tensor, dtype: GgmlDType) -> Quantization
     }
 }
 
+macro_rules! generate_isq {
+    ($tensor:expr, $device:expr, $dtype:expr, $n_quantized:expr) => {
+        if let QMatMul::Tensor(t) = $tensor {
+            let t = t.to_device(&$device).unwrap();
+            let quantization_behaviour = get_quantization_behaviour(&t, $dtype);
+            *$tensor =  match quantization_behaviour{
+                QuantizationBehaviour::Skip => {
+                    let shape = t.shape();
+                    warn!("Skipping quantization of tensor with shape {shape:?} as it is not quantizable.");
+                    QMatMul::QTensor(Arc::new(QTensor::quantize(&t, GgmlDType::F32).unwrap()))
+                },
+                QuantizationBehaviour::Quantize(dtype) => {
+                    $n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    QMatMul::QTensor(Arc::new(QTensor::quantize(&t, dtype).unwrap()))
+                }
+            }
+        }
+    };
+}
+
 pub trait IsqModel {
     fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper);
     /// Quantize the model in-situ.
@@ -82,28 +101,32 @@ pub trait IsqModel {
             devices.push(device.clone());
         }
 
-        tensors
-            .into_par_iter()
-            .zip(devices)
-            .progress_with(bar)
-            .for_each(|((tensor, _), device)| {
-                if let QMatMul::Tensor(t) = tensor {
-                    let t = t.to_device(&device).unwrap();
-                    let quantization_behaviour = get_quantization_behaviour(&t, dtype);
-                    *tensor =  match quantization_behaviour{
-                        QuantizationBehaviour::Skip => {
-                            let shape = t.shape();
-                            warn!("Skipping quantization of tensor with shape {shape:?} as it is not quantizable.");
-                            QMatMul::QTensor(Arc::new(QTensor::quantize(&t, GgmlDType::F32).unwrap()))
-                        },
-                        QuantizationBehaviour::Quantize(dtype) => {
-                            n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            QMatMul::QTensor(Arc::new(QTensor::quantize(&t, dtype).unwrap()))
-                        }
-                    }
-                }
-            });
+        #[cfg(not(feature = "metal"))]
+        {
+            use indicatif::ParallelProgressIterator;
+            use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+            tensors
+                .into_par_iter()
+                .zip(devices)
+                .progress_with(bar)
+                .for_each(|((tensor, _), device)| {
+                    generate_isq!(tensor, device, dtype, n_quantized)
+                });
+        }
+
+        #[cfg(feature = "metal")]
+        {
+            use indicatif::ProgressIterator;
+            tensors
+                .into_iter()
+                .zip(devices)
+                .progress_with(bar)
+                .for_each(|((tensor, _), device)| {
+                    generate_isq!(tensor, device, dtype, n_quantized)
+                });
+        }
         info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors.");
+
         Ok(())
     }
 }
