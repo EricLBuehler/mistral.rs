@@ -26,8 +26,8 @@ pub use gguf::{GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConf
 pub use isq::IsqModel;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 pub use normal_loaders::{
-    GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
-    NormalLoadingMetadata, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3RopeScaling, Qwen2Loader,
+    GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, NormalModelLoader,
+    Phi2Loader, Phi3Loader, Qwen2Loader,NormalLoadingMetadata, Phi3RopeScaling
 };
 pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths, XLoraPaths};
 pub(crate) use processing::{BasicProcessor, MessagesAction, Processor, ProcessorCreator};
