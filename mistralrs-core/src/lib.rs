@@ -261,7 +261,7 @@ impl MistralRs {
 
     /// attempts to reboot the engine, if the sender (only way to communicate with
     /// the engine) is closed
-    /// TODO: GS don't use anyhow for these errors?
+    // TODO(GregSzumel): don't use anyhow for these errors?
     pub fn reboot_engine(&self) -> anyhow::Result<()> {
         tracing::info!("attempting to reboot");
         // only start a new runtime if the receiver was closed. this implies
@@ -295,7 +295,7 @@ impl MistralRs {
         }
     }
 
-    /// TODO: GS don't use anyhow for these errors?
+    // TODO(GregSzumel): don't use anyhow for these errors?
     fn update_sender(&self, new_sender: Sender<Request>) -> anyhow::Result<()> {
         tracing::info!("Trying to update sender");
 

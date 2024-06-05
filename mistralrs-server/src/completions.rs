@@ -162,7 +162,7 @@ pub async fn completions(
     let request = parse_request(oairequest, state.clone(), tx);
     let sender = state.get_sender().unwrap();
     // if the sender is closed, try to reboot the engine, and get the sender
-    // TODO: GS - make more readable?
+    // TODO(GregSzumel): make more readable?
     let sender = if sender.is_closed() {
         match state.reboot_engine() {
             Ok(_) => state.get_sender().unwrap(),
