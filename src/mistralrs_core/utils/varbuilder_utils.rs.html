@@ -143,19 +143,34 @@
 <a href="#141" id="141">141</a>
 <a href="#142" id="142">142</a>
 <a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! Utilities for creating a VarBuilder from a VarMap loaded from tensor storage formats.
 
-</span><span class="kw">use </span>std::{collections::HashMap, path::PathBuf, thread};
+</span><span class="kw">use </span>std::{collections::HashMap, path::PathBuf, thread::JoinHandle};
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{
     var_builder::{SimpleBackend, VarBuilderArgs},
     VarBuilder,
 };
+<span class="kw">use </span>either::Either;
 
 <span class="kw">use </span><span class="kw">crate</span>::lora::LoraConfig;
 <span class="kw">use </span><span class="kw">crate</span>::utils::progress::IterWithProgress;
 <span class="kw">use </span>derive_new::new;
+
+<span class="kw">use </span><span class="kw">super</span>::progress::{Joinable, NonThreadingHandle, Parellelize};
 
 <span class="doccomment">/// Load tensors into a VarBuilder backed by a VarMap using MmapedSafetensors.
 /// Set `silent` to not show a progress bar.
@@ -166,21 +181,30 @@
     device: <span class="kw-2">&amp;</span>Device,
     silent: bool,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;VarBuilderArgs&lt;<span class="lifetime">'a</span>, Box&lt;<span class="kw">dyn </span>SimpleBackend&gt;&gt;&gt; {
-    <span class="kw">let </span><span class="kw-2">mut </span>handles = Vec::new();
+    <span class="attr">#[allow(clippy::type_complexity)]
+    </span><span class="kw">let </span><span class="kw-2">mut </span>handles: Vec&lt;
+        Either&lt;
+            JoinHandle&lt;<span class="prelude-ty">Result</span>&lt;HashMap&lt;String, Tensor&gt;&gt;&gt;,
+            NonThreadingHandle&lt;
+                <span class="prelude-ty">Result</span>&lt;HashMap&lt;String, Tensor&gt;&gt;,
+                Box&lt;<span class="kw">dyn </span>FnOnce() -&gt; <span class="prelude-ty">Result</span>&lt;HashMap&lt;String, Tensor&gt;&gt; + Send + <span class="lifetime">'static</span>&gt;,
+            &gt;,
+        &gt;,
+    &gt; = Vec::new();
 
     <span class="kw">for </span>path <span class="kw">in </span>paths {
         <span class="kw">let </span>device = device.clone();
-        handles.push(thread::spawn(<span class="kw">move </span>|| {
+        handles.push(Parellelize::spawn(Box::new(<span class="kw">move </span>|| {
             <span class="kw">let </span>loader = Common::new();
             loader.load_tensors_from_path(<span class="kw-2">&amp;</span>path, <span class="kw-2">&amp;</span>device, dtype, silent)
-        }));
+        })));
     }
     <span class="kw">for </span>(i, path) <span class="kw">in </span>xlora_paths.into_iter().enumerate() {
         <span class="kw">let </span>device = device.clone();
-        handles.push(thread::spawn(<span class="kw">move </span>|| {
+        handles.push(Parellelize::spawn(Box::new(<span class="kw">move </span>|| {
             <span class="kw">let </span>loader = XLora::new(i + <span class="number">1</span>);
             loader.load_tensors_from_path(<span class="kw-2">&amp;</span>path, <span class="kw-2">&amp;</span>device, dtype, silent)
-        }));
+        })));
     }
 
     <span class="kw">let </span><span class="kw-2">mut </span>ws = HashMap::new();
