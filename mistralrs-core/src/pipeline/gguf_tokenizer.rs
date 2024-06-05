@@ -149,6 +149,7 @@ mod tests {
 
     use super::convert_ggml_to_hf_tokenizer;
 
+    #[allow(dead_code)]
     #[derive(Debug)]
     enum TokenizerType {
         /// Mistral v0.1 tokenizer
@@ -229,7 +230,7 @@ mod tests {
         skip_special_tokens: bool,
     ) -> Result<String> {
         tokenizer
-            .decode(&token_ids, skip_special_tokens)
+            .decode(token_ids, skip_special_tokens)
             .map_err(anyhow::Error::msg)
     }
 
