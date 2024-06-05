@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 pub struct MetadataContext<'a> {
     pub path_prefix: String,
-    pub metadata: &'a HashMap<String, gguf_file::Value>
+    pub metadata: &'a HashMap<String, gguf_file::Value>,
 }
 
 impl MetadataContext<'_> {
@@ -17,7 +17,9 @@ impl MetadataContext<'_> {
 
         // Unwrap the inner value of the `Value` enum via trait method,
         // otherwise format error with prop key as context:
-        value.try_value_into().or_else(|e| candle_core::bail!("`{prop_key}` `{e}`"))
+        value
+            .try_value_into()
+            .or_else(|e| candle_core::bail!("`{prop_key}` `{e}`"))
     }
 
     // Fail early - Catch all missing mandatory keys upfront:
@@ -39,10 +41,14 @@ impl MetadataContext<'_> {
 }
 
 pub trait TryFromValue {
-    fn try_from_value(value: gguf_file::Value) -> Result<Self, candle_core::Error> where Self: Sized;
+    fn try_from_value(value: gguf_file::Value) -> Result<Self, candle_core::Error>
+    where
+        Self: Sized;
 }
 
 // Value wrapped types, each has a different conversion method:
+// NOTE: Type conversion methods internally bail with "not a <into type> <input value>"
+// https://docs.rs/candle-core/latest/candle_core/quantized/gguf_file/enum.Value.html#variants
 akin! {
     let &types = [String, f32, u32];
     let &to_type = [value.to_string().cloned(), value.to_f32(), value.to_u32()];
@@ -57,7 +63,10 @@ akin! {
 // Vec<Value> to Vec<T> from above types:
 impl<T: TryFromValue> TryFromValue for Vec<T> {
     fn try_from_value(value_vec: gguf_file::Value) -> Result<Self, candle_core::Error> {
-        value_vec.to_vec().or_else(|_| candle_core::bail!("value is not a `Vec`"))?.clone()
+        value_vec
+            .to_vec()
+            .or_else(|_| candle_core::bail!("value is not a `Vec`"))?
+            .clone()
             .into_iter()
             .map(|item| T::try_from_value(item))
             .collect()

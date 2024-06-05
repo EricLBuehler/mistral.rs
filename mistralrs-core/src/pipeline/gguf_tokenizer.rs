@@ -31,6 +31,8 @@ struct PropsGGUF {
     bos: u32,
 }
 
+// This approach is a workaround for candles GGUF `Value` enum type wrapper,
+// a better upstream approach would be to have serialize/deserialize support.
 impl TryFrom<MetadataContext<'_>> for PropsGGUF {
     type Error = anyhow::Error;
 
@@ -205,7 +207,11 @@ mod tests {
     }
 
     // The provided passage should encode and decode back into the same passage string:
-    fn codec_roundtrip(tokenizer: &Tokenizer, passage: &str, add_special_tokens: bool) -> Result<String> {
+    fn codec_roundtrip(
+        tokenizer: &Tokenizer,
+        passage: &str,
+        add_special_tokens: bool,
+    ) -> Result<String> {
         let tokenized = tokenizer
             .encode(passage, add_special_tokens)
             .map_err(anyhow::Error::msg)?;
@@ -214,7 +220,11 @@ mod tests {
         decode(tokenizer, tokenized.get_ids(), !add_special_tokens)
     }
 
-    fn decode(tokenizer: &Tokenizer, token_ids: &[u32], skip_special_tokens: bool) -> Result<String> {
+    fn decode(
+        tokenizer: &Tokenizer,
+        token_ids: &[u32],
+        skip_special_tokens: bool,
+    ) -> Result<String> {
         tokenizer
             .decode(&token_ids, skip_special_tokens)
             .map_err(anyhow::Error::msg)
