@@ -105,13 +105,16 @@ fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, Vec<Str
     // Unigram (SentencePiece) default UNK is 0
     let unk = unk.unwrap_or(0);
 
-    let scores = p.scores
-        .as_ref()
-        .expect("`llama` unigram tokenizer is missing required metadata `tokenizer.ggml.scores`");
-    let mut vocab = Vec::new();
-    for (token, score) in p.tokens.iter().cloned().zip(scores.iter().cloned()) {
-        vocab.push((token, score as f64));
-    }
+    let vocab: Vec<(String, f64)> = {
+        let Some(s) = p.scores.as_ref() else {
+            anyhow::bail!(
+                "`llama` unigram tokenizer is missing required metadata `tokenizer.ggml.scores`"
+            );
+        };
+        let scores = s.iter().cloned().map(|f_32| f_32 as f64);
+
+        p.tokens.iter().cloned().zip(scores).collect()
+    };
 
     let unigram = Unigram::from(vocab, Some(unk as usize), true).map_err(anyhow::Error::msg)?;
     let mut tokenizer = Tokenizer::new(ModelWrapper::Unigram(unigram));
