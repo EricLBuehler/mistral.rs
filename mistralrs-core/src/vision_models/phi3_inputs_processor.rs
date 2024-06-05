@@ -393,7 +393,7 @@ impl ImagePreProcessor for Phi3InputsProcessor {
                 input: &ToTensorAndResize {
                     target_h: 336,
                     target_w: 336,
-                    filter: FilterType::Triangle,
+                    filter: FilterType::CatmullRom,
                 },
                 inner_transforms: &[&Normalize {
                     mean: config.image_mean.unwrap_or(Self::DEFAULT_MEAN).to_vec(),
