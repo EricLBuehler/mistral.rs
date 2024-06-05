@@ -330,7 +330,12 @@ impl Loader for GGUFLoader {
             }
         };
 
-        let gguf_chat_template = get_gguf_chat_template(&content);
+        // Only load gguf chat template if there is nothing else
+        let gguf_chat_template = if paths.get_template_filename().is_none() {
+            get_gguf_chat_template(&content)
+        } else {
+            None
+        };
 
         let has_adapter = self.kind.is_adapted();
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
