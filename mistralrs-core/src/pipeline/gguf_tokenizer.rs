@@ -1,10 +1,10 @@
-use std::sync::atomic::Ordering;
+use std::{collections::HashMap, sync::atomic::Ordering};
 
 use anyhow::Result;
 use candle_core::quantized::gguf_file::Content;
 use tokenizers::{
     decoders::{self, byte_fallback::ByteFallback, fuse::Fuse, strip::Strip},
-    models::unigram::Unigram,
+    models::{bpe::BpeBuilder, unigram::Unigram},
     normalizers::{self, Prepend, Replace},
     AddedToken, DecoderWrapper, ModelWrapper, NormalizerWrapper, Tokenizer,
 };
@@ -112,6 +112,38 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<ConversionResul
             tokenizer.add_special_tokens(&[AddedToken::from(tokens[unk].clone(), true)]);
 
             (tokenizer, "unigram")
+        }
+        "gpt2" => {
+            // This is a `bpe` tokenizer
+            let merges = merges
+                .as_ref()
+                .expect("Expect `tokenizer.ggml.merges` for `llama` unigram tokeizer.")
+                .into_iter()
+                .map(|merges| {
+                    let res = merges.splitn(2, ' ').collect::<Vec<_>>();
+                    (res[0].to_string(), res[1].to_string())
+                })
+                .collect::<Vec<_>>();
+            let mut vocab = HashMap::new();
+            for (i, token) in tokens.iter().enumerate() {
+                vocab.insert(token.clone(), i as u32);
+            }
+
+            let bpe = BpeBuilder::new()
+                .vocab_and_merges(vocab, merges)
+                .build()
+                .map_err(anyhow::Error::msg)?;
+            let mut tokenizer = Tokenizer::new(ModelWrapper::BPE(bpe));
+            tokenizer.with_decoder(decoders::byte_level::ByteLevel::new(true, true, true));
+            tokenizer.with_normalizer(normalizers::Sequence::new(vec![
+                NormalizerWrapper::Prepend(Prepend::new("▁".to_string())),
+                NormalizerWrapper::Replace(Replace::new(" ", "▁").map_err(anyhow::Error::msg)?),
+            ]));
+
+            tokenizer.add_special_tokens(&[AddedToken::from(tokens[bos as usize].clone(), true)]);
+            tokenizer.add_special_tokens(&[AddedToken::from(tokens[eos as usize].clone(), true)]);
+
+            todo!()
         }
         other => {
             anyhow::bail!("Tokenizer model `{other}` not supported.");
