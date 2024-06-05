@@ -793,6 +793,7 @@
 <a href="#791" id="791">791</a>
 <a href="#792" id="792">792</a>
 <a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
@@ -810,8 +811,7 @@
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, QLinear, RmsNorm},
     models::llama::Config,
-    pipeline::{<span class="self">self</span>, extract_logits, LayerCaches, NormalModel},
-    DeviceMapMetadata,
+    pipeline::{<span class="self">self</span>, extract_logits, LayerCaches, NormalLoadingMetadata, NormalModel},
 };
 
 <span class="kw">use super</span>::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -1347,13 +1347,13 @@
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         xlora_ordering: Ordering,
         is_gptx: bool,
-        mapper: DeviceMapMetadata,
-        loading_isq: bool,
-        real_device: Device,
+        normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>dtype = vb.dtype();
-        <span class="kw">let </span>mapper = mapper.into_mapper(cfg.num_hidden_layers, <span class="kw-2">&amp;</span>real_device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>mapper = normal_loading_metadata
+            .mapper
+            .into_mapper(cfg.num_hidden_layers, <span class="kw-2">&amp;</span>normal_loading_metadata.real_device)<span class="question-mark">?</span>;
         <span class="kw">let </span>wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -1362,7 +1362,7 @@
         <span class="kw">let </span>lm_head = candle_nn::linear(
             cfg.hidden_size,
             cfg.vocab_size,
-            mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), loading_isq),
+            mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), normal_loading_metadata.loading_isq),
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>ln_f = RmsNorm::new(
             cfg.hidden_size,
@@ -1378,7 +1378,9 @@
                         cfg.rope_theta,
                         head_dim,
                         cfg.max_position_embeddings,
-                        mapper.device_for(i, <span class="bool-val">false</span>).unwrap_or(<span class="kw-2">&amp;</span>real_device),
+                        mapper
+                            .device_for(i, <span class="bool-val">false</span>)
+                            .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device),
                         is_gptx,
                         vb.dtype(),
                     )
@@ -1392,7 +1394,7 @@
                     <span class="kw-2">&amp;</span>xlora_ordering,
                     <span class="kw-2">&amp;*</span>mapper,
                     i,
-                    loading_isq,
+                    normal_loading_metadata.loading_isq,
                     rotary_emb,
                     preload_adapters,
                 )
@@ -1434,7 +1436,7 @@
             ln_f,
             lm_head: QLinear::from_linear(lm_head),
             kv_cache: pipeline::Cache::new(cfg.num_hidden_layers, <span class="bool-val">true</span>),
-            device: real_device,
+            device: normal_loading_metadata.real_device,
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, <span class="bool-val">false</span>).unwrap()
             }),

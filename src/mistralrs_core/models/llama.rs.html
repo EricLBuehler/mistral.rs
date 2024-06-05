@@ -415,6 +415,7 @@
 <a href="#413" id="413">413</a>
 <a href="#414" id="414">414</a>
 <a href="#415" id="415">415</a>
+<a href="#416" id="416">416</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, <span class="prelude-ty">Result</span>, Tensor};
@@ -427,8 +428,7 @@
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
-    pipeline::{extract_logits, IsqModel, NormalModel},
-    DeviceMapMetadata,
+    pipeline::{extract_logits, IsqModel, NormalLoadingMetadata, NormalModel},
 };
 
 <span class="attr">#[derive(Debug, Clone, Deserialize)]
@@ -711,11 +711,11 @@
         cfg: <span class="kw-2">&amp;</span>Config,
         vb: VarBuilder,
         is_gptx: bool,
-        mapper: DeviceMapMetadata,
-        loading_isq: bool,
-        real_device: Device,
+        normal_loading_metadata: NormalLoadingMetadata,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>mapper = mapper.into_mapper(cfg.num_hidden_layers, <span class="kw-2">&amp;</span>real_device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>mapper = normal_loading_metadata
+            .mapper
+            .into_mapper(cfg.num_hidden_layers, <span class="kw-2">&amp;</span>normal_loading_metadata.real_device)<span class="question-mark">?</span>;
         <span class="kw">let </span>wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -724,7 +724,7 @@
         <span class="kw">let </span>lm_head = linear(
             cfg.hidden_size,
             cfg.vocab_size,
-            mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), loading_isq),
+            mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), normal_loading_metadata.loading_isq),
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>ln_f = RmsNorm::new(
             cfg.hidden_size,
@@ -739,7 +739,9 @@
                         cfg.rope_theta,
                         head_dim,
                         cfg.max_position_embeddings,
-                        mapper.device_for(i, <span class="bool-val">false</span>).unwrap_or(<span class="kw-2">&amp;</span>real_device),
+                        mapper
+                            .device_for(i, <span class="bool-val">false</span>)
+                            .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device),
                         is_gptx,
                         vb.dtype(),
                     )
@@ -750,7 +752,7 @@
                     cfg,
                     <span class="kw-2">&amp;*</span>mapper,
                     i,
-                    loading_isq,
+                    normal_loading_metadata.loading_isq,
                     rotary_emb,
                 )
                 .expect(<span class="string">"Failed to load block."</span>)
@@ -763,7 +765,7 @@
             ln_f,
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             kv_cache: <span class="kw">crate</span>::pipeline::Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
-            device: real_device,
+            device: normal_loading_metadata.real_device,
             mapper,
         })
     }

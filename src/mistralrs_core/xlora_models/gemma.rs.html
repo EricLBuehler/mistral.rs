@@ -845,6 +845,7 @@
 <a href="#843" id="843">843</a>
 <a href="#844" id="844">844</a>
 <a href="#845" id="845">845</a>
+<a href="#846" id="846">846</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -852,7 +853,7 @@
 <span class="kw">use crate</span>::{
     layers::ScaledDotProductAttention,
     lora::{linear_b <span class="kw">as </span>linear, LinearLayerLike, LoraConfig, Ordering},
-    pipeline::IsqModel,
+    pipeline::{IsqModel, NormalLoadingMetadata},
 };
 <span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{RotaryEmbedding, VarBuilder};
@@ -864,7 +865,6 @@
     layers::{repeat_kv, CausalMasker, QLinear},
     models::gemma::Config,
     pipeline::{extract_logits, Cache, NormalModel},
-    DeviceMapMetadata,
 };
 
 <span class="kw">use super</span>::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -1318,13 +1318,13 @@
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         xlora_ordering: Ordering,
         is_gptx: bool,
-        mapper: DeviceMapMetadata,
-        loading_isq: bool,
-        real_device: Device,
+        normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
-        <span class="kw">let </span>mapper = mapper.into_mapper(cfg.num_hidden_layers, <span class="kw-2">&amp;</span>real_device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>mapper = normal_loading_metadata
+            .mapper
+            .into_mapper(cfg.num_hidden_layers, <span class="kw-2">&amp;</span>normal_loading_metadata.real_device)<span class="question-mark">?</span>;
         <span class="kw">let </span>embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -1338,7 +1338,9 @@
                 cfg.rope_theta <span class="kw">as </span>f32,
                 cfg.head_dim,
                 cfg.max_position_embeddings,
-                mapper.device_for(layer_idx, <span class="bool-val">false</span>).unwrap_or(<span class="kw-2">&amp;</span>real_device),
+                mapper
+                    .device_for(layer_idx, <span class="bool-val">false</span>)
+                    .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device),
                 is_gptx,
                 vb.dtype(),
             )<span class="question-mark">?</span>);
@@ -1351,7 +1353,7 @@
                 <span class="kw-2">&amp;</span>xlora_ordering,
                 <span class="kw-2">&amp;*</span>mapper,
                 layer_idx,
-                loading_isq,
+                normal_loading_metadata.loading_isq,
                 preload_adapters,
             )<span class="question-mark">?</span>;
             layers.push(layer)
@@ -1395,7 +1397,7 @@
             layers,
             norm,
             lm_head: QLinear::from_linear(lm_head),
-            device: real_device,
+            device: normal_loading_metadata.real_device,
             dtype: vb.dtype(),
             hidden_size: cfg.hidden_size,
             cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">true</span>),

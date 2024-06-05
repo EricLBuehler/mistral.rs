@@ -426,6 +426,7 @@
 <a href="#424" id="424">424</a>
 <a href="#425" id="425">425</a>
 <a href="#426" id="426">426</a>
+<a href="#427" id="427">427</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
@@ -435,8 +436,7 @@
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, QLinear, RmsNorm, ScaledDotProductAttention},
-    pipeline::{extract_logits, Cache, IsqModel, NormalModel},
-    DeviceMapMetadata,
+    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
 };
 
 <span class="attr">#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -697,12 +697,12 @@
         cfg: <span class="kw-2">&amp;</span>Config,
         vb: VarBuilder,
         is_gptx: bool,
-        mapper: DeviceMapMetadata,
-        loading_isq: bool,
-        real_device: Device,
+        normal_loading_metadata: NormalLoadingMetadata,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
-        <span class="kw">let </span>mapper = mapper.into_mapper(cfg.num_hidden_layers, <span class="kw-2">&amp;</span>real_device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>mapper = normal_loading_metadata
+            .mapper
+            .into_mapper(cfg.num_hidden_layers, <span class="kw-2">&amp;</span>normal_loading_metadata.real_device)<span class="question-mark">?</span>;
         <span class="kw">let </span>embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -716,7 +716,9 @@
                 cfg.rope_theta <span class="kw">as </span>f32,
                 head_dim,
                 cfg.max_position_embeddings,
-                mapper.device_for(layer_idx, <span class="bool-val">false</span>).unwrap_or(<span class="kw-2">&amp;</span>real_device),
+                mapper
+                    .device_for(layer_idx, <span class="bool-val">false</span>)
+                    .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device),
                 is_gptx,
                 vb.dtype(),
             )<span class="question-mark">?</span>);
@@ -726,7 +728,7 @@
                 vb_l.pp(layer_idx),
                 <span class="kw-2">&amp;*</span>mapper,
                 layer_idx,
-                loading_isq,
+                normal_loading_metadata.loading_isq,
             )<span class="question-mark">?</span>;
             layers.push(layer)
         }
@@ -738,7 +740,7 @@
         <span class="kw">let </span>lm_head = linear_no_bias(
             cfg.hidden_size,
             cfg.vocab_size,
-            mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), loading_isq),
+            mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), normal_loading_metadata.loading_isq),
         )<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             embed_tokens,
@@ -746,7 +748,7 @@
             norm,
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             sliding_window: cfg.sliding_window,
-            device: real_device,
+            device: normal_loading_metadata.real_device,
             cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
             max_seq_len: cfg.max_position_embeddings,
             mapper,

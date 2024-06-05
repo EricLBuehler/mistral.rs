@@ -784,6 +784,7 @@
 <a href="#782" id="782">782</a>
 <a href="#783" id="783">783</a>
 <a href="#784" id="784">784</a>
+<a href="#785" id="785">785</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -791,7 +792,7 @@
 <span class="kw">use crate</span>::{
     layers::ScaledDotProductAttention,
     lora::{linear, LinearLayerLike, LoraConfig, Ordering},
-    pipeline::IsqModel,
+    pipeline::{IsqModel, NormalLoadingMetadata},
 };
 <span class="doccomment">/// Phi model.
 /// https://huggingface.co/microsoft/phi-2
@@ -810,7 +811,6 @@
     layers::{repeat_kv, CausalMasker, QLinear},
     models::phi2::Config,
     pipeline::{extract_logits, NormalModel},
-    DeviceMapMetadata,
 };
 
 <span class="kw">use super</span>::{classifier::XLoraClassifier, Cache, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -1213,13 +1213,13 @@
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         xlora_ordering: Ordering,
         is_gptx: bool,
-        mapper: DeviceMapMetadata,
-        loading_isq: bool,
-        real_device: Device,
+        normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
-        <span class="kw">let </span>mapper = mapper.into_mapper(cfg.num_hidden_layers, <span class="kw-2">&amp;</span>real_device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>mapper = normal_loading_metadata
+            .mapper
+            .into_mapper(cfg.num_hidden_layers, <span class="kw-2">&amp;</span>normal_loading_metadata.real_device)<span class="question-mark">?</span>;
         <span class="kw">let </span>embed_tokens = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -1240,7 +1240,9 @@
                 cfg.head_dim(),
                 (cfg.partial_rotary_factor * cfg.head_dim() <span class="kw">as </span>f64) <span class="kw">as </span>usize,
                 cfg.max_position_embeddings,
-                mapper.device_for(layer_idx, <span class="bool-val">false</span>).unwrap_or(<span class="kw-2">&amp;</span>real_device),
+                mapper
+                    .device_for(layer_idx, <span class="bool-val">false</span>)
+                    .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device),
                 is_gptx,
                 vb.dtype(),
             )<span class="question-mark">?</span>;
@@ -1252,7 +1254,7 @@
                 <span class="kw-2">&amp;</span>xlora_ordering,
                 <span class="kw-2">&amp;*</span>mapper,
                 layer_idx,
-                loading_isq,
+                normal_loading_metadata.loading_isq,
                 rotary_emb,
                 preload_adapters,
             )<span class="question-mark">?</span>;
@@ -1282,7 +1284,7 @@
         <span class="kw">let </span>lm_head = candle_nn::linear(
             cfg.hidden_size,
             cfg.vocab_size,
-            mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), loading_isq),
+            mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), normal_loading_metadata.loading_isq),
         )<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             embed_tokens,
@@ -1290,7 +1292,7 @@
             final_layernorm,
             lm_head: QLinear::from_linear(lm_head),
             cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">true</span>),
-            device: real_device,
+            device: normal_loading_metadata.real_device,
             max_seq_len: cfg.max_position_embeddings,
             dtype: vb.dtype(),
             xlora_classifier: xlora_config.map(|xlora_config| {
