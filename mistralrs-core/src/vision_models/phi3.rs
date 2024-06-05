@@ -86,6 +86,8 @@ impl Config {
 trait ModuleWithMetadata: Module + Debug + Send + Sync {
     fn device(&self) -> &Device;
     fn dtype(&self) -> DType;
+    fn weight(&self) -> &Tensor;
+    fn bias(&self) -> Option<&Tensor>;
 }
 
 impl ModuleWithMetadata for Linear {
@@ -95,6 +97,12 @@ impl ModuleWithMetadata for Linear {
     fn dtype(&self) -> DType {
         self.weight().dtype()
     }
+    fn bias(&self) -> Option<&Tensor> {
+        self.bias()
+    }
+    fn weight(&self) -> &Tensor {
+        self.weight()
+    }
 }
 
 impl ModuleWithMetadata for candle_nn::Activation {
@@ -102,6 +110,12 @@ impl ModuleWithMetadata for candle_nn::Activation {
         unreachable!()
     }
     fn dtype(&self) -> DType {
+        unreachable!()
+    }
+    fn bias(&self) -> Option<&Tensor> {
+        unreachable!()
+    }
+    fn weight(&self) -> &Tensor {
         unreachable!()
     }
 }
@@ -386,10 +400,36 @@ struct EmbeddingLayers(Vec<Box<dyn ModuleWithMetadata>>);
 
 impl Module for EmbeddingLayers {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        println!();
+        dbg!(&xs.to_dtype(DType::F32)?.mean_all());
+        Tensor::write_npy(&xs.to_dtype(DType::F32)?, "inp.npy").unwrap();
+        println!("^ LATEST inp");
         let mut xs = xs.clone();
+        let mut i = 0;
         for layer in &self.0 {
             xs = layer.forward(&xs)?;
+            if i == 0 {
+                dbg!(&layer.weight().to_dtype(DType::F32)?.mean_all());
+                Tensor::write_npy(
+                    &layer.weight().to_dtype(DType::F32)?,
+                    "layerhiddenweight.npy",
+                )
+                .unwrap();
+                println!("^ LATEST is {i}");
+                dbg!(&layer.bias().unwrap().to_dtype(DType::F32)?.mean_all());
+                Tensor::write_npy(
+                    &layer.bias().unwrap().to_dtype(DType::F32)?,
+                    "layerhiddenbias.npy",
+                )
+                .unwrap();
+                println!("^ LATEST is {i}");
+                dbg!(&xs.to_dtype(DType::F32)?.mean_all());
+                Tensor::write_npy(&xs.to_dtype(DType::F32)?, "xs.npy").unwrap();
+                println!("^ LATEST is {i}");
+            }
+            i += 1;
         }
+        println!();
         Ok(xs)
     }
 }
@@ -540,11 +580,13 @@ impl ImageEmbedding {
     }
 
     fn get_image_features(&self, pixel_values: &Tensor) -> Result<Tensor> {
-        let hidden_states = self
-            .image_processor
-            .forward_get_hidden_states(&pixel_values.to_dtype(self.wte.embeddings().dtype())?)?;
-        let img_feature =
-            hidden_states[(hidden_states.len() as isize + self.layer_idx) as usize].clone();
+        let hidden_states = self.image_processor.forward_get_hidden_states(
+            &Tensor::full(0.5f64, pixel_values.shape(), pixel_values.device())?
+                .to_dtype(self.wte.embeddings().dtype())?,
+        )?;
+        let img_feature = hidden_states[(hidden_states.len() as isize + self.layer_idx) as usize]
+            .clone()
+            .ones_like()?;
         if self.type_feature == "patch" {
             img_feature.i((.., 1..))
         } else if self.type_feature == "cls_patch" {
@@ -588,6 +630,7 @@ impl ImageEmbedding {
                 // bs x max_num_crops x (24x24) x C
                 let img_features =
                     img_features.reshape((bs, (), base_feat_dim.pow(2), self.image_dim_out))?;
+                dbg!(&img_features.to_dtype(DType::F32)?.mean_all());
                 let C = self.image_dim_out;
                 let H = base_feat_dim;
 
@@ -610,21 +653,28 @@ impl ImageEmbedding {
                         .permute((0, 1, 3, 2, 4, 5))?
                         .reshape((1, H / 2, H / 2, 4 * C))?
                         .contiguous()?;
+                    dbg!(&glb_img.to_dtype(DType::F32)?.mean_all());
                     let temp_glbl_gn = self
                         .sub_gn
                         .as_ref()
                         .expect("Need `sub_gn` if `use_hd_transform`")
                         .repeat((1, H / 2, 1, 1))?;
 
+                    dbg!(&temp_glbl_gn.to_dtype(DType::F32)?.mean_all());
+
                     // 1 x 156 x 4096
                     let glb_img =
                         Tensor::cat(&[glb_img, temp_glbl_gn], 2)?.reshape((1, (), 4 * C))?;
+                    dbg!(&glb_img.to_dtype(DType::F32)?.mean_all());
 
                     // (max_num_crops-1) x (12x12) x C
                     let sub_img = img_features.i((bs_, 1..))?;
+                    dbg!(&sub_img.to_dtype(DType::F32)?.mean_all());
+
                     // 16x574x1024
                     // Get rid of padding sub_img
                     let sub_img = sub_img.i(..B_)?;
+                    dbg!(&sub_img.to_dtype(DType::F32)?.mean_all());
 
                     // (num_crops, 12, 2, 12, 2, 1024) -> (num_crops, 12, 12, 2, 2, 1024) -> (num_crops, 12*12, 4*1024)
                     let sub_img = sub_img
@@ -643,8 +693,13 @@ impl ImageEmbedding {
                         .as_ref()
                         .expect("Need `sub_gn` if `use_hd_transform`")
                         .repeat((1, h * 12, 1, 1))?;
+
+                    dbg!(&temp_sub_gn.to_dtype(DType::F32)?.mean_all());
+
                     let sub_img =
                         Tensor::cat(&[sub_img, temp_sub_gn], 2)?.reshape((1, (), 4 * C))?;
+                    dbg!(&sub_img.to_dtype(DType::F32)?.mean_all());
+
                     // (1, num_img_tokens, 1024*4)
 
                     match self.hd_transform_order.as_str() {
@@ -678,6 +733,12 @@ impl ImageEmbedding {
                             candle_core::bail!("Invalid hd_transform_order=`{other}`");
                         }
                     }
+                    dbg!(&output_imgs
+                        .last()
+                        .as_ref()
+                        .unwrap()
+                        .to_dtype(DType::F32)?
+                        .mean_all());
 
                     let temp_len = (h * w + 1) * 144 + 1 + (h + 1) * 12;
                     assert_eq!(temp_len, output_imgs.last().unwrap().dims()[1]);
@@ -687,10 +748,13 @@ impl ImageEmbedding {
                 hd_transform = Some(output_len);
                 let mut image_set_tensor_inner = Vec::new();
                 for img in output_imgs {
-                    image_set_tensor_inner.push(
-                        self.layers
-                            .forward(&img.to_device(target_dev)?.to_dtype(target_dtype)?)?,
-                    );
+                    dbg!(&img.to_dtype(DType::F32)?.mean_all());
+
+                    let layerout = self
+                        .layers
+                        .forward(&img.to_device(target_dev)?.to_dtype(target_dtype)?)?;
+                    dbg!(&layerout.to_dtype(DType::F32)?.mean_all());
+                    image_set_tensor_inner.push(layerout);
                 }
                 image_set_tensor = Some(Either::Left(image_set_tensor_inner));
             } else if pixel_values.dims().len() == 4 {
@@ -718,6 +782,7 @@ impl ImageEmbedding {
         if select {
             match (hd_transform, image_set_tensor) {
                 (Some(output_lens), Some(Either::Left(image_set_tensors))) => {
+                    dbg!(&hidden_states.to_dtype(DType::F32)?.mean_all());
                     let mut idx = 0;
                     for (i, cnt) in output_lens.into_iter().enumerate() {
                         let img_set_tensor = image_set_tensors[i]
