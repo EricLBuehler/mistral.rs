@@ -168,8 +168,17 @@ macro_rules! get_paths {
             None
         };
 
-        info!("Loading `tokenizer_config.json` at `{}`", $this.model_id);
-        let template_filename = $crate::api_get_file!(api, "tokenizer_config.json", model_id);
+        let template_filename = if let Some(ref p) = $this.chat_template {
+            info!("Using chat template file at `{p}`");
+            Some(PathBuf::from_str(p)?)
+        } else {
+            info!("Loading `tokenizer_config.json` at `{}`", $this.model_id);
+            Some($crate::api_get_file!(
+                api,
+                "tokenizer_config.json",
+                model_id
+            ))
+        };
 
         Ok(Box::new($path_name {
             tokenizer_filename,
@@ -209,17 +218,22 @@ macro_rules! get_paths_gguf {
         let chat_template = if let Some(ref p) = $this.chat_template {
             if p.ends_with(".json") {
                 info!("Using chat template file at `{p}`");
-                PathBuf::from_str(p)?
+                Some(PathBuf::from_str(p)?)
             } else {
-                PathBuf::from_str("")?
+                panic!("Specified chat template file must end with .json");
             }
         } else {
-            info!("Loading `tokenizer_config.json` at `{}` because no chat template file was specified.", this_model_id);
-            $crate::api_get_file!(
-                api,
-                "tokenizer_config.json",
-                model_id
-            ) // Will be loaded from inside gguf file
+            if $this.model_id.is_none() {
+                None
+            } else {
+                info!("Loading `tokenizer_config.json` at `{}` because no chat template file was specified.", this_model_id);
+                let res = $crate::api_get_file!(
+                    api,
+                    "tokenizer_config.json",
+                    model_id
+                );
+                Some(res)
+            }
         };
 
         let filenames = get_model_paths(
