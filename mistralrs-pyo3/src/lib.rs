@@ -177,9 +177,10 @@ fn parse_which(
             chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename
-                .map_left(|file| vec![file])
-                .unwrap_right(),
+            match quantized_filename {
+                Either::Left(l) => vec![l],
+                Either::Right(r) => r,
+            },
         )
         .build(),
         Which::XLoraGGUF {
@@ -197,9 +198,10 @@ fn parse_which(
             chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename
-                .map_left(|file| vec![file])
-                .unwrap_right(),
+            match quantized_filename {
+                Either::Left(l) => vec![l],
+                Either::Right(r) => r,
+            },
         )
         .with_xlora(
             xlora_model_id,
@@ -226,9 +228,10 @@ fn parse_which(
             chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename
-                .map_left(|file| vec![file])
-                .unwrap_right(),
+            match quantized_filename {
+                Either::Left(l) => vec![l],
+                Either::Right(r) => r,
+            },
         )
         .with_lora(
             adapters_model_id,
