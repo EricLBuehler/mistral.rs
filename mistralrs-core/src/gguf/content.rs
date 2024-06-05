@@ -65,6 +65,8 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
         #[allow(clippy::cast_possible_truncation)]
         if !n_splits.is_empty() && n_readers != n_splits[0] as usize {
             candle_core::bail!("Number of readers does not match the number of splits.");
+        } else if n_splits.len() == 1 {
+            info!("Model n splits: {}", n_splits[0]);
         }
 
         let mut arch = None;
