@@ -590,19 +590,6 @@
 <a href="#588" id="588">588</a>
 <a href="#589" id="589">589</a>
 <a href="#590" id="590">590</a>
-<a href="#591" id="591">591</a>
-<a href="#592" id="592">592</a>
-<a href="#593" id="593">593</a>
-<a href="#594" id="594">594</a>
-<a href="#595" id="595">595</a>
-<a href="#596" id="596">596</a>
-<a href="#597" id="597">597</a>
-<a href="#598" id="598">598</a>
-<a href="#599" id="599">599</a>
-<a href="#600" id="600">600</a>
-<a href="#601" id="601">601</a>
-<a href="#602" id="602">602</a>
-<a href="#603" id="603">603</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -622,6 +609,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{ChatTemplate, LocalModelPaths};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
+<span class="kw">use </span><span class="kw">crate</span>::utils::debug::setup_logger_and_debug;
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
@@ -634,7 +622,7 @@
     xlora_models::{XLoraQLlama, XLoraQPhi3},
     GgufTokenizerConversion,
 };
-<span class="kw">use crate</span>::{do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, Pipeline, DEBUG};
+<span class="kw">use crate</span>::{do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, Pipeline};
 <span class="kw">use </span>anyhow::{bail, Context, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>candle_core::quantized::GgmlDType;
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
@@ -650,8 +638,6 @@
 <span class="kw">use </span>tokenizers::Tokenizer;
 <span class="kw">use </span>tokio::sync::Mutex;
 <span class="kw">use </span>tracing::info;
-<span class="kw">use </span>tracing::level_filters::LevelFilter;
-<span class="kw">use </span>tracing_subscriber::EnvFilter;
 
 <span class="kw">enum </span>Model {
     Llama(QLlama),
@@ -836,6 +822,8 @@
         chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
         tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     ) -&gt; <span class="self">Self </span>{
+        setup_logger_and_debug();
+
         <span class="kw">let </span>model_id = <span class="kw">if let </span><span class="prelude-val">Some</span>(id) = model_id {
             <span class="prelude-val">Some</span>(id)
         } <span class="kw">else if let </span><span class="prelude-val">Some</span>(xlora_order) = xlora_order.clone() {
@@ -896,20 +884,6 @@
         mapper: DeviceMapMetadata,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
-        <span class="kw">let </span>is_debug = std::env::var(<span class="string">"MISTRALRS_DEBUG"</span>)
-            .unwrap_or_default()
-            .contains(<span class="string">'1'</span>);
-        DEBUG.store(is_debug, std::sync::atomic::Ordering::Relaxed);
-
-        <span class="kw">let </span>filter = EnvFilter::builder()
-            .with_default_directive(<span class="kw">if </span>is_debug {
-                LevelFilter::INFO.into()
-            } <span class="kw">else </span>{
-                LevelFilter::DEBUG.into()
-            })
-            .from_env_lossy();
-        tracing_subscriber::fmt().with_env_filter(filter).init();
-
         <span class="kw">if </span>in_situ_quant.is_some() {
             <span class="macro">anyhow::bail!</span>(
                 <span class="string">"You are trying to in-situ quantize a GGUF model. This will not do anything."
