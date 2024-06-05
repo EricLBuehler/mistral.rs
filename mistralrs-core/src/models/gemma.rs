@@ -8,8 +8,7 @@ use candle_nn::{linear_b as linear, Activation, RotaryEmbedding, VarBuilder};
 use crate::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, QLinear, ScaledDotProductAttention},
-    pipeline::{extract_logits, Cache, IsqModel, NormalModel},
-    DeviceMapMetadata,
+    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
 };
 
 fn default_max_position_embeddings() -> usize {
@@ -319,11 +318,11 @@ impl Model {
         cfg: &Config,
         vb: VarBuilder,
         is_gptx: bool,
-        mapper: DeviceMapMetadata,
-        loading_isq: bool,
-        real_device: Device,
+        normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Self> {
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
+        let mapper = normal_loading_metadata
+            .mapper
+            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
         let vb_m = vb.pp("model");
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
@@ -337,7 +336,9 @@ impl Model {
                 cfg.rope_theta as f32,
                 cfg.head_dim,
                 cfg.max_position_embeddings,
-                mapper.device_for(layer_idx, false).unwrap_or(&real_device),
+                mapper
+                    .device_for(layer_idx, false)
+                    .unwrap_or(&normal_loading_metadata.real_device),
                 is_gptx,
                 vb.dtype(),
             )?);
@@ -347,7 +348,7 @@ impl Model {
                 vb_l.pp(layer_idx),
                 &*mapper,
                 layer_idx,
-                loading_isq,
+                normal_loading_metadata.loading_isq,
             )?;
             layers.push(layer)
         }
@@ -362,7 +363,7 @@ impl Model {
             layers,
             norm,
             lm_head,
-            device: real_device,
+            device: normal_loading_metadata.real_device,
             hidden_size: cfg.hidden_size,
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: default_max_position_embeddings(),
