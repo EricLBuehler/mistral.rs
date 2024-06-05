@@ -369,7 +369,7 @@ impl Loader for GGMLLoader {
             revision,
             self,
             self.quantized_model_id,
-            self.quantized_filename,
+            Some(vec![self.quantized_filename.as_ref().unwrap().clone()]),
             silent
         );
         self.load_model_from_path(&paths?, _dtype, device, silent, mapper, in_situ_quant)

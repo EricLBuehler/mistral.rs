@@ -9,7 +9,7 @@ These are API docs for the `mistralrs` package.
 
 ## `Which`
 
-Each `*_model_id` may be a HF hub repo or a local path.
+Each `*_model_id` may be a HF hub repo or a local path. For quantized GGUF models, a list is accepted if multiples files must be specified.
 
 Additionally, for models without quantization, the model architecture should be provided as the `arch` parameter in contrast to GGUF models which encode the architecture in the file. It should be one of the following:
 - `mistral`
@@ -49,13 +49,13 @@ class Which(Enum):
     class GGUF:
         tok_model_id: str
         quantized_model_id: str
-        quantized_filename: str
+        quantized_filename: str | list[str]
         repeat_last_n: int = 64
     @dataclass
     class XLoraGGUF:
         tok_model_id: str
         quantized_model_id: str
-        quantized_filename: str
+        quantized_filename: str | list[str]
         xlora_model_id: str
         order: str
         tgt_non_granular_index: int | None = None
@@ -64,7 +64,7 @@ class Which(Enum):
     class LoraGGUF:
         tok_model_id: str
         quantized_model_id: str
-        quantized_filename: str
+        quantized_filename: str | list[str]
         adapters_model_id: str
         order: str
         repeat_last_n: int = 64

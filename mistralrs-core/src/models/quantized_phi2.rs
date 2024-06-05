@@ -1,15 +1,14 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::quantized::gguf_file;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Embedding, LayerNorm};
 
 use crate::device_map::DeviceMapper;
+use crate::gguf::Content;
 use crate::layers::ScaledDotProductAttention;
 use crate::layers::{repeat_kv, CausalMasker, QLinear};
 use crate::pipeline::{extract_logits, Cache};
-use crate::utils::max_seq_len::get_gguf_max_seq_len;
 use crate::utils::model_config as ModelConfig;
 use crate::DeviceMapMetadata;
 
@@ -145,53 +144,52 @@ fn layer_norm(w: QTensor, b: QTensor, eps: f64) -> Result<LayerNorm> {
 
 impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
-        ct: gguf_file::Content,
-        reader: &mut R,
+        mut ct: Content<'_, R>,
         device: &Device,
         mapper: DeviceMapMetadata,
     ) -> Result<Self> {
-        let md_get = |s: &str| match ct.metadata.get(s) {
-            None => candle_core::bail!("cannot find {s} in metadata"),
-            Some(v) => Ok(v),
-        };
-
         // Parameter extraction from metadata.
-        let head_count = md_get("phi2.attention.head_count")?.to_u32()? as usize;
-        let head_count_kv = md_get("phi2.attention.head_count_kv")?.to_u32()? as usize;
-        let block_count = md_get("phi2.block_count")?.to_u32()? as usize;
-        let embedding_length = md_get("phi2.embedding_length")?.to_u32()? as usize;
-        let rope_dim = md_get("phi2.rope.dimension_count")?.to_u32()? as usize;
-        let ln_eps = md_get("phi2.attention.layer_norm_epsilon")?.to_f32()? as f64;
-        let max_seq_len =
-            get_gguf_max_seq_len(md_get("phi2.context_length"), MAX_SEQ_LEN as u64) as usize;
+        let head_count = ct.get_metadata("phi2.attention.head_count")?.to_u32()? as usize;
+        let head_count_kv = ct.get_metadata("phi2.attention.head_count_kv")?.to_u32()? as usize;
+        let block_count = ct.get_metadata("phi2.block_count")?.to_u32()? as usize;
+        let embedding_length = ct.get_metadata("phi2.embedding_length")?.to_u32()? as usize;
+        let rope_dim = ct.get_metadata("phi2.rope.dimension_count")?.to_u32()? as usize;
+        let ln_eps = ct
+            .get_metadata("phi2.attention.layer_norm_epsilon")?
+            .to_f32()? as f64;
+
+        let max_seq_len = ct
+            .get_metadata("phi2.context_length")?
+            .to_u64()
+            .unwrap_or(MAX_SEQ_LEN as u64) as usize;
 
         let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, max_seq_len)?;
 
-        let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
+        let tok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
         let output_norm = layer_norm(
-            ct.tensor(reader, "output_norm.weight", device)?,
-            ct.tensor(reader, "output_norm.bias", device)?,
+            ct.tensor("output_norm.weight", device)?,
+            ct.tensor("output_norm.bias", device)?,
             ln_eps,
         )?;
-        let output = QLinear::new(&ct, reader, "output", device)?;
+        let output = QLinear::new(&mut ct, "output", device)?;
         let mut layers = Vec::with_capacity(block_count);
         let mapper = mapper.into_mapper(block_count, device)?;
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
 
-            let ffn_up = QLinear::new(&ct, reader, &format!("{prefix}.ffn_up"), device)?;
-            let ffn_down = QLinear::new(&ct, reader, &format!("{prefix}.ffn_down"), device)?;
+            let ffn_up = QLinear::new(&mut ct, &format!("{prefix}.ffn_up"), device)?;
+            let ffn_down = QLinear::new(&mut ct, &format!("{prefix}.ffn_down"), device)?;
             let mlp = Mlp { ffn_up, ffn_down };
             let attn_norm = layer_norm(
-                ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?,
-                ct.tensor(reader, &format!("{prefix}.attn_norm.bias"), device)?,
+                ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?,
+                ct.tensor(&format!("{prefix}.attn_norm.bias"), device)?,
                 ln_eps,
             )?;
             layers.push(LayerWeights {
-                attn_qkv: QLinear::new(&ct, reader, &format!("{prefix}.attn_qkv"), device)?,
-                attn_output: QLinear::new(&ct, reader, &format!("{prefix}.attn_output"), device)?,
+                attn_qkv: QLinear::new(&mut ct, &format!("{prefix}.attn_qkv"), device)?,
+                attn_output: QLinear::new(&mut ct, &format!("{prefix}.attn_output"), device)?,
                 attn_norm,
                 mlp,
                 n_head: head_count,
