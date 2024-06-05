@@ -24,6 +24,7 @@ pub(crate) fn from_mmaped_safetensors<'a>(
     device: &Device,
     silent: bool,
 ) -> Result<VarBuilderArgs<'a, Box<dyn SimpleBackend>>> {
+    #[allow(clippy::type_complexity)]
     let mut handles: Vec<
         Either<
             JoinHandle<Result<HashMap<String, Tensor>>>,
