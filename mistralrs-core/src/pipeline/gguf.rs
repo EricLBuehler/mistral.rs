@@ -201,6 +201,8 @@ impl GGUFLoaderBuilder {
     }
 
     pub fn build(self) -> Box<dyn Loader> {
+        setup_logger_and_debug();
+
         Box::new(GGUFLoader {
             model_id: self.model_id,
             config: self.config,
