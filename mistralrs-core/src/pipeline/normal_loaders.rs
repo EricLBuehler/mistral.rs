@@ -13,7 +13,7 @@ use serde::Deserialize;
 
 /// Metadata for loading a model with ISQ or device mapping.
 pub struct NormalLoadingMetadata {
-    // Device mapping metadata which can be used to contstruct a concrete device mapper
+    // Device mapping metadata which can be used to construct a concrete device mapper
     pub mapper: DeviceMapMetadata,
     // Flag to check if loading in ISQ
     pub loading_isq: bool,
