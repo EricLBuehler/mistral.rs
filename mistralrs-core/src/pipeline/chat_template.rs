@@ -37,7 +37,7 @@ pub struct BeginEndUnkTok(
 );
 
 #[allow(dead_code)]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct ChatTemplate {
     add_bos_token: Option<bool>,
     add_eos_token: Option<bool>,
