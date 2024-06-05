@@ -287,38 +287,60 @@ pub fn get_model_paths(
 /// Find and parse the appropriate [`ChatTemplate`], and ensure is has a valid [`ChatTemplate.chat_template`].
 /// If the the provided `tokenizer_config.json` from [`ModelPaths.get_template_filename`] does not
 /// have a `chat_template`, use the provided one.
+///
+/// - Uses `chat_template_fallback` if `paths` does not contain a chat template file. This may be a literal or .json file.
+/// - `chat_template_ovrd` (GGUF chat template content) causes the usage of that string chat template initially.
+///   Falls back to `chat_template_file` if it is invalid. *The user must add the bos/unk/eos tokens manually if this
+///   is used.*
 #[allow(clippy::borrowed_box)]
 pub(crate) fn get_chat_template(
     paths: &Box<dyn ModelPaths>,
-    chat_template: &Option<String>,
+    chat_template_fallback: &Option<String>,
+    chat_template_ovrd: Option<String>,
 ) -> ChatTemplate {
-    let template_filename = if paths.get_template_filename().to_string_lossy().is_empty() {
-        PathBuf::from(
-            chat_template
-                .as_ref()
-                .expect("A tokenizer config or chat template file path must be specified."),
-        )
+    // Get template content, this may be overridden.
+    let template_content = if let Some(template_filename) = paths.get_template_filename() {
+        if template_filename
+            .extension()
+            .expect("Template filename must be a file")
+            .to_string_lossy()
+            != "json"
+        {
+            panic!("Template filename {template_filename:?} must end with `.json`.");
+        }
+        fs::read_to_string(&template_filename).expect("Loading chat template failed.")
     } else {
-        paths.get_template_filename().clone()
+        if chat_template_fallback
+            .as_ref()
+            .is_some_and(|f| f.ends_with(".json"))
+        {
+            // User specified a file
+            let template_filename = chat_template_fallback
+                .as_ref()
+                .expect("A tokenizer config or chat template file path must be specified.");
+            fs::read_to_string(&template_filename).expect("Loading chat template failed.")
+        } else {
+            panic!("Expected chat template file to end with .json, or you can specify a tokenizer model ID to load the chat template there.");
+        }
     };
-    if template_filename
-        .extension()
-        .expect("Template filename must be a file")
-        .to_string_lossy()
-        != "json"
-    {
-        panic!("Template filename {template_filename:?} must end with `.json`.");
-    }
-    let template: ChatTemplate = serde_json::from_str(
-        &fs::read_to_string(&template_filename).expect("Deserialization of chat template failed."),
-    )
-    .unwrap();
+
+    let template: ChatTemplate = match chat_template_ovrd {
+        Some(chat_template) => {
+            // In this case the override chat template is being used. The user must add the bos/eos/unk toks themselves.
+            info!("Using literal chat template.");
+            let mut template = ChatTemplate::default();
+            template.chat_template = Some(chat_template);
+            template
+        }
+        None => serde_json::from_str(&template_content).unwrap(),
+    };
 
     #[derive(Debug, serde::Deserialize)]
     struct SpecifiedTemplate {
         chat_template: String,
         bos_token: Option<String>,
         eos_token: Option<String>,
+        unk_token: Option<String>,
     }
 
     match &template.chat_template {
@@ -326,34 +348,34 @@ pub(crate) fn get_chat_template(
         None => {
             info!("`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
             let mut deser: HashMap<String, Value> =
-                serde_json::from_str(&fs::read_to_string(&template_filename).unwrap()).unwrap();
+                serde_json::from_str(&template_content).unwrap();
 
-            match chat_template.clone() {
+            match chat_template_fallback.clone() {
                 Some(t) => {
-                    if t.ends_with(".json") {
-                        info!("Loading specified loading chat template file at `{t}`.");
-                        let templ: SpecifiedTemplate =
-                            serde_json::from_str(&fs::read_to_string(t.clone()).unwrap()).unwrap();
+                    info!("Loading specified loading chat template file at `{t}`.");
+                    let templ: SpecifiedTemplate =
+                        serde_json::from_str(&fs::read_to_string(t.clone()).unwrap()).unwrap();
+                    deser.insert(
+                        "chat_template".to_string(),
+                        Value::String(templ.chat_template),
+                    );
+                    if templ.bos_token.is_some() {
                         deser.insert(
-                            "chat_template".to_string(),
-                            Value::String(templ.chat_template),
+                            "bos_token".to_string(),
+                            Value::String(templ.bos_token.unwrap()),
                         );
-                        if templ.bos_token.is_some() {
-                            deser.insert(
-                                "bos_token".to_string(),
-                                Value::String(templ.bos_token.unwrap()),
-                            );
-                        }
-                        if templ.eos_token.is_some() {
-                            deser.insert(
-                                "eos_token".to_string(),
-                                Value::String(templ.eos_token.unwrap()),
-                            );
-                        }
-                        info!("Loaded chat template file.");
-                    } else {
-                        deser.insert("chat_template".to_string(), Value::String(t));
-                        info!("Loaded specified literal chat template.");
+                    }
+                    if templ.eos_token.is_some() {
+                        deser.insert(
+                            "eos_token".to_string(),
+                            Value::String(templ.eos_token.unwrap()),
+                        );
+                    }
+                    if templ.unk_token.is_some() {
+                        deser.insert(
+                            "unk_token".to_string(),
+                            Value::String(templ.unk_token.unwrap()),
+                        );
                     }
                 }
                 None => {

@@ -10,11 +10,11 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
-use crate::gguf::Content;
+use crate::gguf::{get_gguf_chat_template, Content};
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
+use crate::pipeline::ChatTemplate;
 use crate::pipeline::{get_chat_template, Cache};
-use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::debug::setup_logger_and_debug;
@@ -30,7 +30,9 @@ use crate::{
     xlora_models::{XLoraQLlama, XLoraQPhi3},
     GgufTokenizerConversion,
 };
-use crate::{do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, Pipeline};
+use crate::{
+    do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths, Pipeline,
+};
 use anyhow::{bail, Context, Result};
 use candle_core::quantized::GgmlDType;
 use candle_core::{DType, Device, Tensor};
@@ -328,6 +330,8 @@ impl Loader for GGUFLoader {
             }
         };
 
+        let gguf_chat_template = get_gguf_chat_template(&content);
+
         let has_adapter = self.kind.is_adapted();
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
 
@@ -371,7 +375,7 @@ impl Loader for GGUFLoader {
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
-        let mut chat_template = get_chat_template(paths, &self.chat_template);
+        let mut chat_template = get_chat_template(paths, &self.chat_template, gguf_chat_template);
 
         let max_seq_len = match model {
             Model::Llama(ref l) => l.max_seq_len,

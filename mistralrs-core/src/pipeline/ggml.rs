@@ -317,7 +317,7 @@ impl Loader for GGMLLoader {
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
-        let chat_template = get_chat_template(paths, &self.chat_template);
+        let chat_template = get_chat_template(paths, &self.chat_template, None);
 
         let max_seq_len = match model {
             Model::Llama(ref l) => l.max_seq_len,
