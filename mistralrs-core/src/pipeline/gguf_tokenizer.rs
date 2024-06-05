@@ -60,81 +60,79 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<ConversionResul
     };
     let props = PropsGGUF::try_from(metadata)?;
 
-    let PropsGGUF {
-        model,
-        tokens,
-        added_tokens,
-        scores,
-        merges,
-        ..
-    } = props;
-
-    let PropsGGUF {
-        unk,
-        eos,
-        bos,
-        ..
-    } = props;
-
-    let bos_str = tokens[bos as usize].clone();
-    let eos_str = tokens[eos as usize].clone();
-    let unk_str;
-
-    let (tokenizer, ty) = match model.as_str() {
-        "llama" | "replit" => {
-            // This is a `unigram` tokenizer
-            let scores = scores
-                .as_ref()
-                .expect("Expect `tokenizer.ggml.scores` for `llama` unigram tokeizer.");
-            let mut vocab = Vec::new();
-            for (token, score) in tokens.iter().zip(scores) {
-                vocab.push((token.clone(), *score as f64));
-            }
-
-            // Unigram (sentencepiece) default UNK is 0
-            let unk = unk.unwrap_or(0);
-            unk_str = tokens[unk as usize].clone();
-
-            let unigram = Unigram::from(vocab, Some(unk as usize), true).map_err(anyhow::Error::msg)?;
-            let mut tokenizer = Tokenizer::new(ModelWrapper::Unigram(unigram));
-            tokenizer.with_decoder(decoders::sequence::Sequence::new(vec![
-                DecoderWrapper::Replace(Replace::new("▁", " ").map_err(anyhow::Error::msg)?),
-                DecoderWrapper::ByteFallback(ByteFallback::new()),
-                DecoderWrapper::Fuse(Fuse::new()),
-                DecoderWrapper::Strip(Strip::new(' ', 1, 0)),
-            ]));
-            tokenizer.with_normalizer(normalizers::Sequence::new(vec![
-                NormalizerWrapper::Prepend(Prepend::new("▁".to_string())),
-                NormalizerWrapper::Replace(Replace::new(" ", "▁").map_err(anyhow::Error::msg)?),
-            ]));
-
-            for token_id in [bos, eos, unk] {
-                tokenizer.add_special_tokens(&[AddedToken::from(tokens[token_id as usize].clone(), true)]);
-            }
-
-            (tokenizer, "unigram")
-        }
+    let (tokenizer, kind, special_tokens) = match props.model.as_str() {
+        "llama" | "replit" => unigram_tokenizer(&props)?,
         other => {
             anyhow::bail!("Tokenizer model `{other}` not supported.");
         }
     };
+
     info!(
-        "GGUF tokenizer model is `{model}`, kind: `{}`, num tokens: {}, num added tokens: {}, num merges: {}, num scores: {}",
-        ty,
+        "GGUF tokenizer model is `{model}`, kind: `{kind:?}`, num tokens: {}, num added tokens: {}, num merges: {}, num scores: {}",
         tokenizer.get_vocab_size(true),
-        added_tokens.as_ref().map(|x| x.len()).unwrap_or(0),
-        merges.as_ref().map(|x| x.len()).unwrap_or(0),
-        scores.as_ref().map(|x| x.len()).unwrap_or(0)
+        props.added_tokens.as_ref().map(|x| x.len()).unwrap_or(0),
+        props.merges.as_ref().map(|x| x.len()).unwrap_or(0),
+        props.scores.as_ref().map(|x| x.len()).unwrap_or(0),
+        model = props.model,
     );
     if DEBUG.load(Ordering::Relaxed) {
         info!("Tokenizer: {tokenizer:?}");
     }
+
+    let [bos_str, eos_str, unk_str] = special_tokens
+        .try_into()
+        .or_else(|_| anyhow::bail!("Tokenizer is missing required special tokens"))?;
+
     Ok(ConversionResult {
         tokenizer,
         bos: Some(bos_str),
         eos: Some(eos_str),
         unk: Some(unk_str),
     })
+}
+
+// TODO: Add support for additional tokenizer models: BPE, WordPiece, WordLevel
+// https://docs.rs/tokenizers/latest/tokenizers/models/enum.ModelWrapper.html
+#[derive(Debug)]
+enum TokenizerKind {
+    Unigram,
+}
+
+fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, Vec<String>)> {
+    let PropsGGUF { unk, eos, bos, .. } = *p;
+    // Unigram (SentencePiece) default UNK is 0
+    let unk = unk.unwrap_or(0);
+
+    let scores = p.scores
+        .as_ref()
+        .expect("`llama` unigram tokenizer is missing required metadata `tokenizer.ggml.scores`");
+    let mut vocab = Vec::new();
+    for (token, score) in p.tokens.iter().cloned().zip(scores.iter().cloned()) {
+        vocab.push((token, score as f64));
+    }
+
+    let unigram = Unigram::from(vocab, Some(unk as usize), true).map_err(anyhow::Error::msg)?;
+    let mut tokenizer = Tokenizer::new(ModelWrapper::Unigram(unigram));
+    tokenizer.with_decoder(decoders::sequence::Sequence::new(vec![
+        DecoderWrapper::Replace(Replace::new("▁", " ").map_err(anyhow::Error::msg)?),
+        DecoderWrapper::ByteFallback(ByteFallback::new()),
+        DecoderWrapper::Fuse(Fuse::new()),
+        DecoderWrapper::Strip(Strip::new(' ', 1, 0)),
+    ]));
+    tokenizer.with_normalizer(normalizers::Sequence::new(vec![
+        NormalizerWrapper::Prepend(Prepend::new("▁".to_string())),
+        NormalizerWrapper::Replace(Replace::new(" ", "▁").map_err(anyhow::Error::msg)?),
+    ]));
+
+    let mut special_tokens = Vec::<String>::new();
+    for token_id in [bos, eos, unk] {
+        let token = p.tokens[token_id as usize].as_str();
+
+        special_tokens.push(token.to_owned());
+        tokenizer.add_special_tokens(&[AddedToken::from(token.to_owned(), true)]);
+    }
+
+    Ok((tokenizer, TokenizerKind::Unigram, special_tokens))
 }
 
 #[cfg(test)]
