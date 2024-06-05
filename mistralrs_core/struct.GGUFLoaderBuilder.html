@@ -5,7 +5,7 @@
     chat_template: <a class="enum" href="https://doc.rust-lang.org/1.78.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.78.0/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>&gt;,
     tok_model_id: <a class="enum" href="https://doc.rust-lang.org/1.78.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.78.0/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>&gt;,
     quantized_model_id: <a class="struct" href="https://doc.rust-lang.org/1.78.0/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>,
-    quantized_filename: <a class="struct" href="https://doc.rust-lang.org/1.78.0/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>
+    quantized_filename: <a class="struct" href="https://doc.rust-lang.org/1.78.0/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.78.0/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>&gt;
 ) -&gt; Self</h4></section></summary><div class="docblock"><p>Create a loader builder for a GGUF model. <code>tok_model_id</code> is the model ID where you can find a
 <code>tokenizer_config.json</code> file. If the <code>chat_template</code> is specified, then it will be treated as a
 path and used over remote files, removing all remote accesses.</p>

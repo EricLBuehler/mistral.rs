@@ -296,6 +296,10 @@
 <a href="#294" id="294">294</a>
 <a href="#295" id="295">295</a>
 <a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
@@ -324,6 +328,7 @@
 <span class="kw">pub use </span>model_selected::ModelSelected;
 
 <span class="kw">mod </span>cublaslt;
+<span class="kw">pub mod </span>gguf;
 <span class="kw">pub mod </span>layers;
 <span class="kw">mod </span>layers_masker;
 <span class="kw">mod </span>layers_utils;
@@ -340,11 +345,12 @@
 <span class="kw">mod </span>xlora_models;
 
 <span class="kw">pub use </span>device_map::{DeviceMapMetadata, LayerDeviceMapper};
+<span class="kw">pub use </span>gguf::{convert_gguf_to_hf_tokenizer, GgufTokenizerConversion};
 <span class="kw">pub use </span>pipeline::{
-    GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder,
-    GGUFSpecificConfig, GemmaLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader,
-    MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, Phi2Loader, Phi3Loader, Qwen2Loader, SpeculativeConfig,
+    GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFArchitecture, GGUFLoader,
+    GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader, LlamaLoader, Loader, LocalModelPaths,
+    MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder,
+    NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Qwen2Loader, SpeculativeConfig,
     SpeculativeLoader, SpeculativePipeline, TokenSource,
 };
 <span class="kw">pub use </span>request::{Constraint, Content, NormalRequest, Request, RequestMessage};
@@ -358,6 +364,8 @@
 
 <span class="doccomment">/// `true` if `MISTRALRS_DEBUG=1`
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">static </span>DEBUG: AtomicBool = AtomicBool::new(<span class="bool-val">false</span>);
+<span class="doccomment">/// Delimiter for GGUF multiple files in the CLI.
+</span><span class="kw">pub const </span>GGUF_MULTI_FILE_DELIMITER: <span class="kw-2">&amp;</span>str = <span class="string">" "</span>;
 
 <span class="doccomment">/// The MistralRs struct handles sending requests to the engine.
 /// It is the core multi-threaded component of mistral.rs, and uses `mspc`
