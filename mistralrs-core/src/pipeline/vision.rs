@@ -12,6 +12,7 @@ use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::{get_chat_template, ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
+use crate::utils::debug::setup_logger_and_debug;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
@@ -93,6 +94,8 @@ impl VisionLoaderBuilder {
     }
 
     pub fn build(self, loader: VisionLoaderType) -> Box<dyn Loader> {
+        setup_logger_and_debug();
+
         let loader: Box<dyn VisionModelLoader> = match loader {
             VisionLoaderType::Phi3V => Box::new(Phi3Loader),
         };
@@ -143,20 +146,6 @@ impl Loader for VisionLoader {
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let is_debug = std::env::var("MISTRALRS_DEBUG")
-            .unwrap_or_default()
-            .contains('1');
-        DEBUG.store(is_debug, std::sync::atomic::Ordering::Relaxed);
-
-        let filter = EnvFilter::builder()
-            .with_default_directive(if is_debug {
-                LevelFilter::INFO.into()
-            } else {
-                LevelFilter::DEBUG.into()
-            })
-            .from_env_lossy();
-        tracing_subscriber::fmt().with_env_filter(filter).init();
-
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         let default_dtype = if device.is_cuda() && mapper.is_dummy() {
             DType::BF16

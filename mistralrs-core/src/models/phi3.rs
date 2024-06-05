@@ -12,8 +12,9 @@ use crate::{
         repeat_kv, CausalMasker, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm,
         ScaledDotProductAttention,
     },
-    pipeline::{extract_logits, Cache, IsqModel, NormalModel, Phi3RopeScaling,  NormalLoadingMetadata},
-    DeviceMapMetadata,
+    pipeline::{
+        extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel, Phi3RopeScaling,
+    },
 };
 
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
