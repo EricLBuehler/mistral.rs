@@ -9,6 +9,7 @@ use crate::device_map::DeviceMapper;
 use crate::layers::ScaledDotProductAttention;
 use crate::layers::{repeat_kv, CausalMasker, QLinear};
 use crate::pipeline::{extract_logits, Cache};
+use crate::utils::max_seq_len::get_gguf_max_seq_len;
 use crate::utils::model_config as ModelConfig;
 use crate::DeviceMapMetadata;
 
@@ -161,9 +162,9 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let embedding_length = md_get("phi2.embedding_length")?.to_u32()? as usize;
         let rope_dim = md_get("phi2.rope.dimension_count")?.to_u32()? as usize;
         let ln_eps = md_get("phi2.attention.layer_norm_epsilon")?.to_f32()? as f64;
-        let max_seq_len = md_get("phi2.context_length")
-            .and_then(|m| m.to_u64())
-            .unwrap_or(MAX_SEQ_LEN as u64) as usize;
+        let max_seq_len =
+            get_gguf_max_seq_len(md_get("phi2.context_length"), MAX_SEQ_LEN as u64) as usize;
+
         let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, max_seq_len)?;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;

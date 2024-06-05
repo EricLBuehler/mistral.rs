@@ -1,5 +1,8 @@
+pub(crate) mod debug;
 pub(crate) mod gguf_metadata;
+pub(crate) mod max_seq_len;
 pub(crate) mod model_config;
+pub(crate) mod progress;
 pub(crate) mod tokenizer;
 pub(crate) mod tokens;
 pub(crate) mod varbuilder_utils;

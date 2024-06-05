@@ -307,6 +307,11 @@ pub(crate) fn get_chat_template(
     {
         panic!("Template filename {template_filename:?} must end with `.json`.");
     }
+    let template: ChatTemplate = serde_json::from_str(
+        &fs::read_to_string(&template_filename).expect("Deserialization of chat template failed."),
+    )
+    .unwrap();
+
     #[derive(Debug, serde::Deserialize)]
     struct SpecifiedTemplate {
         chat_template: String,
@@ -314,44 +319,50 @@ pub(crate) fn get_chat_template(
         eos_token: Option<String>,
     }
 
-    info!("`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
-    let mut deser: HashMap<String, Value> =
-        serde_json::from_str(&fs::read_to_string(&template_filename).unwrap()).unwrap();
-
-    match chat_template.clone() {
-        Some(t) => {
-            if t.ends_with(".json") {
-                info!("Loading specified loading chat template file at `{t}`.");
-                let templ: SpecifiedTemplate =
-                    serde_json::from_str(&fs::read_to_string(t.clone()).unwrap()).unwrap();
-                deser.insert(
-                    "chat_template".to_string(),
-                    Value::String(templ.chat_template),
-                );
-                if templ.bos_token.is_some() {
-                    deser.insert(
-                        "bos_token".to_string(),
-                        Value::String(templ.bos_token.unwrap()),
-                    );
-                }
-                if templ.eos_token.is_some() {
-                    deser.insert(
-                        "eos_token".to_string(),
-                        Value::String(templ.eos_token.unwrap()),
-                    );
-                }
-                info!("Loaded chat template file.");
-            } else {
-                deser.insert("chat_template".to_string(), Value::String(t));
-                info!("Loaded specified literal chat template.");
-            }
-        }
+    match &template.chat_template {
+        Some(_) => template,
         None => {
-            info!("No specified chat template. No chat template will be used. Only prompts will be accepted, not messages.");
-            deser.insert("chat_template".to_string(), Value::Null);
+            info!("`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
+            let mut deser: HashMap<String, Value> =
+                serde_json::from_str(&fs::read_to_string(&template_filename).unwrap()).unwrap();
+
+            match chat_template.clone() {
+                Some(t) => {
+                    if t.ends_with(".json") {
+                        info!("Loading specified loading chat template file at `{t}`.");
+                        let templ: SpecifiedTemplate =
+                            serde_json::from_str(&fs::read_to_string(t.clone()).unwrap()).unwrap();
+                        deser.insert(
+                            "chat_template".to_string(),
+                            Value::String(templ.chat_template),
+                        );
+                        if templ.bos_token.is_some() {
+                            deser.insert(
+                                "bos_token".to_string(),
+                                Value::String(templ.bos_token.unwrap()),
+                            );
+                        }
+                        if templ.eos_token.is_some() {
+                            deser.insert(
+                                "eos_token".to_string(),
+                                Value::String(templ.eos_token.unwrap()),
+                            );
+                        }
+                        info!("Loaded chat template file.");
+                    } else {
+                        deser.insert("chat_template".to_string(), Value::String(t));
+                        info!("Loaded specified literal chat template.");
+                    }
+                }
+                None => {
+                    info!("No specified chat template. No chat template will be used. Only prompts will be accepted, not messages.");
+                    deser.insert("chat_template".to_string(), Value::Null);
+                }
+            }
+
+            let ser = serde_json::to_string_pretty(&deser)
+                .expect("Serialization of modified chat template failed.");
+            serde_json::from_str(&ser).unwrap()
         }
-    };
-    let ser = serde_json::to_string_pretty(&deser)
-        .expect("Serialization of modified chat template failed.");
-    serde_json::from_str(&ser).unwrap()
+    }
 }

@@ -92,9 +92,11 @@ macro_rules! get_paths {
             info!("Using tokenizer.json at `{p}`");
             PathBuf::from_str(p)?
         } else {
+            info!("Loading `tokenizer.json` at `{}`", $this.model_id);
             $crate::api_get_file!(api, "tokenizer.json", model_id)
         };
 
+        info!("Loading `config.json` at `{}`", $this.model_id);
         let config_filename = $crate::api_get_file!(api, "config.json", model_id);
 
         let filenames = get_model_paths(
@@ -125,6 +127,7 @@ macro_rules! get_paths {
             .collect::<Vec<_>>()
             .contains(&"generation_config.json".to_string())
         {
+            info!("Loading `generation_config.json` at `{}`", $this.model_id);
             Some($crate::api_get_file!(
                 api,
                 "generation_config.json",
@@ -138,6 +141,7 @@ macro_rules! get_paths {
             .collect::<Vec<_>>()
             .contains(&"preprocessor_config.json".to_string())
         {
+            info!("Loading `preprocessor_config.json` at `{}`", $this.model_id);
             Some($crate::api_get_file!(
                 api,
                 "preprocessor_config.json",
@@ -151,6 +155,7 @@ macro_rules! get_paths {
             .collect::<Vec<_>>()
             .contains(&"processor_config.json".to_string())
         {
+            info!("Loading `processor_config.json` at `{}`", $this.model_id);
             Some($crate::api_get_file!(
                 api,
                 "processor_config.json",
@@ -160,6 +165,7 @@ macro_rules! get_paths {
             None
         };
 
+        info!("Loading `tokenizer_config.json` at `{}`", $this.model_id);
         let template_filename = $crate::api_get_file!(api, "tokenizer_config.json", model_id);
 
         Ok(Box::new($path_name {
@@ -188,14 +194,13 @@ macro_rules! get_paths_gguf {
             .with_token(get_token($token_source)?)
             .build()?;
         let revision = $revision.unwrap_or("main".to_string());
-        let model_id_this = $this.model_id.clone().unwrap_or($this.quantized_model_id.clone());
-        let model_id_copy = model_id_this.clone();
+        let this_model_id = $this.model_id.clone().unwrap_or($this.quantized_model_id.clone());
         let api = api.repo(Repo::with_revision(
-            model_id_this.clone(),
+            this_model_id.clone(),
             RepoType::Model,
             revision.clone(),
         ));
-        let model_id = std::path::Path::new(&model_id_copy);
+        let model_id = std::path::Path::new(&this_model_id);
 
         let chat_template = if let Some(ref p) = $this.chat_template {
             if p.ends_with(".json") {
@@ -205,6 +210,7 @@ macro_rules! get_paths_gguf {
                 PathBuf::from_str("")?
             }
         } else {
+            info!("Loading `tokenizer_config.json` at `{}` because no chat template file was specified.", this_model_id);
             $crate::api_get_file!(
                 api,
                 "tokenizer_config.json",
@@ -229,7 +235,7 @@ macro_rules! get_paths_gguf {
             xlora_config,
             lora_preload_adapter_info,
         } = get_xlora_paths(
-            model_id_this,
+            this_model_id.clone(),
             &$this.xlora_model_id,
             &$token_source,
             revision.clone(),
@@ -240,6 +246,7 @@ macro_rules! get_paths_gguf {
             .collect::<Vec<_>>()
             .contains(&"generation_config.json".to_string())
         {
+            info!("Loading `generation_config.json` at `{}`", this_model_id);
             Some($crate::api_get_file!(
                 api,
                 "generation_config.json",
@@ -253,6 +260,7 @@ macro_rules! get_paths_gguf {
             .collect::<Vec<_>>()
             .contains(&"preprocessor_config.json".to_string())
         {
+            info!("Loading `preprocessor_config.json` at `{}`", this_model_id);
             Some($crate::api_get_file!(
                 api,
                 "preprocessor_config.json",
@@ -266,6 +274,7 @@ macro_rules! get_paths_gguf {
             .collect::<Vec<_>>()
             .contains(&"processor_config.json".to_string())
         {
+            info!("Loading `processor_config.json` at `{}`", this_model_id);
             Some($crate::api_get_file!(
                 api,
                 "processor_config.json",
@@ -276,6 +285,7 @@ macro_rules! get_paths_gguf {
         };
 
         let tokenizer_filename = if $this.model_id.is_some() {
+            info!("Loading `tokenizer.json` at `{}`", this_model_id);
             $crate::api_get_file!(api, "tokenizer.json", model_id)
         } else {
             PathBuf::from_str("")?
@@ -314,9 +324,11 @@ macro_rules! normal_model_loader {
             &$config,
             $use_flash_attn,
             vb,
-            $mapper,
-            $loading_isq,
-            $real_device,
+            $crate::pipeline::NormalLoadingMetadata {
+                mapper: $mapper,
+                loading_isq: $loading_isq,
+                real_device: $real_device,
+            },
         )?
     }};
 }
@@ -372,9 +384,11 @@ macro_rules! xlora_model_loader {
             $paths.get_adapter_configs().as_ref().unwrap(),
             Some($paths.get_classifier_config().as_ref().unwrap().clone()),
             $paths.get_ordering().as_ref().unwrap().clone(),
-            $mapper,
-            $loading_isq,
-            $real_device,
+            $crate::pipeline::NormalLoadingMetadata {
+                mapper: $mapper,
+                loading_isq: $loading_isq,
+                real_device: $real_device,
+            },
             &$crate::utils::varbuilder_utils::load_preload_adapters(
                 $paths.get_lora_preload_adapter_info(),
                 $dtype.unwrap_or($default_dtype),
@@ -413,9 +427,11 @@ macro_rules! lora_model_loader {
             $paths.get_adapter_configs().as_ref().unwrap(),
             None,
             $paths.get_ordering().as_ref().unwrap().clone(),
-            $mapper,
-            $loading_isq,
-            $real_device,
+            $crate::pipeline::NormalLoadingMetadata {
+                mapper: $mapper,
+                loading_isq: $loading_isq,
+                real_device: $real_device,
+            },
             &$crate::utils::varbuilder_utils::load_preload_adapters(
                 $paths.get_lora_preload_adapter_info(),
                 $dtype.unwrap_or($default_dtype),

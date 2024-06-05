@@ -275,6 +275,8 @@ chat template JSON file (examples [here](chat_templates), you will need to creat
 ./mistralrs-server --chat-template <chat_template> gguf -m . -f Phi-3-mini-128k-instruct-q4_K_M.gguf
 ```
 
+If you do not specify a chat template, then the `--tok-model-id`/`-t` tokenizer model ID argument is expected where the `tokenizer_config.json` file should be provided. If that model ID contains a `tokenizer.json`, then that will be used over the GGUF tokenizer.
+
 The following tokenizer model types are currently supported. If you would like one to be added, please raise an issue. Otherwise,
 please consider using the method demonstrated in examples below, where the tokenizer is sourced from Hugging Face.
 
