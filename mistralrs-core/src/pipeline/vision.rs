@@ -19,7 +19,7 @@ use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
-    do_sample, get_paths, vision_normal_model_loader, DeviceMapMetadata, Ordering, Pipeline, DEBUG,
+    do_sample, get_paths, vision_normal_model_loader, DeviceMapMetadata, Ordering, Pipeline,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
@@ -34,8 +34,6 @@ use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::info;
-use tracing::level_filters::LevelFilter;
-use tracing_subscriber::EnvFilter;
 
 pub struct VisionPipeline {
     model: Box<dyn VisionModel + Send + Sync>,
