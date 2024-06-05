@@ -15,8 +15,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, QLinear, RmsNorm},
     models::llama::Config,
-    pipeline::{self, extract_logits, LayerCaches, NormalModel},
-    DeviceMapMetadata,
+    pipeline::{self, extract_logits, LayerCaches, NormalLoadingMetadata, NormalModel},
 };
 
 use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -552,13 +551,13 @@ impl XLoraLlama {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         is_gptx: bool,
-        mapper: DeviceMapMetadata,
-        loading_isq: bool,
-        real_device: Device,
+        normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let dtype = vb.dtype();
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
+        let mapper = normal_loading_metadata
+            .mapper
+            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -567,7 +566,7 @@ impl XLoraLlama {
         let lm_head = candle_nn::linear(
             cfg.hidden_size,
             cfg.vocab_size,
-            mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
+            mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
         )?;
         let ln_f = RmsNorm::new(
             cfg.hidden_size,
@@ -583,7 +582,9 @@ impl XLoraLlama {
                         cfg.rope_theta,
                         head_dim,
                         cfg.max_position_embeddings,
-                        mapper.device_for(i, false).unwrap_or(&real_device),
+                        mapper
+                            .device_for(i, false)
+                            .unwrap_or(&normal_loading_metadata.real_device),
                         is_gptx,
                         vb.dtype(),
                     )
@@ -597,7 +598,7 @@ impl XLoraLlama {
                     &xlora_ordering,
                     &*mapper,
                     i,
-                    loading_isq,
+                    normal_loading_metadata.loading_isq,
                     rotary_emb,
                     preload_adapters,
                 )
@@ -639,7 +640,7 @@ impl XLoraLlama {
             ln_f,
             lm_head: QLinear::from_linear(lm_head),
             kv_cache: pipeline::Cache::new(cfg.num_hidden_layers, true),
-            device: real_device,
+            device: normal_loading_metadata.real_device,
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
             }),

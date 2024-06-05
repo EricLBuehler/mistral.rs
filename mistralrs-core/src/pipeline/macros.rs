@@ -314,9 +314,11 @@ macro_rules! normal_model_loader {
             &$config,
             $use_flash_attn,
             vb,
-            $mapper,
-            $loading_isq,
-            $real_device,
+            $crate::pipeline::NormalLoadingMetadata {
+                mapper: $mapper,
+                loading_isq: $loading_isq,
+                real_device: $real_device,
+            },
         )?
     }};
 }
@@ -372,9 +374,11 @@ macro_rules! xlora_model_loader {
             $paths.get_adapter_configs().as_ref().unwrap(),
             Some($paths.get_classifier_config().as_ref().unwrap().clone()),
             $paths.get_ordering().as_ref().unwrap().clone(),
-            $mapper,
-            $loading_isq,
-            $real_device,
+            $crate::pipeline::NormalLoadingMetadata {
+                mapper: $mapper,
+                loading_isq: $loading_isq,
+                real_device: $real_device,
+            },
             &$crate::utils::varbuilder_utils::load_preload_adapters(
                 $paths.get_lora_preload_adapter_info(),
                 $dtype.unwrap_or($default_dtype),
@@ -413,9 +417,11 @@ macro_rules! lora_model_loader {
             $paths.get_adapter_configs().as_ref().unwrap(),
             None,
             $paths.get_ordering().as_ref().unwrap().clone(),
-            $mapper,
-            $loading_isq,
-            $real_device,
+            $crate::pipeline::NormalLoadingMetadata {
+                mapper: $mapper,
+                loading_isq: $loading_isq,
+                real_device: $real_device,
+            },
             &$crate::utils::varbuilder_utils::load_preload_adapters(
                 $paths.get_lora_preload_adapter_info(),
                 $dtype.unwrap_or($default_dtype),
