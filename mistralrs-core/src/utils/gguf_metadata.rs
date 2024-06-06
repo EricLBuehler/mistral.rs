@@ -38,8 +38,26 @@ impl ContentMetadata<'_> {
         ensure!(all_props_are_present, "Tokenizer is missing required props");
         Ok(())
     }
+
+    // Reference: https://github.com/ggerganov/ggml/blob/master/docs/gguf.md#required
+    pub fn verify_arch(&self, expected_arch: &str) -> Result<()> {
+        let actual_arch: String = self
+            .metadata
+            .get("general.architecture")
+            .cloned()
+            .try_value_into()?;
+
+        anyhow::ensure!(
+            actual_arch == expected_arch,
+            "Expected `{expected_arch}` architecture, got `{actual_arch}`."
+        );
+
+        Ok(())
+    }
 }
 
+// These traits below are a workaround for converting candles GGUF `Value` enum type wrapper.
+// A better upstream approach would instead be to provide serialize/deserialize support?
 pub trait TryFromValue {
     fn try_from_value(value: gguf_file::Value) -> Result<Self, candle_core::Error>
     where
