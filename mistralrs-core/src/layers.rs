@@ -18,7 +18,7 @@ use candle_nn::{Linear, Module, VarBuilder};
 use either::Either;
 
 pub use crate::layers_masker::CausalMasker;
-pub use crate::layers_utils::{flash_attn, repeat_kv, verify_sanity_gguf};
+pub use crate::layers_utils::{flash_attn, repeat_kv};
 
 use crate::{cublaslt::CUBLASLT_HANDLE, INHIBIT_GEMM_F16};
 

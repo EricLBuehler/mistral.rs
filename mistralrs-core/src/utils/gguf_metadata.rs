@@ -3,6 +3,7 @@ use anyhow::ensure;
 use anyhow::Result;
 use candle_core::quantized::gguf_file;
 use std::collections::HashMap;
+use tracing::warn;
 
 pub struct ContentMetadata<'a> {
     pub path_prefix: String,
@@ -31,7 +32,7 @@ impl ContentMetadata<'_> {
 
             if !self.metadata.contains_key(&prop_key) {
                 all_props_are_present = false;
-                eprintln!("Expected GGUF metadata to have key: `{prop_key}`");
+                warn!("Expected GGUF metadata to have key: `{prop_key}`");
             }
         }
 

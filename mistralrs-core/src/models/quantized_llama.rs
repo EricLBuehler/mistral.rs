@@ -259,17 +259,17 @@ impl ModelConfig::FromGGML for ModelWeights {
 // llama `llm` fields:
 // https://github.com/ggerganov/ggml/blob/master/docs/gguf.md#llm
 // NOTE: Types here do not match spec
-struct PropsGGUF {
-    n_expert: usize,
-    n_expert_used: usize,
-    head_count: usize,
-    head_count_kv: usize,
-    block_count: usize,
-    embedding_length: usize,
-    rope_dim: usize,
-    rms_norm_eps: f32,
-    max_seq_len: usize,
-    rope_freq_base: f32,
+pub(crate) struct PropsGGUF {
+    pub n_expert: usize,
+    pub n_expert_used: usize,
+    pub head_count: usize,
+    pub head_count_kv: usize,
+    pub block_count: usize,
+    pub embedding_length: usize,
+    pub rope_dim: usize,
+    pub rms_norm_eps: f32,
+    pub max_seq_len: usize,
+    pub rope_freq_base: f32,
 }
 
 impl TryFrom<ContentMetadata<'_>> for PropsGGUF {

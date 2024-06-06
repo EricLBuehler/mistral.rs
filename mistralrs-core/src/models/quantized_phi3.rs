@@ -162,15 +162,15 @@ fn precomput_freqs_cis(
 // phi3 `llm` fields:
 // https://github.com/ggerganov/ggml/blob/master/docs/gguf.md#llm
 // NOTE: Types here do not match spec
-struct PropsGGUF {
-    head_count: usize,
-    head_count_kv: usize,
-    block_count: usize,
-    embedding_length: usize,
-    i_size: usize,
-    rope_dim: usize,
-    rms_eps: f64,
-    context_window: usize,
+pub(crate) struct PropsGGUF {
+    pub head_count: usize,
+    pub head_count_kv: usize,
+    pub block_count: usize,
+    pub embedding_length: usize,
+    pub i_size: usize,
+    pub rope_dim: usize,
+    pub rms_eps: f64,
+    pub context_window: usize,
 }
 
 impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
