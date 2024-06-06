@@ -517,6 +517,8 @@
 <a href="#515" id="515">515</a>
 <a href="#516" id="516">516</a>
 <a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
+<a href="#519" id="519">519</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -685,6 +687,8 @@
     }
 
     <span class="kw">pub fn </span>build(<span class="self">self</span>) -&gt; Box&lt;<span class="kw">dyn </span>Loader&gt; {
+        setup_logger_and_debug();
+
         Box::new(GGMLLoader {
             model_id: <span class="self">self</span>.model_id.unwrap(),
             config: <span class="self">self</span>.config,

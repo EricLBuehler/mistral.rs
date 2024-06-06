@@ -637,6 +637,8 @@
 <a href="#635" id="635">635</a>
 <a href="#636" id="636">636</a>
 <a href="#637" id="637">637</a>
+<a href="#638" id="638">638</a>
+<a href="#639" id="639">639</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -840,6 +842,8 @@
     }
 
     <span class="kw">pub fn </span>build(<span class="self">self</span>) -&gt; Box&lt;<span class="kw">dyn </span>Loader&gt; {
+        setup_logger_and_debug();
+
         Box::new(GGUFLoader {
             model_id: <span class="self">self</span>.model_id,
             config: <span class="self">self</span>.config,
