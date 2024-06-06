@@ -166,6 +166,8 @@ impl GGMLLoaderBuilder {
     }
 
     pub fn build(self) -> Box<dyn Loader> {
+        setup_logger_and_debug();
+
         Box::new(GGMLLoader {
             model_id: self.model_id.unwrap(),
             config: self.config,

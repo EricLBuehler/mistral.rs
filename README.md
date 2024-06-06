@@ -168,6 +168,7 @@ To install mistral.rs, one should ensure they have Rust installed by following [
     ```
 
 3) Set HF token correctly (skip if already set or your model is not gated, or if you want to use the `token_source` parameters in Python or the command line.)
+    - Note: you can install `huggingface-cli` as documented [here](https://huggingface.co/docs/huggingface_hub/en/installation). 
     ```bash
     huggingface-cli login
     ```
