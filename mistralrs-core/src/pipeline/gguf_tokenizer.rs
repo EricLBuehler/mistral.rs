@@ -31,8 +31,6 @@ struct PropsGGUF {
     bos: u32,
 }
 
-// This approach is a workaround for candles GGUF `Value` enum type wrapper,
-// a better upstream approach would be to have serialize/deserialize support.
 impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
     type Error = anyhow::Error;
 
