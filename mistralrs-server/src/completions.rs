@@ -161,20 +161,6 @@ pub async fn completions(
     }
     let request = parse_request(oairequest, state.clone(), tx);
     let sender = state.get_sender().unwrap();
-    // if the sender is closed, try to reboot the engine, and get the sender
-    // TODO(GregSzumel): make more readable?
-    let sender = if sender.is_closed() {
-        match state.reboot_engine() {
-            Ok(_) => state.get_sender().unwrap(),
-            _ => {
-                return CompletionResponder::InternalError(
-                    "could not communicate with engine, failed to reboot.".into(),
-                )
-            }
-        }
-    } else {
-        sender
-    };
 
     if let Err(e) = sender.send(request).await {
         let e = anyhow::Error::msg(e.to_string());

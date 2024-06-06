@@ -11,7 +11,7 @@ use std::{
     fs::OpenOptions,
     io::Write,
     sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
-    thread,
+    thread::{self, JoinHandle},
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::mpsc::{channel, Sender};
@@ -72,6 +72,7 @@ pub struct MistralRs {
     creation_time: u64,
     next_request_id: Mutex<RefCell<usize>>,
     reboot_state: RebootState,
+    engine_handler: RwLock<JoinHandle<()>>,
 }
 
 #[derive(Clone)]
@@ -227,19 +228,9 @@ impl MistralRs {
         let (tx, rx) = channel(10_000);
 
         let sender = RwLock::new(tx);
+        let id = pipeline.try_lock().unwrap().name();
 
-        let this = Arc::new(Self {
-            sender,
-            log,
-            id: pipeline.try_lock().unwrap().name(),
-            creation_time: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("Time travel has occurred!")
-                .as_secs(),
-            next_request_id: Mutex::new(RefCell::new(0)),
-            reboot_state,
-        });
-        thread::spawn(move || {
+        let engine_handler = thread::spawn(move || {
             let rt = Runtime::new().unwrap();
             rt.block_on(async move {
                 let mut engine = Engine::new(
@@ -256,24 +247,45 @@ impl MistralRs {
             });
         });
 
-        this
+        Arc::new(Self {
+            sender,
+            log,
+            id,
+            creation_time: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Time travel has occurred!")
+                .as_secs(),
+            next_request_id: Mutex::new(RefCell::new(0)),
+            reboot_state,
+            engine_handler: RwLock::new(engine_handler),
+        })
     }
 
     /// attempts to reboot the engine, if the sender (only way to communicate with
     /// the engine) is closed
     // TODO(GregSzumel): don't use anyhow for these errors?
-    pub fn reboot_engine(&self) -> anyhow::Result<()> {
-        tracing::info!("attempting to reboot");
-        // only start a new runtime if the receiver was closed. this implies
-        // that it was dropped, and therefore the tokio runtime is down.
-        if self.get_sender()?.is_closed() {
-            tracing::info!("sender is closed, rebooting");
-            let (tx, rx) = channel(10_000);
-            self.update_sender(tx)?;
+    fn reboot_engine(&self) -> anyhow::Result<()> {
+        tracing::info!("trying to reboot");
+        let (new_sender, rx) = channel(10_000);
+        let reboot_state = self.reboot_state.clone();
+        let mut sender_lock = self
+            .sender
+            .write()
+            .map_err(|err| anyhow::Error::msg(err.to_string()))?;
+        tracing::info!("locked sender");
+        let mut engine_lock = self
+            .engine_handler
+            .write()
+            .map_err(|err| anyhow::Error::msg(err.to_string()))?;
+        tracing::info!("locked engine");
 
-            let reboot_state = self.reboot_state.clone();
-
-            thread::spawn(move || {
+        if !engine_lock.is_finished() {
+            tracing::info!("engine already running, returning ok");
+            Ok(())
+        } else {
+            // critical section. A panic here could lead to poisoned locks
+            tracing::info!("starting engine");
+            let new_engine_handler = thread::spawn(move || {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
                     let mut engine = Engine::new(
@@ -289,29 +301,29 @@ impl MistralRs {
                     engine.run().await;
                 });
             });
+            tracing::info!("updating sender and engine handler");
+            *sender_lock = new_sender;
+            *engine_lock = new_engine_handler;
             Ok(())
-        } else {
-            Err(anyhow::Error::msg("Did not reboot, sender not closed"))
         }
     }
 
-    // TODO(GregSzumel): don't use anyhow for these errors?
-    fn update_sender(&self, new_sender: Sender<Request>) -> anyhow::Result<()> {
-        tracing::info!("Trying to update sender");
-
-        match self.sender.write() {
-            Ok(mut sender) => {
-                *sender = new_sender;
-                Ok(())
+    fn engine_dead(&self) -> anyhow::Result<bool> {
+        match self.engine_handler.read() {
+            Ok(handler) => Ok(handler.is_finished()),
+            Err(_) => {
+                tracing::info!("couldn't get read lock, engine is being rebooted");
+                Err(anyhow::Error::msg("couldn't get engine read lock"))
             }
-            Err(err) => Err(anyhow::Error::msg(format!(
-                "Couldn't update sender, {}",
-                err,
-            ))),
         }
     }
 
     pub fn get_sender(&self) -> anyhow::Result<Sender<Request>> {
+        tracing::info!("checking if engine is dead");
+        if self.engine_dead()? {
+            tracing::info!("engine is dead");
+            self.reboot_engine()?
+        }
         match self.sender.read() {
             Ok(sender) => Ok(sender.clone()),
             Err(err) => {
