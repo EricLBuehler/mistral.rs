@@ -4,12 +4,12 @@ use anyhow::Result;
 use candle_core::quantized::gguf_file;
 use std::collections::HashMap;
 
-pub struct MetadataContext<'a> {
+pub struct ContentMetadata<'a> {
     pub path_prefix: String,
     pub metadata: &'a HashMap<String, gguf_file::Value>,
 }
 
-impl MetadataContext<'_> {
+impl ContentMetadata<'_> {
     // Retrieve a prop the struct needs by querying the metadata content:
     pub fn get_value<T: TryFromValue>(&self, field_name: &str) -> Result<T, candle_core::Error> {
         let prop_key = format!("{prefix}.{field_name}", prefix = self.path_prefix);

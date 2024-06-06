@@ -10,7 +10,7 @@ use tokenizers::{
 };
 use tracing::info;
 
-use crate::utils::gguf_metadata::MetadataContext;
+use crate::utils::gguf_metadata::ContentMetadata;
 use crate::DEBUG;
 
 pub struct ConversionResult {
@@ -33,10 +33,10 @@ struct PropsGGUF {
 
 // This approach is a workaround for candles GGUF `Value` enum type wrapper,
 // a better upstream approach would be to have serialize/deserialize support.
-impl TryFrom<MetadataContext<'_>> for PropsGGUF {
+impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
     type Error = anyhow::Error;
 
-    fn try_from(c: MetadataContext) -> Result<Self, Self::Error> {
+    fn try_from(c: ContentMetadata) -> Result<Self, Self::Error> {
         let required = ["model", "tokens", "eos_token_id", "bos_token_id"];
         c.has_required_keys(&required)?;
 
@@ -56,7 +56,7 @@ impl TryFrom<MetadataContext<'_>> for PropsGGUF {
 }
 
 pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<ConversionResult> {
-    let metadata = MetadataContext {
+    let metadata = ContentMetadata {
         path_prefix: "tokenizer.ggml".to_string(),
         metadata: &content.metadata,
     };
