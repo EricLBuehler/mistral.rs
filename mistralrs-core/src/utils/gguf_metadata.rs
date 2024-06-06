@@ -11,7 +11,7 @@ pub struct ContentMetadata<'a> {
 
 impl ContentMetadata<'_> {
     // Retrieve a prop the struct needs by querying the metadata content:
-    pub fn get_value<T: TryFromValue>(&self, field_name: &str) -> Result<T, candle_core::Error> {
+    pub fn get_value<T: TryFromValue>(&self, field_name: &str) -> Result<T, anyhow::Error> {
         let prop_key = format!("{prefix}.{field_name}", prefix = self.path_prefix);
         let value = self.metadata.get(&prop_key).cloned();
 
@@ -19,7 +19,7 @@ impl ContentMetadata<'_> {
         // otherwise format error with prop key as context:
         value
             .try_value_into()
-            .or_else(|e| candle_core::bail!("`{prop_key}` `{e}`"))
+            .or_else(|e| anyhow::bail!("`{prop_key}` `{e}`"))
     }
 
     // Fail early - Catch all missing mandatory keys upfront:
@@ -68,8 +68,21 @@ pub trait TryFromValue {
 // NOTE: Type conversion methods internally bail with "not a <into type> <input value>"
 // https://docs.rs/candle-core/latest/candle_core/quantized/gguf_file/enum.Value.html#variants
 akin! {
-    let &types = [String, f32, u32];
-    let &to_type = [value.to_string().cloned(), value.to_f32(), value.to_u32()];
+    let &types = [String, bool, f32, f64, i8, i16, i32, i64, u8, u16, u32, u64];
+    let &to_type = [
+        value.to_string().cloned(),
+        value.to_bool(),
+        value.to_f32(),
+        value.to_f64(),
+        value.to_i8(),
+        value.to_i16(),
+        value.to_i32(),
+        value.to_i64(),
+        value.to_u8(),
+        value.to_u16(),
+        value.to_u32(),
+        value.to_u64(),
+    ];
 
     impl TryFromValue for *types {
         fn try_from_value(value: gguf_file::Value) -> Result<Self, candle_core::Error> {
@@ -105,7 +118,7 @@ impl<T: TryFromValue> TryValueInto<T> for Option<gguf_file::Value> {
     fn try_value_into(self) -> Result<T, candle_core::Error> {
         match self {
             Some(value) => value.try_value_into(),
-            None => candle_core::bail!("Option is missing value"),
+            None => candle_core::bail!("Expected `Option<gguf_file::Value>` to contain a value"),
         }
     }
 }
