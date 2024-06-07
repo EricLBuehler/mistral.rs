@@ -31,7 +31,7 @@ use pyo3::{
 use std::fs::File;
 mod stream;
 mod which;
-use which::{Architecture, Which};
+use which::{Architecture, VisionArchitecture, Which};
 
 #[cfg(not(feature = "metal"))]
 static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
@@ -1035,6 +1035,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ChatCompletionRequest>()?;
     m.add_class::<CompletionRequest>()?;
     m.add_class::<Architecture>()?;
+    m.add_class::<VisionArchitecture>()?;
 
     m.add_class::<mistralrs_core::ResponseMessage>()?;
     m.add_class::<mistralrs_core::Delta>()?;
