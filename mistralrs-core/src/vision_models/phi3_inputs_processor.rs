@@ -377,13 +377,11 @@ impl ImagePreProcessor for Phi3InputsProcessor {
         // If >1 images, resize them all to the largest, potentially destroying aspect ratio
         let mut max_size = None;
         for image in images.iter() {
-            if max_size.is_none()
-                || max_size.is_some_and(|(x, _)| image.dimensions().0 as usize > x)
-            {
+            if max_size.is_none() {
+                max_size = Some((image.dimensions().0 as usize, image.dimensions().1 as usize))
+            } else if max_size.is_some_and(|(x, _)| image.dimensions().0 as usize > x) {
                 max_size = Some((image.dimensions().0 as usize, max_size.unwrap().1));
-            } else if max_size.is_none()
-                || max_size.is_some_and(|(_, y)| image.dimensions().1 as usize > y)
-            {
+            } else if max_size.is_some_and(|(_, y)| image.dimensions().1 as usize > y) {
                 max_size = Some((max_size.unwrap().0, image.dimensions().1 as usize));
             }
         }
