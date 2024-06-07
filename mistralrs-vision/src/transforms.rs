@@ -84,7 +84,9 @@ impl ImageTransform for InterpolateResize {
     type Output = Self::Input;
 
     fn map(&self, x: &Self::Input, _: &Device) -> Result<Self::Output> {
-        x.interpolate2d(self.target_h, self.target_w)
+        x.unsqueeze(0)?
+            .interpolate2d(self.target_h, self.target_w)?
+            .squeeze(0)
     }
 }
 
