@@ -549,7 +549,7 @@ mod tests {
 
     #[test]
     fn fused_bias_linear() {
-        use candle_core::{DType, Device, Tensor};
+        use candle_core::{DType, Device, IndexOp, Tensor};
         use candle_nn::{Linear, Module};
 
         use crate::cublaslt::setup_cublas_lt_wrapper;
@@ -568,18 +568,24 @@ mod tests {
             DType::F32
         };
 
-        let w = Tensor::rand(0.0f32, 1.0, (OUT, IN), &dev)
+        let w = Tensor::arange(0f32, (OUT * IN) as f32, &dev)
             .unwrap()
             .to_dtype(inner_dtype)
+            .unwrap()
+            .reshape((OUT, IN))
             .unwrap();
-        let b = Tensor::rand(0.0f32, 1.0, (OUT,), &dev)
+        let b = Tensor::arange(0f32, OUT as f32, &dev)
             .unwrap()
             .to_dtype(inner_dtype)
+            .unwrap()
+            .reshape((OUT,))
             .unwrap();
 
-        let xs = Tensor::rand(0.0f32, 1.0, (1, INNER, IN), &dev)
+        let xs = Tensor::arange(0f32, (INNER * IN) as f32, &dev)
             .unwrap()
             .to_dtype(inner_dtype)
+            .unwrap()
+            .reshape((1, INNER, IN))
             .unwrap();
 
         let lin = Linear::new(w.clone(), Some(b.clone()));
@@ -602,12 +608,13 @@ mod tests {
         if truth_y != fused_y {
             panic!(
                 "Truth does not match fused kernel. Diff fused - truth:\n{:#?}",
-                &(fused_out - truth_out)
+                &(&fused_out - &truth_out)
+                    .unwrap()
+                    .i((0, 5..10, 0..5))
                     .unwrap()
                     .to_dtype(DType::F32)
                     .unwrap()
-                    .to_vec3::<f32>()
-                    .unwrap()[..][5..10][..5]
+                    .to_vec2::<f32>()
             )
         }
     }
