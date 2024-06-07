@@ -554,13 +554,13 @@ mod tests {
         let w = Tensor::rand(0.0f32, 1.0, (OUT, IN), &dev).unwrap();
         let b = Tensor::rand(0.0f32, 1.0, (OUT,), &dev).unwrap();
 
-        let xs = Tensor::rand(0.0f32, 1.0, (10, IN), &dev).unwrap();
+        let xs = Tensor::rand(0.0f32, 1.0, (1, 10, IN), &dev).unwrap();
 
         let lin = Linear::new(w.clone(), Some(b.clone()));
-        let truth_y = lin.forward(&xs).unwrap().to_vec2::<f32>().unwrap();
+        let truth_y = lin.forward(&xs).unwrap().to_vec3::<f32>().unwrap();
 
         let fused = FusedBiasLinear { w, b };
-        let fused_y = fused.forward(&xs).unwrap().to_vec2::<f32>().unwrap();
+        let fused_y = fused.forward(&xs).unwrap().to_vec3::<f32>().unwrap();
 
         assert_eq!(truth_y, fused_y);
     }
