@@ -86,7 +86,7 @@ impl InputsProcessor for Phi3InputsProcessor {
             .clone()
             .expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
-        let (pixel_values, image_sizes, num_img_tokens) = if is_prompt
+        let (pixel_values, image_sizes, num_img_tokens, n_images) = if is_prompt
             && input_seqs
                 .iter()
                 .map(|seq| seq.images().is_some())
@@ -95,18 +95,19 @@ impl InputsProcessor for Phi3InputsProcessor {
             let mut pixel_values_accum = Vec::new();
             let mut image_sizes_accum = Vec::new();
             let mut num_img_tokens_accum = Vec::new();
+            let mut n_images = Vec::new();
             for seq in input_seqs.iter_mut() {
+                let imgs = seq
+                    .take_images()
+                    .expect("Need to have images by this point.");
+                let imgs_len = imgs.len();
+                n_images.push(imgs_len);
                 let PreprocessedImages {
                     pixel_values,
                     pixel_attention_mask: _,
                     image_sizes,
                     num_img_tokens,
-                } = self.preprocess(
-                    seq.take_images()
-                        .expect("Need to have images by this point."),
-                    config,
-                    device,
-                )?;
+                } = self.preprocess(imgs, config, device)?;
                 let image_sizes = image_sizes.unwrap();
                 pixel_values_accum.push(pixel_values);
                 image_sizes_accum.push(image_sizes);
@@ -116,6 +117,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                 Some(Tensor::cat(&pixel_values_accum, 0)?),
                 Some(image_sizes_accum),
                 Some(num_img_tokens_accum),
+                n_images,
             )
         } else {
             let text_models_inputs_processor::ModelInputs {
@@ -163,10 +165,11 @@ impl InputsProcessor for Phi3InputsProcessor {
             )
             .map_err(anyhow::Error::msg)?;
 
-        for (detokenized, (seq, num_img_tokens)) in detokenized
-            .into_iter()
-            .zip(input_seqs.iter_mut().zip(num_img_tokens.unwrap()))
-        {
+        for (detokenized, (seq, (num_img_tokens, n_images))) in detokenized.into_iter().zip(
+            input_seqs
+                .iter_mut()
+                .zip(num_img_tokens.unwrap().into_iter().zip(n_images)),
+        ) {
             let splits = self
                 .image_tag_splitter
                 .split(&detokenized)
@@ -205,7 +208,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                 anyhow::bail!("`image_ids` must start from 1, and must be continuous, e.g. [1, 2, 3], cannot be [1, 4, 5].");
             }
             // Total images must be the same as the number of image tags
-            if unique_image_ids.len() != seq.images().as_ref().unwrap().len() {
+            if unique_image_ids.len() != n_images {
                 anyhow::bail!("Total images must be the same as the number of image tags.");
             }
 
