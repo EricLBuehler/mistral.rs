@@ -338,7 +338,7 @@ fn parse_which(
             tokenizer_json,
             Some(model_id),
         )
-        .build(arch),
+        .build(arch.into()),
     })
 }
 
