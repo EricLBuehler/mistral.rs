@@ -1,8 +1,10 @@
 #![allow(clippy::too_many_arguments)]
 
+use base64::{engine::general_purpose, Engine};
 use candle_core::{quantized::GgmlDType, Result};
 use either::Either;
 use indexmap::IndexMap;
+use reqwest::StatusCode;
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -16,11 +18,10 @@ use tokio::sync::mpsc::channel;
 use candle_core::Device;
 use mistralrs_core::{
     ChatCompletionResponse, CompletionResponse, Constraint, DeviceMapMetadata, GGMLLoaderBuilder,
-    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MessageContent, MistralRs,
-    MistralRsBuilder, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig,
-    Request as _Request, RequestMessage, Response, SamplingParams, SchedulerMethod,
-    SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource, VisionLoaderBuilder,
-    VisionSpecificConfig,
+    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder,
+    NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, Request as _Request, RequestMessage,
+    Response, SamplingParams, SchedulerMethod, SpeculativeConfig, SpeculativeLoader, StopTokens,
+    TokenSource, VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
@@ -489,28 +490,157 @@ impl Runner {
                 messages: match request.messages {
                     Either::Left(ref messages) => {
                         let mut messages_vec = Vec::new();
+                        let mut image_urls = Vec::new();
                         for message in messages {
-                            let role = message
-                                .get("role")
-                                .expect("Expected role")
-                                .as_ref()
-                                .left()
-                                .unwrap();
-                            let content = message.get("content").expect("Expected role");
-                            let mut message_map: IndexMap<
-                                String,
-                                Either<String, Vec<IndexMap<String, String>>>,
-                            > = IndexMap::new();
-                            if !["user", "assistant", "system"].contains(&role.as_str()) {
-                                return Err(PyValueError::new_err(
-                                    "Only `user`, `assistant`, `system` roles supported.",
-                                ));
+                            match &message["content"] {
+                                Either::Left(content) => {
+                                    let mut message_map: IndexMap<
+                                        String,
+                                        Either<String, Vec<IndexMap<String, String>>>,
+                                    > = IndexMap::new();
+                                    message_map.insert(
+                                        "role".to_string(),
+                                        Either::Left(
+                                            message["role"].as_ref().left().unwrap().clone(),
+                                        ),
+                                    );
+                                    message_map.insert(
+                                        "content".to_string(),
+                                        Either::Left(content.to_string()),
+                                    );
+                                    messages_vec.push(message_map);
+                                }
+                                Either::Right(image_messages) => {
+                                    if image_messages.len() != 2 {
+                                        return Err(PyValueError::new_err(
+                                        "Expected 2 items for the content of a message with an image."
+                                    .to_string()));
+                                    }
+                                    if message["role"].as_ref().left().unwrap() != "user" {
+                                        return Err(PyValueError::new_err(format!(
+                                        "Role for an image message must be `user`, but it is {}",
+                                        &message["role"].as_ref().left().unwrap()
+                                    )));
+                                    }
+
+                                    let mut items = Vec::new();
+                                    for image_message in image_messages {
+                                        if image_message.len() != 2 {
+                                            return Err(PyValueError::new_err("Expected 2 items for the sub-content of a message with an image.".to_string()));
+                                        }
+                                        if !image_message.contains_key("type") {
+                                            return Err(PyValueError::new_err(
+                                                "Expected `type` key in input message.".to_string(),
+                                            ));
+                                        }
+                                        if image_message["type"].is_right() {
+                                            return Err(PyValueError::new_err(
+                                                "Expected string value in `type`.".to_string(),
+                                            ));
+                                        }
+                                        items.push(
+                                            image_message["type"].as_ref().unwrap_left().clone(),
+                                        )
+                                    }
+
+                                    #[allow(clippy::type_complexity)]
+                                    fn get_content_and_url(
+                                        text_idx: usize,
+                                        url_idx: usize,
+                                        image_messages: &[HashMap<
+                                            String,
+                                            Either<String, HashMap<String, String>>,
+                                        >],
+                                    ) -> PyResult<(String, String)>
+                                    {
+                                        if image_messages[text_idx]["text"].is_right() {
+                                            return Err(PyValueError::new_err(
+                                                "Expected string value in `text`.".to_string(),
+                                            ));
+                                        }
+                                        let content = image_messages[text_idx]["text"]
+                                            .as_ref()
+                                            .unwrap_left()
+                                            .clone();
+                                        if image_messages[url_idx]["image_url"].is_left()
+                                            || !image_messages[url_idx]["image_url"]
+                                                .as_ref()
+                                                .unwrap_right()
+                                                .contains_key("url")
+                                        {
+                                            return Err(PyValueError::new_err("Expected content of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}".to_string()));
+                                        }
+                                        let url = image_messages[url_idx]["image_url"]
+                                            .as_ref()
+                                            .unwrap_right()["url"]
+                                            .clone();
+                                        Ok((content, url))
+                                    }
+                                    let mut message_map: IndexMap<
+                                        String,
+                                        Either<String, Vec<IndexMap<String, String>>>,
+                                    > = IndexMap::new();
+                                    message_map.insert(
+                                        "role".to_string(),
+                                        Either::Left(
+                                            message["role"].as_ref().left().unwrap().clone(),
+                                        ),
+                                    );
+                                    let (content, url) = if items[0] == "text" {
+                                        get_content_and_url(0, 1, image_messages)?
+                                    } else {
+                                        get_content_and_url(1, 0, image_messages)?
+                                    };
+
+                                    let mut content_map = Vec::new();
+                                    let mut content_image_map = IndexMap::new();
+                                    content_image_map
+                                        .insert("type".to_string(), "image".to_string());
+                                    content_map.push(content_image_map);
+                                    let mut content_text_map = IndexMap::new();
+                                    content_text_map.insert("type".to_string(), "text".to_string());
+                                    content_text_map.insert("text".to_string(), content);
+                                    content_map.push(content_text_map);
+
+                                    message_map
+                                        .insert("content".to_string(), Either::Right(content_map));
+                                    messages_vec.push(message_map);
+                                    image_urls.push(url);
+                                }
                             }
-                            message_map.insert("role".to_string(), Either::Left(role.to_string()));
-                            message_map.insert("content".to_string(), content.clone());
-                            messages_vec.push(message_map);
                         }
-                        RequestMessage::Chat(messages_vec)
+                        if !image_urls.is_empty() {
+                            let mut images = Vec::new();
+                            for url in image_urls {
+                                let bytes = match reqwest::blocking::get(url.clone()) {
+                                    Ok(http_resp) => http_resp
+                                        .bytes()
+                                        .map_err(|e| PyValueError::new_err(e.to_string()))?
+                                        .to_vec(),
+                                    Err(e) => {
+                                        if e.status()
+                                            .is_some_and(|code| code == StatusCode::NOT_FOUND)
+                                        {
+                                            general_purpose::STANDARD
+                                                .decode(url)
+                                                .map_err(|e| PyValueError::new_err(e.to_string()))?
+                                        } else {
+                                            return Err(PyValueError::new_err(e.to_string()));
+                                        }
+                                    }
+                                };
+                                images.push(
+                                    image::load_from_memory(&bytes)
+                                        .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                                );
+                            }
+                            RequestMessage::VisionChat {
+                                messages: messages_vec,
+                                images,
+                            }
+                        } else {
+                            RequestMessage::Chat(messages_vec)
+                        }
                     }
                     Either::Right(ref prompt) => {
                         let mut messages = Vec::new();
@@ -759,7 +889,16 @@ impl CompletionRequest {
 #[derive(Debug)]
 /// An OpenAI API compatible chat completion request.
 struct ChatCompletionRequest {
-    messages: Either<Vec<IndexMap<String, MessageContent>>, String>,
+    #[allow(clippy::type_complexity)]
+    messages: Either<
+        Vec<
+            HashMap<
+                String,
+                Either<String, Vec<HashMap<String, Either<String, HashMap<String, String>>>>>,
+            >,
+        >,
+        String,
+    >,
     _model: String,
     logit_bias: Option<HashMap<u32, f32>>,
     logprobs: bool,
@@ -823,16 +962,46 @@ impl ChatCompletionRequest {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
                 let mut messages_vec = Vec::new();
                 for message in messages {
-                    messages_vec.push(message.extract::<IndexMap<String, MessageContent>>()?);
+                    messages_vec.push(message.extract::<HashMap<
+                        String,
+                        Either<
+                            String,
+                            Vec<HashMap<String, Either<String, HashMap<String, String>>>>,
+                        >,
+                    >>()?);
                 }
-                Ok::<Either<Vec<IndexMap<String, MessageContent>>, String>, PyErr>(Either::Left(
-                    messages_vec,
-                ))
+                Ok::<
+                    Either<
+                        Vec<
+                            HashMap<
+                                String,
+                                Either<
+                                    String,
+                                    Vec<HashMap<String, Either<String, HashMap<String, String>>>>,
+                                >,
+                            >,
+                        >,
+                        String,
+                    >,
+                    PyErr,
+                >(Either::Left(messages_vec))
             } else if let Ok(messages) = messages.bind(py).downcast_exact::<PyString>() {
                 let prompt = messages.extract::<String>()?;
-                Ok::<Either<Vec<IndexMap<String, MessageContent>>, String>, PyErr>(Either::Right(
-                    prompt,
-                ))
+                Ok::<
+                    Either<
+                        Vec<
+                            HashMap<
+                                String,
+                                Either<
+                                    String,
+                                    Vec<HashMap<String, Either<String, HashMap<String, String>>>>,
+                                >,
+                            >,
+                        >,
+                        String,
+                    >,
+                    PyErr,
+                >(Either::Right(prompt))
             } else {
                 return Err(PyTypeError::new_err("Expected a string or list of dicts."));
             }
