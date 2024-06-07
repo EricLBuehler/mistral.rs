@@ -304,14 +304,11 @@ mod tests {
         }
     }
 
+    // Content based upon https://github.com/ggerganov/llama.cpp/blob/master/tests/test-tokenizer-random.py#L99-L161
     fn get_test_passage() -> String {
-        // TODO: Why is it necessary to depend on this for a multi-line test string?
-        let passage = reqwest::blocking::get("https://loripsum.net/api")
-            .expect("Failed to download sample text")
-            .bytes()
-            .expect("Failed to get bytes");
+        let passage = "Hello, world! \n🚀 (normal) 😶‍🌫️ (compound emoji, zwj sequence) ✅ (emoji as single token)\n你好世界！\nNǐ hǎo shìjiè!";
 
-        String::from_utf8(passage.to_vec()).expect("Failed to convert sample text to string.")
+        passage.to_owned()
     }
 
     // The provided passage should encode and decode back into the same passage string:
@@ -348,6 +345,7 @@ mod tests {
         let hf_decoded = codec_roundtrip(&hf_tokenizer, passage.as_str(), false)?;
         let gguf_decoded = codec_roundtrip(&gguf_tokenizer, passage.as_str(), false)?;
         assert_eq!(hf_decoded, gguf_decoded);
+        assert_eq!(passage, gguf_decoded);
 
         // With special tokens added
         // SKIPPED:
