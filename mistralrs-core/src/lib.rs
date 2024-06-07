@@ -52,7 +52,7 @@ pub use pipeline::{
     MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder,
     NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Qwen2Loader, SpeculativeConfig,
     SpeculativeLoader, SpeculativePipeline, TokenSource, VisionLoader, VisionLoaderBuilder,
-    VisionModelLoader, VisionSpecificConfig,
+    VisionLoaderType, VisionModelLoader, VisionSpecificConfig,
 };
 pub use request::{Constraint, Content, NormalRequest, Request, RequestMessage};
 pub use response::Response;

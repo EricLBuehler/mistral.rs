@@ -379,15 +379,6 @@ impl ImagePreProcessor for Phi3InputsProcessor {
 
             let hd_image = Self::hd_transform(image, config.num_crops.expect("Need `num_crops`"));
 
-            let transforms_hd2 = Transforms {
-                input: &ToTensor,
-                inner_transforms: &[],
-            };
-
-            // (3,h,w)
-            let hd_image2 = hd_image.apply(transforms_hd2, device)?;
-            dbg!(hd_image2);
-
             // Both hd and global have a normalization
             // Transforms for the HD image
             let transforms_hd = Transforms {
