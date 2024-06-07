@@ -163,8 +163,10 @@ impl InputsProcessor for Phi3InputsProcessor {
             )
             .map_err(anyhow::Error::msg)?;
 
-        let num_img_tokens = num_img_tokens.unwrap();
-        for (detokenized, seq) in detokenized.into_iter().zip(input_seqs.iter_mut()) {
+        for (detokenized, (seq, num_img_tokens)) in detokenized
+            .into_iter()
+            .zip(input_seqs.iter_mut().zip(num_img_tokens.unwrap()))
+        {
             let splits = self
                 .image_tag_splitter
                 .split(&detokenized)
@@ -199,15 +201,13 @@ impl InputsProcessor for Phi3InputsProcessor {
                 .sorted()
                 .collect::<Vec<_>>();
             // `image_ids` must start from 1, and must be continuous int, e.g. [1, 2, 3], cannot be [1, 4, 5]
-            assert_eq!(
-                unique_image_ids,
-                (1u32..unique_image_ids.len() as u32 + 1).collect::<Vec<_>>()
-            );
+            if unique_image_ids != (1u32..unique_image_ids.len() as u32 + 1).collect::<Vec<_>>() {
+                anyhow::bail!("`image_ids` must start from 1, and must be continuous, e.g. [1, 2, 3], cannot be [1, 4, 5].");
+            }
             // Total images must be the same as the number of image tags
-            assert_eq!(
-                unique_image_ids.len(),
-                1, // One image per seq
-            );
+            if unique_image_ids.len() != seq.images().as_ref().unwrap().len() {
+                anyhow::bail!("Total images must be the same as the number of image tags.");
+            }
 
             // Use the TryInto + unwrap_or to handle case when id==0
             let image_ids_pad = image_ids
@@ -368,9 +368,30 @@ impl ImagePreProcessor for Phi3InputsProcessor {
         config: &PreProcessorConfig,
         device: &Device,
     ) -> Result<PreprocessedImages> {
+        // If no images, will not call this.
+        assert!(!images.is_empty());
+
         let mut image_sizes = Vec::new();
         let mut padded_images = Vec::new();
         let mut num_img_tokens = Vec::new();
+        // If >1 images, resize them all to the largest, potentially destroying aspect ratio
+        let mut max_size = None;
+        for image in images.iter() {
+            if max_size.is_none()
+                || max_size.is_some_and(|(x, _)| image.dimensions().0 as usize > x)
+            {
+                max_size = Some((image.dimensions().0 as usize, max_size.unwrap().1));
+            } else if max_size.is_none()
+                || max_size.is_some_and(|(_, y)| image.dimensions().1 as usize > y)
+            {
+                max_size = Some((max_size.unwrap().0, image.dimensions().1 as usize));
+            }
+        }
+        let (max_h, max_w) = max_size.unwrap();
+        for image in images.iter_mut() {
+            *image = image.resize_exact(max_w as u32, max_h as u32, FilterType::Nearest);
+        }
+
         for image in images.iter_mut() {
             // Convert to rgb, default to true
             if config.do_convert_rgb.unwrap_or(true) {
@@ -425,7 +446,6 @@ impl ImagePreProcessor for Phi3InputsProcessor {
             candle_core::bail!("Can only process one image per batch");
         }
         let image_sizes = image_sizes[0];
-        let num_img_tokens = num_img_tokens[0];
 
         Ok(PreprocessedImages {
             pixel_values: Tensor::stack(&padded_images, 0)?,

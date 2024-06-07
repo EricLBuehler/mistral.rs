@@ -47,12 +47,12 @@ mod xlora_models;
 pub use device_map::{DeviceMapMetadata, LayerDeviceMapper};
 pub use gguf::{convert_gguf_to_hf_tokenizer, GgufTokenizerConversion};
 pub use pipeline::{
-    chat_template::ChatTemplate, GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFArchitecture, GGUFLoader,
-    GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader, LlamaLoader, Loader, LocalModelPaths,
-    MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder,
-    NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Qwen2Loader, SpeculativeConfig,
-    SpeculativeLoader, SpeculativePipeline, TokenSource, VisionLoader, VisionLoaderBuilder,
-    VisionLoaderType, VisionModelLoader, VisionSpecificConfig,
+    chat_template::ChatTemplate, GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig,
+    GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader, LlamaLoader,
+    Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader,
+    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader,
+    Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline, TokenSource,
+    VisionLoader, VisionLoaderBuilder, VisionLoaderType, VisionModelLoader, VisionSpecificConfig,
 };
 pub use request::{Constraint, Content, NormalRequest, Request, RequestMessage};
 pub use response::Response;
