@@ -45,8 +45,9 @@ pub struct ChatTemplate {
     additional_special_tokens: Option<Vec<String>>,
     pub bos_token: Option<BeginEndUnkTok>,
 
-    /// Jinja format chat templating for chat completion.
-    /// See: https://huggingface.co/docs/transformers/chat_templating
+    /// Jinja format [chat templating] for chat completion.
+    ///
+    /// [chat templating]: https://huggingface.co/docs/transformers/chat_templating
     pub chat_template: Option<String>,
     clean_up_tokenization_spaces: Option<bool>,
     device_map: Option<String>,

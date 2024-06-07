@@ -1,5 +1,5 @@
 mod cache_manager;
-mod chat_template;
+pub mod chat_template;
 mod ggml;
 mod gguf;
 mod inputs_processor;
@@ -61,12 +61,14 @@ pub trait ModelPaths {
     /// Model weights files (multiple files supported).
     fn get_weight_filenames(&self) -> &[PathBuf];
 
-    /// Retrieve the PretrainedConfig file.
-    /// See: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/configuration#transformers.PretrainedConfig
+    /// Retrieve the [`PretrainedConfig`] file.
+    ///
+    /// [`PretrainedConfig`]: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/configuration#transformers.PretrainedConfig
     fn get_config_filename(&self) -> &PathBuf;
 
-    /// A serialised `tokenizers.Tokenizer` HuggingFace object.
-    /// See: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/tokenizer
+    /// A serialised [`tokenizers.Tokenizer`] HuggingFace object.
+    ///
+    /// [`tokenizers.Tokenizer`]: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/tokenizer
     fn get_tokenizer_filename(&self) -> &PathBuf;
 
     /// Content expected to deserialize to [`ChatTemplate`].
