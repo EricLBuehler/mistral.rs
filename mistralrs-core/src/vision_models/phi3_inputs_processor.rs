@@ -379,6 +379,15 @@ impl ImagePreProcessor for Phi3InputsProcessor {
 
             let hd_image = Self::hd_transform(image, config.num_crops.expect("Need `num_crops`"));
 
+            let transforms_hd2 = Transforms {
+                input: &ToTensor,
+                inner_transforms: &[],
+            };
+
+            // (3,h,w)
+            let hd_image2 = hd_image.apply(transforms_hd2, device)?;
+            dbg!(hd_image2);
+
             // Both hd and global have a normalization
             // Transforms for the HD image
             let transforms_hd = Transforms {
@@ -394,7 +403,7 @@ impl ImagePreProcessor for Phi3InputsProcessor {
 
             // Resize with bicubic interpolation
             // (3,336,336)
-            let global_image = hd_image.unsqueeze(0)?.interpolate2d(336, 336)?.squeeze(0)?;
+            let global_image = hd_image.unsqueeze(0)?.interpolate2d(336, 336)?;
 
             let (_, h, w) = hd_image.dims3()?;
             let num_image_tokens = ((h as f32 / 336. * w as f32 / 336. + 1.) * 144.

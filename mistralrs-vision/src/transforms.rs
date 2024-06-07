@@ -20,7 +20,7 @@ impl ToTensor {
                 )
             }
             let row = Tensor::cat(&row_accum, 0)?;
-            accum.push(row.reshape((row.dim(1)?, ()))?.unsqueeze(1)?);
+            accum.push(row.t()?.unsqueeze(1)?);
         }
         let t = Tensor::cat(&accum, 1)?.to_device(device)?;
         // Rescale to between 0 and 1
