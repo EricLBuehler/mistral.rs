@@ -119,6 +119,8 @@ fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, Vec<Str
         Unigram::from(vocab, Some(unk as usize), true).map_err(anyhow::Error::msg)?
     };
 
+    // Decoder + Normalizer config reference:
+    // https://github.com/EricLBuehler/mistral.rs/pull/389#discussion_r1630620763
     let decoder = Decoder::Sequence(vec![
         Decoder::Replace("▁", " "),
         Decoder::ByteFallback,
