@@ -33,5 +33,5 @@ fn normalize_and_interpolate_resize() {
         ],
     };
     let transformed = image.apply(transforms, &Device::Cpu).unwrap();
-    assert_eq!(transformed.dims(), &[3, 300, 300]);
+    assert_eq!(transformed.dims(), &[3, 336, 336]);
 }

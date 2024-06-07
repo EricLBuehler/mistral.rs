@@ -5,7 +5,7 @@ use std::{any::Any, sync::Arc};
 use candle_core::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImage, GenericImageView, Rgba};
 use itertools::Itertools;
-use mistralrs_vision::{ApplyTransforms, InterpolateResize, Normalize, ToTensor, Transforms};
+use mistralrs_vision::{ApplyTransforms, Normalize, ToTensor, Transforms};
 use regex_automata::meta::Regex;
 use tokenizers::Tokenizer;
 
@@ -388,27 +388,13 @@ impl ImagePreProcessor for Phi3InputsProcessor {
                     std: config.image_std.unwrap_or(Self::DEFAULT_STD).to_vec(),
                 }],
             };
-            // Transforms for the global image (after HD transform, resized)
-            let transforms_global = Transforms {
-                input: &ToTensor,
-                inner_transforms: &[
-                    &Normalize {
-                        mean: config.image_mean.unwrap_or(Self::DEFAULT_MEAN).to_vec(),
-                        std: config.image_std.unwrap_or(Self::DEFAULT_STD).to_vec(),
-                    },
-                    &InterpolateResize {
-                        target_h: 336,
-                        target_w: 336,
-                    },
-                ],
-            };
-
-            // Resize with bicubic interpolation
-            // (3,336,336)
-            let global_image = hd_image.apply(transforms_global, device)?.unsqueeze(0)?;
 
             // (3,h,w)
             let hd_image = hd_image.apply(transforms_hd, device)?;
+
+            // Resize with bicubic interpolation
+            // (3,336,336)
+            let global_image = hd_image.unsqueeze(0)?.interpolate2d(336, 336)?.squeeze(0)?;
 
             let (_, h, w) = hd_image.dims3()?;
             let num_image_tokens = ((h as f32 / 336. * w as f32 / 336. + 1.) * 144.
