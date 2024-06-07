@@ -880,11 +880,34 @@
 <a href="#878" id="878">878</a>
 <a href="#879" id="879">879</a>
 <a href="#880" id="880">880</a>
+<a href="#881" id="881">881</a>
+<a href="#882" id="882">882</a>
+<a href="#883" id="883">883</a>
+<a href="#884" id="884">884</a>
+<a href="#885" id="885">885</a>
+<a href="#886" id="886">886</a>
+<a href="#887" id="887">887</a>
+<a href="#888" id="888">888</a>
+<a href="#889" id="889">889</a>
+<a href="#890" id="890">890</a>
+<a href="#891" id="891">891</a>
+<a href="#892" id="892">892</a>
+<a href="#893" id="893">893</a>
+<a href="#894" id="894">894</a>
+<a href="#895" id="895">895</a>
+<a href="#896" id="896">896</a>
+<a href="#897" id="897">897</a>
+<a href="#898" id="898">898</a>
+<a href="#899" id="899">899</a>
+<a href="#900" id="900">900</a>
+<a href="#901" id="901">901</a>
+<a href="#902" id="902">902</a>
+<a href="#903" id="903">903</a>
+<a href="#904" id="904">904</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>cache_manager;
 <span class="kw">pub mod </span>chat_template;
 <span class="kw">mod </span>ggml;
 <span class="kw">mod </span>gguf;
-<span class="kw">mod </span>gguf_tokenizer;
 <span class="kw">mod </span>inputs_processor;
 <span class="kw">mod </span>isq;
 <span class="kw">mod </span>macros;
@@ -894,6 +917,8 @@
 <span class="kw">mod </span>processing;
 <span class="kw">mod </span>sampling;
 <span class="kw">mod </span>speculative;
+<span class="kw">mod </span>vision;
+<span class="kw">mod </span>vision_loaders;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">mod </span>sampling_pipeline;
@@ -903,15 +928,15 @@
 <span class="kw">use </span>chat_template::ChatTemplate;
 <span class="kw">use </span>core::fmt;
 <span class="kw">pub use </span>ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
-<span class="kw">pub use </span>gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
+<span class="kw">pub use </span>gguf::{GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 <span class="kw">pub use </span>isq::IsqModel;
 <span class="kw">pub use </span>normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 <span class="kw">pub use </span>normal_loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
-    NormalLoadingMetadata, NormalModelLoader, Phi2Loader, Phi3Loader, Qwen2Loader,
+    NormalLoadingMetadata, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3RopeScaling, Qwen2Loader,
 };
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>paths::{get_chat_template, get_model_paths, get_xlora_paths, XLoraPaths};
-<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>processing::{BasicProcessor, Processor, ProcessorCreator};
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>processing::{BasicProcessor, MessagesAction, Processor, ProcessorCreator};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">pub use </span>speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 <span class="kw">use </span>std::any::Any;
@@ -920,6 +945,8 @@
 <span class="kw">use </span>std::{collections::HashMap, path::PathBuf, str::FromStr};
 <span class="kw">use </span>tokenizers::Tokenizer;
 <span class="kw">use </span>tokio::sync::Mutex;
+<span class="kw">pub use </span>vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
+<span class="kw">pub use </span>vision_loaders::{VisionLoaderType, VisionModelLoader};
 
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
@@ -930,7 +957,9 @@
 };
 
 <span class="kw">pub use </span><span class="self">self</span>::cache_manager::{Cache, CacheManager, LayerCaches};
-<span class="kw">pub use </span><span class="self">self</span>::inputs_processor::{text_models_inputs_processor, InputsProcessor};
+<span class="kw">pub use </span><span class="self">self</span>::inputs_processor::{
+    text_models_inputs_processor, InputsProcessor, InputsProcessorType,
+};
 
 <span class="doccomment">/// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
 /// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
@@ -1317,7 +1346,7 @@
 
 <span class="kw">pub trait </span>PreProcessingMixin: MetadataMixin {
     <span class="kw">fn </span>get_processor(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;<span class="kw">dyn </span>Processor&gt; {
-        BasicProcessor::new_processor()
+        Arc::new(BasicProcessor)
     }
     <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;ChatTemplate&gt;;
     <span class="kw">fn </span>get_input_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;;
@@ -1357,7 +1386,7 @@
 <span class="attr">#[derive(PartialEq, Copy, Clone)]
 </span><span class="kw">pub enum </span>ModelCategory {
     Text,
-    Vision,
+    Vision { has_conv2d: bool },
 }
 
 <span class="attr">#[async_trait::async_trait]
@@ -1507,6 +1536,25 @@
     }
 }
 
+<span class="kw">pub trait </span>VisionModel: IsqModel {
+    <span class="comment">// pixel_values and pixel_attention_mask only specified for prompt seqs
+    </span><span class="attr">#[allow(clippy::too_many_arguments)]
+    </span><span class="kw">fn </span>forward(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        input_ids: <span class="kw-2">&amp;</span>Tensor,
+        pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec&lt;(usize, usize)&gt;,
+        position_ids: Vec&lt;usize&gt;,
+        model_specific_args: Box&lt;<span class="kw">dyn </span>Any&gt;, <span class="comment">// pixel attention mask, or image sizes, or anything else
+    </span>) -&gt; candle_core::Result&lt;Tensor&gt;;
+    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device;
+    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache;
+    <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
+    <span class="kw">fn </span>has_conv2d(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
+}
+
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>extract_logits(
     logits: <span class="kw-2">&amp;</span>Tensor,
     context_lens: Vec&lt;(usize, usize)&gt;,
@@ -1520,7 +1568,7 @@
 
 <span class="attr">#[cfg(test)]
 </span><span class="kw">mod </span>tests {
-    <span class="kw">use </span><span class="kw">crate</span>::Content;
+    <span class="kw">use </span><span class="kw">crate</span>::MessageContent;
     <span class="kw">use </span>either::Either;
     <span class="kw">use </span>indexmap::IndexMap;
 
@@ -1546,7 +1594,7 @@
     </span><span class="kw">fn </span>test_with_inputs(
         templates: <span class="kw-2">&amp;</span>[(bool, <span class="kw-2">&amp;</span>str, <span class="kw-2">&amp;</span>str, <span class="kw-2">&amp;</span>str, <span class="kw-2">&amp;</span>str)],
         expected_outputs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>str],
-        inputs: Vec&lt;IndexMap&lt;String, Content&gt;&gt;,
+        inputs: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
     ) {
         <span class="kw">use </span><span class="kw">super</span>::chat_template::apply_chat_template_to;
         <span class="kw">let </span><span class="kw-2">mut </span>failed = Vec::new();
@@ -1660,11 +1708,11 @@
     /// ```
     </span><span class="kw">fn </span>test_image_chat_templates() {
         <span class="kw">let </span>templates = [
-            <span class="comment">// HuggingFaceM4/idefics2-8b-chatty: first run, without images
+            <span class="comment">// HuggingFaceM4/idefics2-8b-chatty
             </span>(<span class="bool-val">true</span>, <span class="string">"&lt;s&gt;"</span>, <span class="string">"&lt;/s&gt;"</span>, <span class="string">"&lt;unk&gt;"</span>, <span class="string">"{% for message in messages %}{{message['role'].capitalize()}}{% if message['content'][0]['type'] == 'image' %}{{':'}}{% else %}{{': '}}{% endif %}{% for line in message['content'] %}{% if line['type'] == 'text' %}{{line['text']}}{% elif line['type'] == 'image' %}{{ '&lt;image&gt;' }}{% endif %}{% endfor %}&lt;end_of_utterance&gt;\n{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"</span>),
         ];
         <span class="kw">let </span>expected_outputs = [
-            <span class="comment">// HuggingFaceM4/idefics2-8b-chatty: first run, without images
+            <span class="comment">// HuggingFaceM4/idefics2-8b-chatty
             </span><span class="string">"System: You are a helpful assistant&lt;end_of_utterance&gt;\nUser:&lt;image&gt;Hello, please describe the above.&lt;end_of_utterance&gt;\nAssistant: Hi there&lt;end_of_utterance&gt;\nUser:&lt;image&gt;This is me, who are you&lt;end_of_utterance&gt;\nAssistant:    I am an assistant   &lt;end_of_utterance&gt;\nUser:&lt;image&gt;Another question, what is this?&lt;end_of_utterance&gt;\nAssistant:"</span>,
         ];
 

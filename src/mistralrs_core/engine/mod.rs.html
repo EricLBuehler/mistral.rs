@@ -559,6 +559,9 @@
 <a href="#557" id="557">557</a>
 <a href="#558" id="558">558</a>
 <a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::{HashMap, VecDeque},
     sync::{
@@ -849,7 +852,10 @@
     }
 
     <span class="kw">async fn </span>add_request(<span class="kw-2">&amp;mut </span><span class="self">self</span>, request: NormalRequest) {
-        <span class="kw">let </span>is_chat = <span class="macro">matches!</span>(request.messages, RequestMessage::Chat(<span class="kw">_</span>));
+        <span class="kw">let </span>is_chat = <span class="macro">matches!</span>(
+            request.messages,
+            RequestMessage::Chat(<span class="kw">_</span>) | RequestMessage::VisionChat { .. }
+        );
         <span class="kw">let </span>echo_prompt = <span class="macro">matches!</span>(
             request.messages,
             RequestMessage::Completion {

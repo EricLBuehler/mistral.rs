@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/gguf_tokenizer.rs`."><title>gguf_tokenizer.rs - source</title><script> if (window.location.protocol !== "file:") document.write(`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/SourceSerif4-Regular-46f98efaafac5295.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/FiraSans-Regular-018c141bf0843ffd.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/FiraSans-Medium-8f9a781e4970d388.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2">`)</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-e935ef01ae1c1829.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.78.0 (9b00956e5 2024-04-29)" data-channel="1.78.0" data-search-js="search-42d8da7a6b9792c2.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-4c98445ec4002617.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-12cf3b4f4f9dc36d.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-04d5337699b92874.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-16x16-8b506e7a72182f1c.png"><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/gguf/gguf_tokenizer.rs`."><title>gguf_tokenizer.rs - source</title><script> if (window.location.protocol !== "file:") document.write(`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/SourceSerif4-Regular-46f98efaafac5295.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/FiraSans-Regular-018c141bf0843ffd.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/FiraSans-Medium-8f9a781e4970d388.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2"><link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2">`)</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-e935ef01ae1c1829.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.78.0 (9b00956e5 2024-04-29)" data-channel="1.78.0" data-search-js="search-42d8da7a6b9792c2.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-4c98445ec4002617.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-12cf3b4f4f9dc36d.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-04d5337699b92874.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-16x16-8b506e7a72182f1c.png"><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title">
             <h2>Files</h2></div></nav><div class="sidebar-resizer"></div>
     <main><nav class="sub"><form class="search-form"><span></span><div id="sidebar-button" tabindex="-1"><a href="../../../mistralrs_core/all.html" title="show sidebar"></a></div><input class="search-input" name="search" aria-label="Run search in the documentation" autocomplete="off" spellcheck="false" placeholder="Click or press ‘S’ to search, ‘?’ for more options…" type="search"><div id="help-button" tabindex="-1"><a href="../../../help.html" title="help">?</a></div><div id="settings-menu" tabindex="-1"><a href="../../../settings.html" title="settings"><img width="22" height="22" alt="Change settings" src="../../../static.files/wheel-7b819b6101059cd0.svg"></a></div></form></nav><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
@@ -278,10 +278,15 @@
 <a href="#276" id="276">276</a>
 <a href="#277" id="277">277</a>
 <a href="#278" id="278">278</a>
+<a href="#279" id="279">279</a>
+<a href="#280" id="280">280</a>
+<a href="#281" id="281">281</a>
+<a href="#282" id="282">282</a>
+<a href="#283" id="283">283</a>
+<a href="#284" id="284">284</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::atomic::Ordering;
 
 <span class="kw">use </span>anyhow::Result;
-<span class="kw">use </span>candle_core::quantized::gguf_file::Content;
 <span class="kw">use </span>tokenizers::{
     decoders::{<span class="self">self</span>, byte_fallback::ByteFallback, fuse::Fuse, strip::Strip},
     models::unigram::Unigram,
@@ -292,27 +297,33 @@
 
 <span class="kw">use </span><span class="kw">crate</span>::DEBUG;
 
-<span class="kw">pub struct </span>ConversionResult {
+<span class="kw">use </span><span class="kw">super</span>::Content;
+
+<span class="kw">pub struct </span>GgufTokenizerConversion {
     <span class="kw">pub </span>tokenizer: Tokenizer,
     <span class="kw">pub </span>bos: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub </span>eos: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub </span>unk: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
-<span class="kw">pub fn </span>convert_ggml_to_hf_tokenizer(content: <span class="kw-2">&amp;</span>Content) -&gt; <span class="prelude-ty">Result</span>&lt;ConversionResult&gt; {
-    <span class="kw">let </span>model = content.metadata[<span class="string">"tokenizer.ggml.model"</span>]
-        .to_string()
+<span class="comment">// Convert GGUF tokenizer to tokenizer and metadata
+</span><span class="kw">pub fn </span>convert_gguf_to_hf_tokenizer&lt;R: std::io::Seek + std::io::Read&gt;(
+    content: <span class="kw-2">&amp;</span>Content&lt;<span class="lifetime">'_</span>, R&gt;,
+) -&gt; <span class="prelude-ty">Result</span>&lt;GgufTokenizerConversion&gt; {
+    <span class="kw">let </span>model = content
+        .get_metadata(<span class="string">"tokenizer.ggml.model"</span>)<span class="question-mark">?
+        </span>.to_string()
         .expect(<span class="string">"GGUF tokenizer model is not a string."</span>)
         .clone();
-    <span class="kw">let </span>tokens = content.metadata[<span class="string">"tokenizer.ggml.tokens"</span>]
-        .to_vec()
+    <span class="kw">let </span>tokens = content
+        .get_metadata(<span class="string">"tokenizer.ggml.tokens"</span>)<span class="question-mark">?
+        </span>.to_vec()
         .expect(<span class="string">"GGUF tokenizer tokens is not a vec."</span>)
         .iter()
         .map(|t| t.to_string().expect(<span class="string">"GGUF token is not a string."</span>).clone())
         .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
     <span class="kw">let </span>added_tokens = content
-        .metadata
-        .get(<span class="string">"tokenizer.ggml.added_tokens"</span>)
+        .get_metadata(<span class="string">"tokenizer.ggml.added_tokens"</span>)
         .map(|items| {
             items
                 .to_vec()
@@ -325,7 +336,7 @@
                 })
                 .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
         });
-    <span class="kw">let </span>scores = content.metadata.get(<span class="string">"tokenizer.ggml.scores"</span>).map(|items| {
+    <span class="kw">let </span>scores = content.get_metadata(<span class="string">"tokenizer.ggml.scores"</span>).map(|items| {
         items
             .to_vec()
             .expect(<span class="string">"GGUF tokenizer scores is not a vec."</span>)
@@ -333,7 +344,7 @@
             .map(|t| t.to_f32().expect(<span class="string">"GGUF score is not a f32."</span>))
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
     });
-    <span class="kw">let </span>merges = content.metadata.get(<span class="string">"tokenizer.ggml.merges"</span>).map(|items| {
+    <span class="kw">let </span>merges = content.get_metadata(<span class="string">"tokenizer.ggml.merges"</span>).map(|items| {
         items
             .to_vec()
             .expect(<span class="string">"GGUF tokenizer merges is not a vec."</span>)
@@ -343,16 +354,17 @@
     });
 
     <span class="kw">let </span>unk = content
-        .metadata
-        .get(<span class="string">"tokenizer.ggml.unknown_token_id"</span>)
+        .get_metadata(<span class="string">"tokenizer.ggml.unknown_token_id"</span>)
         .map(|t| t.to_u32().expect(<span class="string">"GGUF unk token is not u32"</span>));
 
-    <span class="kw">let </span>eos = content.metadata[<span class="string">"tokenizer.ggml.eos_token_id"</span>]
-        .to_u32()
+    <span class="kw">let </span>eos = content
+        .get_metadata(<span class="string">"tokenizer.ggml.eos_token_id"</span>)<span class="question-mark">?
+        </span>.to_u32()
         .expect(<span class="string">"GGUF unk token is not u32"</span>);
 
-    <span class="kw">let </span>bos = content.metadata[<span class="string">"tokenizer.ggml.bos_token_id"</span>]
-        .to_u32()
+    <span class="kw">let </span>bos = content
+        .get_metadata(<span class="string">"tokenizer.ggml.bos_token_id"</span>)<span class="question-mark">?
+        </span>.to_u32()
         .expect(<span class="string">"GGUF unk token is not u32"</span>);
 
     <span class="kw">let </span>bos_str = tokens[bos <span class="kw">as </span>usize].clone();
@@ -408,7 +420,7 @@
     <span class="kw">if </span>DEBUG.load(Ordering::Relaxed) {
         <span class="macro">info!</span>(<span class="string">"Tokenizer: {tokenizer:?}"</span>);
     }
-    <span class="prelude-val">Ok</span>(ConversionResult {
+    <span class="prelude-val">Ok</span>(GgufTokenizerConversion {
         tokenizer,
         bos: <span class="prelude-val">Some</span>(bos_str),
         eos: <span class="prelude-val">Some</span>(eos_str),
@@ -417,12 +429,12 @@
 }
 
 <span class="kw">mod </span>tests {
+    <span class="kw">use </span><span class="kw">crate</span>::gguf::Content;
     <span class="kw">use </span>anyhow::Result;
-    <span class="kw">use </span>candle_core::quantized::gguf_file::Content;
     <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
     <span class="kw">use </span>tokenizers::Tokenizer;
 
-    <span class="kw">use </span><span class="kw">super</span>::convert_ggml_to_hf_tokenizer;
+    <span class="kw">use </span><span class="kw">super</span>::convert_gguf_to_hf_tokenizer;
 
     <span class="attr">#[allow(dead_code)]
     #[derive(Debug)]
@@ -447,8 +459,8 @@
 
                 <span class="kw">let </span>filename = api.get(<span class="string">"mistral-7b-instruct-v0.1.Q2_K.gguf"</span>).unwrap();
                 <span class="kw">let </span><span class="kw-2">mut </span>file = std::fs::File::open(<span class="kw-2">&amp;</span>filename)<span class="question-mark">?</span>;
-                convert_ggml_to_hf_tokenizer(
-                    <span class="kw-2">&amp;</span>Content::read(<span class="kw-2">&amp;mut </span>file)
+                convert_gguf_to_hf_tokenizer(
+                    <span class="kw-2">&amp;</span>Content::from_readers(<span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>file])
                         .map_err(|e| e.with_path(filename))
                         .map_err(anyhow::Error::msg)<span class="question-mark">?</span>,
                 )

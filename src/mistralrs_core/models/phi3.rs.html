@@ -443,13 +443,13 @@
 <a href="#441" id="441">441</a>
 <a href="#442" id="442">442</a>
 <a href="#443" id="443">443</a>
+<a href="#444" id="444">444</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{linear_no_bias, VarBuilder};
-<span class="kw">use </span>either::Either;
 <span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
 <span class="kw">use crate</span>::{
@@ -458,7 +458,9 @@
         repeat_kv, CausalMasker, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm,
         ScaledDotProductAttention,
     },
-    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
+    pipeline::{
+        extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel, Phi3RopeScaling,
+    },
 };
 
 <span class="comment">// https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
@@ -475,7 +477,7 @@
     <span class="kw">pub </span>rope_theta: f64,
     <span class="kw">pub </span>bos_token_id: <span class="prelude-ty">Option</span>&lt;u32&gt;,
     <span class="kw">pub </span>eos_token_id: <span class="prelude-ty">Option</span>&lt;u32&gt;,
-    <span class="kw">pub </span>rope_scaling: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, Either&lt;Vec&lt;f32&gt;, String&gt;&gt;&gt;,
+    <span class="kw">pub </span>rope_scaling: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, Phi3RopeScaling&gt;&gt;,
     <span class="kw">pub </span>max_position_embeddings: usize,
     <span class="kw">pub </span>use_flash_attn: bool,
     <span class="kw">pub </span>sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,

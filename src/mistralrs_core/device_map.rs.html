@@ -151,6 +151,7 @@
 <a href="#149" id="149">149</a>
 <a href="#150" id="150">150</a>
 <a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::fmt::Debug;
 
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
@@ -171,7 +172,8 @@
             host_layers: <span class="prelude-val">None</span>,
         }
     }
-    <span class="kw">pub fn </span>dummy() -&gt; <span class="self">Self </span>{
+    <span class="doccomment">/// A device mapper to not map device.
+    </span><span class="kw">pub fn </span>dummy() -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             device_layers: <span class="prelude-val">None</span>,
             host_layers: <span class="prelude-val">None</span>,

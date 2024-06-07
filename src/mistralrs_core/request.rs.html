@@ -100,12 +100,12 @@
     <span class="prelude-val">None</span>,
 }
 
-<span class="kw">pub type </span>Content = Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;;
+<span class="kw">pub type </span>MessageContent = Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;;
 
 <span class="attr">#[derive(Clone, Debug)]
 </span><span class="doccomment">/// Message or messages for a [`Request`].
 </span><span class="kw">pub enum </span>RequestMessage {
-    Chat(Vec&lt;IndexMap&lt;String, Content&gt;&gt;),
+    Chat(Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;),
     Completion {
         text: String,
         echo_prompt: bool,
@@ -114,7 +114,7 @@
     CompletionTokens(Vec&lt;u32&gt;),
     VisionChat {
         images: Vec&lt;image::DynamicImage&gt;,
-        messages: Vec&lt;IndexMap&lt;String, Content&gt;&gt;,
+        messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
     },
 }
 

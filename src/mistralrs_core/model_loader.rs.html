@@ -282,6 +282,32 @@
 <a href="#280" id="280">280</a>
 <a href="#281" id="281">281</a>
 <a href="#282" id="282">282</a>
+<a href="#283" id="283">283</a>
+<a href="#284" id="284">284</a>
+<a href="#285" id="285">285</a>
+<a href="#286" id="286">286</a>
+<a href="#287" id="287">287</a>
+<a href="#288" id="288">288</a>
+<a href="#289" id="289">289</a>
+<a href="#290" id="290">290</a>
+<a href="#291" id="291">291</a>
+<a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::fs::{<span class="self">self</span>, File};
 
 <span class="kw">use crate</span>::{
@@ -289,7 +315,8 @@
         GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
         NormalSpecificConfig,
     },
-    Loader, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector,
+    Loader, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector, VisionLoaderBuilder,
+    VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
 };
 
 <span class="kw">pub struct </span>LoaderBuilder {
@@ -335,7 +362,8 @@
         | ModelSelected::LoraGGUF { .. }
         | ModelSelected::GGML { .. }
         | ModelSelected::LoraGGML { .. }
-        | ModelSelected::Toml { .. } =&gt; <span class="prelude-val">None</span>,
+        | ModelSelected::Toml { .. }
+        | ModelSelected::VisionPlain { .. } =&gt; <span class="prelude-val">None</span>,
         ModelSelected::XLora {
             tgt_non_granular_index,
             ..
@@ -442,7 +470,10 @@
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(|s| s.to_string())
+                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
         )
         .build(),
         ModelSelected::XLoraGGUF {
@@ -458,7 +489,10 @@
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(|s| s.to_string())
+                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
         )
         .with_xlora(
             xlora_model_id,
@@ -482,7 +516,10 @@
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(|s| s.to_string())
+                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
         )
         .with_lora(
             adapters_model_id,
@@ -561,6 +598,21 @@
             )<span class="question-mark">?</span>,
         )
         .build(),
+        ModelSelected::VisionPlain {
+            model_id,
+            repeat_last_n,
+            tokenizer_json,
+            arch,
+        } =&gt; VisionLoaderBuilder::new(
+            VisionSpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+            },
+            args.chat_template,
+            tokenizer_json,
+            <span class="prelude-val">Some</span>(model_id),
+        )
+        .build(arch),
     };
     <span class="prelude-val">Ok</span>(loader)
 }
