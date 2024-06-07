@@ -14,7 +14,7 @@ pub enum Activation {
 impl Module for Activation {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
-            Activation::QuickGelu => candle_nn::Activation::Gelu.forward(xs),
+            Activation::QuickGelu => xs * candle_nn::ops::sigmoid(&(xs * 1.702f64)?),
         }
     }
 }

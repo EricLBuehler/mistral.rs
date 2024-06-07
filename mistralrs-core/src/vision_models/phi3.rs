@@ -400,47 +400,10 @@ struct EmbeddingLayers(Vec<Box<dyn ModuleWithMetadata>>);
 
 impl Module for EmbeddingLayers {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        println!();
-        dbg!(&xs.to_dtype(DType::F32)?.mean_all());
-        Tensor::write_npy(&xs.to_dtype(DType::F32)?, "inp.npy").unwrap();
-        println!("^ LATEST inp");
         let mut xs = xs.clone();
-        let mut i = 0;
         for layer in &self.0 {
-            let xs_first = xs.clone();
             xs = layer.forward(&xs)?;
-            if i == 0 {
-                let w = layer.weight();
-                let w = match *xs_first.dims() {
-                    [b1, b2, _, _] => w.broadcast_left((b1, b2))?.t()?,
-                    [bsize, _, _] => w.broadcast_left(bsize)?.t()?,
-                    _ => w.t()?,
-                };
-                let res = xs_first.matmul(&w)?.broadcast_add(&layer.bias().unwrap())?;
-                dbg!(&res.to_dtype(DType::F32)?.mean_all());
-                Tensor::write_npy(&res.to_dtype(DType::F32)?, "matmulweight.npy").unwrap();
-
-                dbg!(&layer.weight().to_dtype(DType::F32)?.mean_all());
-                Tensor::write_npy(
-                    &layer.weight().to_dtype(DType::F32)?,
-                    "layerhiddenweight.npy",
-                )
-                .unwrap();
-                println!("^ LATEST is {i}");
-                dbg!(&layer.bias().unwrap().to_dtype(DType::F32)?.mean_all());
-                Tensor::write_npy(
-                    &layer.bias().unwrap().to_dtype(DType::F32)?,
-                    "layerhiddenbias.npy",
-                )
-                .unwrap();
-                println!("^ LATEST is {i}");
-                dbg!(&xs.to_dtype(DType::F32)?.mean_all());
-                Tensor::write_npy(&xs.to_dtype(DType::F32)?, "xs.npy").unwrap();
-                println!("^ LATEST is {i}");
-            }
-            i += 1;
         }
-        println!();
         Ok(xs)
     }
 }
@@ -765,6 +728,8 @@ impl ImageEmbedding {
                         .layers
                         .forward(&img.to_device(target_dev)?.to_dtype(target_dtype)?)?;
                     dbg!(&layerout.to_dtype(DType::F32)?.mean_all());
+                    Tensor::write_npy(&layerout.to_dtype(DType::F32)?, "layerout.npy").unwrap();
+                    println!("^ LATEST");
                     image_set_tensor_inner.push(layerout);
                 }
                 image_set_tensor = Some(Either::Left(image_set_tensor_inner));

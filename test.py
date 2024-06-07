@@ -252,42 +252,12 @@ class Phi3ImageEmbedding(nn.Module):
                 
                 num_img_tokens = output_len
                 img_set_tensor = []
-                for _output_img in output_imgs:     
-                    l = _output_img.float().cpu().numpy()
-                    print("output img mean", _output_img.mean())
-
-                    print()
-                    i=0
-                    tmp = _output_img.to(target_device).to(target_dtype)
-                    print("target_dtype",target_dtype)
-                    print("xs is",tmp.mean())
-                    import numpy
-                    numpy.save("imp.npy",tmp.float().cpu().numpy())
-                    print("^ LATEST inp",i)
-                    for layer in self.layers:
-                        print(layer)
-                        tmp_first = tmp.clone()
-                        tmp = layer(tmp)
-                        if i == 0:
-                            res = tmp_first.matmul(layer.weight.T) + layer.bias
-                            print("res mean is",res.mean())
-
-                            print("layer weight is",layer.weight.mean())
-                            import numpy
-                            numpy.save("layerhiddenweight.npy",layer.weight.float().cpu().numpy())
-                            print("^ LATEST is",i)
-                            print("layer bias is",layer.bias.mean())
-                            numpy.save("layerhiddenbias.npy",layer.bias.float().cpu().numpy())
-                            print("^ LATEST is",i)
-                            print("tmp is",tmp.mean())
-                            numpy.save("xs.npy",tmp.float().cpu().numpy())
-                            print("^ LATEST is",i)
-                        i+=1
-                    print("tmp",tmp.mean())
-                    
-                    print()
+                for _output_img in output_imgs:
                     img_feature_proj = self.img_projection(_output_img.to(target_device).to(target_dtype))
                     print("img_feature_proj",img_feature_proj.mean())
+                    import numpy
+                    numpy.save("layerout.npy",img_feature_proj.float().cpu().numpy())
+                    print("^ LATEST")
                     
                     img_set_tensor.append(img_feature_proj)
                 logger.info(f'img_embeds size: {img_embeds.size()}, image sizes: {img_sizes} loading time {datetime.now() - start_time}')
