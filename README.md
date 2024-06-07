@@ -301,7 +301,10 @@ To start a server serving Mistral GGUF on `localhost:1234`,
 
 Mistral.rs uses subcommands to control the model type. They are generally of format `<XLORA/LORA>-<QUANTIZATION>`. Please run `./mistralrs_server --help` to see the subcommands.
 
-Additionally, for models without quantization, the model architecture should be provided as the `--arch` or `-a` argument in contrast to GGUF models which encode the architecture in the file. It should be one of the following:
+Additionally, for models without quantization, the model architecture should be provided as the `--arch` or `-a` argument in contrast to GGUF models which encode the architecture in the file. 
+
+### Architecture for plain models
+
 - `mistral`
 - `gemma`
 - `mixtral`
@@ -309,6 +312,10 @@ Additionally, for models without quantization, the model architecture should be 
 - `phi2`
 - `phi3`
 - `qwen2`
+
+### Architecture for vision models
+
+- `phi3v`
 
 **Interactive mode:**
 

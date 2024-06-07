@@ -54,7 +54,7 @@ pub use pipeline::{
     Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline, TokenSource,
     VisionLoader, VisionLoaderBuilder, VisionLoaderType, VisionModelLoader, VisionSpecificConfig,
 };
-pub use request::{Constraint, Content, NormalRequest, Request, RequestMessage};
+pub use request::{Constraint, MessageContent, NormalRequest, Request, RequestMessage};
 pub use response::Response;
 pub use response::*;
 pub use sampler::{SamplingParams, StopTokens, TopLogprob};

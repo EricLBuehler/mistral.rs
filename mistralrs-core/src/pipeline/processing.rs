@@ -6,7 +6,7 @@ use indexmap::IndexMap;
 
 use crate::{
     vision_models::{preprocessor_config::PreProcessorConfig, processor_config::ProcessorConfig},
-    Content, Pipeline,
+    MessageContent, Pipeline,
 };
 
 use super::{chat_template::apply_chat_template_to, text_models_inputs_processor, InputsProcessor};
@@ -33,7 +33,7 @@ pub trait Processor {
     fn process(
         &self,
         pipeline: &dyn Pipeline,
-        messages: Vec<IndexMap<String, Content>>,
+        messages: Vec<IndexMap<String, MessageContent>>,
         add_generation_prompt: bool,
     ) -> Result<Vec<u32>> {
         let prompt = apply_chat_template(
@@ -55,7 +55,7 @@ pub trait Processor {
 
 pub(crate) fn apply_chat_template(
     pipeline: &dyn Pipeline,
-    messages: Vec<IndexMap<String, Content>>,
+    messages: Vec<IndexMap<String, MessageContent>>,
     add_generation_prompt: bool,
     action: MessagesAction,
 ) -> Result<String> {

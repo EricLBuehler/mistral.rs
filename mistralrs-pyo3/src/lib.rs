@@ -16,10 +16,11 @@ use tokio::sync::mpsc::channel;
 use candle_core::Device;
 use mistralrs_core::{
     ChatCompletionResponse, CompletionResponse, Constraint, DeviceMapMetadata, GGMLLoaderBuilder,
-    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder,
-    NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, Request as _Request, RequestMessage,
-    Response, SamplingParams, SchedulerMethod, SpeculativeConfig, SpeculativeLoader, StopTokens,
-    TokenSource,
+    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MessageContent, MistralRs,
+    MistralRsBuilder, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig,
+    Request as _Request, RequestMessage, Response, SamplingParams, SchedulerMethod,
+    SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource, VisionLoaderBuilder,
+    VisionSpecificConfig,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
@@ -322,6 +323,21 @@ fn parse_which(
             .map_err(|e| PyValueError::new_err(e.to_string()))?,
         )
         .build(),
+        Which::VisionPlain {
+            model_id,
+            repeat_last_n,
+            tokenizer_json,
+            arch,
+        } => VisionLoaderBuilder::new(
+            VisionSpecificConfig {
+                use_flash_attn,
+                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+            },
+            chat_template,
+            tokenizer_json,
+            Some(model_id),
+        )
+        .build(arch),
     })
 }
 
@@ -358,7 +374,8 @@ impl Runner {
             | Which::GGUF { .. }
             | Which::LoraGGUF { .. }
             | Which::GGML { .. }
-            | Which::LoraGGML { .. } => None,
+            | Which::LoraGGML { .. }
+            | Which::VisionPlain { .. } => None,
             Which::XLora {
                 tgt_non_granular_index,
                 ..
@@ -473,7 +490,12 @@ impl Runner {
                     Either::Left(ref messages) => {
                         let mut messages_vec = Vec::new();
                         for message in messages {
-                            let role = message.get("role").expect("Expected role");
+                            let role = message
+                                .get("role")
+                                .expect("Expected role")
+                                .as_ref()
+                                .left()
+                                .unwrap();
                             let content = message.get("content").expect("Expected role");
                             let mut message_map: IndexMap<
                                 String,
@@ -485,8 +507,7 @@ impl Runner {
                                 ));
                             }
                             message_map.insert("role".to_string(), Either::Left(role.to_string()));
-                            message_map
-                                .insert("content".to_string(), Either::Left(content.clone()));
+                            message_map.insert("content".to_string(), content.clone());
                             messages_vec.push(message_map);
                         }
                         RequestMessage::Chat(messages_vec)
@@ -738,7 +759,7 @@ impl CompletionRequest {
 #[derive(Debug)]
 /// An OpenAI API compatible chat completion request.
 struct ChatCompletionRequest {
-    messages: Either<Vec<IndexMap<String, String>>, String>,
+    messages: Either<Vec<IndexMap<String, MessageContent>>, String>,
     _model: String,
     logit_bias: Option<HashMap<u32, f32>>,
     logprobs: bool,
@@ -802,14 +823,16 @@ impl ChatCompletionRequest {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
                 let mut messages_vec = Vec::new();
                 for message in messages {
-                    messages_vec.push(message.extract::<IndexMap<String, String>>()?);
+                    messages_vec.push(message.extract::<IndexMap<String, MessageContent>>()?);
                 }
-                Ok::<Either<Vec<IndexMap<String, String>>, String>, PyErr>(Either::Left(
+                Ok::<Either<Vec<IndexMap<String, MessageContent>>, String>, PyErr>(Either::Left(
                     messages_vec,
                 ))
             } else if let Ok(messages) = messages.bind(py).downcast_exact::<PyString>() {
                 let prompt = messages.extract::<String>()?;
-                Ok::<Either<Vec<IndexMap<String, String>>, String>, PyErr>(Either::Right(prompt))
+                Ok::<Either<Vec<IndexMap<String, MessageContent>>, String>, PyErr>(Either::Right(
+                    prompt,
+                ))
             } else {
                 return Err(PyTypeError::new_err("Expected a string or list of dicts."));
             }

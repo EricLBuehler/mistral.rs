@@ -662,7 +662,7 @@ pub(crate) fn extract_logits(
 
 #[cfg(test)]
 mod tests {
-    use crate::Content;
+    use crate::MessageContent;
     use either::Either;
     use indexmap::IndexMap;
 
@@ -688,7 +688,7 @@ mod tests {
     fn test_with_inputs(
         templates: &[(bool, &str, &str, &str, &str)],
         expected_outputs: &[&str],
-        inputs: Vec<IndexMap<String, Content>>,
+        inputs: Vec<IndexMap<String, MessageContent>>,
     ) {
         use super::chat_template::apply_chat_template_to;
         let mut failed = Vec::new();

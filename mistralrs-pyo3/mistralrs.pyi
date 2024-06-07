@@ -60,6 +60,10 @@ class Architecture(Enum):
     Llama = "llama"
     Phi2 = "phi2"
 
+@dataclass
+class VisionArchitecture(Enum):
+    Phi3V = "phi3v"
+
 class Which(Enum):
     """
     Which model to select. See the docs for the `Which` enum in API.md for more details.
@@ -140,6 +144,12 @@ class Which(Enum):
         order: str
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
+    @dataclass
+    class VisionPlain:
+        model_id: str
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
+        arch: VisionArchitecture
 
 class Runner:
     def __init__(
