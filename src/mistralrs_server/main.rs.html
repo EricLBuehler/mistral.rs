@@ -403,8 +403,8 @@
     </span>chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
     <span class="doccomment">/// Source of the token for authentication.
-    /// Can be in the formats: "literal:&lt;value&gt;", "env:&lt;value&gt;", "path:&lt;value&gt;", "cache" to use a cached token or "none" to use no token.
-    /// Defaults to using a cached token.
+    /// Can be in the formats: `literal:&lt;value&gt;`, `env:&lt;value&gt;`, `path:&lt;value&gt;`, `cache` to use a cached token, or `none` to use no token.
+    /// Defaults to `cache`.
     </span><span class="attr">#[arg(long, default_value_t = TokenSource::CacheToken, value_parser = parse_token_source)]
     </span>token_source: TokenSource,
 

@@ -211,6 +211,7 @@
 <a href="#209" id="209">209</a>
 <a href="#210" id="210">210</a>
 <a href="#211" id="211">211</a>
+<a href="#212" id="212">212</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>anyhow::Result;
@@ -258,8 +259,9 @@
     additional_special_tokens: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
     <span class="kw">pub </span>bos_token: <span class="prelude-ty">Option</span>&lt;BeginEndUnkTok&gt;,
 
-    <span class="doccomment">/// Jinja format chat templating for chat completion.
-    /// See: https://huggingface.co/docs/transformers/chat_templating
+    <span class="doccomment">/// Jinja format [chat templating] for chat completion.
+    ///
+    /// [chat templating]: https://huggingface.co/docs/transformers/chat_templating
     </span><span class="kw">pub </span>chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     clean_up_tokenization_spaces: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     device_map: <span class="prelude-ty">Option</span>&lt;String&gt;,

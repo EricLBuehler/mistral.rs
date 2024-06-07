@@ -878,8 +878,10 @@
 <a href="#876" id="876">876</a>
 <a href="#877" id="877">877</a>
 <a href="#878" id="878">878</a>
+<a href="#879" id="879">879</a>
+<a href="#880" id="880">880</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>cache_manager;
-<span class="kw">mod </span>chat_template;
+<span class="kw">pub mod </span>chat_template;
 <span class="kw">mod </span>ggml;
 <span class="kw">mod </span>gguf;
 <span class="kw">mod </span>gguf_tokenizer;
@@ -936,12 +938,14 @@
     <span class="doccomment">/// Model weights files (multiple files supported).
     </span><span class="kw">fn </span>get_weight_filenames(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[PathBuf];
 
-    <span class="doccomment">/// Retrieve the PretrainedConfig file.
-    /// See: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/configuration#transformers.PretrainedConfig
+    <span class="doccomment">/// Retrieve the [`PretrainedConfig`] file.
+    ///
+    /// [`PretrainedConfig`]: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/configuration#transformers.PretrainedConfig
     </span><span class="kw">fn </span>get_config_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf;
 
-    <span class="doccomment">/// A serialised `tokenizers.Tokenizer` HuggingFace object.
-    /// See: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/tokenizer
+    <span class="doccomment">/// A serialised [`tokenizers.Tokenizer`] HuggingFace object.
+    ///
+    /// [`tokenizers.Tokenizer`]: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/tokenizer
     </span><span class="kw">fn </span>get_tokenizer_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf;
 
     <span class="doccomment">/// Content expected to deserialize to [`ChatTemplate`].
