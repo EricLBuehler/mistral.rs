@@ -38,7 +38,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
         let required = ["model", "tokens", "eos_token_id", "bos_token_id"];
         c.has_required_keys(&required)?;
 
-        let tokenizer_ggml = PropsGGUF {
+        let props = Self {
             model: c.get_value("model")?,
             tokens: c.get_value("tokens")?,
             added_tokens: c.get_value("added_tokens").ok(),
@@ -49,13 +49,13 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             bos: c.get_value("bos_token_id")?,
         };
 
-        Ok(tokenizer_ggml)
+        Ok(props)
     }
 }
 
 pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<ConversionResult> {
     let metadata = ContentMetadata {
-        path_prefix: "tokenizer.ggml".to_string(),
+        path_prefix: "tokenizer.ggml",
         metadata: &content.metadata,
     };
     let props = PropsGGUF::try_from(metadata)?;

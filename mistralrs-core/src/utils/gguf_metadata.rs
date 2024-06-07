@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use tracing::warn;
 
 pub struct ContentMetadata<'a> {
-    pub path_prefix: String,
+    pub path_prefix: &'a str,
     pub metadata: &'a HashMap<String, gguf_file::Value>,
 }
 
