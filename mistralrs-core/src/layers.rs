@@ -535,19 +535,22 @@ impl Module for QLinear {
     }
 }
 
-
 mod tests {
+
     #[test]
     fn fused_bias_linear() {
         use candle_core::{Device, Tensor};
         use candle_nn::{Linear, Module};
-    
+
+        use crate::cublaslt::setup_cublas_lt_wrapper;
         use crate::layers::FusedBiasLinear;
-        
+
         const IN: usize = 5;
         const OUT: usize = 3;
 
         let dev = Device::cuda_if_available(0).unwrap();
+        setup_cublas_lt_wrapper();
+
         let w = Tensor::rand(0.0f32, 1.0, (OUT, IN), &dev).unwrap();
         let b = Tensor::rand(0.0f32, 1.0, (OUT,), &dev).unwrap();
 
@@ -556,10 +559,7 @@ mod tests {
         let lin = Linear::new(w.clone(), Some(b.clone()));
         let truth_y = lin.forward(&xs).unwrap().to_vec2::<f32>().unwrap();
 
-        let fused = FusedBiasLinear {
-            w,
-            b,
-        };
+        let fused = FusedBiasLinear { w, b };
         let fused_y = fused.forward(&xs).unwrap().to_vec2::<f32>().unwrap();
 
         assert_eq!(truth_y, fused_y);
