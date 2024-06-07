@@ -1,6 +1,8 @@
 import transformers
 
-processor = transformers.AutoProcessor.from_pretrained("microsoft/Phi-3-vision-128k-instruct", trust_remote_code=True)
+processor = transformers.AutoProcessor.from_pretrained(
+    "microsoft/Phi-3-vision-128k-instruct", trust_remote_code=True
+)
 
 res = processor.tokenizer.apply_chat_template(
     [

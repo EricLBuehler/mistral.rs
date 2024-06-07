@@ -44,7 +44,7 @@ completion = openai.chat.completions.create(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg"
+                        "url": "https://upload.wikimedia.org/wikipedia/commons/e/e7/Everest_North_Face_toward_Base_Camp_Tibet_Luca_Galuzzi_2006.jpg"
                     },
                 },
                 {
