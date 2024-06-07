@@ -1,9 +1,6 @@
 use crate::utils::{get_pixel_data, n_channels};
 use candle_core::{DType, Device, Result, Tensor};
-use image::{
-    imageops::{self, FilterType},
-    DynamicImage, GenericImageView,
-};
+use image::{DynamicImage, GenericImageView};
 
 use crate::ImageTransform;
 
@@ -77,21 +74,17 @@ impl ImageTransform for Normalize {
 
 /// Do what `ToTensor` does, but also resize the image without preserving
 /// aspect ratio.
-pub struct ToTensorAndResize {
+pub struct InterpolateResize {
     pub target_w: usize,
     pub target_h: usize,
-    pub filter: FilterType,
 }
 
-impl ImageTransform for ToTensorAndResize {
-    type Input = DynamicImage;
-    type Output = Tensor;
+impl ImageTransform for InterpolateResize {
+    type Input = Tensor;
+    type Output = Self::Input;
 
-    fn map(&self, x: &Self::Input, device: &Device) -> Result<Self::Output> {
-        let n_channels = n_channels(x);
-        let img = imageops::resize(x, self.target_w as u32, self.target_h as u32, self.filter);
-        let data = get_pixel_data(n_channels, img, self.target_h, self.target_w);
-        ToTensor::to_tensor(device, n_channels, data)
+    fn map(&self, x: &Self::Input, _: &Device) -> Result<Self::Output> {
+        x.interpolate2d(self.target_h, self.target_w)
     }
 }
 

@@ -2,7 +2,7 @@ use candle_core::{Device, Result, Tensor};
 use image::DynamicImage;
 mod transforms;
 pub(crate) mod utils;
-pub use transforms::{Normalize, ToTensor, ToTensorAndResize};
+pub use transforms::{InterpolateResize, Normalize, ToTensor};
 
 pub trait ImageTransform {
     type Input;

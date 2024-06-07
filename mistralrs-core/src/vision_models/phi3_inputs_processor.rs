@@ -5,7 +5,7 @@ use std::{any::Any, sync::Arc};
 use candle_core::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImage, GenericImageView, Rgba};
 use itertools::Itertools;
-use mistralrs_vision::{ApplyTransforms, Normalize, ToTensor, ToTensorAndResize, Transforms};
+use mistralrs_vision::{ApplyTransforms, InterpolateResize, Normalize, ToTensor, Transforms};
 use regex_automata::meta::Regex;
 use tokenizers::Tokenizer;
 
@@ -390,15 +390,17 @@ impl ImagePreProcessor for Phi3InputsProcessor {
             };
             // Transforms for the global image (after HD transform, resized)
             let transforms_global = Transforms {
-                input: &ToTensorAndResize {
-                    target_h: 336,
-                    target_w: 336,
-                    filter: FilterType::CatmullRom,
-                },
-                inner_transforms: &[&Normalize {
-                    mean: config.image_mean.unwrap_or(Self::DEFAULT_MEAN).to_vec(),
-                    std: config.image_std.unwrap_or(Self::DEFAULT_STD).to_vec(),
-                }],
+                input: &ToTensor,
+                inner_transforms: &[
+                    &Normalize {
+                        mean: config.image_mean.unwrap_or(Self::DEFAULT_MEAN).to_vec(),
+                        std: config.image_std.unwrap_or(Self::DEFAULT_STD).to_vec(),
+                    },
+                    &InterpolateResize {
+                        target_h: 336,
+                        target_w: 336,
+                    },
+                ],
             };
 
             // Resize with bicubic interpolation
