@@ -135,6 +135,6 @@ pub enum Which {
         model_id: String,
         tokenizer_json: Option<String>,
         repeat_last_n: Option<usize>,
-        arch: VisionLoaderType,
+        arch: VisionArchitecture,
     },
 }
