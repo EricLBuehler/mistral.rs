@@ -35,46 +35,22 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs_server -i plain -m meta-llama/Meta-Llama-3-8B-Instruct -a llama
     ```
 
-    **OR**
-
-    *For experienced Rust users*
-
-    ```
-    cargo run --release --features ... -- -i plain -m meta-llama/Meta-Llama-3-8B-Instruct -a llama
-    ```
-
 - φ³ Run the Phi 3 model with 128K context window
 
     *After following installation instructions*
 
     ```
     ./mistralrs_server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
-    ````
-
-    **OR**
-
-    *For experienced Rust users*
-
-    ```
-    cargo run --release --features ... -- -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
     ```
 
 - φ³📷 Run the Phi 3 vision model: [documentation and guide here](docs/PHI3V.md)
 
-    <img src="https://upload.wikimedia.org/wikipedia/commons/e/e7/Everest_North_Face_toward_Base_Camp_Tibet_Luca_Galuzzi_2006.jpg" alt="Mount Everest" width = "400" height = "267">
+    <img src="https://static.vecteezy.com/system/resources/previews/012/168/187/large_2x/beautiful-sunset-on-the-beach-with-palm-tree-for-travel-and-vacation-free-photo.JPG" alt="Sunset on a beach" width = "400" height = "267">
 
     *After following installation instructions*
 
     ```
     ./mistralrs_server --port 1234 vision-plain -m microsoft/Phi-3-vision-128k-instruct -a phi3v
-    ```
-
-    **OR**
-
-    *For experienced Rust users*
-
-    ```
-    cargo run --release --features ... -- --port 1234 vision-plain -m microsoft/Phi-3-vision-128k-instruct -a phi3v
     ```
 
 - Other models: [see supported models](#supported-models) and [how to run them](#run-with-the-cli)
@@ -427,10 +403,6 @@ Example:
 ```bash
 ./mistralrs_server --port 1234 toml -f toml-selectors/gguf.toml
 ```
-
-**Command line docs**
-
-Command line docs [here](docs/CMD_LINE_DOCS.md)
 
 ---
 
