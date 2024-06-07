@@ -400,7 +400,7 @@ impl ScaledDotProductAttention {
 }
 
 /// Linear layer with fused bias matmul.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FusedBiasLinear {
     pub(crate) w: Tensor,
     pub(crate) b: Tensor,

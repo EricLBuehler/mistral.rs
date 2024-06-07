@@ -4,7 +4,7 @@
 use candle_core::{DType, IndexOp, Result, Shape, Tensor, D};
 use candle_nn::{Conv2dConfig, Module};
 
-use crate::serde_default_fn;
+use crate::{layers::FusedBiasLinear, serde_default_fn};
 
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 pub enum Activation {
@@ -116,10 +116,10 @@ impl Module for ClipVisionEmbeddings {
 
 #[derive(Clone, Debug)]
 struct ClipAttention {
-    k_proj: candle_nn::Linear,
-    v_proj: candle_nn::Linear,
-    q_proj: candle_nn::Linear,
-    out_proj: candle_nn::Linear,
+    k_proj: FusedBiasLinear,
+    v_proj: FusedBiasLinear,
+    q_proj: FusedBiasLinear,
+    out_proj: FusedBiasLinear,
     head_dim: usize,
     scale: f64,
     num_attention_heads: usize,
@@ -137,10 +137,10 @@ impl ClipAttention {
         let scale = (head_dim as f64).powf(-0.5);
 
         Ok(ClipAttention {
-            k_proj,
-            v_proj,
-            q_proj,
-            out_proj,
+            k_proj: k_proj.try_into()?,
+            v_proj: v_proj.try_into()?,
+            q_proj: q_proj.try_into()?,
+            out_proj: out_proj.try_into()?,
             head_dim,
             scale,
             num_attention_heads,
@@ -197,8 +197,8 @@ impl ClipAttention {
 
 #[derive(Clone, Debug)]
 struct ClipMlp {
-    fc1: candle_nn::Linear,
-    fc2: candle_nn::Linear,
+    fc1: FusedBiasLinear,
+    fc2: FusedBiasLinear,
     activation: Activation,
 }
 
@@ -208,8 +208,8 @@ impl ClipMlp {
         let fc2 = candle_nn::linear(c.intermediate_size, c.hidden_size, vs.pp("fc2"))?;
 
         Ok(ClipMlp {
-            fc1,
-            fc2,
+            fc1: fc1.try_into()?,
+            fc2: fc2.try_into()?,
             activation: c.hidden_act,
         })
     }
