@@ -222,7 +222,7 @@
 <span class="kw">use </span>tokenizers::Tokenizer;
 <span class="kw">use </span>tracing::info;
 
-<span class="kw">use </span><span class="kw">crate</span>::MessageContent;
+<span class="kw">use </span><span class="kw">crate</span>::Content;
 
 <span class="kw">const </span>SUPPORTED_ALTERNATE_EOS: [<span class="kw-2">&amp;</span>str; <span class="number">2</span>] = [
     <span class="string">"&lt;|eot_id|&gt;"</span>, <span class="comment">// Handle Llama3 chat case
@@ -385,7 +385,7 @@
 }
 
 <span class="kw">pub fn </span>apply_chat_template_to(
-    messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
+    messages: Vec&lt;IndexMap&lt;String, Content&gt;&gt;,
     add_generation_prompt: bool,
     template: <span class="kw-2">&amp;</span>str,
     bos_tok: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -398,7 +398,7 @@
     env.set_trim_blocks(<span class="bool-val">true</span>);
 
     <span class="attr">#[derive(Serialize, Deserialize)]
-    </span><span class="kw">struct </span>UntaggedContent(<span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span>MessageContent);
+    </span><span class="kw">struct </span>UntaggedContent(<span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span>Content);
     <span class="kw">let </span><span class="kw-2">mut </span>new_messages = Vec::new();
     <span class="kw">for </span>message <span class="kw">in </span>messages {
         <span class="kw">let </span><span class="kw-2">mut </span>new_message = IndexMap::new();

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["InterpolateResize","Normalize","ToTensor","Transforms"],"trait":["ApplyTransforms","ImageTransform"]};

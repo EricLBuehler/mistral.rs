@@ -368,20 +368,11 @@
 <a href="#366" id="366">366</a>
 <a href="#367" id="367">367</a>
 <a href="#368" id="368">368</a>
-<a href="#369" id="369">369</a>
-<a href="#370" id="370">370</a>
-<a href="#371" id="371">371</a>
-<a href="#372" id="372">372</a>
-<a href="#373" id="373">373</a>
-<a href="#374" id="374">374</a>
-<a href="#375" id="375">375</a>
-<a href="#376" id="376">376</a>
-<a href="#377" id="377">377</a>
-<a href="#378" id="378">378</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 <span class="kw">use </span>anyhow::Result;
@@ -630,16 +621,14 @@
     revision: String,
     token_source: <span class="kw-2">&amp;</span>TokenSource,
     quantized_model_id: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;String&gt;,
-    quantized_filename: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
+    quantized_filename: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;String&gt;,
     api: <span class="kw-2">&amp;</span>ApiRepo,
     model_id: <span class="kw-2">&amp;</span>Path,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;PathBuf&gt;&gt; {
     <span class="kw">match </span><span class="kw-2">&amp;</span>quantized_filename {
-        <span class="prelude-val">Some</span>(names) =&gt; {
-            <span class="kw">let </span>id = quantized_model_id.as_ref().unwrap();
-            <span class="kw">let </span><span class="kw-2">mut </span>files = Vec::new();
-
-            <span class="kw">for </span>name <span class="kw">in </span>names {
+        <span class="prelude-val">Some</span>(name) =&gt; <span class="kw">match </span>quantized_model_id.as_ref().unwrap().as_str() {
+            <span class="string">"" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[PathBuf::from_str(name).unwrap()]),
+            id =&gt; {
                 <span class="kw">let </span>qapi = ApiBuilder::new()
                     .with_progress(<span class="bool-val">true</span>)
                     .with_token(get_token(token_source)<span class="question-mark">?</span>)
@@ -650,10 +639,9 @@
                     revision.clone(),
                 ));
                 <span class="kw">let </span>model_id = Path::new(<span class="kw-2">&amp;</span>id);
-                files.push(<span class="macro">api_get_file!</span>(qapi, name, model_id));
+                <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[<span class="macro">api_get_file!</span>(qapi, name, model_id)])
             }
-            <span class="prelude-val">Ok</span>(files)
-        }
+        },
         <span class="prelude-val">None </span>=&gt; {
             <span class="kw">let </span><span class="kw-2">mut </span>filenames = <span class="macro">vec!</span>[];
             <span class="kw">for </span>rfilename <span class="kw">in </span><span class="macro">api_dir_list!</span>(api, model_id).filter(|x| x.ends_with(<span class="string">".safetensors"</span>)) {
@@ -689,18 +677,10 @@
     </span>{
         <span class="macro">panic!</span>(<span class="string">"Template filename {template_filename:?} must end with `.json`."</span>);
     }
-
-    <span class="kw">let </span><span class="kw-2">mut </span>template: ChatTemplate =
-        serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(<span class="kw-2">&amp;</span>template_filename).unwrap()).unwrap();
-    <span class="kw">let </span>processor_conf: <span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::vision_models::processor_config::ProcessorConfig&gt; = paths
-        .get_processor_config()
-        .as_ref()
-        .map(|f| serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap()).unwrap());
-    <span class="kw">if let </span><span class="prelude-val">Some</span>(processor_conf) = processor_conf {
-        <span class="kw">if </span>processor_conf.chat_template.is_some() {
-            template.chat_template = processor_conf.chat_template;
-        }
-    }
+    <span class="kw">let </span>template: ChatTemplate = serde_json::from_str(
+        <span class="kw-2">&amp;</span>fs::read_to_string(<span class="kw-2">&amp;</span>template_filename).expect(<span class="string">"Deserialization of chat template failed."</span>),
+    )
+    .unwrap();
 
     <span class="attr">#[derive(Debug, serde::Deserialize)]
     </span><span class="kw">struct </span>SpecifiedTemplate {

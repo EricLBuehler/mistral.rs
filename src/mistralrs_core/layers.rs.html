@@ -634,17 +634,16 @@
 };
 
 <span class="kw">use </span>candle_core::{
-    quantized::{QMatMul, QTensor},
+    quantized::{gguf_file, QMatMul, QTensor},
     DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Shape, Tensor, D,
 };
 <span class="kw">use </span>candle_nn::{Linear, Module, VarBuilder};
+<span class="kw">use </span>either::Either;
 
 <span class="kw">pub use </span><span class="kw">crate</span>::layers_masker::CausalMasker;
 <span class="kw">pub use </span><span class="kw">crate</span>::layers_utils::{flash_attn, repeat_kv, verify_sanity_gguf};
 
-<span class="kw">use crate</span>::{
-    cublaslt::CUBLASLT_HANDLE, gguf::Content, pipeline::Phi3RopeScaling, INHIBIT_GEMM_F16,
-};
+<span class="kw">use crate</span>::{cublaslt::CUBLASLT_HANDLE, INHIBIT_GEMM_F16};
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">pub struct </span>RmsNorm {
@@ -727,7 +726,7 @@
 }
 
 <span class="kw">pub struct </span>PhiRopeConfig {
-    <span class="kw">pub </span>rope_scaling: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, Phi3RopeScaling&gt;&gt;,
+    <span class="kw">pub </span>rope_scaling: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, Either&lt;Vec&lt;f32&gt;, String&gt;&gt;&gt;,
     <span class="kw">pub </span>max_position_embeddings: usize,
     <span class="kw">pub </span>original_max_position_embeddings: usize,
     <span class="kw">pub </span>rope_theta: f64,
@@ -738,9 +737,9 @@
     <span class="kw">pub fn </span>new(dtype: DType, cfg: <span class="kw">impl </span>Into&lt;PhiRopeConfig&gt;, dev: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>cfg: PhiRopeConfig = cfg.into();
         <span class="kw">let </span>scaled_params = cfg.rope_scaling.as_ref().map(|r| ScaledRopeParams {
-            short_factor: r[<span class="string">"short_factor"</span>].clone().<span class="number">0</span>.left().unwrap(),
-            long_factor: r[<span class="string">"long_factor"</span>].clone().<span class="number">0</span>.left().unwrap(),
-            scaling_type: r[<span class="string">"type"</span>].clone().<span class="number">0</span>.right().unwrap().parse().unwrap(),
+            short_factor: r[<span class="string">"short_factor"</span>].clone().left().unwrap(),
+            long_factor: r[<span class="string">"long_factor"</span>].clone().left().unwrap(),
+            scaling_type: r[<span class="string">"type"</span>].clone().right().unwrap().parse().unwrap(),
         });
         <span class="kw">let </span>max_seq_len = cfg.max_position_embeddings;
         <span class="kw">let </span>dim = cfg.head_dim;
@@ -1023,7 +1022,7 @@
 }
 
 <span class="doccomment">/// Linear layer with fused bias matmul.
-</span><span class="attr">#[derive(Debug, Clone)]
+</span><span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>FusedBiasLinear {
     <span class="kw">pub</span>(<span class="kw">crate</span>) w: Tensor,
     <span class="kw">pub</span>(<span class="kw">crate</span>) b: Tensor,
@@ -1082,12 +1081,13 @@
 
 <span class="kw">impl </span>QLinear {
     <span class="kw">pub fn </span>new&lt;R: std::io::Read + std::io::Seek&gt;(
-        ct: <span class="kw-2">&amp;mut </span>Content&lt;<span class="lifetime">'_</span>, R&gt;,
+        ct: <span class="kw-2">&amp;</span>gguf_file::Content,
+        r: <span class="kw-2">&amp;mut </span>R,
         name: <span class="kw-2">&amp;</span>str,
         device: <span class="kw-2">&amp;</span>Device,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>w = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{name}.weight"</span>), device)<span class="question-mark">?</span>;
-        <span class="kw">let </span>b = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{name}.bias"</span>), device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>w = ct.tensor(r, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{name}.weight"</span>), device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>b = ct.tensor(r, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{name}.bias"</span>), device)<span class="question-mark">?</span>;
         <span class="kw">let </span>inner = QMatMul::from_qtensor(w)<span class="question-mark">?</span>;
         <span class="kw">let </span>bias = b.dequantize(device)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{

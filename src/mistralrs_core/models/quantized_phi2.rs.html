@@ -250,17 +250,20 @@
 <a href="#248" id="248">248</a>
 <a href="#249" id="249">249</a>
 <a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-</span><span class="kw">use </span>candle_core::quantized::QTensor;
+</span><span class="kw">use </span>candle_core::quantized::gguf_file;
+<span class="kw">use </span>candle_core::quantized::QTensor;
 <span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{Embedding, LayerNorm};
 
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
-<span class="kw">use </span><span class="kw">crate</span>::gguf::Content;
 <span class="kw">use </span><span class="kw">crate</span>::layers::ScaledDotProductAttention;
 <span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, CausalMasker, QLinear};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, Cache};
+<span class="kw">use </span><span class="kw">crate</span>::utils::max_seq_len::get_gguf_max_seq_len;
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
 
@@ -396,52 +399,53 @@
 
 <span class="kw">impl </span>ModelConfig::FromGGUF <span class="kw">for </span>ModelWeights {
     <span class="kw">fn </span>from_gguf&lt;R: std::io::Seek + std::io::Read&gt;(
-        <span class="kw-2">mut </span>ct: Content&lt;<span class="lifetime">'_</span>, R&gt;,
+        ct: gguf_file::Content,
+        reader: <span class="kw-2">&amp;mut </span>R,
         device: <span class="kw-2">&amp;</span>Device,
         mapper: DeviceMapMetadata,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="comment">// Parameter extraction from metadata.
-        </span><span class="kw">let </span>head_count = ct.get_metadata(<span class="string">"phi2.attention.head_count"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="kw">let </span>head_count_kv = ct.get_metadata(<span class="string">"phi2.attention.head_count_kv"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="kw">let </span>block_count = ct.get_metadata(<span class="string">"phi2.block_count"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="kw">let </span>embedding_length = ct.get_metadata(<span class="string">"phi2.embedding_length"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="kw">let </span>rope_dim = ct.get_metadata(<span class="string">"phi2.rope.dimension_count"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="kw">let </span>ln_eps = ct
-            .get_metadata(<span class="string">"phi2.attention.layer_norm_epsilon"</span>)<span class="question-mark">?
-            </span>.to_f32()<span class="question-mark">? </span><span class="kw">as </span>f64;
+        <span class="kw">let </span>md_get = |s: <span class="kw-2">&amp;</span>str| <span class="kw">match </span>ct.metadata.get(s) {
+            <span class="prelude-val">None </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"cannot find {s} in metadata"</span>),
+            <span class="prelude-val">Some</span>(v) =&gt; <span class="prelude-val">Ok</span>(v),
+        };
 
-        <span class="kw">let </span>max_seq_len = ct
-            .get_metadata(<span class="string">"phi2.context_length"</span>)<span class="question-mark">?
-            </span>.to_u64()
-            .unwrap_or(MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize;
+        <span class="comment">// Parameter extraction from metadata.
+        </span><span class="kw">let </span>head_count = md_get(<span class="string">"phi2.attention.head_count"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
+        <span class="kw">let </span>head_count_kv = md_get(<span class="string">"phi2.attention.head_count_kv"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
+        <span class="kw">let </span>block_count = md_get(<span class="string">"phi2.block_count"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
+        <span class="kw">let </span>embedding_length = md_get(<span class="string">"phi2.embedding_length"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
+        <span class="kw">let </span>rope_dim = md_get(<span class="string">"phi2.rope.dimension_count"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
+        <span class="kw">let </span>ln_eps = md_get(<span class="string">"phi2.attention.layer_norm_epsilon"</span>)<span class="question-mark">?</span>.to_f32()<span class="question-mark">? </span><span class="kw">as </span>f64;
+        <span class="kw">let </span>max_seq_len =
+            get_gguf_max_seq_len(md_get(<span class="string">"phi2.context_length"</span>), MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize;
 
         <span class="kw">let </span>(cos, sin) = precomput_freqs_cis(rope_dim, <span class="number">10_000.</span>, device, max_seq_len)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>tok_embeddings = ct.tensor(<span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>tok_embeddings = ct.tensor(reader, <span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(device)<span class="question-mark">?</span>;
         <span class="kw">let </span>output_norm = layer_norm(
-            ct.tensor(<span class="string">"output_norm.weight"</span>, device)<span class="question-mark">?</span>,
-            ct.tensor(<span class="string">"output_norm.bias"</span>, device)<span class="question-mark">?</span>,
+            ct.tensor(reader, <span class="string">"output_norm.weight"</span>, device)<span class="question-mark">?</span>,
+            ct.tensor(reader, <span class="string">"output_norm.bias"</span>, device)<span class="question-mark">?</span>,
             ln_eps,
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>output = QLinear::new(<span class="kw-2">&amp;mut </span>ct, <span class="string">"output"</span>, device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>output = QLinear::new(<span class="kw-2">&amp;</span>ct, reader, <span class="string">"output"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(block_count);
         <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device)<span class="question-mark">?</span>;
         <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..block_count {
             <span class="kw">let </span>prefix = <span class="macro">format!</span>(<span class="string">"blk.{layer_idx}"</span>);
             <span class="kw">let </span>device = mapper.device_for(layer_idx, <span class="bool-val">false</span>).unwrap_or(device);
 
-            <span class="kw">let </span>ffn_up = QLinear::new(<span class="kw-2">&amp;mut </span>ct, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_up"</span>), device)<span class="question-mark">?</span>;
-            <span class="kw">let </span>ffn_down = QLinear::new(<span class="kw-2">&amp;mut </span>ct, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_down"</span>), device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>ffn_up = QLinear::new(<span class="kw-2">&amp;</span>ct, reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_up"</span>), device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>ffn_down = QLinear::new(<span class="kw-2">&amp;</span>ct, reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_down"</span>), device)<span class="question-mark">?</span>;
             <span class="kw">let </span>mlp = Mlp { ffn_up, ffn_down };
             <span class="kw">let </span>attn_norm = layer_norm(
-                ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_norm.weight"</span>), device)<span class="question-mark">?</span>,
-                ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_norm.bias"</span>), device)<span class="question-mark">?</span>,
+                ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_norm.weight"</span>), device)<span class="question-mark">?</span>,
+                ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_norm.bias"</span>), device)<span class="question-mark">?</span>,
                 ln_eps,
             )<span class="question-mark">?</span>;
             layers.push(LayerWeights {
-                attn_qkv: QLinear::new(<span class="kw-2">&amp;mut </span>ct, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_qkv"</span>), device)<span class="question-mark">?</span>,
-                attn_output: QLinear::new(<span class="kw-2">&amp;mut </span>ct, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_output"</span>), device)<span class="question-mark">?</span>,
+                attn_qkv: QLinear::new(<span class="kw-2">&amp;</span>ct, reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_qkv"</span>), device)<span class="question-mark">?</span>,
+                attn_output: QLinear::new(<span class="kw-2">&amp;</span>ct, reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_output"</span>), device)<span class="question-mark">?</span>,
                 attn_norm,
                 mlp,
                 n_head: head_count,

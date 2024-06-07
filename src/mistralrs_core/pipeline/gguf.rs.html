@@ -592,6 +592,53 @@
 <a href="#590" id="590">590</a>
 <a href="#591" id="591">591</a>
 <a href="#592" id="592">592</a>
+<a href="#593" id="593">593</a>
+<a href="#594" id="594">594</a>
+<a href="#595" id="595">595</a>
+<a href="#596" id="596">596</a>
+<a href="#597" id="597">597</a>
+<a href="#598" id="598">598</a>
+<a href="#599" id="599">599</a>
+<a href="#600" id="600">600</a>
+<a href="#601" id="601">601</a>
+<a href="#602" id="602">602</a>
+<a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a>
+<a href="#612" id="612">612</a>
+<a href="#613" id="613">613</a>
+<a href="#614" id="614">614</a>
+<a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
+<a href="#617" id="617">617</a>
+<a href="#618" id="618">618</a>
+<a href="#619" id="619">619</a>
+<a href="#620" id="620">620</a>
+<a href="#621" id="621">621</a>
+<a href="#622" id="622">622</a>
+<a href="#623" id="623">623</a>
+<a href="#624" id="624">624</a>
+<a href="#625" id="625">625</a>
+<a href="#626" id="626">626</a>
+<a href="#627" id="627">627</a>
+<a href="#628" id="628">628</a>
+<a href="#629" id="629">629</a>
+<a href="#630" id="630">630</a>
+<a href="#631" id="631">631</a>
+<a href="#632" id="632">632</a>
+<a href="#633" id="633">633</a>
+<a href="#634" id="634">634</a>
+<a href="#635" id="635">635</a>
+<a href="#636" id="636">636</a>
+<a href="#637" id="637">637</a>
+<a href="#638" id="638">638</a>
+<a href="#639" id="639">639</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -604,9 +651,9 @@
 };
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
-<span class="kw">use </span><span class="kw">crate</span>::gguf::Content;
 <span class="kw">use </span><span class="kw">crate</span>::lora::Ordering;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::gguf_tokenizer::{convert_ggml_to_hf_tokenizer, ConversionResult};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{get_chat_template, Cache};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{ChatTemplate, LocalModelPaths};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
@@ -615,18 +662,19 @@
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
+<span class="kw">use crate</span>::{do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, Pipeline, DEBUG};
 <span class="kw">use crate</span>::{
-    convert_gguf_to_hf_tokenizer,
     models::quantized_llama::ModelWeights <span class="kw">as </span>QLlama,
     models::quantized_phi2::ModelWeights <span class="kw">as </span>QPhi,
     models::quantized_phi3::ModelWeights <span class="kw">as </span>QPhi3,
     utils::tokens::get_token,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
-    GgufTokenizerConversion,
 };
-<span class="kw">use crate</span>::{do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, Pipeline};
 <span class="kw">use </span>anyhow::{bail, Context, <span class="prelude-ty">Result</span>};
-<span class="kw">use </span>candle_core::quantized::GgmlDType;
+<span class="kw">use </span>candle_core::quantized::{
+    gguf_file::{<span class="self">self</span>, Value <span class="kw">as </span>GgufValue},
+    GgmlDType,
+};
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -664,7 +712,7 @@
     model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     config: GGUFSpecificConfig,
     quantized_model_id: String,
-    quantized_filename: Vec&lt;String&gt;,
+    quantized_filename: String,
     xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
     no_kv_cache: bool,
@@ -673,9 +721,9 @@
     tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
-<span class="attr">#[derive(Copy, Clone, Debug, EnumString)]
+<span class="attr">#[derive(Debug, EnumString)]
 #[strum(serialize_all = <span class="string">"kebab-case"</span>)]
-</span><span class="kw">pub enum </span>GGUFArchitecture {
+</span><span class="kw">enum </span>GGUFArchitecture {
     Llama,
     Mpt,
     Gptneox,
@@ -693,8 +741,7 @@
 // - Case-insensitive variant matching (TODO: is this desirable?)
 // - Customized error until potential upstream support: https://github.com/Peternator7/strum/issues/332
 </span><span class="kw">impl </span>GGUFArchitecture {
-    <span class="doccomment">/// GGUF architecture from a kebab-case representation.
-    </span><span class="kw">pub fn </span>from_value&lt;T: AsRef&lt;str&gt; + std::fmt::Display&gt;(value: T) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">fn </span>from_value&lt;T: AsRef&lt;str&gt; + std::fmt::Display&gt;(value: T) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="self">Self</span>::from_str(<span class="kw-2">&amp;</span>value.as_ref().to_ascii_lowercase())
             .with_context(|| <span class="macro">format!</span>(<span class="string">"Unknown GGUF architecture `{value}`"</span>))
             .map_err(anyhow::Error::msg)
@@ -713,7 +760,7 @@
     model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     config: GGUFSpecificConfig,
     quantized_model_id: String,
-    quantized_filename: Vec&lt;String&gt;,
+    quantized_filename: String,
     xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     kind: ModelKind,
     xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
@@ -731,7 +778,7 @@
         chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
         tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         quantized_model_id: String,
-        quantized_filename: Vec&lt;String&gt;,
+        quantized_filename: String,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>kind = ModelKind::Quantized {
             quant: QuantizationKind::Gguf,
@@ -818,7 +865,7 @@
         model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         config: GGUFSpecificConfig,
         quantized_model_id: String,
-        quantized_filename: Vec&lt;String&gt;,
+        quantized_filename: String,
         xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         kind: ModelKind,
         xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
@@ -851,6 +898,28 @@
             kind,
             tgt_non_granular_index,
         }
+    }
+}
+
+<span class="kw">fn </span>parse_gguf_value(value: <span class="kw-2">&amp;</span>GgufValue) -&gt; String {
+    <span class="kw">match </span>value {
+        GgufValue::Array(vs) =&gt; vs
+            .iter()
+            .map(parse_gguf_value)
+            .collect::&lt;Vec&lt;String&gt;&gt;()
+            .join(<span class="string">", "</span>),
+        GgufValue::Bool(b) =&gt; b.to_string(),
+        GgufValue::F32(x) =&gt; x.to_string(),
+        GgufValue::F64(x) =&gt; x.to_string(),
+        GgufValue::I8(x) =&gt; x.to_string(),
+        GgufValue::I16(x) =&gt; x.to_string(),
+        GgufValue::I32(x) =&gt; x.to_string(),
+        GgufValue::I64(x) =&gt; x.to_string(),
+        GgufValue::String(x) =&gt; x.to_string(),
+        GgufValue::U8(x) =&gt; x.to_string(),
+        GgufValue::U16(x) =&gt; x.to_string(),
+        GgufValue::U32(x) =&gt; x.to_string(),
+        GgufValue::U64(x) =&gt; x.to_string(),
     }
 }
 
@@ -898,25 +967,50 @@
             <span class="macro">info!</span>(<span class="string">"Loading model `{}` on {device:?}..."</span>, <span class="self">self</span>.get_id());
         }
 
-        <span class="kw">let </span><span class="kw-2">mut </span>files = Vec::new();
-        <span class="kw">for </span>weight_filename <span class="kw">in </span>paths.get_weight_filenames() {
-            files.push(std::fs::File::open(weight_filename)<span class="question-mark">?</span>);
+        <span class="kw">let </span><span class="kw-2">mut </span>file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())<span class="question-mark">?</span>;
+        <span class="kw">let </span>model = gguf_file::Content::read(<span class="kw-2">&amp;mut </span>file)
+            .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))<span class="question-mark">?</span>;
+        <span class="kw">let </span>arch = model.metadata[<span class="string">"general.architecture"</span>]
+            .to_string()
+            .context(<span class="string">"Model metadata should have declared an architecture"</span>)
+            .and_then(GGUFArchitecture::from_value)<span class="question-mark">?</span>;
+
+        <span class="macro">info!</span>(<span class="string">"Model config:"</span>);
+        <span class="kw">let </span><span class="kw-2">mut </span>sorted_keys = model.metadata.keys().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+        sorted_keys.sort();
+        <span class="kw">for </span>name <span class="kw">in </span>sorted_keys {
+            <span class="kw">if </span>!name.contains(<span class="string">"tokenizer"</span>) {
+                <span class="kw">let </span>value = parse_gguf_value(<span class="kw-2">&amp;</span>model.metadata[name]);
+                <span class="macro">println!</span>(<span class="string">"{name}: {}"</span>, value);
+            }
         }
-        <span class="kw">let </span><span class="kw-2">mut </span>files = files.iter_mut().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 
-        <span class="kw">let </span>content = Content::from_readers(<span class="kw-2">&amp;mut </span>files)<span class="question-mark">?</span>;
-        <span class="kw">let </span>arch = content.arch();
+        <span class="kw">if </span>DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
+            <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
+            <span class="kw">for </span>(name, info) <span class="kw">in </span><span class="kw-2">&amp;</span>model.tensor_infos {
+                tensors.push(<span class="macro">format!</span>(
+                    <span class="string">"name = `{name}`, shape = {:?}, dtype = {:?}"</span>,
+                    info.shape.clone(),
+                    info.ggml_dtype
+                ));
+            }
+            fs::write(
+                <span class="string">"mistralrs_gguf_tensors.txt"</span>,
+                serde_json::to_string_pretty(<span class="kw-2">&amp;</span>tensors).expect(<span class="string">"Serialization failed."</span>),
+            )<span class="question-mark">?</span>;
 
-        <span class="comment">// Set bos/eos/unk to None to avoid the override
-        </span><span class="kw">let </span>GgufTokenizerConversion {
+            <span class="macro">info!</span>(<span class="string">"Debug is enabled, wrote the names and information about each tensor to `mistralrs_gguf_tensors.txt`."</span>);
+        }
+
+        <span class="kw">let </span>ConversionResult {
             tokenizer,
             bos,
             eos,
             unk,
         } = <span class="kw">if </span>paths.get_tokenizer_filename().to_string_lossy().is_empty() {
-            convert_gguf_to_hf_tokenizer(<span class="kw-2">&amp;</span>content)<span class="question-mark">?
+            convert_ggml_to_hf_tokenizer(<span class="kw-2">&amp;</span>model)<span class="question-mark">?
         </span>} <span class="kw">else </span>{
-            GgufTokenizerConversion {
+            ConversionResult {
                 tokenizer: get_tokenizer(paths.get_tokenizer_filename(), <span class="prelude-val">None</span>)<span class="question-mark">?</span>,
                 bos: <span class="prelude-val">None</span>,
                 eos: <span class="prelude-val">None</span>,
@@ -929,7 +1023,7 @@
 
         <span class="kw">let </span>model_config = {
             <span class="comment">// Base config (quantization only):
-            </span><span class="kw">let </span>quant = ModelConfig::ParamsGGUF(content, (device, mapper).into());
+            </span><span class="kw">let </span>quant = ModelConfig::ParamsGGUF((model, <span class="kw-2">&amp;mut </span>file).into(), (device, mapper).into());
 
             <span class="comment">// With optional adapter config:
             </span><span class="kw">let </span><span class="kw-2">mut </span>adapter = <span class="prelude-val">None</span>;

@@ -614,10 +614,6 @@
 <a href="#612" id="612">612</a>
 <a href="#613" id="613">613</a>
 <a href="#614" id="614">614</a>
-<a href="#615" id="615">615</a>
-<a href="#616" id="616">616</a>
-<a href="#617" id="617">617</a>
-<a href="#618" id="618">618</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fmt::Display,
     sync::{Arc, RwLock},
@@ -877,10 +873,6 @@
             <span class="kw">return </span>toks;
         }
         <span class="kw-2">&amp;</span><span class="self">self</span>.tokens
-    }
-
-    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>set_toks(<span class="kw-2">&amp;mut </span><span class="self">self</span>, toks: Vec&lt;u32&gt;) {
-        <span class="self">self</span>.tokens = toks;
     }
 
     <span class="kw">pub fn </span>completion_bytes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[u8] {

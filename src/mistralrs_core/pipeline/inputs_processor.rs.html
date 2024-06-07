@@ -368,7 +368,7 @@
     <span class="kw">use </span>std::{any::Any, iter::repeat, sync::Arc};
 
     <span class="kw">use </span>anyhow::Result;
-    <span class="kw">use </span>candle_core::{Device, Tensor, WithDType};
+    <span class="kw">use </span>candle_core::{Device, Tensor};
     <span class="kw">use </span>tokenizers::Tokenizer;
 
     <span class="kw">use crate</span>::{layers::set_use_matmul_via_f16, sequence::Sequence};
@@ -383,8 +383,8 @@
         </span><span class="kw">pub </span>position_ids: Vec&lt;usize&gt;,
     }
 
-    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_prompt_input&lt;T: WithDType&gt;(
-        toks: Vec&lt;Vec&lt;T&gt;&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_prompt_input(
+        toks: Vec&lt;Vec&lt;u32&gt;&gt;,
         input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
         device: <span class="kw-2">&amp;</span>Device,
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
@@ -394,7 +394,7 @@
             .map(|seq| seq.len())
             .max()
             .expect(<span class="string">"No sequences"</span>);
-        <span class="kw">let </span>padding_tok = T::zero();
+        <span class="kw">let </span>padding_tok = <span class="number">0</span>;
         <span class="comment">// Pad each sequence by the padding token to the max len.
         </span><span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>seqlen_offsets = Vec::new();
@@ -455,8 +455,8 @@
         })
     }
 
-    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_completion_input&lt;T: WithDType&gt;(
-        toks: Vec&lt;Vec&lt;T&gt;&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_completion_input(
+        toks: Vec&lt;Vec&lt;u32&gt;&gt;,
         input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
         device: <span class="kw-2">&amp;</span>Device,
         no_kv_cache: bool,

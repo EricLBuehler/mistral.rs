@@ -728,6 +728,10 @@
 <a href="#726" id="726">726</a>
 <a href="#727" id="727">727</a>
 <a href="#728" id="728">728</a>
+<a href="#729" id="729">729</a>
+<a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, fmt::Debug, str::FromStr};
 
 <span class="kw">use </span><span class="kw">crate</span>::lora::{LoraConfig, Ordering};
@@ -1277,8 +1281,8 @@
 
 <span class="comment">// ======================== Phi3 loader
 
-</span><span class="attr">#[derive(Deserialize, Debug, Clone)]
-</span><span class="kw">pub struct </span>Phi3RopeScaling(<span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span><span class="kw">pub </span>Either&lt;Vec&lt;f32&gt;, String&gt;);
+</span><span class="attr">#[derive(Deserialize)]
+</span><span class="kw">struct </span>RopeScaling(<span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span>Either&lt;Vec&lt;f32&gt;, String&gt;);
 
 <span class="attr">#[derive(Deserialize)]
 </span><span class="kw">struct </span>Phi3BasicConfig {
@@ -1293,7 +1297,7 @@
     rope_theta: f64,
     bos_token_id: <span class="prelude-ty">Option</span>&lt;u32&gt;,
     eos_token_id: <span class="prelude-ty">Option</span>&lt;u32&gt;,
-    rope_scaling: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, Phi3RopeScaling&gt;&gt;,
+    rope_scaling: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, RopeScaling&gt;&gt;,
     max_position_embeddings: usize,
     original_max_position_embeddings: usize,
     sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
@@ -1315,7 +1319,11 @@
             rms_norm_eps: basic_config.rms_norm_eps,
             eos_token_id: basic_config.eos_token_id,
             bos_token_id: basic_config.bos_token_id,
-            rope_scaling: basic_config.rope_scaling,
+            rope_scaling: basic_config.rope_scaling.map(|s| {
+                s.into_iter()
+                    .map(|(k, v)| (k, v.<span class="number">0</span>))
+                    .collect::&lt;HashMap&lt;<span class="kw">_</span>, <span class="kw">_</span>&gt;&gt;()
+            }),
             original_max_position_embeddings: basic_config.original_max_position_embeddings,
             use_flash_attn,
             sliding_window: basic_config.sliding_window,
