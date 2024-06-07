@@ -11,7 +11,7 @@ use std::{
 };
 
 use candle_core::{
-    quantized::{gguf_file, QMatMul, QTensor},
+    quantized::{QMatMul, QTensor},
     DType, Device, IndexOp, Result, Shape, Tensor, D,
 };
 use candle_nn::{Linear, Module, VarBuilder};
