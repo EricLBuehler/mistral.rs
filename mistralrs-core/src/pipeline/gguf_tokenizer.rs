@@ -103,35 +103,41 @@ fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, Vec<Str
     // Unigram (SentencePiece) default UNK is 0
     let unk = unk.unwrap_or(0);
 
-    let vocab: Vec<(String, f64)> = {
-        let Some(s) = p.scores.as_ref() else {
-            anyhow::bail!(
-                "`llama` unigram tokenizer is missing required metadata `tokenizer.ggml.scores`"
-            );
-        };
-        let scores = s.iter().cloned().map(|f_32| f_32 as f64);
+    // Create the Tokenizer model:
+    let model = {
+        let vocab: Vec<(String, f64)> = {
+            let Some(s) = p.scores.as_ref() else {
+                anyhow::bail!(
+                    "`llama` unigram tokenizer is missing required metadata `tokenizer.ggml.scores`"
+                );
+            };
+            let scores = s.iter().cloned().map(|f_32| f_32 as f64);
 
-        p.tokens.iter().cloned().zip(scores).collect()
+            p.tokens.iter().cloned().zip(scores).collect()
+        };
+
+        Unigram::from(vocab, Some(unk as usize), true).map_err(anyhow::Error::msg)?
     };
 
-    let unigram = Unigram::from(vocab, Some(unk as usize), true).map_err(anyhow::Error::msg)?;
-
-    let decoder = DecoderWrapper::try_from(Decoder::Sequence(vec![
+    let decoder = Decoder::Sequence(vec![
         Decoder::Replace("_", " "),
         Decoder::ByteFallback,
         Decoder::Fuse,
         Decoder::Strip(' ', 1, 0),
-    ]))?;
+    ]);
 
-    let normalizer = NormalizerWrapper::try_from(Normalizer::Sequence(vec![
+    let normalizer = Normalizer::Sequence(vec![
         Normalizer::Prepend("▁"),
         Normalizer::Replace(" ", "▁"),
-    ]))?;
+    ]);
 
-    let mut tokenizer = Tokenizer::new(ModelWrapper::Unigram(unigram));
-    tokenizer.with_decoder(decoder);
-    tokenizer.with_normalizer(normalizer);
+    let mut tokenizer: Tokenizer = TokenizerX::try_builder()
+        .with_model(model)
+        .with_decoder(decoder)
+        .with_normalizer(normalizer)
+        .build()?;
 
+    // Add special tokens (bos, eos, unk):
     let mut special_tokens = Vec::<String>::new();
     for token_id in [bos, eos, unk] {
         let token = p.tokens[token_id as usize].as_str();
@@ -141,6 +147,34 @@ fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, Vec<Str
     }
 
     Ok((tokenizer, TokenizerKind::Unigram, special_tokens))
+}
+
+// This is a workaround to have a better builder API.
+// Upstream `TokenizerBuilder` is difficult to work with:
+// https://github.com/huggingface/tokenizers/issues/1549
+struct TokenizerX;
+#[buildstructor::buildstructor]
+impl TokenizerX {
+    #[builder]
+    fn try_new<'a>(
+        with_model: ModelWrapper,
+        with_decoder: Option<Decoder<'a>>,
+        with_normalizer: Option<Normalizer<'a>>,
+    ) -> Result<Tokenizer> {
+        let mut tokenizer = Tokenizer::new(with_model);
+
+        // Handle local enum to remote enum type:
+        if let Some(decoder) = with_decoder {
+            let d = DecoderWrapper::try_from(decoder)?;
+            tokenizer.with_decoder(d);
+        }
+        if let Some(normalizer) = with_normalizer {
+            let n = NormalizerWrapper::try_from(normalizer)?;
+            tokenizer.with_normalizer(n);
+        }
+
+        Ok(tokenizer)
+    }
 }
 
 // Convenient alternative to upstream:
