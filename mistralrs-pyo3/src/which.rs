@@ -1,4 +1,5 @@
-use mistralrs_core::NormalLoaderType;
+use either::Either;
+use mistralrs_core::{NormalLoaderType, VisionLoaderType};
 use pyo3::pyclass;
 
 #[pyclass]
@@ -10,6 +11,13 @@ pub enum Architecture {
     Llama,
     Phi2,
     Phi3,
+    Qwen2,
+}
+
+#[pyclass]
+#[derive(Debug, Clone)]
+pub enum VisionArchitecture {
+    Phi3V,
 }
 
 impl From<Architecture> for NormalLoaderType {
@@ -21,6 +29,15 @@ impl From<Architecture> for NormalLoaderType {
             Architecture::Mixtral => Self::Mixtral,
             Architecture::Phi2 => Self::Phi2,
             Architecture::Phi3 => Self::Phi3,
+            Architecture::Qwen2 => Self::Qwen2,
+        }
+    }
+}
+
+impl From<VisionArchitecture> for VisionLoaderType {
+    fn from(value: VisionArchitecture) -> Self {
+        match value {
+            VisionArchitecture::Phi3V => VisionLoaderType::Phi3V,
         }
     }
 }
@@ -58,14 +75,14 @@ pub enum Which {
     GGUF {
         tok_model_id: Option<String>,
         quantized_model_id: String,
-        quantized_filename: String,
+        quantized_filename: Either<String, Vec<String>>,
         repeat_last_n: Option<usize>,
     },
 
     XLoraGGUF {
         tok_model_id: Option<String>,
         quantized_model_id: String,
-        quantized_filename: String,
+        quantized_filename: Either<String, Vec<String>>,
         repeat_last_n: Option<usize>,
         xlora_model_id: String,
         order: String,
@@ -75,7 +92,7 @@ pub enum Which {
     LoraGGUF {
         tok_model_id: Option<String>,
         quantized_model_id: String,
-        quantized_filename: String,
+        quantized_filename: Either<String, Vec<String>>,
         repeat_last_n: Option<usize>,
         adapters_model_id: String,
         order: String,
@@ -112,5 +129,12 @@ pub enum Which {
         adapters_model_id: String,
         order: String,
         gqa: Option<usize>,
+    },
+
+    VisionPlain {
+        model_id: String,
+        tokenizer_json: Option<String>,
+        repeat_last_n: Option<usize>,
+        arch: VisionArchitecture,
     },
 }

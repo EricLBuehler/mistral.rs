@@ -5,7 +5,8 @@ use crate::{
         GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
         NormalSpecificConfig,
     },
-    Loader, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector,
+    Loader, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector, VisionLoaderBuilder,
+    VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
 };
 
 pub struct LoaderBuilder {
@@ -51,7 +52,8 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
         | ModelSelected::LoraGGUF { .. }
         | ModelSelected::GGML { .. }
         | ModelSelected::LoraGGML { .. }
-        | ModelSelected::Toml { .. } => None,
+        | ModelSelected::Toml { .. }
+        | ModelSelected::VisionPlain { .. } => None,
         ModelSelected::XLora {
             tgt_non_granular_index,
             ..
@@ -158,7 +160,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
         )
         .build(),
         ModelSelected::XLoraGGUF {
@@ -174,7 +179,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
         )
         .with_xlora(
             xlora_model_id,
@@ -198,7 +206,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
         )
         .with_lora(
             adapters_model_id,
@@ -277,6 +288,21 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             )?,
         )
         .build(),
+        ModelSelected::VisionPlain {
+            model_id,
+            repeat_last_n,
+            tokenizer_json,
+            arch,
+        } => VisionLoaderBuilder::new(
+            VisionSpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+            },
+            args.chat_template,
+            tokenizer_json,
+            Some(model_id),
+        )
+        .build(arch),
     };
     Ok(loader)
 }

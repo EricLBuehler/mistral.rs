@@ -6,7 +6,6 @@ use crate::pipeline::Cache;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::DeviceMapMetadata;
-use candle_core::quantized::gguf_file;
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
@@ -210,8 +209,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
 
 impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
-        ct: gguf_file::Content,
-        reader: &mut R,
+        mut ct: Content<'_, R>,
         device: &Device,
         mapper: DeviceMapMetadata,
     ) -> Result<Self> {
@@ -233,49 +231,39 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
         let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, context_window)?;
 
-        let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
+        let tok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
-        let output_norm = rms_norm(ct.tensor(reader, "output_norm.weight", device)?, rms_eps)?;
-        let output = QMatMul::from_qtensor(ct.tensor(reader, "output.weight", device)?)?;
+        let output_norm = rms_norm(ct.tensor("output_norm.weight", device)?, rms_eps)?;
+        let output = QMatMul::from_qtensor(ct.tensor("output.weight", device)?)?;
         let mut layers = Vec::with_capacity(block_count);
         let mapper = mapper.into_mapper(block_count, device)?;
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
-            let ffn_up = QMatMul::from_qtensor(ct.tensor(
-                reader,
-                &format!("{prefix}.ffn_up.weight"),
-                device,
-            )?)?;
-            let ffn_down = QMatMul::from_qtensor(ct.tensor(
-                reader,
-                &format!("{prefix}.ffn_down.weight"),
-                device,
-            )?)?;
+            let ffn_up =
+                QMatMul::from_qtensor(ct.tensor(&format!("{prefix}.ffn_up.weight"), device)?)?;
+            let ffn_down =
+                QMatMul::from_qtensor(ct.tensor(&format!("{prefix}.ffn_down.weight"), device)?)?;
             let mlp = Mlp {
                 ffn_up,
                 ffn_down,
                 i_size,
             };
             let attn_norm = rms_norm(
-                ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?,
+                ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?,
                 rms_eps,
             )?;
             let ffn_norm = rms_norm(
-                ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?,
+                ct.tensor(&format!("{prefix}.ffn_norm.weight"), device)?,
                 rms_eps,
             )?;
             layers.push(LayerWeights {
-                attn_qkv: QMatMul::from_qtensor(ct.tensor(
-                    reader,
-                    &format!("{prefix}.attn_qkv.weight"),
-                    device,
-                )?)?,
-                attn_output: QMatMul::from_qtensor(ct.tensor(
-                    reader,
-                    &format!("{prefix}.attn_output.weight"),
-                    device,
-                )?)?,
+                attn_qkv: QMatMul::from_qtensor(
+                    ct.tensor(&format!("{prefix}.attn_qkv.weight"), device)?,
+                )?,
+                attn_output: QMatMul::from_qtensor(
+                    ct.tensor(&format!("{prefix}.attn_output.weight"), device)?,
+                )?,
                 attn_norm,
                 ffn_norm,
                 mlp,

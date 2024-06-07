@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use tracing::info;
 
-use crate::Content;
+use crate::MessageContent;
 
 const SUPPORTED_ALTERNATE_EOS: [&str; 2] = [
     "<|eot_id|>", // Handle Llama3 chat case
@@ -171,7 +171,7 @@ pub struct GenerationConfig {
 }
 
 pub fn apply_chat_template_to(
-    messages: Vec<IndexMap<String, Content>>,
+    messages: Vec<IndexMap<String, MessageContent>>,
     add_generation_prompt: bool,
     template: &str,
     bos_tok: Option<String>,
@@ -184,7 +184,7 @@ pub fn apply_chat_template_to(
     env.set_trim_blocks(true);
 
     #[derive(Serialize, Deserialize)]
-    struct UntaggedContent(#[serde(with = "either::serde_untagged")] Content);
+    struct UntaggedContent(#[serde(with = "either::serde_untagged")] MessageContent);
     let mut new_messages = Vec::new();
     for message in messages {
         let mut new_message = IndexMap::new();

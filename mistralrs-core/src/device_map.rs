@@ -18,6 +18,7 @@ impl DeviceMapMetadata {
             host_layers: None,
         }
     }
+    /// A device mapper to not map device.
     pub fn dummy() -> Self {
         Self {
             device_layers: None,

@@ -5,7 +5,8 @@ use serde::Deserialize;
 use crate::{
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
     NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
-    SpeculativeLoader,
+    SpeculativeLoader, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
+    GGUF_MULTI_FILE_DELIMITER,
 };
 
 fn default_repeat_last_n() -> usize {
@@ -191,6 +192,15 @@ enum TomlModelSelected {
         #[serde(default = "default_one")]
         gqa: usize,
     },
+
+    /// Select a vision plain model, without quantization or adapters
+    VisionPlain {
+        /// Model ID to load from. This may be a HF hub repo or a local path.
+        model_id: String,
+
+        /// The architecture of the model.
+        arch: VisionLoaderType,
+    },
 }
 
 #[derive(Deserialize)]
@@ -307,7 +317,10 @@ fn loader_from_selected(
             args.chat_template,
             Some(tok_model_id),
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
         )
         .build(),
         TomlModelSelected::XLoraGGUF {
@@ -324,7 +337,10 @@ fn loader_from_selected(
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
         )
         .with_xlora(
             xlora_model_id,
@@ -349,7 +365,10 @@ fn loader_from_selected(
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
         )
         .with_lora(
             adapters_model_id,
@@ -431,6 +450,16 @@ fn loader_from_selected(
             )?,
         )
         .build(),
+        TomlModelSelected::VisionPlain { model_id, arch } => VisionLoaderBuilder::new(
+            VisionSpecificConfig {
+                use_flash_attn,
+                repeat_last_n: args.repeat_last_n,
+            },
+            args.chat_template,
+            args.tokenizer_json,
+            Some(model_id),
+        )
+        .build(arch),
     };
     Ok(loader)
 }

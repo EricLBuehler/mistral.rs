@@ -1,11 +1,11 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::quantized::gguf_file;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Embedding, LayerNorm};
 
 use crate::device_map::DeviceMapper;
+use crate::gguf::Content;
 use crate::layers::ScaledDotProductAttention;
 use crate::layers::{repeat_kv, CausalMasker, QLinear};
 use crate::pipeline::{extract_logits, Cache};
@@ -194,8 +194,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
 
 impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
-        ct: gguf_file::Content,
-        reader: &mut R,
+        mut ct: Content<'_, R>,
         device: &Device,
         mapper: DeviceMapMetadata,
     ) -> Result<Self> {
@@ -216,31 +215,31 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
         let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, max_seq_len)?;
 
-        let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
+        let tok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
         let output_norm = layer_norm(
-            ct.tensor(reader, "output_norm.weight", device)?,
-            ct.tensor(reader, "output_norm.bias", device)?,
+            ct.tensor("output_norm.weight", device)?,
+            ct.tensor("output_norm.bias", device)?,
             ln_eps,
         )?;
-        let output = QLinear::new(&ct, reader, "output", device)?;
+        let output = QLinear::new(&mut ct, "output", device)?;
         let mut layers = Vec::with_capacity(block_count);
         let mapper = mapper.into_mapper(block_count, device)?;
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
 
-            let ffn_up = QLinear::new(&ct, reader, &format!("{prefix}.ffn_up"), device)?;
-            let ffn_down = QLinear::new(&ct, reader, &format!("{prefix}.ffn_down"), device)?;
+            let ffn_up = QLinear::new(&mut ct, &format!("{prefix}.ffn_up"), device)?;
+            let ffn_down = QLinear::new(&mut ct, &format!("{prefix}.ffn_down"), device)?;
             let mlp = Mlp { ffn_up, ffn_down };
             let attn_norm = layer_norm(
-                ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?,
-                ct.tensor(reader, &format!("{prefix}.attn_norm.bias"), device)?,
+                ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?,
+                ct.tensor(&format!("{prefix}.attn_norm.bias"), device)?,
                 ln_eps,
             )?;
             layers.push(LayerWeights {
-                attn_qkv: QLinear::new(&ct, reader, &format!("{prefix}.attn_qkv"), device)?,
-                attn_output: QLinear::new(&ct, reader, &format!("{prefix}.attn_output"), device)?,
+                attn_qkv: QLinear::new(&mut ct, &format!("{prefix}.attn_qkv"), device)?,
+                attn_output: QLinear::new(&mut ct, &format!("{prefix}.attn_output"), device)?,
                 attn_norm,
                 mlp,
                 n_head: head_count,

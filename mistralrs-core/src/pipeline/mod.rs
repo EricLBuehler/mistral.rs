@@ -2,7 +2,6 @@ mod cache_manager;
 pub mod chat_template;
 mod ggml;
 mod gguf;
-mod gguf_tokenizer;
 mod inputs_processor;
 mod isq;
 mod macros;
@@ -12,6 +11,8 @@ mod paths;
 mod processing;
 mod sampling;
 mod speculative;
+mod vision;
+mod vision_loaders;
 use crate::aici::toktree::TokTrie;
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
@@ -21,15 +22,15 @@ use candle_core::quantized::GgmlDType;
 use chat_template::ChatTemplate;
 use core::fmt;
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
-pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
+pub use gguf::{GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 pub use isq::IsqModel;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 pub use normal_loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
-    NormalLoadingMetadata, NormalModelLoader, Phi2Loader, Phi3Loader, Qwen2Loader,
+    NormalLoadingMetadata, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3RopeScaling, Qwen2Loader,
 };
 pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths, XLoraPaths};
-pub(crate) use processing::{BasicProcessor, Processor, ProcessorCreator};
+pub(crate) use processing::{BasicProcessor, MessagesAction, Processor, ProcessorCreator};
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 use std::any::Any;
@@ -38,6 +39,8 @@ use std::sync::Arc;
 use std::{collections::HashMap, path::PathBuf, str::FromStr};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
+pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
+pub use vision_loaders::{VisionLoaderType, VisionModelLoader};
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -48,7 +51,9 @@ use crate::{
 };
 
 pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
-pub use self::inputs_processor::{text_models_inputs_processor, InputsProcessor};
+pub use self::inputs_processor::{
+    text_models_inputs_processor, InputsProcessor, InputsProcessorType,
+};
 
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
 /// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
@@ -435,7 +440,7 @@ pub enum CacheInstruction {
 
 pub trait PreProcessingMixin: MetadataMixin {
     fn get_processor(&self) -> Arc<dyn Processor> {
-        BasicProcessor::new_processor()
+        Arc::new(BasicProcessor)
     }
     fn get_chat_template(&self) -> Arc<ChatTemplate>;
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>>;
@@ -475,7 +480,7 @@ pub trait MetadataMixin {
 #[derive(PartialEq, Copy, Clone)]
 pub enum ModelCategory {
     Text,
-    Vision,
+    Vision { has_conv2d: bool },
 }
 
 #[async_trait::async_trait]
@@ -625,6 +630,25 @@ pub trait NormalModel: IsqModel {
     }
 }
 
+pub trait VisionModel: IsqModel {
+    // pixel_values and pixel_attention_mask only specified for prompt seqs
+    #[allow(clippy::too_many_arguments)]
+    fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        pixel_values: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
+        model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
+    ) -> candle_core::Result<Tensor>;
+    fn device(&self) -> &Device;
+    fn cache(&self) -> &Cache;
+    fn max_seq_len(&self) -> usize;
+    fn has_conv2d(&self) -> bool;
+}
+
 pub(crate) fn extract_logits(
     logits: &Tensor,
     context_lens: Vec<(usize, usize)>,
@@ -638,7 +662,7 @@ pub(crate) fn extract_logits(
 
 #[cfg(test)]
 mod tests {
-    use crate::Content;
+    use crate::MessageContent;
     use either::Either;
     use indexmap::IndexMap;
 
@@ -664,7 +688,7 @@ mod tests {
     fn test_with_inputs(
         templates: &[(bool, &str, &str, &str, &str)],
         expected_outputs: &[&str],
-        inputs: Vec<IndexMap<String, Content>>,
+        inputs: Vec<IndexMap<String, MessageContent>>,
     ) {
         use super::chat_template::apply_chat_template_to;
         let mut failed = Vec::new();
@@ -778,11 +802,11 @@ mod tests {
     /// ```
     fn test_image_chat_templates() {
         let templates = [
-            // HuggingFaceM4/idefics2-8b-chatty: first run, without images
+            // HuggingFaceM4/idefics2-8b-chatty
             (true, "<s>", "</s>", "<unk>", "{% for message in messages %}{{message['role'].capitalize()}}{% if message['content'][0]['type'] == 'image' %}{{':'}}{% else %}{{': '}}{% endif %}{% for line in message['content'] %}{% if line['type'] == 'text' %}{{line['text']}}{% elif line['type'] == 'image' %}{{ '<image>' }}{% endif %}{% endfor %}<end_of_utterance>\n{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"),
         ];
         let expected_outputs = [
-            // HuggingFaceM4/idefics2-8b-chatty: first run, without images
+            // HuggingFaceM4/idefics2-8b-chatty
             "System: You are a helpful assistant<end_of_utterance>\nUser:<image>Hello, please describe the above.<end_of_utterance>\nAssistant: Hi there<end_of_utterance>\nUser:<image>This is me, who are you<end_of_utterance>\nAssistant:    I am an assistant   <end_of_utterance>\nUser:<image>Another question, what is this?<end_of_utterance>\nAssistant:",
         ];
 

@@ -288,7 +288,10 @@ impl Engine {
     }
 
     async fn add_request(&mut self, request: NormalRequest) {
-        let is_chat = matches!(request.messages, RequestMessage::Chat(_));
+        let is_chat = matches!(
+            request.messages,
+            RequestMessage::Chat(_) | RequestMessage::VisionChat { .. }
+        );
         let echo_prompt = matches!(
             request.messages,
             RequestMessage::Completion {

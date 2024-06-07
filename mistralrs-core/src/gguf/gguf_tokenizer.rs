@@ -1,7 +1,6 @@
 use std::sync::atomic::Ordering;
 
 use anyhow::Result;
-use candle_core::quantized::gguf_file::Content;
 use tokenizers::{
     decoders::{self, byte_fallback::ByteFallback, fuse::Fuse, strip::Strip},
     models::unigram::Unigram,
@@ -13,7 +12,9 @@ use tracing::info;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::DEBUG;
 
-pub struct ConversionResult {
+use super::Content;
+
+pub struct GgufTokenizerConversion {
     pub tokenizer: Tokenizer,
     pub bos: Option<String>,
     pub eos: Option<String>,
@@ -60,8 +61,48 @@ pub fn convert_ggml_to_hf_tokenizer(content: &Content) -> Result<ConversionResul
     };
     let props = PropsGGUF::try_from(metadata)?;
 
-    let (tokenizer, kind, special_tokens) = match props.model.as_str() {
-        "llama" | "replit" => unigram_tokenizer(&props)?,
+    let bos = content.metadata["tokenizer.ggml.bos_token_id"]
+        .to_u32()
+        .expect("GGUF unk token is not u32");
+
+    let bos_str = tokens[bos as usize].clone();
+    let eos_str = tokens[eos as usize].clone();
+    let unk_str;
+
+    let (tokenizer, ty) = match model.as_str() {
+        "llama" | "replit" => {
+            // This is a `unigram` tokenizer
+            let scores = scores
+                .as_ref()
+                .expect("Expect `tokenizer.ggml.scores` for `llama` unigram tokeizer.");
+            let mut vocab = Vec::new();
+            for (token, score) in tokens.iter().zip(scores) {
+                vocab.push((token.clone(), *score as f64));
+            }
+
+            // Unigram (sentencepiece) default UNK is 0
+            let unk = unk.map(|x| x as usize).unwrap_or(0);
+            unk_str = tokens[unk].clone();
+
+            let unigram = Unigram::from(vocab, Some(unk), true).map_err(anyhow::Error::msg)?;
+            let mut tokenizer = Tokenizer::new(ModelWrapper::Unigram(unigram));
+            tokenizer.with_decoder(decoders::sequence::Sequence::new(vec![
+                DecoderWrapper::Replace(Replace::new("▁", " ").map_err(anyhow::Error::msg)?),
+                DecoderWrapper::ByteFallback(ByteFallback::new()),
+                DecoderWrapper::Fuse(Fuse::new()),
+                DecoderWrapper::Strip(Strip::new(' ', 1, 0)),
+            ]));
+            tokenizer.with_normalizer(normalizers::Sequence::new(vec![
+                NormalizerWrapper::Prepend(Prepend::new("▁".to_string())),
+                NormalizerWrapper::Replace(Replace::new(" ", "▁").map_err(anyhow::Error::msg)?),
+            ]));
+
+            tokenizer.add_special_tokens(&[AddedToken::from(tokens[bos as usize].clone(), true)]);
+            tokenizer.add_special_tokens(&[AddedToken::from(tokens[eos as usize].clone(), true)]);
+            tokenizer.add_special_tokens(&[AddedToken::from(tokens[unk].clone(), true)]);
+
+            (tokenizer, "unigram")
+        }
         other => {
             anyhow::bail!("Tokenizer model `{other}` not supported.");
         }
@@ -248,12 +289,12 @@ impl TryFrom<Normalizer<'_>> for NormalizerWrapper {
 
 #[cfg(test)]
 mod tests {
+    use crate::gguf::Content;
     use anyhow::Result;
-    use candle_core::quantized::gguf_file::Content;
     use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
     use tokenizers::Tokenizer;
 
-    use super::convert_ggml_to_hf_tokenizer;
+    use super::convert_gguf_to_hf_tokenizer;
 
     #[allow(dead_code)]
     #[derive(Debug)]
@@ -277,8 +318,8 @@ mod tests {
 
                 let filename = api.get("mistral-7b-instruct-v0.1.Q2_K.gguf").unwrap();
                 let mut file = std::fs::File::open(&filename)?;
-                convert_ggml_to_hf_tokenizer(
-                    &Content::read(&mut file)
+                convert_gguf_to_hf_tokenizer(
+                    &Content::from_readers(&mut [&mut file])
                         .map_err(|e| e.with_path(filename))
                         .map_err(anyhow::Error::msg)?,
                 )

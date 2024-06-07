@@ -33,9 +33,9 @@ tokio.workspace = true
 either.workspace = true
 clap.workspace = true
 once_cell.workspace=true
-reqwest = "0.12.4"
+reqwest.workspace = true
 image.workspace = true
-base64 = "0.22.1"
+base64.workspace = true
 
 [features]
 cuda = ["mistralrs-core/cuda"]
