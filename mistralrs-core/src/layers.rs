@@ -423,18 +423,28 @@ impl TryFrom<Linear> for FusedBiasLinear {
 impl Module for FusedBiasLinear {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let w = match *x.dims() {
-            [b1, b2, _, _] => self.w.broadcast_left((b1, b2))?.t()?,
-            [bsize, _, _] => self.w.broadcast_left(bsize)?.t()?,
-            _ => self.w.t()?,
+            [b1, b2, _, _] => self.w.broadcast_left((b1, b2))?,
+            [bsize, _, _] => self.w.broadcast_left(bsize)?,
+            _ => self.w.clone(),
         };
         let mut tgt_shape = x.dims().to_vec();
-        tgt_shape[x.dims().len() - 1] = w.dim(D::Minus1)?;
+        tgt_shape[x.dims().len() - 1] = w.dim(D::Minus2)?;
         let b = self.b.broadcast_as(Shape::from_dims(&tgt_shape))?;
 
         if let (Device::Cuda(_), Some(cublaslt)) = (x.device(), *CUBLASLT_HANDLE.lock().unwrap()) {
-            cublaslt.batch_matmul(x, &w, Some(&b), None, Some(1.0), None, None)
+            cublaslt
+                .batch_matmul(
+                    x,
+                    &w,
+                    Some(&b.t()?.contiguous()?),
+                    None,
+                    Some(1.0),
+                    None,
+                    None,
+                )?
+                .t()
         } else {
-            x.matmul(&w)? + b
+            x.matmul(&w.t()?)? + b
         }
     }
 }
@@ -539,29 +549,66 @@ mod tests {
 
     #[test]
     fn fused_bias_linear() {
-        use candle_core::{Device, Tensor};
+        use candle_core::{DType, Device, Tensor};
         use candle_nn::{Linear, Module};
 
         use crate::cublaslt::setup_cublas_lt_wrapper;
         use crate::layers::FusedBiasLinear;
 
-        const IN: usize = 5;
-        const OUT: usize = 3;
+        const IN: usize = 1921;
+        const OUT: usize = 4096;
+        const INNER: usize = 1024;
 
         let dev = Device::cuda_if_available(0).unwrap();
         setup_cublas_lt_wrapper();
 
-        let w = Tensor::rand(0.0f32, 1.0, (OUT, IN), &dev).unwrap();
-        let b = Tensor::rand(0.0f32, 1.0, (OUT,), &dev).unwrap();
+        let inner_dtype = if dev.is_cuda() {
+            DType::BF16
+        } else {
+            DType::F32
+        };
 
-        let xs = Tensor::rand(0.0f32, 1.0, (1, 10, IN), &dev).unwrap();
+        let w = Tensor::rand(0.0f32, 1.0, (OUT, IN), &dev)
+            .unwrap()
+            .to_dtype(inner_dtype)
+            .unwrap();
+        let b = Tensor::rand(0.0f32, 1.0, (OUT,), &dev)
+            .unwrap()
+            .to_dtype(inner_dtype)
+            .unwrap();
+
+        let xs = Tensor::rand(0.0f32, 1.0, (1, INNER, IN), &dev)
+            .unwrap()
+            .to_dtype(inner_dtype)
+            .unwrap();
 
         let lin = Linear::new(w.clone(), Some(b.clone()));
-        let truth_y = lin.forward(&xs).unwrap().to_vec3::<f32>().unwrap();
+        let truth_out = lin.forward(&xs).unwrap();
+        let truth_y = truth_out
+            .to_dtype(DType::F32)
+            .unwrap()
+            .to_vec3::<f32>()
+            .unwrap();
 
         let fused = FusedBiasLinear { w, b };
-        let fused_y = fused.forward(&xs).unwrap().to_vec3::<f32>().unwrap();
+        let fused_out = fused.forward(&xs).unwrap();
+        let fused_y = fused_out
+            .to_dtype(DType::F32)
+            .unwrap()
+            .to_vec3::<f32>()
+            .unwrap();
 
-        assert_eq!(truth_y, fused_y);
+        assert_eq!(truth_out.shape(), fused_out.shape());
+        if truth_y != fused_y {
+            panic!(
+                "Truth does not match fused kernel. Diff fused - truth:\n{:#?}",
+                &(fused_out - truth_out)
+                    .unwrap()
+                    .to_dtype(DType::F32)
+                    .unwrap()
+                    .to_vec3::<f32>()
+                    .unwrap()[..][5..10][..5]
+            )
+        }
     }
 }
