@@ -296,7 +296,7 @@ impl Phi3InputsProcessor {
     fn padding_336(img: &DynamicImage) -> DynamicImage {
         let (_width, height) = img.dimensions();
         let tar = ((height as f64 / 336.0).ceil() * 336.0) as u32;
-        let top_padding = ((tar as f64 - height as f64) / 2.) as u32;
+        let top_padding = ((tar as f64 - height as f64 + 1.) / 2.) as u32;
         let bottom_padding = tar - height - top_padding;
         let left_padding = 0u32;
         let right_padding = 0u32;
@@ -335,7 +335,7 @@ impl Phi3InputsProcessor {
         let new_width = (scale * 336.0) as u32;
         let new_height = (new_width as f64 / ratio) as u32;
 
-        let resized_img = img.resize(new_width, new_height, FilterType::Nearest);
+        let resized_img = img.resize_exact(new_width, new_height, FilterType::Nearest);
         let padded_img = Self::padding_336(&resized_img);
 
         if transposed {
