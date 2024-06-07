@@ -265,8 +265,13 @@ class Phi3ImageEmbedding(nn.Module):
                     numpy.save("imp.npy",tmp.float().cpu().numpy())
                     print("^ LATEST inp",i)
                     for layer in self.layers:
+                        print(layer)
+                        tmp_first = tmp.clone()
                         tmp = layer(tmp)
                         if i == 0:
+                            res = tmp_first.matmul(layer.weight.T) + layer.bias
+                            print("res mean is",res.mean())
+
                             print("layer weight is",layer.weight.mean())
                             import numpy
                             numpy.save("layerhiddenweight.npy",layer.weight.float().cpu().numpy())

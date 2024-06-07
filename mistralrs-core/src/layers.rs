@@ -12,7 +12,7 @@ use std::{
 
 use candle_core::{
     quantized::{QMatMul, QTensor},
-    DType, Device, IndexOp, Result, Tensor,
+    DType, Device, IndexOp, Result, Shape, Tensor, D,
 };
 use candle_nn::{Linear, Module, VarBuilder};
 
@@ -395,6 +395,47 @@ impl ScaledDotProductAttention {
             }
         } else {
             naive_sdpa(q, k, v, head_dim, mask)
+        }
+    }
+}
+
+/// Linear layer with fused bias matmul.
+#[derive(Debug)]
+pub struct FusedBiasLinear {
+    pub(crate) w: Tensor,
+    pub(crate) b: Tensor,
+}
+
+impl TryFrom<Linear> for FusedBiasLinear {
+    type Error = candle_core::Error;
+
+    fn try_from(x: Linear) -> Result<Self> {
+        if let Some(bias) = x.bias() {
+            Ok(Self {
+                w: x.weight().clone(),
+                b: bias.clone(),
+            })
+        } else {
+            candle_core::bail!("`FusedBiasLinear` expects a Linear layer with bias.")
+        }
+    }
+}
+
+impl Module for FusedBiasLinear {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let w = match *x.dims() {
+            [b1, b2, _, _] => self.w.broadcast_left((b1, b2))?.t()?,
+            [bsize, _, _] => self.w.broadcast_left(bsize)?.t()?,
+            _ => self.w.t()?,
+        };
+        let mut tgt_shape = x.dims().to_vec();
+        tgt_shape[x.dims().len() - 1] = w.dim(D::Minus1)?;
+        let b = self.b.broadcast_as(Shape::from_dims(&tgt_shape))?;
+
+        if let (Device::Cuda(_), Some(cublaslt)) = (x.device(), *CUBLASLT_HANDLE.lock().unwrap()) {
+            cublaslt.batch_matmul(&x, &w, Some(&b), None, Some(1.0), None, None)
+        } else {
+            x.matmul(&w)? + b
         }
     }
 }

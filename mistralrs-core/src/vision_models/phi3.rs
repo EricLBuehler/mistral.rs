@@ -6,7 +6,7 @@ use candle_core::{
     quantized::QMatMul, shape::ShapeWithOneHole, DType, Device, IndexOp, Module, Result, Shape,
     Tensor, D,
 };
-use candle_nn::{linear_b, linear_no_bias, Linear, VarBuilder};
+use candle_nn::{linear_b, linear_no_bias, VarBuilder};
 use either::Either;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
@@ -14,8 +14,8 @@ use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
 use crate::{
     device_map::DeviceMapper,
     layers::{
-        repeat_kv, CausalMasker, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm,
-        ScaledDotProductAttention,
+        repeat_kv, CausalMasker, FusedBiasLinear, MatMul, PhiRopeConfig, PhiRotaryEmbedding,
+        RmsNorm, ScaledDotProductAttention,
     },
     pipeline::{extract_logits, Cache, IsqModel, Phi3RopeScaling, VisionModel},
     serde_default_fn,
@@ -90,18 +90,18 @@ trait ModuleWithMetadata: Module + Debug + Send + Sync {
     fn bias(&self) -> Option<&Tensor>;
 }
 
-impl ModuleWithMetadata for Linear {
+impl ModuleWithMetadata for FusedBiasLinear {
     fn device(&self) -> &Device {
-        self.weight().device()
+        self.w.device()
     }
     fn dtype(&self) -> DType {
-        self.weight().dtype()
+        self.w.dtype()
     }
     fn bias(&self) -> Option<&Tensor> {
-        self.bias()
+        Some(&self.b)
     }
     fn weight(&self) -> &Tensor {
-        self.weight()
+        &self.w
     }
 }
 
@@ -407,8 +407,19 @@ impl Module for EmbeddingLayers {
         let mut xs = xs.clone();
         let mut i = 0;
         for layer in &self.0 {
+            let xs_first = xs.clone();
             xs = layer.forward(&xs)?;
             if i == 0 {
+                let w = layer.weight();
+                let w = match *xs_first.dims() {
+                    [b1, b2, _, _] => w.broadcast_left((b1, b2))?.t()?,
+                    [bsize, _, _] => w.broadcast_left(bsize)?.t()?,
+                    _ => w.t()?,
+                };
+                let res = xs_first.matmul(&w)?.broadcast_add(&layer.bias().unwrap())?;
+                dbg!(&res.to_dtype(DType::F32)?.mean_all());
+                Tensor::write_npy(&res.to_dtype(DType::F32)?, "matmulweight.npy").unwrap();
+
                 dbg!(&layer.weight().to_dtype(DType::F32)?.mean_all());
                 Tensor::write_npy(
                     &layer.weight().to_dtype(DType::F32)?,
@@ -508,47 +519,47 @@ impl ImageEmbedding {
         let layers: Vec<Box<dyn ModuleWithMetadata>> =
             match (projection_cls.as_str(), use_hd_transform) {
                 ("linear", _) => {
-                    vec![Box::new(linear_b(
+                    vec![Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
                         image_dim_out,
                         hidden_size,
                         true,
                         vb.pp("img_projection"),
-                    )?)]
+                    )?)?)]
                 }
                 ("mlp", true) => {
                     let dim_proj = hidden_size;
                     vec![
-                        Box::new(linear_b(
+                        Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
                             image_dim_out * 4,
                             dim_proj,
                             true,
                             vb.pp("img_projection.0"),
-                        )?),
+                        )?)?),
                         Box::new(candle_nn::Activation::Gelu),
-                        Box::new(linear_b(
+                        Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
                             dim_proj,
                             dim_proj,
                             true,
                             vb.pp("img_projection.2"),
-                        )?),
+                        )?)?),
                     ]
                 }
                 ("mlp", false) => {
                     let dim_proj = hidden_size;
                     vec![
-                        Box::new(linear_b(
+                        Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
                             image_dim_out,
                             dim_proj,
                             true,
                             vb.pp("img_projection.0"),
-                        )?),
+                        )?)?),
                         Box::new(candle_nn::Activation::Gelu),
-                        Box::new(linear_b(
+                        Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
                             dim_proj,
                             dim_proj,
                             true,
                             vb.pp("img_projection.2"),
-                        )?),
+                        )?)?),
                     ]
                 }
                 _ => {
