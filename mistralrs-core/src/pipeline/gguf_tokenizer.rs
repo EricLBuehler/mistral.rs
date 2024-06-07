@@ -115,17 +115,22 @@ fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, Vec<Str
     };
 
     let unigram = Unigram::from(vocab, Some(unk as usize), true).map_err(anyhow::Error::msg)?;
+
+    let decoder = DecoderWrapper::try_from(Decoder::Sequence(vec![
+        Decoder::Replace("_", " "),
+        Decoder::ByteFallback,
+        Decoder::Fuse,
+        Decoder::Strip(' ', 1, 0),
+    ]))?;
+
+    let normalizer = NormalizerWrapper::try_from(Normalizer::Sequence(vec![
+        Normalizer::Prepend("▁"),
+        Normalizer::Replace(" ", "▁"),
+    ]))?;
+
     let mut tokenizer = Tokenizer::new(ModelWrapper::Unigram(unigram));
-    tokenizer.with_decoder(decoders::sequence::Sequence::new(vec![
-        DecoderWrapper::Replace(Replace::new("▁", " ").map_err(anyhow::Error::msg)?),
-        DecoderWrapper::ByteFallback(ByteFallback::new()),
-        DecoderWrapper::Fuse(Fuse::new()),
-        DecoderWrapper::Strip(Strip::new(' ', 1, 0)),
-    ]));
-    tokenizer.with_normalizer(normalizers::Sequence::new(vec![
-        NormalizerWrapper::Prepend(Prepend::new("▁".to_string())),
-        NormalizerWrapper::Replace(Replace::new(" ", "▁").map_err(anyhow::Error::msg)?),
-    ]));
+    tokenizer.with_decoder(decoder);
+    tokenizer.with_normalizer(normalizer);
 
     let mut special_tokens = Vec::<String>::new();
     for token_id in [bos, eos, unk] {
@@ -136,6 +141,73 @@ fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, Vec<Str
     }
 
     Ok((tokenizer, TokenizerKind::Unigram, special_tokens))
+}
+
+// Convenient alternative to upstream:
+// https://docs.rs/tokenizers/latest/tokenizers/decoders/enum.DecoderWrapper.html
+enum Decoder<'a> {
+    ByteFallback,
+    Fuse,
+    Replace(&'a str, &'a str),
+    Strip(char, usize, usize),
+    Sequence(Vec<Self>),
+}
+
+// Convert into upstream type wrapped enum variants:
+impl TryFrom<Decoder<'_>> for DecoderWrapper {
+    type Error = anyhow::Error;
+
+    fn try_from(variant: Decoder) -> Result<Self, Self::Error> {
+        let value: DecoderWrapper = match variant {
+            Decoder::ByteFallback => ByteFallback::default().into(),
+            Decoder::Fuse => Fuse::default().into(),
+            Decoder::Replace(pattern, content) => Replace::new(pattern, content)
+                .map_err(anyhow::Error::msg)?
+                .into(),
+            Decoder::Strip(content, start, stop) => Strip::new(content, start, stop).into(),
+            Decoder::Sequence(decoders) => {
+                let seq = decoders
+                    .into_iter()
+                    .map(DecoderWrapper::try_from)
+                    .collect::<Result<Vec<DecoderWrapper>>>()?;
+
+                decoders::sequence::Sequence::new(seq).into()
+            }
+        };
+
+        Ok(value)
+    }
+}
+
+// Convenient alternative to upstream:
+// https://docs.rs/tokenizers/latest/tokenizers/normalizers/enum.NormalizerWrapper.html
+enum Normalizer<'a> {
+    Prepend(&'a str),
+    Replace(&'a str, &'a str),
+    Sequence(Vec<Self>),
+}
+
+impl TryFrom<Normalizer<'_>> for NormalizerWrapper {
+    type Error = anyhow::Error;
+
+    fn try_from(variant: Normalizer) -> Result<Self, Self::Error> {
+        let value: NormalizerWrapper = match variant {
+            Normalizer::Prepend(prepend) => Prepend::new(prepend.to_owned()).into(),
+            Normalizer::Replace(pattern, content) => Replace::new(pattern, content)
+                .map_err(anyhow::Error::msg)?
+                .into(),
+            Normalizer::Sequence(decoders) => {
+                let seq = decoders
+                    .into_iter()
+                    .map(NormalizerWrapper::try_from)
+                    .collect::<Result<Vec<NormalizerWrapper>>>()?;
+
+                normalizers::Sequence::new(seq).into()
+            }
+        };
+
+        Ok(value)
+    }
 }
 
 #[cfg(test)]
