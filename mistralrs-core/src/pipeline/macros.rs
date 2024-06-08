@@ -354,9 +354,11 @@ macro_rules! vision_normal_model_loader {
             &$config,
             $use_flash_attn,
             vb,
-            $mapper,
-            $loading_isq,
-            $real_device,
+            $crate::pipeline::NormalLoadingMetadata {
+                mapper: $mapper,
+                loading_isq: $loading_isq,
+                real_device: $real_device,
+            },
         )?
     }};
 }

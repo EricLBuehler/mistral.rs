@@ -16,10 +16,11 @@ use crate::{
         repeat_kv, CausalMasker, FusedBiasLinear, MatMul, Nonzero, PhiRopeConfig,
         PhiRotaryEmbedding, RmsNorm, ScaledDotProductAttention,
     },
-    pipeline::{extract_logits, Cache, IsqModel, Phi3RopeScaling, VisionModel},
+    pipeline::{
+        extract_logits, Cache, IsqModel, NormalLoadingMetadata, Phi3RopeScaling, VisionModel,
+    },
     serde_default_fn,
     vision_models::clip::{Activation, ClipConfig, ClipVisionTransformer},
-    DeviceMapMetadata,
 };
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -757,12 +758,12 @@ impl Model {
         cfg: &Config,
         vb: VarBuilder,
         _is_gptx: bool,
-        mapper: DeviceMapMetadata,
-        loading_isq: bool,
-        real_device: Device,
+        normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
+        let mapper = normal_loading_metadata
+            .mapper
+            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -780,7 +781,9 @@ impl Model {
             let rotary_emb = Arc::new(PhiRotaryEmbedding::new(
                 vb.dtype(),
                 cfg.clone(),
-                mapper.device_for(layer_idx, false).unwrap_or(&real_device),
+                mapper
+                    .device_for(layer_idx, false)
+                    .unwrap_or(&normal_loading_metadata.real_device),
             )?);
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
@@ -788,7 +791,7 @@ impl Model {
                 vb_l.pp(layer_idx),
                 &*mapper,
                 layer_idx,
-                loading_isq,
+                normal_loading_metadata.loading_isq,
             )?;
             layers.push(layer)
         }
@@ -800,14 +803,14 @@ impl Model {
         let lm_head = linear_no_bias(
             cfg.hidden_size,
             cfg.vocab_size,
-            mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
+            mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
         )?;
         Ok(Self {
             vision_embed_tokens,
             layers,
             norm,
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
-            device: real_device,
+            device: normal_loading_metadata.real_device,
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
