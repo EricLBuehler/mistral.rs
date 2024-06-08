@@ -97,9 +97,9 @@ impl Attention {
         let v_proj = linear(hidden_sz, num_kv_heads * head_dim, vb.pp("v_proj"))?;
         let o_proj = linear_no_bias(num_heads * head_dim, hidden_sz, vb.pp("o_proj"))?;
         Ok(Self {
-            q_proj: QLinear::from_linear(q_proj),
-            k_proj: QLinear::from_linear(k_proj),
-            v_proj: QLinear::from_linear(v_proj),
+            q_proj: q_proj.into(),
+            k_proj: k_proj.into(),
+            v_proj: v_proj.into(),
             o_proj: QMatMul::Tensor(o_proj.weight().clone()),
             num_heads,
             num_kv_heads,

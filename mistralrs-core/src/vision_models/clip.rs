@@ -1,10 +1,15 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 // Sourced from https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/clip/vision_model.rs
-use candle_core::{DType, IndexOp, Result, Shape, Tensor, D};
+use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Result, Shape, Tensor, D};
 use candle_nn::{Conv2dConfig, Module};
 
-use crate::{layers::FusedBiasLinear, serde_default_fn};
+use crate::{
+    device_map::DeviceMapper,
+    layers::QLinear,
+    pipeline::{IsqModel, NormalLoadingMetadata},
+    serde_default_fn,
+};
 
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 pub enum Activation {
@@ -116,10 +121,10 @@ impl Module for ClipVisionEmbeddings {
 
 #[derive(Clone, Debug)]
 struct ClipAttention {
-    k_proj: FusedBiasLinear,
-    v_proj: FusedBiasLinear,
-    q_proj: FusedBiasLinear,
-    out_proj: FusedBiasLinear,
+    k_proj: QLinear,
+    v_proj: QLinear,
+    q_proj: QLinear,
+    out_proj: QLinear,
     head_dim: usize,
     scale: f64,
     num_attention_heads: usize,
@@ -137,10 +142,10 @@ impl ClipAttention {
         let scale = (head_dim as f64).powf(-0.5);
 
         Ok(ClipAttention {
-            k_proj: k_proj.try_into()?,
-            v_proj: v_proj.try_into()?,
-            q_proj: q_proj.try_into()?,
-            out_proj: out_proj.try_into()?,
+            k_proj: k_proj.into(),
+            v_proj: v_proj.into(),
+            q_proj: q_proj.into(),
+            out_proj: out_proj.into(),
             head_dim,
             scale,
             num_attention_heads,
@@ -157,20 +162,31 @@ impl ClipAttention {
         let in_dtype = xs.dtype();
         let (bsz, seq_len, hidden_size) = xs.dims3()?;
 
-        let query_states = (self.q_proj.forward(xs)? * self.scale)?;
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.q_proj.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        let query_states = (self.q_proj.forward(&xs)? * self.scale)?;
         let proj_shape = (bsz * self.num_attention_heads, seq_len, self.head_dim);
-        let query_states = self
+        let mut query_states = self
             .shape(&query_states, seq_len, bsz)?
             .reshape(proj_shape)?
             .to_dtype(DType::F32)?;
-        let key_states = self
-            .shape(&self.k_proj.forward(xs)?, seq_len, bsz)?
+        let mut key_states = self
+            .shape(&self.k_proj.forward(&xs)?, seq_len, bsz)?
             .reshape(proj_shape)?
             .to_dtype(DType::F32)?;
-        let value_states = self
-            .shape(&self.v_proj.forward(xs)?, seq_len, bsz)?
+        let mut value_states = self
+            .shape(&self.v_proj.forward(&xs)?, seq_len, bsz)?
             .reshape(proj_shape)?
             .to_dtype(DType::F32)?;
+        if self.q_proj.is_quant() {
+            query_states = query_states.to_dtype(original_dtype)?;
+            key_states = key_states.to_dtype(original_dtype)?;
+            value_states = value_states.to_dtype(original_dtype)?;
+        }
+
         let attn_weights = query_states.matmul(&key_states.transpose(1, 2)?)?;
 
         let src_len = key_states.dim(1)?;
@@ -187,18 +203,25 @@ impl ClipAttention {
         let attn_weights = candle_nn::ops::softmax(&attn_weights, D::Minus1)?;
 
         let attn_output = attn_weights.matmul(&value_states)?.to_dtype(in_dtype)?;
-        let attn_output = attn_output
+        let mut attn_output = attn_output
             .reshape((bsz, self.num_attention_heads, seq_len, self.head_dim))?
             .transpose(1, 2)?
             .reshape((bsz, seq_len, hidden_size))?;
-        self.out_proj.forward(&attn_output)
+        if self.q_proj.is_quant() {
+            attn_output = attn_output.to_dtype(DType::F32)?;
+        }
+        let mut res = self.out_proj.forward(&attn_output)?;
+        if self.q_proj.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
 #[derive(Clone, Debug)]
 struct ClipMlp {
-    fc1: FusedBiasLinear,
-    fc2: FusedBiasLinear,
+    fc1: QLinear,
+    fc2: QLinear,
     activation: Activation,
 }
 
@@ -208,8 +231,8 @@ impl ClipMlp {
         let fc2 = candle_nn::linear(c.intermediate_size, c.hidden_size, vs.pp("fc2"))?;
 
         Ok(ClipMlp {
-            fc1: fc1.try_into()?,
-            fc2: fc2.try_into()?,
+            fc1: fc1.into(),
+            fc2: fc2.into(),
             activation: c.hidden_act,
         })
     }
@@ -217,8 +240,17 @@ impl ClipMlp {
 
 impl ClipMlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let xs = self.fc1.forward(xs)?;
-        self.fc2.forward(&self.activation.forward(&xs)?)
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.fc1.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        let xs = self.fc1.forward(&xs)?;
+        let mut res = self.fc2.forward(&self.activation.forward(&xs)?)?;
+        if self.fc1.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -258,20 +290,41 @@ impl ClipEncoderLayer {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ClipEncoder {
     layers: Vec<ClipEncoderLayer>,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
+    device: Device,
 }
 
 impl ClipEncoder {
-    pub fn new(vs: candle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
+    pub fn new(
+        vs: candle_nn::VarBuilder,
+        c: &ClipConfig,
+        normal_loading_metadata: NormalLoadingMetadata,
+        mapper: &dyn DeviceMapper,
+    ) -> Result<Self> {
         let vs = vs.pp("layers");
         let mut layers: Vec<ClipEncoderLayer> = Vec::new();
         for index in 0..c.num_hidden_layers {
-            let layer = ClipEncoderLayer::new(vs.pp(&index.to_string()), c)?;
+            let layer = ClipEncoderLayer::new(
+                mapper.set_device(
+                    index,
+                    vs.pp(&index.to_string()),
+                    normal_loading_metadata.loading_isq,
+                ),
+                c,
+            )?;
             layers.push(layer)
         }
-        Ok(ClipEncoder { layers })
+        let mapper = normal_loading_metadata
+            .mapper
+            .into_mapper(c.num_hidden_layers, &normal_loading_metadata.real_device)?;
+        Ok(ClipEncoder {
+            layers,
+            mapper,
+            device: normal_loading_metadata.real_device.clone(),
+        })
     }
 
     pub fn forward_get_hidden_states(
@@ -282,6 +335,7 @@ impl ClipEncoder {
         let mut xs = xs.clone();
         let mut hidden_states = Vec::new();
         for layer in self.layers.iter() {
+            xs = xs.to_device(&self.device)?;
             xs = layer.forward(&xs, causal_attention_mask)?;
             hidden_states.push(xs.clone());
         }
@@ -290,7 +344,7 @@ impl ClipEncoder {
 }
 
 // https://github.com/huggingface/transformers/blob/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip/modeling_clip.py#L743
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ClipVisionTransformer {
     embeddings: ClipVisionEmbeddings,
     encoder: ClipEncoder,
@@ -301,11 +355,25 @@ pub struct ClipVisionTransformer {
 impl ClipVisionTransformer {
     /// Create a CLIP vision transformer model. Expects the vb to point to the root (not model)
     /// where (for example) `.pp("embeddings")` is valid.
-    pub fn new(vb: candle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
-        let embeddings = ClipVisionEmbeddings::new(vb.pp("embeddings"), c)?;
-        let pre_layer_norm = candle_nn::layer_norm(c.hidden_size, 1e-5, vb.pp("pre_layrnorm"))?;
-        let encoder = ClipEncoder::new(vb.pp("encoder"), c)?;
-        let final_layer_norm = candle_nn::layer_norm(c.hidden_size, 1e-5, vb.pp("post_layernorm"))?;
+    pub fn new(
+        vb: candle_nn::VarBuilder,
+        c: &ClipConfig,
+        normal_loading_metadata: NormalLoadingMetadata,
+        mapper: &dyn DeviceMapper,
+    ) -> Result<Self> {
+        let embeddings =
+            ClipVisionEmbeddings::new(mapper.set_nm_device(vb.pp("embeddings"), false), c)?;
+        let pre_layer_norm = candle_nn::layer_norm(
+            c.hidden_size,
+            1e-5,
+            mapper.set_nm_device(vb.pp("pre_layrnorm"), false),
+        )?;
+        let encoder = ClipEncoder::new(vb.pp("encoder"), c, normal_loading_metadata, mapper)?;
+        let final_layer_norm = candle_nn::layer_norm(
+            c.hidden_size,
+            1e-5,
+            mapper.set_nm_device(vb.pp("post_layernorm"), false),
+        )?;
         Ok(Self {
             embeddings,
             encoder,
@@ -321,9 +389,25 @@ impl ClipVisionTransformer {
         let mut result = self
             .encoder
             .forward_get_hidden_states(&hidden_states, None)?;
-        let encoder_outputs = result.last().unwrap();
+        let encoder_outputs = result.last().unwrap().to_device(pixel_values.device())?;
         let pooled_output = encoder_outputs.i((.., 0, ..))?;
         result.push(self.final_layer_norm.forward(&pooled_output)?.clone());
         Ok(result)
+    }
+}
+
+impl IsqModel for ClipVisionTransformer {
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+        // TODO(EricLBuehler): more?
+        let mut tensors: Vec<(&mut QMatMul, Option<usize>)> = Vec::new();
+        for (i, layer) in self.encoder.layers.iter_mut().enumerate() {
+            tensors.push((layer.self_attn.q_proj.inner(), Some(i)));
+            tensors.push((layer.self_attn.k_proj.inner(), Some(i)));
+            tensors.push((layer.self_attn.v_proj.inner(), Some(i)));
+            tensors.push((layer.self_attn.out_proj.inner(), Some(i)));
+            tensors.push((layer.mlp.fc1.inner(), Some(i)));
+            tensors.push((layer.mlp.fc2.inner(), Some(i)));
+        }
+        (tensors, &*self.encoder.mapper)
     }
 }

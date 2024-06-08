@@ -456,7 +456,7 @@ impl Model {
             embed_tokens,
             layers,
             norm,
-            lm_head: QLinear::from_linear(lm_head),
+            lm_head: lm_head.into(),
             device: normal_loading_metadata.real_device,
             dtype: vb.dtype(),
             cache: Cache::new(cfg.num_hidden_layers, true),

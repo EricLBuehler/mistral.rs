@@ -638,7 +638,7 @@ impl XLoraLlama {
             wte,
             blocks,
             ln_f,
-            lm_head: QLinear::from_linear(lm_head),
+            lm_head: lm_head.into(),
             kv_cache: pipeline::Cache::new(cfg.num_hidden_layers, true),
             device: normal_loading_metadata.real_device,
             xlora_classifier: xlora_config.map(|xlora_config| {

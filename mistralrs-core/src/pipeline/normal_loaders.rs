@@ -11,6 +11,7 @@ use pyo3::pyclass;
 
 use serde::Deserialize;
 
+#[derive(Clone)]
 /// Metadata for loading a model with ISQ or device mapping.
 pub struct NormalLoadingMetadata {
     // Device mapping metadata which can be used to construct a concrete device mapper

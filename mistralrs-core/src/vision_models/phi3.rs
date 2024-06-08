@@ -387,6 +387,8 @@ impl ImageEmbedding {
         wte: candle_nn::Embedding,
         embed_config: &EmbedLayerConfig,
         vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        mapper: &dyn DeviceMapper,
     ) -> Result<Self> {
         let hidden_size = config.hidden_size;
         if config.img_processor.name != "clip_vision_model" {
@@ -413,6 +415,8 @@ impl ImageEmbedding {
                 patch_size: 14,
                 projection_dim: 768,
             },
+            normal_loading_metadata,
+            mapper,
         )?;
 
         // High dim transform
@@ -774,6 +778,8 @@ impl Model {
             embed_tokens.clone(),
             &cfg.embd_layer,
             mapper.set_nm_device(vb_m.pp("vision_embed_tokens"), false),
+            normal_loading_metadata.clone(),
+            &*mapper,
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
@@ -881,6 +887,7 @@ impl IsqModel for Model {
             tensors.push((&mut layer.mlp.gate_up_proj, Some(i)));
             tensors.push((&mut layer.mlp.down_proj, Some(i)));
         }
+        tensors.extend(self.vision_embed_tokens.image_processor.get_tensors().0);
         (tensors, &*self.mapper)
     }
 }

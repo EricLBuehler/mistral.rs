@@ -59,8 +59,8 @@ impl MLP {
         let fc1 = linear(cfg.hidden_size, cfg.intermediate_size, vb.pp("fc1"))?;
         let fc2 = linear(cfg.intermediate_size, cfg.hidden_size, vb.pp("fc2"))?;
         Ok(Self {
-            fc1: QLinear::from_linear(fc1),
-            fc2: QLinear::from_linear(fc2),
+            fc1: fc1.into(),
+            fc2: fc2.into(),
             // This does not match the mixformers implementation where Gelu is used rather than
             // GeluNew.
             act: cfg.hidden_act,
@@ -115,10 +115,10 @@ impl Attention {
             (None, None)
         };
         Ok(Self {
-            q_proj: QLinear::from_linear(q_proj),
-            k_proj: QLinear::from_linear(k_proj),
-            v_proj: QLinear::from_linear(v_proj),
-            dense: QLinear::from_linear(dense),
+            q_proj: q_proj.into(),
+            k_proj: k_proj.into(),
+            v_proj: v_proj.into(),
+            dense: dense.into(),
             q_layernorm,
             k_layernorm,
             rotary_emb: rope,
@@ -336,7 +336,7 @@ impl Model {
             embed_tokens,
             layers,
             final_layernorm,
-            lm_head: QLinear::from_linear(lm_head),
+            lm_head: lm_head.into(),
             cache: Cache::new(cfg.num_hidden_layers, false),
             device: normal_loading_metadata.real_device,
             max_seq_len: cfg.max_position_embeddings,

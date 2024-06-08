@@ -548,7 +548,7 @@ impl XLoraModel {
             embed_tokens,
             layers,
             norm,
-            lm_head: QLinear::from_linear(lm_head),
+            lm_head: lm_head.into(),
             device: normal_loading_metadata.real_device,
             dtype: vb.dtype(),
             hidden_size: cfg.hidden_size,

@@ -503,7 +503,7 @@ impl Model {
             embed_tokens,
             layers,
             final_layernorm,
-            lm_head: QLinear::from_linear(lm_head),
+            lm_head: lm_head.into(),
             cache: Cache::new(cfg.num_hidden_layers, true),
             device: normal_loading_metadata.real_device,
             max_seq_len: cfg.max_position_embeddings,

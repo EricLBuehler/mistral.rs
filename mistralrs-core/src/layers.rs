@@ -456,6 +456,12 @@ pub struct QLinear {
     dtype: DType,
 }
 
+impl From<Linear> for QLinear {
+    fn from(value: Linear) -> Self {
+        Self::from_linear(value)
+    }
+}
+
 impl QLinear {
     pub fn new<R: std::io::Read + std::io::Seek>(
         ct: &gguf_file::Content,

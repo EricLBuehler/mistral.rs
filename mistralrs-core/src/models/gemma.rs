@@ -95,9 +95,9 @@ impl MLP {
         let up_proj = linear(hidden_sz, intermediate_sz, false, vb.pp("up_proj"))?;
         let down_proj = linear(intermediate_sz, hidden_sz, false, vb.pp("down_proj"))?;
         Ok(Self {
-            gate_proj: QLinear::from_linear(gate_proj),
-            up_proj: QLinear::from_linear(up_proj),
-            down_proj: QLinear::from_linear(down_proj),
+            gate_proj: gate_proj.into(),
+            up_proj: up_proj.into(),
+            down_proj: down_proj.into(),
             act_fn: cfg.hidden_act()?,
         })
     }
@@ -147,10 +147,10 @@ impl Attention {
         let v_proj = linear(hidden_sz, num_kv_heads * head_dim, bias, vb.pp("v_proj"))?;
         let o_proj = linear(num_heads * head_dim, hidden_sz, bias, vb.pp("o_proj"))?;
         Ok(Self {
-            q_proj: QLinear::from_linear(q_proj),
-            k_proj: QLinear::from_linear(k_proj),
-            v_proj: QLinear::from_linear(v_proj),
-            o_proj: QLinear::from_linear(o_proj),
+            q_proj: q_proj.into(),
+            k_proj: k_proj.into(),
+            v_proj: v_proj.into(),
+            o_proj: o_proj.into(),
             num_heads,
             num_kv_heads,
             num_kv_groups,
