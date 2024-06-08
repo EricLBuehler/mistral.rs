@@ -263,11 +263,28 @@ struct ClipEncoderLayer {
 }
 
 impl ClipEncoderLayer {
-    fn new(vs: candle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
-        let self_attn = ClipAttention::new(vs.pp("self_attn"), c)?;
-        let layer_norm1 = candle_nn::layer_norm(c.hidden_size, 1e-5, vs.pp("layer_norm1"))?;
-        let mlp = ClipMlp::new(vs.pp("mlp"), c)?;
-        let layer_norm2 = candle_nn::layer_norm(c.hidden_size, 1e-5, vs.pp("layer_norm2"))?;
+    fn new(
+        vs: candle_nn::VarBuilder,
+        c: &ClipConfig,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
+    ) -> Result<Self> {
+        let self_attn = ClipAttention::new(
+            mapper.set_device(layer_idx, vs.pp("self_attn"), loading_isq),
+            c,
+        )?;
+        let layer_norm1 = candle_nn::layer_norm(
+            c.hidden_size,
+            1e-5,
+            mapper.set_device(layer_idx, vs.pp("layer_norm1"), false),
+        )?;
+        let mlp = ClipMlp::new(mapper.set_device(layer_idx, vs.pp("mlp"), loading_isq), c)?;
+        let layer_norm2 = candle_nn::layer_norm(
+            c.hidden_size,
+            1e-5,
+            mapper.set_device(layer_idx, vs.pp("layer_norm2"), false),
+        )?;
 
         Ok(ClipEncoderLayer {
             self_attn,
@@ -308,12 +325,11 @@ impl ClipEncoder {
         let mut layers: Vec<ClipEncoderLayer> = Vec::new();
         for index in 0..c.num_hidden_layers {
             let layer = ClipEncoderLayer::new(
-                mapper.set_device(
-                    index,
-                    vs.pp(&index.to_string()),
-                    normal_loading_metadata.loading_isq,
-                ),
+                vs.pp(&index.to_string()),
                 c,
+                mapper,
+                index,
+                normal_loading_metadata.loading_isq,
             )?;
             layers.push(layer)
         }
