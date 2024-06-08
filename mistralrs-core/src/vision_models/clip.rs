@@ -421,21 +421,21 @@ impl IsqModel for ClipVisionTransformer {
             layer
                 .self_attn
                 .q_proj
-                .bias_to_device(&self.encoder.device)?;
+                .prepare_bias_for_isq(&self.encoder.device)?;
             layer
                 .self_attn
                 .k_proj
-                .bias_to_device(&self.encoder.device)?;
+                .prepare_bias_for_isq(&self.encoder.device)?;
             layer
                 .self_attn
                 .v_proj
-                .bias_to_device(&self.encoder.device)?;
+                .prepare_bias_for_isq(&self.encoder.device)?;
             layer
                 .self_attn
                 .out_proj
-                .bias_to_device(&self.encoder.device)?;
-            layer.mlp.fc1.bias_to_device(&self.encoder.device)?;
-            layer.mlp.fc2.bias_to_device(&self.encoder.device)?;
+                .prepare_bias_for_isq(&self.encoder.device)?;
+            layer.mlp.fc1.prepare_bias_for_isq(&self.encoder.device)?;
+            layer.mlp.fc2.prepare_bias_for_isq(&self.encoder.device)?;
 
             tensors.push((layer.self_attn.q_proj.inner(), Some(i)));
             tensors.push((layer.self_attn.k_proj.inner(), Some(i)));

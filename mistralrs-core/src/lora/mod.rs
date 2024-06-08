@@ -111,7 +111,7 @@ pub trait LinearLayerLike: Debug + Merge + AdapterSwapper {
 
     // ISQ functions
     fn inner(&mut self) -> &mut QMatMul;
-    fn bias_to_device(&mut self, device: &Device) -> Result<()>;
+    fn prepare_bias_for_isq(&mut self, device: &Device) -> Result<()>;
 }
 
 pub trait Merge {
@@ -156,7 +156,7 @@ impl LinearLayerLike for Linear {
     fn inner(&mut self) -> &mut QMatMul {
         unreachable!()
     }
-    fn bias_to_device(&mut self, _: &Device) -> Result<()> {
+    fn prepare_bias_for_isq(&mut self, _: &Device) -> Result<()> {
         unreachable!()
     }
     fn bias(&self) -> Option<&Tensor> {

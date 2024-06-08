@@ -528,9 +528,10 @@ impl QLinear {
         self.bias.as_ref()
     }
 
-    pub fn bias_to_device(&mut self, device: &Device) -> Result<()> {
+    pub fn prepare_bias_for_isq(&mut self, device: &Device) -> Result<()> {
         if let Some(bias) = &mut self.bias {
             *bias = bias.to_device(device)?;
+            *bias = bias.to_dtype(DType::F32)?;
         }
         Ok(())
     }

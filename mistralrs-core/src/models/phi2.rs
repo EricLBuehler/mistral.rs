@@ -386,12 +386,12 @@ impl IsqModel for Model {
         tensors.push((self.lm_head.inner(), None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
             // Be sure to also cast the biases
-            layer.self_attn.q_proj.bias_to_device(&self.device)?;
-            layer.self_attn.k_proj.bias_to_device(&self.device)?;
-            layer.self_attn.v_proj.bias_to_device(&self.device)?;
-            layer.self_attn.dense.bias_to_device(&self.device)?;
-            layer.mlp.fc1.bias_to_device(&self.device)?;
-            layer.mlp.fc2.bias_to_device(&self.device)?;
+            layer.self_attn.q_proj.prepare_bias_for_isq(&self.device)?;
+            layer.self_attn.k_proj.prepare_bias_for_isq(&self.device)?;
+            layer.self_attn.v_proj.prepare_bias_for_isq(&self.device)?;
+            layer.self_attn.dense.prepare_bias_for_isq(&self.device)?;
+            layer.mlp.fc1.prepare_bias_for_isq(&self.device)?;
+            layer.mlp.fc2.prepare_bias_for_isq(&self.device)?;
 
             tensors.push((layer.self_attn.q_proj.inner(), Some(i)));
             tensors.push((layer.self_attn.k_proj.inner(), Some(i)));

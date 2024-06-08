@@ -238,7 +238,7 @@ impl LinearLayerLike for QLoraLinear {
     fn inner(&mut self) -> &mut QMatMul {
         &mut self.old
     }
-    fn bias_to_device(&mut self, _: &candle_core::Device) -> Result<()> {
+    fn prepare_bias_for_isq(&mut self, _: &candle_core::Device) -> Result<()> {
         unreachable!()
     }
     fn is_quant(&self) -> bool {

@@ -656,22 +656,22 @@ impl IsqModel for Model {
             // Be sure to also cast the biases
             Arc::get_mut(&mut layer.self_attn.q_proj)
                 .unwrap()
-                .bias_to_device(&self.device)?;
+                .prepare_bias_for_isq(&self.device)?;
             Arc::get_mut(&mut layer.self_attn.k_proj)
                 .unwrap()
-                .bias_to_device(&self.device)?;
+                .prepare_bias_for_isq(&self.device)?;
             Arc::get_mut(&mut layer.self_attn.v_proj)
                 .unwrap()
-                .bias_to_device(&self.device)?;
+                .prepare_bias_for_isq(&self.device)?;
             Arc::get_mut(&mut layer.self_attn.dense)
                 .unwrap()
-                .bias_to_device(&self.device)?;
+                .prepare_bias_for_isq(&self.device)?;
             Arc::get_mut(&mut layer.mlp.fc1)
                 .unwrap()
-                .bias_to_device(&self.device)?;
+                .prepare_bias_for_isq(&self.device)?;
             Arc::get_mut(&mut layer.mlp.fc2)
                 .unwrap()
-                .bias_to_device(&self.device)?;
+                .prepare_bias_for_isq(&self.device)?;
 
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner(),
