@@ -6,7 +6,6 @@ use crate::{
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
     NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
     SpeculativeLoader, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
-    GGUF_MULTI_FILE_DELIMITER,
 };
 
 fn default_repeat_last_n() -> usize {
@@ -317,10 +316,7 @@ fn loader_from_selected(
             args.chat_template,
             Some(tok_model_id),
             quantized_model_id,
-            quantized_filename
-                .split(GGUF_MULTI_FILE_DELIMITER)
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>(),
+            quantized_filename,
         )
         .build(),
         TomlModelSelected::XLoraGGUF {
@@ -337,10 +333,7 @@ fn loader_from_selected(
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename
-                .split(GGUF_MULTI_FILE_DELIMITER)
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>(),
+            quantized_filename,
         )
         .with_xlora(
             xlora_model_id,
@@ -365,10 +358,7 @@ fn loader_from_selected(
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename
-                .split(GGUF_MULTI_FILE_DELIMITER)
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>(),
+            quantized_filename,
         )
         .with_lora(
             adapters_model_id,
