@@ -773,7 +773,7 @@ impl Model {
             cfg,
             embed_tokens.clone(),
             &cfg.embd_layer,
-            vb_m.pp("vision_embed_tokens"),
+            mapper.set_nm_device(vb_m.pp("vision_embed_tokens"), false),
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
