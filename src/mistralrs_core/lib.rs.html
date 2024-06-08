@@ -304,6 +304,7 @@
 <a href="#302" id="302">302</a>
 <a href="#303" id="303">303</a>
 <a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
@@ -356,8 +357,9 @@
     GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader, LlamaLoader,
     Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader,
     NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader,
-    Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline, TokenSource,
-    VisionLoader, VisionLoaderBuilder, VisionLoaderType, VisionModelLoader, VisionSpecificConfig,
+    Phi3VLoader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline,
+    TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType, VisionModelLoader,
+    VisionSpecificConfig,
 };
 <span class="kw">pub use </span>request::{Constraint, MessageContent, NormalRequest, Request, RequestMessage};
 <span class="kw">pub use </span>response::Response;

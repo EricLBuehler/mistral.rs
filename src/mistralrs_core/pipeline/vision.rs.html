@@ -355,7 +355,7 @@
 <a href="#353" id="353">353</a>
 <a href="#354" id="354">354</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
-<span class="kw">use </span><span class="kw">super</span>::vision_loaders::{Phi3Loader, VisionLoaderType};
+<span class="kw">use </span><span class="kw">super</span>::vision_loaders::{Phi3VLoader, VisionLoaderType};
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, Cache, CacheManager,
     CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory,
@@ -451,7 +451,7 @@
         setup_logger_and_debug();
 
         <span class="kw">let </span>loader: Box&lt;<span class="kw">dyn </span>VisionModelLoader&gt; = <span class="kw">match </span>loader {
-            VisionLoaderType::Phi3V =&gt; Box::new(Phi3Loader),
+            VisionLoaderType::Phi3V =&gt; Box::new(Phi3VLoader),
         };
         Box::new(VisionLoader {
             inner: loader,
