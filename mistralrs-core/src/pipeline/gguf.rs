@@ -10,7 +10,9 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
-use crate::gguf::{get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion}};
+use crate::gguf::{
+    get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
+};
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
 use crate::pipeline::ChatTemplate;
@@ -21,7 +23,10 @@ use crate::utils::debug::setup_logger_and_debug;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
-use crate::{do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, Pipeline, DEBUG};
+use crate::{
+    do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths, Pipeline,
+    DEBUG,
+};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
     models::quantized_phi2::ModelWeights as QPhi,
@@ -378,7 +383,7 @@ impl Loader for GGUFLoader {
             }
         };
 
-        let gguf_chat_template = get_gguf_chat_template(&content);
+        let gguf_chat_template = get_gguf_chat_template(&model)?;
 
         let has_adapter = self.kind.is_adapted();
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
