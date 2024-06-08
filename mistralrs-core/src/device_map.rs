@@ -6,6 +6,7 @@ use serde::Deserialize;
 use tracing::info;
 
 #[derive(Debug, Default, Deserialize, Clone)]
+/// Metadata to initialize the device mapper.
 pub struct DeviceMapMetadata {
     device_layers: Option<usize>,
     host_layers: Option<usize>,
@@ -80,6 +81,7 @@ pub trait DeviceMapper: Debug {
 }
 
 #[derive(Debug)]
+/// A device mapper which does device mapping per hidden layer.
 pub struct LayerDeviceMapper {
     mappings: Vec<Device>,
     nm_device: Device,

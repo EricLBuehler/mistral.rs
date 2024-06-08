@@ -1,3 +1,4 @@
+#[doc(hidden)]
 #[macro_export]
 macro_rules! api_dir_list {
     ($api:expr, $model_id:expr) => {
@@ -44,6 +45,7 @@ macro_rules! api_dir_list {
     };
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! api_get_file {
     ($api:expr, $file:expr, $model_id:expr) => {
@@ -73,6 +75,7 @@ macro_rules! api_get_file {
     };
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! get_paths {
     ($path_name:ident, $token_source:expr, $revision:expr, $this:expr, $quantized_model_id:expr, $quantized_filename:expr, $silent:expr) => {{
@@ -186,6 +189,7 @@ macro_rules! get_paths {
     }};
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! get_paths_gguf {
     ($path_name:ident, $token_source:expr, $revision:expr, $this:expr, $quantized_model_id:expr, $quantized_filename:expr, $silent:expr) => {{
@@ -309,6 +313,7 @@ macro_rules! get_paths_gguf {
     }};
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! normal_model_loader {
     ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
@@ -333,6 +338,7 @@ macro_rules! normal_model_loader {
     }};
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! vision_normal_model_loader {
     ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
@@ -355,6 +361,7 @@ macro_rules! vision_normal_model_loader {
     }};
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! xlora_model_loader {
     ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
@@ -399,6 +406,7 @@ macro_rules! xlora_model_loader {
     }};
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! lora_model_loader {
     ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{

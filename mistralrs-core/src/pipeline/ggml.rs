@@ -57,6 +57,7 @@ pub struct GGMLPipeline {
     metadata: GeneralMetadata,
 }
 
+/// A loader for a GGML model.
 pub struct GGMLLoader {
     model_id: String,
     config: GGMLSpecificConfig,

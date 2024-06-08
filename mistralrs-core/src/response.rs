@@ -23,6 +23,7 @@ macro_rules! generate_repr {
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+/// Chat completion response message.
 pub struct ResponseMessage {
     pub content: String,
     pub role: String,
@@ -33,6 +34,7 @@ generate_repr!(ResponseMessage);
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+/// Delta in content for streaming response.
 pub struct Delta {
     pub content: String,
     pub role: String,
@@ -43,6 +45,7 @@ generate_repr!(Delta);
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+/// A logprob with the top logprobs for this token.
 pub struct ResponseLogprob {
     pub token: String,
     pub logprob: f32,
@@ -55,6 +58,7 @@ generate_repr!(ResponseLogprob);
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+/// Logprobs per token.
 pub struct Logprobs {
     pub content: Option<Vec<ResponseLogprob>>,
 }
@@ -64,6 +68,7 @@ generate_repr!(Logprobs);
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+/// Chat completion choice.
 pub struct Choice {
     pub finish_reason: String,
     pub index: usize,
@@ -76,6 +81,7 @@ generate_repr!(Choice);
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+/// Completion streaming chunk choice.
 pub struct ChunkChoice {
     pub finish_reason: Option<String>,
     pub index: usize,
@@ -122,6 +128,7 @@ generate_repr!(ChatCompletionResponse);
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+/// Chat completion streaming request chunk.
 pub struct ChatCompletionChunkResponse {
     pub id: String,
     pub choices: Vec<ChunkChoice>,
@@ -136,6 +143,7 @@ generate_repr!(ChatCompletionChunkResponse);
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+/// Completion request choice.
 pub struct CompletionChoice {
     pub finish_reason: String,
     pub index: usize,
