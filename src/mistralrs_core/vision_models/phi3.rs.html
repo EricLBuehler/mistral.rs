@@ -1702,7 +1702,7 @@
             cfg,
             embed_tokens.clone(),
             <span class="kw-2">&amp;</span>cfg.embd_layer,
-            vb_m.pp(<span class="string">"vision_embed_tokens"</span>),
+            mapper.set_nm_device(vb_m.pp(<span class="string">"vision_embed_tokens"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
         <span class="kw">let </span>vb_l = vb_m.pp(<span class="string">"layers"</span>);
