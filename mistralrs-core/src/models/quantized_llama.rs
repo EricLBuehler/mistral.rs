@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::quantized::QMatMul;
 use candle_core::quantized::{ggml_file, gguf_file};
+use candle_core::quantized::{QMatMul, QTensor};
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 
@@ -380,18 +380,69 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 let feed_forward_gate_inp =
                     ct.tensor(reader, &format!("{prefix}.ffn_gate_inp.weight"), device)?;
                 let mut experts = Vec::with_capacity(n_expert);
-                for i in 0..n_expert {
-                    let feed_forward_w1 =
-                        ct.tensor(reader, &format!("{prefix}.ffn_gate.{i}.weight"), device)?;
-                    let feed_forward_w2 =
-                        ct.tensor(reader, &format!("{prefix}.ffn_down.{i}.weight"), device)?;
-                    let feed_forward_w3 =
-                        ct.tensor(reader, &format!("{prefix}.ffn_up.{i}.weight"), device)?;
-                    experts.push(Mlp {
-                        feed_forward_w1: QMatMul::from_qtensor(feed_forward_w1)?,
-                        feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2)?,
-                        feed_forward_w3: QMatMul::from_qtensor(feed_forward_w3)?,
-                    })
+                match ct.tensor(reader, &format!("{prefix}.ffn_gate_exps.weight"), device) {
+                    Ok(feed_forward_gate_exps) => {
+                        let feed_forward_down_exps =
+                            ct.tensor(reader, &format!("{prefix}.ffn_down_exps.weight"), device)?;
+                        let feed_forward_up_exps =
+                            ct.tensor(reader, &format!("{prefix}.ffn_up_exps.weight"), device)?;
+
+                        let dequant_ffn_gate = feed_forward_gate_exps
+                            .dequantize(device)?
+                            .chunk(n_expert, 0)?;
+                        let dequant_ffn_down = feed_forward_down_exps
+                            .dequantize(device)?
+                            .chunk(n_expert, 0)?;
+                        let dequant_ffn_up = feed_forward_up_exps
+                            .dequantize(device)?
+                            .chunk(n_expert, 0)?;
+
+                        assert_eq!(dequant_ffn_up.len(), dequant_ffn_down.len());
+                        assert_eq!(dequant_ffn_gate.len(), dequant_ffn_down.len());
+                        assert_eq!(dequant_ffn_gate.len(), n_expert);
+
+                        let gate_type = feed_forward_gate_exps.dtype();
+                        let down_type = feed_forward_down_exps.dtype();
+                        let up_type = feed_forward_up_exps.dtype();
+
+                        for (ff_w1, (ff_w2, ff_w3)) in dequant_ffn_gate
+                            .into_iter()
+                            .zip(dequant_ffn_down.into_iter().zip(dequant_ffn_up))
+                        {
+                            experts.push(Mlp {
+                                feed_forward_w1: QMatMul::from_qtensor(QTensor::quantize(
+                                    &ff_w1, gate_type,
+                                )?)?,
+                                feed_forward_w2: QMatMul::from_qtensor(QTensor::quantize(
+                                    &ff_w2, down_type,
+                                )?)?,
+                                feed_forward_w3: QMatMul::from_qtensor(QTensor::quantize(
+                                    &ff_w3, up_type,
+                                )?)?,
+                            })
+                        }
+                    }
+                    Err(_) => {
+                        for i in 0..n_expert {
+                            let feed_forward_w1 = ct.tensor(
+                                reader,
+                                &format!("{prefix}.ffn_gate.{i}.weight"),
+                                device,
+                            )?;
+                            let feed_forward_w2 = ct.tensor(
+                                reader,
+                                &format!("{prefix}.ffn_down.{i}.weight"),
+                                device,
+                            )?;
+                            let feed_forward_w3 =
+                                ct.tensor(reader, &format!("{prefix}.ffn_up.{i}.weight"), device)?;
+                            experts.push(Mlp {
+                                feed_forward_w1: QMatMul::from_qtensor(feed_forward_w1)?,
+                                feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2)?,
+                                feed_forward_w3: QMatMul::from_qtensor(feed_forward_w3)?,
+                            })
+                        }
+                    }
                 }
                 MlpOrMoe::MoE {
                     n_expert_used,
