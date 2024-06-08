@@ -13,19 +13,47 @@ Blazingly fast LLM inference.
 
 Mistral.rs is a fast LLM inference platform supporting inference on a variety of devices, quantization, and easy-to-use application with an Open-AI API compatible HTTP server and Python bindings. 
 
-## Upcoming features
-- More models: please submit requests [here](https://github.com/EricLBuehler/mistral.rs/issues/156).
-- X-LoRA: Scalings `topk` and softmax `topk` ([#48](https://github.com/EricLBuehler/mistral.rs/issues/48)).
-- Parallel linear layers (sharding) ([#50](https://github.com/EricLBuehler/mistral.rs/issues/50)).
-- Vision models: Idefics 2 ([#309](https://github.com/EricLBuehler/mistral.rs/pull/309)).
+Please submit requests for new models [here](https://github.com/EricLBuehler/mistral.rs/issues/156).
 
-**Running the new Llama 3 model**
+## Get started fast 🚀
 
-`cargo run --release --features ... -- -i plain -m meta-llama/Meta-Llama-3-8B-Instruct -a llama`
+1) [Install](#installation-and-build)
 
-**Running the new Phi 3 model with 128K context window**
+2) [Get models](#getting-models)
 
-`cargo run --release --features ... -- -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3`
+3) Deploy with our easy to use APIs
+    - [Python](examples/python)
+    - [Rust](mistralrs/examples)
+    - [OpenAI compatible HTTP server](examples/http.md)
+
+## Quick examples
+- 🦙 Run the Llama 3 model
+
+    *After following installation instructions*
+
+    ```
+    ./mistralrs_server -i plain -m meta-llama/Meta-Llama-3-8B-Instruct -a llama
+    ```
+
+- φ³ Run the Phi 3 model with 128K context window
+
+    *After following installation instructions*
+
+    ```
+    ./mistralrs_server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
+    ```
+
+- φ³ 📷 Run the Phi 3 vision model: [documentation and guide here](docs/PHI3V.md)
+
+    <img src="https://upload.wikimedia.org/wikipedia/commons/e/e7/Everest_North_Face_toward_Base_Camp_Tibet_Luca_Galuzzi_2006.jpg" alt="Mount Everest" width = "400" height = "267">
+
+    *After following installation instructions*
+
+    ```
+    ./mistralrs_server --port 1234 vision-plain -m microsoft/Phi-3-vision-128k-instruct -a phi3v
+    ```
+
+- Other models: [see supported models](#supported-models) and [how to run them](#run-with-the-cli)
 
 ## Description
 **Fast**:
@@ -69,19 +97,24 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95
 Please see [this section](#supported-models) for details on quantization and LoRA support.
 
 ## APIs and Integrations
-**Rust Library API**
 
-Rust multithreaded API for easy integration into any application.
+<details>
+  <summary><b>Rust Crate</b></summary>
+
+Rust multithreaded/async API for easy integration into any application.
 
 - [Docs](https://ericlbuehler.github.io/mistral.rs/mistralrs/)
 - [Examples](mistralrs/examples/)
 - To install: Add `mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }`
 
-**Python API**
+</details>
+
+<details>
+  <summary><b>Python API</b></summary>
 
 Python API for mistral.rs.
 
-- [Installation](mistralrs-pyo3/README.md)
+- [Installation including PyPI](mistralrs-pyo3/README.md)
 - [Docs](mistralrs-pyo3/API.md)
 - [Example](examples/python/python_api.py)
 - [Cookbook](examples/python/cookbook.ipynb)
@@ -113,7 +146,10 @@ print(res.choices[0].message.content)
 print(res.usage)
 ```
 
-**HTTP Server**
+</details>
+
+<details>
+  <summary><b>HTTP Server</b></summary>
 
 OpenAI API compatible API server
 
@@ -121,9 +157,14 @@ OpenAI API compatible API server
 - [Running](README.md#run)
 - [Example](examples/server/chat.py)
 
-**Llama Index integration**
+</details>
+
+<details>
+  <summary><b>Llama Index integration</b></summary>
 
 - Docs: https://docs.llamaindex.ai/en/stable/examples/llm/mistral_rs/
+
+</details>
 
 ---
 
@@ -149,13 +190,11 @@ Enabling features is done by passing `--features ...` to the build system. When 
 |A10 GPU, CUDA|78|78|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 |Intel Xeon 8358 CPU, AVX|6|19|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 |Raspberry Pi 5 (8GB), Neon|2|3|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|2_K|
-|A100 GPU, CUDA|110|119|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|A100 GPU, CUDA|119|119|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 
 Please submit more benchmarks via raising an issue!
 
-## Usage
-### Installation and Build
-To install mistral.rs, one should ensure they have Rust installed by following [this](https://rustup.rs/) link. Additionally, the Hugging Face token should be provided in `~/.cache/huggingface/token` by running `huggingface-cli login` to enable automatic download of gated models.
+## Installation and Build
 
 1) Install required packages
     - `openssl` (ex., `sudo apt install libssl-dev`)
@@ -168,6 +207,7 @@ To install mistral.rs, one should ensure they have Rust installed by following [
     ```
 
 3) Set HF token correctly (skip if already set or your model is not gated, or if you want to use the `token_source` parameters in Python or the command line.)
+    - Note: you can install `huggingface-cli` as documented [here](https://huggingface.co/docs/huggingface_hub/en/installation). 
     ```bash
     huggingface-cli login
     ```
@@ -223,6 +263,7 @@ To install mistral.rs, one should ensure they have Rust installed by following [
 There are 2 ways to run a model with mistral.rs:
 - From Hugging Face Hub (easiest)
 - From local files
+    - Running a GGUF model fully locally
 
 ### Getting models from Hugging Face Hub
 
@@ -283,16 +324,14 @@ please consider using the method demonstrated in examples below, where the token
 **Supported GGUF tokenizer types**
 - `llama`
 
-## Run
-
-To start a server serving Mistral GGUF on `localhost:1234`, 
-```bash
-./mistralrs_server --port 1234 --log output.log gguf -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -t mistralai/Mistral-7B-Instruct-v0.1 -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
-```
+## Run with the CLI
 
 Mistral.rs uses subcommands to control the model type. They are generally of format `<XLORA/LORA>-<QUANTIZATION>`. Please run `./mistralrs_server --help` to see the subcommands.
 
-Additionally, for models without quantization, the model architecture should be provided as the `--arch` or `-a` argument in contrast to GGUF models which encode the architecture in the file. It should be one of the following:
+Additionally, for models without quantization, the model architecture should be provided as the `--arch` or `-a` argument in contrast to GGUF models which encode the architecture in the file. 
+
+### Architecture for plain models
+
 - `mistral`
 - `gemma`
 - `mixtral`
@@ -300,6 +339,10 @@ Additionally, for models without quantization, the model architecture should be 
 - `phi2`
 - `phi3`
 - `qwen2`
+
+### Architecture for vision models
+
+- `phi3v`
 
 **Interactive mode:**
 
@@ -309,7 +352,7 @@ You can launch interactive mode, a simple chat application running in the termin
 ./mistralrs_server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
 ```
 
-### Quick examples:
+## More quick examples:
 
 - X-LoRA with no quantization
 
@@ -361,13 +404,14 @@ Example:
 ./mistralrs_server --port 1234 toml -f toml-selectors/gguf.toml
 ```
 
-**Command line docs**
-
-Command line docs [here](docs/CMD_LINE_DOCS.md)
-
 ---
 
 ## Supported models
+
+Mistal.rs supports several model categories:
+- text
+- vision (see [the docs](docs/VISION_MODELS.md))
+
 **Quantization support**
 |Model|GGUF|GGML|
 |--|--|--|
@@ -378,13 +422,15 @@ Command line docs [here](docs/CMD_LINE_DOCS.md)
 |Phi 2|✅| |
 |Phi 3|✅| |
 |Qwen 2| | |
+|Phi 3 Vision| | |
 
 **Device mapping support**
 |Model|Supported|
 |--|--|
-|Normal|✅|
+|Plain|✅|
 |GGUF|✅|
 |GGML| |
+|Vision Plain| |
 
 **X-LoRA and LoRA support**
 |Model|X-LoRA|X-LoRA+GGUF|X-LoRA+GGML|
@@ -396,17 +442,19 @@ Command line docs [here](docs/CMD_LINE_DOCS.md)
 |Phi 2|✅| | |
 |Phi 3|✅|✅| |
 |Qwen 2| | | |
+|Phi 3 Vision| | | |
 
-**Using derivative models**
+### Using derivative model
 
 To use a derivative model, select the model architecture using the correct subcommand. To see what can be passed for the architecture, pass `--help` after the subcommand. For example, when using a different model than the default, specify the following for the following types of models:
 
-- **Normal**: Model id
+- **Plain**: Model id
 - **Quantized**: Quantized model id, quantized filename, and tokenizer id
 - **X-LoRA**: Model id, X-LoRA ordering
 - **X-LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and X-LoRA ordering
 - **LoRA**: Model id, LoRA ordering
 - **LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and LoRA ordering
+- **Vision Plain**: Model id
 
 See [this](#adapter-ordering-file) section to determine if it is necessary to prepare an X-LoRA/LoRA ordering file, it is always necessary if the target modules or architecture changed, or if the adapter order changed.
 
@@ -420,16 +468,13 @@ For example, when using a Zephyr model:
 
 An adapter model is a model with X-LoRA or LoRA. X-LoRA support is provided by selecting the `x-lora-*` architecture, and LoRA support by selecting the `lora-*` architecture. Please find docs for adapter models [here](docs/ADAPTER_MODELS.md)
 
----
-
 ### Chat Templates and Tokenizer
 Mistral.rs will attempt to automatically load a chat template and tokenizer. This enables high flexibility across models and ensures accurate and flexible chat templating. However, this behavior can be customized. Please find detailed documentation [here](docs/CHAT_TOK.md).
 
 ## Contributing
-If you have any problems or want to contribute something, please raise an issue or pull request!
 
-
-If you want to add a new model, please see [our guide](docs/ADDING_MODELS.md).
+Thank you for contributing! If you have any problems or want to contribute something, please raise an issue or pull request.
+If you want to add a new model, please contact us via an issue and we can coordinate how to do this.
 
 ## FAQ
 - Debugging with the environment variable `MISTRALRS_DEBUG=1` causes the following things

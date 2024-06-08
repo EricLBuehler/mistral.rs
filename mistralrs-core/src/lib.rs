@@ -4,6 +4,7 @@ use cublaslt::setup_cublas_lt_wrapper;
 use engine::Engine;
 pub use engine::TERMINATE_ALL_NEXT_STEP;
 pub use lora::Ordering;
+use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
 use std::{
     cell::RefCell,
@@ -26,6 +27,7 @@ mod model_selected;
 pub use model_selected::ModelSelected;
 
 mod cublaslt;
+pub mod gguf;
 pub mod layers;
 mod layers_masker;
 mod layers_utils;
@@ -39,17 +41,20 @@ mod scheduler;
 mod sequence;
 mod toml_selector;
 mod utils;
+mod vision_models;
 mod xlora_models;
 
 pub use device_map::{DeviceMapMetadata, LayerDeviceMapper};
+pub use gguf::{convert_gguf_to_hf_tokenizer, GgufTokenizerConversion};
 pub use pipeline::{
-    GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder,
-    GGUFSpecificConfig, GemmaLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader,
-    MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, Phi2Loader, Phi3Loader, Qwen2Loader, SpeculativeConfig,
-    SpeculativeLoader, SpeculativePipeline, TokenSource,
+    chat_template::ChatTemplate, GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig,
+    GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader, LlamaLoader,
+    Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader,
+    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader,
+    Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline, TokenSource,
+    VisionLoader, VisionLoaderBuilder, VisionLoaderType, VisionModelLoader, VisionSpecificConfig,
 };
-pub use request::{Constraint, Content, NormalRequest, Request, RequestMessage};
+pub use request::{Constraint, MessageContent, NormalRequest, Request, RequestMessage};
 pub use response::Response;
 pub use response::*;
 pub use sampler::{SamplingParams, StopTokens, TopLogprob};
@@ -191,7 +196,11 @@ impl MistralRs {
             gemm_full_precision_f16,
         } = config;
 
-        if !gemm_full_precision_f16.unwrap_or(false) {
+        let model_supports_reduced_gemm = match pipeline.try_lock().unwrap().category() {
+            ModelCategory::Text => true,
+            ModelCategory::Vision { has_conv2d } => !has_conv2d,
+        };
+        if !gemm_full_precision_f16.unwrap_or(false) && model_supports_reduced_gemm {
             set_gemm_reduced_precision_f16();
         }
         setup_cublas_lt_wrapper();

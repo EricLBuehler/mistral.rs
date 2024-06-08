@@ -14,12 +14,12 @@ pub enum Constraint {
     None,
 }
 
-pub type Content = Either<String, Vec<IndexMap<String, String>>>;
+pub type MessageContent = Either<String, Vec<IndexMap<String, String>>>;
 
 #[derive(Clone, Debug)]
 /// Message or messages for a [`Request`].
 pub enum RequestMessage {
-    Chat(Vec<IndexMap<String, Content>>),
+    Chat(Vec<IndexMap<String, MessageContent>>),
     Completion {
         text: String,
         echo_prompt: bool,
@@ -28,7 +28,7 @@ pub enum RequestMessage {
     CompletionTokens(Vec<u32>),
     VisionChat {
         images: Vec<image::DynamicImage>,
-        messages: Vec<IndexMap<String, Content>>,
+        messages: Vec<IndexMap<String, MessageContent>>,
     },
 }
 

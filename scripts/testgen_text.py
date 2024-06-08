@@ -1,6 +1,8 @@
 import transformers
 
-tokenizer = transformers.AutoTokenizer.from_pretrained("mistralai/Mistral-7B-Instruct-v0.3")
+tokenizer = transformers.AutoTokenizer.from_pretrained(
+    "mistralai/Mistral-7B-Instruct-v0.3"
+)
 
 res = tokenizer.apply_chat_template(
     [

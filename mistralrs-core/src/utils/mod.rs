@@ -1,5 +1,5 @@
 pub(crate) mod debug;
-pub(crate) mod max_seq_len;
+pub(crate) mod gguf_metadata;
 #[cfg(feature = "memory_usage")]
 pub(crate) mod memory_usage;
 pub(crate) mod model_config;

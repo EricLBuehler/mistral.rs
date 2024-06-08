@@ -222,7 +222,7 @@ macro_rules! get_paths_gguf {
             revision.clone(),
             &$token_source,
             &Some($quantized_model_id),
-            &Some($quantized_filename),
+            &Some(vec![$quantized_filename]),
             &api,
             &model_id,
         )?;

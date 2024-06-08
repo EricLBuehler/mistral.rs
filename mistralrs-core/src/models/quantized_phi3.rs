@@ -1,10 +1,9 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::device_map::DeviceMapper;
-use crate::layers::{
-    repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention,
-};
+use crate::layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention};
 use crate::pipeline::Cache;
+use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::DeviceMapMetadata;
 use candle_core::quantized::gguf_file;
@@ -160,6 +159,55 @@ fn precomput_freqs_cis(
     Ok((cos, sin))
 }
 
+// phi3 `llm` fields:
+// https://github.com/ggerganov/ggml/blob/master/docs/gguf.md#llm
+// NOTE: Types here do not match spec
+pub(crate) struct PropsGGUF {
+    pub head_count: usize,
+    pub head_count_kv: usize,
+    pub block_count: usize,
+    pub embedding_length: usize,
+    pub i_size: usize,
+    pub rope_dim: usize,
+    pub rms_eps: f64,
+    pub context_window: usize,
+}
+
+impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
+    type Error = anyhow::Error;
+
+    fn try_from(c: ContentMetadata) -> std::result::Result<Self, Self::Error> {
+        c.verify_arch("phi3")?;
+
+        let required = [
+            "attention.head_count",
+            "attention.head_count_kv",
+            "block_count",
+            "embedding_length",
+            "feed_forward_length",
+            "rope.dimension_count",
+            "attention.layer_norm_rms_epsilon",
+            "context_length",
+        ];
+        c.has_required_keys(&required)?;
+
+        // NOTE: Values are not aligned with GGUFv3 types
+        // TODO: Normalize value types to spec
+        let props = Self {
+            head_count: c.get_value::<u32>("attention.head_count")? as usize,
+            head_count_kv: c.get_value::<u32>("attention.head_count_kv")? as usize,
+            block_count: c.get_value::<u32>("block_count")? as usize,
+            embedding_length: c.get_value::<u32>("embedding_length")? as usize,
+            i_size: c.get_value::<u32>("feed_forward_length")? as usize,
+            rope_dim: c.get_value::<u32>("rope.dimension_count")? as usize,
+            rms_eps: c.get_value::<f32>("attention.layer_norm_rms_epsilon")? as f64,
+            context_window: c.get_value::<u32>("context_length")? as usize,
+        };
+
+        Ok(props)
+    }
+}
+
 impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: gguf_file::Content,
@@ -167,21 +215,22 @@ impl ModelConfig::FromGGUF for ModelWeights {
         device: &Device,
         mapper: DeviceMapMetadata,
     ) -> Result<Self> {
-        let md_get = |s: &str| match ct.metadata.get(s) {
-            None => candle_core::bail!("cannot find {s} in metadata"),
-            Some(v) => Ok(v),
-        };
-        verify_sanity_gguf(md_get("general.architecture")?.to_string().unwrap(), "phi3")?;
-
         // Parameter extraction from metadata.
-        let head_count = md_get("phi3.attention.head_count")?.to_u32()? as usize;
-        let head_count_kv = md_get("phi3.attention.head_count_kv")?.to_u32()? as usize;
-        let block_count = md_get("phi3.block_count")?.to_u32()? as usize;
-        let embedding_length = md_get("phi3.embedding_length")?.to_u32()? as usize;
-        let i_size = md_get("phi3.feed_forward_length")?.to_u32()? as usize;
-        let rope_dim = md_get("phi3.rope.dimension_count")?.to_u32()? as usize;
-        let rms_eps = md_get("phi3.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
-        let context_window = md_get("phi3.context_length")?.to_u32()? as usize;
+        let metadata = ContentMetadata {
+            path_prefix: "phi3",
+            metadata: &ct.metadata,
+        };
+        let PropsGGUF {
+            head_count,
+            head_count_kv,
+            block_count,
+            embedding_length,
+            i_size,
+            rope_dim,
+            rms_eps,
+            context_window,
+        } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
+
         let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, context_window)?;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
