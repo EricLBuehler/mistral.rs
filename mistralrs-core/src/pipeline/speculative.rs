@@ -117,7 +117,7 @@ impl Loader for SpeculativeLoader {
     }
 }
 
-/// Speculative decoding pipeline: https://arxiv.org/pdf/2211.17192
+/// Speculative decoding pipeline: <https://arxiv.org/pdf/2211.17192>
 ///
 /// # Algorithm
 /// Given draft model q and target model p with probability distributions \

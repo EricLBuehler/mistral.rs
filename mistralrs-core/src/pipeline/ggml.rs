@@ -166,6 +166,8 @@ impl GGMLLoaderBuilder {
     }
 
     pub fn build(self) -> Box<dyn Loader> {
+        setup_logger_and_debug();
+
         Box::new(GGMLLoader {
             model_id: self.model_id.unwrap(),
             config: self.config,
@@ -372,7 +374,7 @@ impl Loader for GGMLLoader {
             revision,
             self,
             self.quantized_model_id,
-            self.quantized_filename,
+            Some(vec![self.quantized_filename.as_ref().unwrap().clone()]),
             silent
         );
         self.load_model_from_path(&paths?, _dtype, device, silent, mapper, in_situ_quant)

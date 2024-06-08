@@ -5,7 +5,7 @@ use serde::Deserialize;
 use crate::{
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
     NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
-    SpeculativeLoader,
+    SpeculativeLoader, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
 };
 
 fn default_repeat_last_n() -> usize {
@@ -190,6 +190,15 @@ enum TomlModelSelected {
         /// GQA value
         #[serde(default = "default_one")]
         gqa: usize,
+    },
+
+    /// Select a vision plain model, without quantization or adapters
+    VisionPlain {
+        /// Model ID to load from. This may be a HF hub repo or a local path.
+        model_id: String,
+
+        /// The architecture of the model.
+        arch: VisionLoaderType,
     },
 }
 
@@ -431,6 +440,16 @@ fn loader_from_selected(
             )?,
         )
         .build(),
+        TomlModelSelected::VisionPlain { model_id, arch } => VisionLoaderBuilder::new(
+            VisionSpecificConfig {
+                use_flash_attn,
+                repeat_last_n: args.repeat_last_n,
+            },
+            args.chat_template,
+            args.tokenizer_json,
+            Some(model_id),
+        )
+        .build(arch),
     };
     Ok(loader)
 }

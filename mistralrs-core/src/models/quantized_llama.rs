@@ -6,11 +6,9 @@ use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 
 use crate::device_map::DeviceMapper;
-use crate::layers::{
-    repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention,
-};
+use crate::layers::{repeat_kv, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention};
 use crate::pipeline::{extract_logits, Cache};
-use crate::utils::max_seq_len::get_gguf_max_seq_len;
+use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::DeviceMapMetadata;
 
@@ -258,6 +256,61 @@ impl ModelConfig::FromGGML for ModelWeights {
     }
 }
 
+// llama `llm` fields:
+// https://github.com/ggerganov/ggml/blob/master/docs/gguf.md#llm
+// NOTE: Types here do not match spec
+pub(crate) struct PropsGGUF {
+    pub n_expert: usize,
+    pub n_expert_used: usize,
+    pub head_count: usize,
+    pub head_count_kv: usize,
+    pub block_count: usize,
+    pub embedding_length: usize,
+    pub rope_dim: usize,
+    pub rms_norm_eps: f32,
+    pub max_seq_len: usize,
+    pub rope_freq_base: f32,
+}
+
+impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
+    type Error = anyhow::Error;
+
+    fn try_from(c: ContentMetadata) -> std::result::Result<Self, Self::Error> {
+        c.verify_arch("llama")?;
+
+        let required = [
+            "attention.head_count",
+            "attention.head_count_kv",
+            "block_count",
+            "embedding_length",
+            "rope.dimension_count",
+            "attention.layer_norm_rms_epsilon",
+        ];
+        c.has_required_keys(&required)?;
+
+        // NOTE: Values are not aligned with GGUFv3 types
+        // TODO: Normalize value types to spec
+        let props = Self {
+            n_expert: c.get_value::<u32>("expert_count").ok().unwrap_or(0) as usize,
+            n_expert_used: c.get_value::<u32>("expert_used_count").ok().unwrap_or(0) as usize,
+            head_count: c.get_value::<u32>("attention.head_count")? as usize,
+            head_count_kv: c.get_value::<u32>("attention.head_count_kv")? as usize,
+            block_count: c.get_value::<u32>("block_count")? as usize,
+            embedding_length: c.get_value::<u32>("embedding_length")? as usize,
+            rope_dim: c.get_value::<u32>("rope.dimension_count")? as usize,
+            // Strangely this value is generally 1e-6 in GGUF file but used to be 1e-5 by default.
+            rms_norm_eps: c.get_value("attention.layer_norm_rms_epsilon")?,
+            max_seq_len: c
+                .get_value::<u64>("context_length")
+                .ok()
+                .unwrap_or(MAX_SEQ_LEN as u64) as usize,
+            rope_freq_base: c.get_value("rope.freq_base").ok().unwrap_or(10_000_f32),
+        };
+
+        Ok(props)
+    }
+}
+
 impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: gguf_file::Content,
@@ -265,36 +318,24 @@ impl ModelConfig::FromGGUF for ModelWeights {
         device: &Device,
         mapper: DeviceMapMetadata,
     ) -> Result<Self> {
-        let md_get = |s: &str| match ct.metadata.get(s) {
-            None => candle_core::bail!("cannot find {s} in metadata"),
-            Some(v) => Ok(v),
-        };
-        verify_sanity_gguf(
-            md_get("general.architecture")?.to_string().unwrap(),
-            "llama",
-        )?;
-
         // Parameter extraction from metadata.
-        let n_expert = md_get("llama.expert_count")
-            .and_then(|v| v.to_u32())
-            .unwrap_or(0) as usize;
-        let n_expert_used = md_get("llama.expert_used_count")
-            .and_then(|v| v.to_u32())
-            .unwrap_or(0) as usize;
-        let head_count = md_get("llama.attention.head_count")?.to_u32()? as usize;
-        let head_count_kv = md_get("llama.attention.head_count_kv")?.to_u32()? as usize;
-        let block_count = md_get("llama.block_count")?.to_u32()? as usize;
-        let embedding_length = md_get("llama.embedding_length")?.to_u32()? as usize;
-        let rope_dim = md_get("llama.rope.dimension_count")?.to_u32()? as usize;
-        // Strangely this value is generally 1e-6 in GGUF file but used to be 1e-5 by default.
-        let rms_norm_eps = md_get("llama.attention.layer_norm_rms_epsilon")?.to_f32()?;
+        let metadata = ContentMetadata {
+            path_prefix: "llama",
+            metadata: &ct.metadata,
+        };
+        let PropsGGUF {
+            n_expert,
+            n_expert_used,
+            head_count,
+            head_count_kv,
+            block_count,
+            embedding_length,
+            rope_dim,
+            rms_norm_eps,
+            max_seq_len,
+            rope_freq_base,
+        } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
 
-        let max_seq_len =
-            get_gguf_max_seq_len(md_get("llama.context_length"), MAX_SEQ_LEN as u64) as usize;
-
-        let rope_freq_base = md_get("llama.rope.freq_base")
-            .and_then(|m| m.to_f32())
-            .unwrap_or(10000f32);
         let head_dim = embedding_length / head_count;
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;

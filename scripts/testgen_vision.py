@@ -1,8 +1,10 @@
 import transformers
 
-processor = transformers.AutoProcessor.from_pretrained(...)
+processor = transformers.AutoProcessor.from_pretrained(
+    "microsoft/Phi-3-vision-128k-instruct", trust_remote_code=True
+)
 
-res = processor.apply_chat_template(
+res = processor.tokenizer.apply_chat_template(
     [
         {
             "role": "system",

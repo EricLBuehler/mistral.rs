@@ -2,7 +2,6 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    str::FromStr,
 };
 
 use anyhow::Result;
@@ -251,14 +250,16 @@ pub fn get_model_paths(
     revision: String,
     token_source: &TokenSource,
     quantized_model_id: &Option<String>,
-    quantized_filename: &Option<String>,
+    quantized_filename: &Option<Vec<String>>,
     api: &ApiRepo,
     model_id: &Path,
 ) -> Result<Vec<PathBuf>> {
     match &quantized_filename {
-        Some(name) => match quantized_model_id.as_ref().unwrap().as_str() {
-            "" => Ok(vec![PathBuf::from_str(name).unwrap()]),
-            id => {
+        Some(names) => {
+            let id = quantized_model_id.as_ref().unwrap();
+            let mut files = Vec::new();
+
+            for name in names {
                 let qapi = ApiBuilder::new()
                     .with_progress(true)
                     .with_token(get_token(token_source)?)
@@ -269,9 +270,10 @@ pub fn get_model_paths(
                     revision.clone(),
                 ));
                 let model_id = Path::new(&id);
-                Ok(vec![api_get_file!(qapi, name, model_id)])
+                files.push(api_get_file!(qapi, name, model_id));
             }
-        },
+            Ok(files)
+        }
         None => {
             let mut filenames = vec![];
             for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
@@ -307,10 +309,18 @@ pub(crate) fn get_chat_template(
     {
         panic!("Template filename {template_filename:?} must end with `.json`.");
     }
-    let template: ChatTemplate = serde_json::from_str(
-        &fs::read_to_string(&template_filename).expect("Deserialization of chat template failed."),
-    )
-    .unwrap();
+
+    let mut template: ChatTemplate =
+        serde_json::from_str(&fs::read_to_string(&template_filename).unwrap()).unwrap();
+    let processor_conf: Option<crate::vision_models::processor_config::ProcessorConfig> = paths
+        .get_processor_config()
+        .as_ref()
+        .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
+    if let Some(processor_conf) = processor_conf {
+        if processor_conf.chat_template.is_some() {
+            template.chat_template = processor_conf.chat_template;
+        }
+    }
 
     #[derive(Debug, serde::Deserialize)]
     struct SpecifiedTemplate {

@@ -10,9 +10,9 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
+use crate::gguf::{convert_gguf_to_hf_tokenizer, GgufTokenizerConversion};
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
-use crate::pipeline::gguf_tokenizer::{convert_ggml_to_hf_tokenizer, ConversionResult};
 use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
@@ -82,7 +82,7 @@ pub struct GGUFLoader {
 
 #[derive(Debug, EnumString)]
 #[strum(serialize_all = "kebab-case")]
-enum GGUFArchitecture {
+pub enum GGUFArchitecture {
     Llama,
     Mpt,
     Gptneox,
@@ -201,6 +201,8 @@ impl GGUFLoaderBuilder {
     }
 
     pub fn build(self) -> Box<dyn Loader> {
+        setup_logger_and_debug();
+
         Box::new(GGUFLoader {
             model_id: self.model_id,
             config: self.config,
@@ -359,15 +361,15 @@ impl Loader for GGUFLoader {
             info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_gguf_tensors.txt`.");
         }
 
-        let ConversionResult {
+        let GgufTokenizerConversion {
             tokenizer,
             bos,
             eos,
             unk,
         } = if paths.get_tokenizer_filename().to_string_lossy().is_empty() {
-            convert_ggml_to_hf_tokenizer(&model)?
+            convert_gguf_to_hf_tokenizer(&model)?
         } else {
-            ConversionResult {
+            GgufTokenizerConversion {
                 tokenizer: get_tokenizer(paths.get_tokenizer_filename(), None)?,
                 bos: None,
                 eos: None,
