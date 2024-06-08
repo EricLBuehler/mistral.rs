@@ -1,16 +1,32 @@
-use super::Content;
+use anyhow::Result;
+use candle_core::quantized::gguf_file::Content;
+
+use crate::utils::gguf_metadata::ContentMetadata;
+
+struct PropsGGUFTemplate {
+    chat_template: Option<String>,
+}
+
+impl TryFrom<ContentMetadata<'_>> for PropsGGUFTemplate {
+    type Error = anyhow::Error;
+
+    fn try_from(c: ContentMetadata) -> Result<Self, Self::Error> {
+        // No required keys
+
+        let props = Self {
+            chat_template: c.get_option_value("chat_template")?,
+        };
+
+        Ok(props)
+    }
+}
 
 // Get chat template from GGUF metadata if it exists
-pub fn get_gguf_chat_template<R: std::io::Seek + std::io::Read>(
-    content: &Content<'_, R>,
-) -> Option<String> {
-    content
-        .get_metadata("tokenizer.chat_template")
-        .ok()
-        .map(|template| {
-            template
-                .to_string()
-                .expect("Chat template must be a string")
-                .clone()
-        })
+pub fn get_gguf_chat_template(content: &Content) -> Result<Option<String>> {
+    let metadata = ContentMetadata {
+        path_prefix: "tokenizer",
+        metadata: &content.metadata,
+    };
+    let props = PropsGGUFTemplate::try_from(metadata)?;
+    Ok(props.chat_template)
 }

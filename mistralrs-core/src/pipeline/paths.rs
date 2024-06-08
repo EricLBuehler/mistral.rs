@@ -308,20 +308,18 @@ pub(crate) fn get_chat_template(
         {
             panic!("Template filename {template_filename:?} must end with `.json`.");
         }
-        fs::read_to_string(&template_filename).expect("Loading chat template failed.")
-    } else {
-        if chat_template_fallback
+        fs::read_to_string(template_filename).expect("Loading chat template failed.")
+    } else if chat_template_fallback
+        .as_ref()
+        .is_some_and(|f| f.ends_with(".json"))
+    {
+        // User specified a file
+        let template_filename = chat_template_fallback
             .as_ref()
-            .is_some_and(|f| f.ends_with(".json"))
-        {
-            // User specified a file
-            let template_filename = chat_template_fallback
-                .as_ref()
-                .expect("A tokenizer config or chat template file path must be specified.");
-            fs::read_to_string(&template_filename).expect("Loading chat template failed.")
-        } else {
-            panic!("Expected chat template file to end with .json, or you can specify a tokenizer model ID to load the chat template there.");
-        }
+            .expect("A tokenizer config or chat template file path must be specified.");
+        fs::read_to_string(template_filename).expect("Loading chat template failed.")
+    } else {
+        panic!("Expected chat template file to end with .json, or you can specify a tokenizer model ID to load the chat template there.");
     };
 
     let template: ChatTemplate = match chat_template_ovrd {
