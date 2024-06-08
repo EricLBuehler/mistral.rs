@@ -451,6 +451,8 @@
 <a href="#449" id="449">449</a>
 <a href="#450" id="450">450</a>
 <a href="#451" id="451">451</a>
+<a href="#452" id="452">452</a>
+<a href="#453" id="453">453</a>
 </pre></div><pre class="rust"><code><span class="attr">#[doc(hidden)]
 #[macro_export]
 </span><span class="macro">macro_rules!</span> api_dir_list {
@@ -807,9 +809,11 @@
             <span class="kw-2">&amp;</span><span class="macro-nonterminal">$config</span>,
             <span class="macro-nonterminal">$use_flash_attn</span>,
             vb,
-            <span class="macro-nonterminal">$mapper</span>,
-            <span class="macro-nonterminal">$loading_isq</span>,
-            <span class="macro-nonterminal">$real_device</span>,
+            <span class="macro-nonterminal">$crate::pipeline::NormalLoadingMetadata </span>{
+                mapper: <span class="macro-nonterminal">$mapper</span>,
+                loading_isq: <span class="macro-nonterminal">$loading_isq</span>,
+                real_device: <span class="macro-nonterminal">$real_device</span>,
+            },
         )<span class="question-mark">?
     </span>}};
 }
