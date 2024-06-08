@@ -1,10 +1,11 @@
-use std::sync::atomic::Ordering;
+use std::{collections::HashMap, sync::atomic::Ordering};
 
 use anyhow::Result;
 use candle_core::quantized::gguf_file::Content;
+use itertools::Itertools;
 use tokenizers::{
     decoders::{self, byte_fallback::ByteFallback, fuse::Fuse, strip::Strip},
-    models::unigram::Unigram,
+    models::{bpe::BpeBuilder, unigram::Unigram},
     normalizers::{self, Prepend, Replace},
     AddedToken, DecoderWrapper, ModelWrapper, NormalizerWrapper, Tokenizer,
 };
@@ -53,6 +54,12 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
     }
 }
 
+struct AddedTokensCollection {
+    bos: String,
+    eos: String,
+    unk: Option<String>,
+}
+
 pub fn convert_gguf_to_hf_tokenizer(content: &Content) -> Result<GgufTokenizerConversion> {
     let metadata = ContentMetadata {
         path_prefix: "tokenizer.ggml",
@@ -62,6 +69,7 @@ pub fn convert_gguf_to_hf_tokenizer(content: &Content) -> Result<GgufTokenizerCo
 
     let (tokenizer, kind, special_tokens) = match props.model.as_str() {
         "llama" | "replit" => unigram_tokenizer(&props)?,
+        "gpt2" => bpe_tokenizer(&props)?,
         other => {
             anyhow::bail!("Tokenizer model `{other}` not supported.");
         }
@@ -79,26 +87,61 @@ pub fn convert_gguf_to_hf_tokenizer(content: &Content) -> Result<GgufTokenizerCo
         info!("Tokenizer: {tokenizer:?}");
     }
 
-    let [bos_str, eos_str, unk_str] = special_tokens
-        .try_into()
-        .or_else(|_| anyhow::bail!("Tokenizer is missing required special tokens"))?;
+    let AddedTokensCollection { bos, eos, unk } = special_tokens;
 
     Ok(GgufTokenizerConversion {
         tokenizer,
-        bos: Some(bos_str),
-        eos: Some(eos_str),
-        unk: Some(unk_str),
+        bos: Some(bos),
+        eos: Some(eos),
+        unk,
     })
 }
 
-// TODO: Add support for additional tokenizer models: BPE, WordPiece, WordLevel
+// TODO: Add support for additional tokenizer models: WordPiece, WordLevel
 // https://docs.rs/tokenizers/latest/tokenizers/models/enum.ModelWrapper.html
 #[derive(Debug)]
 enum TokenizerKind {
     Unigram,
+    Bpe,
 }
 
-fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, Vec<String>)> {
+/// Add the special tokens and return their string representations
+fn add_special_tokens(
+    p: &PropsGGUF,
+    tokenizer: &mut Tokenizer,
+    bos: u32,
+    eos: u32,
+    unk: Option<u32>,
+) -> AddedTokensCollection {
+    // Add special tokens (bos, eos, unk):
+    let mut special_tokens = Vec::<String>::new();
+    for token_id in [bos, eos] {
+        let token = p.tokens[token_id as usize].as_str();
+
+        special_tokens.push(token.to_owned());
+        tokenizer.add_special_tokens(&[AddedToken::from(token.to_owned(), true)]);
+    }
+    if let Some(unk) = unk {
+        let token = p.tokens[unk as usize].as_str();
+
+        special_tokens.push(token.to_owned());
+        tokenizer.add_special_tokens(&[AddedToken::from(token.to_owned(), true)]);
+
+        AddedTokensCollection {
+            bos: special_tokens[0].clone(),
+            eos: special_tokens[1].clone(),
+            unk: Some(special_tokens[2].clone()),
+        }
+    } else {
+        AddedTokensCollection {
+            bos: special_tokens[0].clone(),
+            eos: special_tokens[1].clone(),
+            unk: None,
+        }
+    }
+}
+
+fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokensCollection)> {
     let PropsGGUF { unk, eos, bos, .. } = *p;
     // Unigram (SentencePiece) default UNK is 0
     let unk = unk.unwrap_or(0);
@@ -140,15 +183,43 @@ fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, Vec<Str
         .build()?;
 
     // Add special tokens (bos, eos, unk):
-    let mut special_tokens = Vec::<String>::new();
-    for token_id in [bos, eos, unk] {
-        let token = p.tokens[token_id as usize].as_str();
-
-        special_tokens.push(token.to_owned());
-        tokenizer.add_special_tokens(&[AddedToken::from(token.to_owned(), true)]);
-    }
+    let special_tokens = add_special_tokens(p, &mut tokenizer, bos, eos, Some(unk));
 
     Ok((tokenizer, TokenizerKind::Unigram, special_tokens))
+}
+
+fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokensCollection)> {
+    let merges = p
+        .merges
+        .as_ref()
+        .ok_or(anyhow::Error::msg("BPE tokenizer must include merges"))?
+        .iter()
+        .map(|merge| {
+            let split: (&str, &str) = merge
+                .splitn(2, ' ')
+                .collect_tuple()
+                .expect("Failed to convert split into 2-tuple");
+            (split.0.to_string(), split.1.to_string())
+        })
+        .collect::<Vec<_>>();
+
+    let mut vocab = HashMap::new();
+    for (i, token) in p.tokens.iter().enumerate() {
+        #[allow(clippy::cast_possible_truncation)]
+        vocab.insert(token.clone(), i as u32);
+    }
+
+    let bpe = BpeBuilder::new()
+        .vocab_and_merges(vocab, merges)
+        .build()
+        .map_err(anyhow::Error::msg)?;
+    let mut tokenizer = Tokenizer::new(ModelWrapper::BPE(bpe));
+    tokenizer.with_decoder(decoders::byte_level::ByteLevel::new(true, true, true));
+
+    let PropsGGUF { eos, bos, .. } = *p;
+    let special_tokens = add_special_tokens(p, &mut tokenizer, bos, eos, None);
+
+    Ok((tokenizer, TokenizerKind::Bpe, special_tokens))
 }
 
 // This is a workaround to have a better builder API.
