@@ -543,13 +543,15 @@
 <a href="#541" id="541">541</a>
 <a href="#542" id="542">542</a>
 <a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::layers::repeat_kv;
-<span class="kw">use </span><span class="kw">crate</span>::layers::verify_sanity_gguf;
 <span class="kw">use </span><span class="kw">crate</span>::layers::CausalMasker;
 <span class="kw">use </span><span class="kw">crate</span>::layers::MatMul;
 <span class="kw">use </span><span class="kw">crate</span>::layers::RmsNorm;
@@ -578,6 +580,8 @@
 <span class="kw">use </span><span class="kw">super</span>::NonGranularState;
 <span class="kw">use </span><span class="kw">super</span>::ScalingsMaker;
 <span class="kw">use </span><span class="kw">super</span>::XLoraConfig;
+<span class="kw">use </span><span class="kw">crate</span>::models::quantized_phi3::PropsGGUF;
+<span class="kw">use </span><span class="kw">crate</span>::utils::gguf_metadata::ContentMetadata;
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 
 <span class="kw">const </span>SUPPORTED_LAYERS: [<span class="kw-2">&amp;</span>str; <span class="number">4</span>] = [
@@ -771,22 +775,24 @@
         mapper: DeviceMapMetadata,
         preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>md_get = |s: <span class="kw-2">&amp;</span>str| <span class="kw">match </span>ct.metadata.get(s) {
-            <span class="prelude-val">None </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"cannot find {s} in metadata"</span>),
-            <span class="prelude-val">Some</span>(v) =&gt; <span class="prelude-val">Ok</span>(v),
-        };
-        verify_sanity_gguf(md_get(<span class="string">"general.architecture"</span>)<span class="question-mark">?</span>.to_string().unwrap(), <span class="string">"phi3"</span>)<span class="question-mark">?</span>;
         verify_sanity_adapters(ordering, <span class="kw-2">&amp;</span>SUPPORTED_LAYERS)<span class="question-mark">?</span>;
 
         <span class="comment">// Parameter extraction from metadata.
-        </span><span class="kw">let </span>head_count = md_get(<span class="string">"phi3.attention.head_count"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="kw">let </span>head_count_kv = md_get(<span class="string">"phi3.attention.head_count_kv"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="kw">let </span>block_count = md_get(<span class="string">"phi3.block_count"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="kw">let </span>embedding_length = md_get(<span class="string">"phi3.embedding_length"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="kw">let </span>i_size = md_get(<span class="string">"phi3.feed_forward_length"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="kw">let </span>rope_dim = md_get(<span class="string">"phi3.rope.dimension_count"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="kw">let </span>rms_eps = md_get(<span class="string">"phi3.attention.layer_norm_rms_epsilon"</span>)<span class="question-mark">?</span>.to_f32()<span class="question-mark">? </span><span class="kw">as </span>f64;
-        <span class="kw">let </span>context_window = md_get(<span class="string">"phi3.context_length"</span>)<span class="question-mark">?</span>.to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
+        </span><span class="kw">let </span>metadata = ContentMetadata {
+            path_prefix: <span class="string">"phi3"</span>,
+            metadata: <span class="kw-2">&amp;</span>ct.metadata,
+        };
+        <span class="kw">let </span>PropsGGUF {
+            head_count,
+            head_count_kv,
+            block_count,
+            embedding_length,
+            i_size,
+            rope_dim,
+            rms_eps,
+            context_window,
+        } = PropsGGUF::try_from(metadata).or_else(|err| <span class="macro">candle_core::bail!</span>(<span class="string">"{err}"</span>))<span class="question-mark">?</span>;
+
         <span class="kw">let </span>(cos, sin) = precomput_freqs_cis(rope_dim, <span class="number">10_000.</span>, device, context_window)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>tok_embeddings = ct.tensor(reader, <span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
