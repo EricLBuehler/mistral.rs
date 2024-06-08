@@ -294,7 +294,7 @@ macro_rules! get_paths_gguf {
         Ok(Box::new($path_name {
             tokenizer_filename,
             config_filename: PathBuf::from_str("")?,
-            filenames: filenames,
+            filenames,
             xlora_adapter_configs: adapter_configs,
             xlora_adapter_filenames: adapter_safetensors,
             classifier_path,

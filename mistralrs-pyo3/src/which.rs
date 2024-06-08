@@ -1,4 +1,3 @@
-use either::Either;
 use mistralrs_core::{NormalLoaderType, VisionLoaderType};
 use pyo3::pyclass;
 
@@ -75,14 +74,14 @@ pub enum Which {
     GGUF {
         tok_model_id: Option<String>,
         quantized_model_id: String,
-        quantized_filename: Either<String, Vec<String>>,
+        quantized_filename: String,
         repeat_last_n: Option<usize>,
     },
 
     XLoraGGUF {
         tok_model_id: Option<String>,
         quantized_model_id: String,
-        quantized_filename: Either<String, Vec<String>>,
+        quantized_filename: String,
         repeat_last_n: Option<usize>,
         xlora_model_id: String,
         order: String,
@@ -92,7 +91,7 @@ pub enum Which {
     LoraGGUF {
         tok_model_id: Option<String>,
         quantized_model_id: String,
-        quantized_filename: Either<String, Vec<String>>,
+        quantized_filename: String,
         repeat_last_n: Option<usize>,
         adapters_model_id: String,
         order: String,

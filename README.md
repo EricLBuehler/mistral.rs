@@ -43,9 +43,9 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs_server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
     ```
 
-- φ³📷 Run the Phi 3 vision model: [documentation and guide here](docs/PHI3V.md)
+- φ³ 📷 Run the Phi 3 vision model: [documentation and guide here](docs/PHI3V.md)
 
-    <img src="https://static.vecteezy.com/system/resources/previews/012/168/187/large_2x/beautiful-sunset-on-the-beach-with-palm-tree-for-travel-and-vacation-free-photo.JPG" alt="Sunset on a beach" width = "400" height = "267">
+    <img src="https://upload.wikimedia.org/wikipedia/commons/e/e7/Everest_North_Face_toward_Base_Camp_Tibet_Luca_Galuzzi_2006.jpg" alt="Mount Everest" width = "400" height = "267">
 
     *After following installation instructions*
 
