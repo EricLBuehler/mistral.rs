@@ -114,30 +114,24 @@ fn add_special_tokens(
     unk: Option<u32>,
 ) -> AddedTokensCollection {
     // Add special tokens (bos, eos, unk):
-    let mut special_tokens = Vec::<String>::new();
-    for token_id in [bos, eos] {
-        let token = p.tokens[token_id as usize].as_str();
+    let mut special_tokens: [Option<String>; 3] = Default::default();
 
-        special_tokens.push(token.to_owned());
-        tokenizer.add_special_tokens(&[AddedToken::from(token.to_owned(), true)]);
+    // A little bit awkward here since eos/bos are assumed not options so we need to handle an Option
+    for (i, token_id) in [Some(bos), Some(eos), unk].into_iter().enumerate() {
+        if let Some(token_id) = token_id {
+            let token = p.tokens[token_id as usize].as_str();
+            special_tokens[i] = Some(token.to_string());
+            tokenizer.add_special_tokens(&[AddedToken::from(token.to_string(), true)]);
+        }
     }
-    if let Some(unk) = unk {
-        let token = p.tokens[unk as usize].as_str();
 
-        special_tokens.push(token.to_owned());
-        tokenizer.add_special_tokens(&[AddedToken::from(token.to_owned(), true)]);
-
-        AddedTokensCollection {
-            bos: special_tokens[0].clone(),
-            eos: special_tokens[1].clone(),
-            unk: Some(special_tokens[2].clone()),
-        }
-    } else {
-        AddedTokensCollection {
-            bos: special_tokens[0].clone(),
-            eos: special_tokens[1].clone(),
-            unk: None,
-        }
+    // Destructure array of options:
+    let [bos_str, eos_str, unk_str] = special_tokens;
+    // Would need to unwrap bos/eos here, or change the struct types
+    AddedTokensCollection {
+        bos: bos_str.unwrap(),
+        eos: eos_str.unwrap(),
+        unk: unk_str,
     }
 }
 
