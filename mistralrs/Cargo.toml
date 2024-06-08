@@ -12,11 +12,14 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
-mistralrs-core = { version = "0.1.13", path = "../mistralrs-core" }
+mistralrs-core = { version = "0.1.16", path = "../mistralrs-core" }
 anyhow.workspace = true
 tokio.workspace = true
 candle-core.workspace = true
 serde_json.workspace = true
+image.workspace = true
+indexmap.workspace = true
+either.workspace = true
 
 [features]
 cuda = ["mistralrs-core/cuda"]
@@ -56,4 +59,8 @@ required-features = []
 
 [[example]]
 name = "gguf_locally"
+required-features = []
+
+[[example]]
+name = "phi3v"
 required-features = []

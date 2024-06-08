@@ -5,6 +5,7 @@ use engine::Engine;
 pub use engine::TERMINATE_ALL_NEXT_STEP;
 pub use lora::Ordering;
 use pipeline::ModelCategory;
+use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
 use std::{
     cell::RefCell,
@@ -27,6 +28,7 @@ mod model_selected;
 pub use model_selected::ModelSelected;
 
 mod cublaslt;
+mod gguf;
 pub mod layers;
 mod layers_masker;
 mod layers_utils;
@@ -41,25 +43,28 @@ mod sequence;
 mod toml_selector;
 mod utils;
 mod vision_models;
+mod vision_models;
 mod xlora_models;
 
 pub use device_map::{DeviceMapMetadata, LayerDeviceMapper};
 pub use pipeline::{
-    GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder,
-    GGUFSpecificConfig, GemmaLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader,
-    MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, Phi2Loader, Phi3Loader, Qwen2Loader, SpeculativeConfig,
-    SpeculativeLoader, SpeculativePipeline, TokenSource, VisionLoader, VisionLoaderBuilder,
-    VisionModelLoader, VisionSpecificConfig,
+    chat_template::ChatTemplate, GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig,
+    GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader, LlamaLoader,
+    Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader,
+    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader,
+    Phi3VLoader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline,
+    TokenSource, VisionLoader, VisionLoaderBuilder,
+    VisionModelLoader, VisionSpecificConfig, VisionLoader, VisionLoaderBuilder, VisionLoaderType, VisionModelLoader,
+    VisionSpecificConfig,
 };
-pub use request::{Constraint, Content, NormalRequest, Request, RequestMessage};
+pub use request::{Constraint, MessageContent, NormalRequest, Request, RequestMessage};
 pub use response::Response;
 pub use response::*;
 pub use sampler::{SamplingParams, StopTokens, TopLogprob};
 pub use scheduler::SchedulerMethod;
 use serde::Serialize;
 use tokio::runtime::Runtime;
-pub use toml_selector::{TomlLoaderArgs, TomlSelector};
+use toml_selector::{TomlLoaderArgs, TomlSelector};
 
 /// `true` if `MISTRALRS_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
@@ -153,7 +158,7 @@ fn set_gemm_reduced_precision_f16() {
     let a = Tensor::zeros((2, 2), DType::BF16, &Device::new_cuda(0).unwrap()).unwrap();
     candle_core::cuda::set_gemm_reduced_precision_bf16(true);
     match a.matmul(&a) {
-        Ok(_) => (),
+        Ok(_) => tracing::info!("Enabling GEMM reduced precision in BF16."),
         Err(e) => {
             if format!("{e:?}").contains("CUBLAS_STATUS_NOT_SUPPORTED") {
                 tracing::info!("GEMM reduced precision in BF16 not supported.");
@@ -166,7 +171,7 @@ fn set_gemm_reduced_precision_f16() {
     let a = Tensor::zeros((2, 2), DType::F16, &Device::new_cuda(0).unwrap()).unwrap();
     candle_core::cuda::set_gemm_reduced_precision_f16(true);
     match a.matmul(&a) {
-        Ok(_) => (),
+        Ok(_) => tracing::info!("Enabling GEMM reduced precision in F16."),
         Err(e) => {
             if format!("{e:?}").contains("CUBLAS_STATUS_NOT_SUPPORTED") {
                 tracing::info!("GEMM reduced precision in F16 not supported.");

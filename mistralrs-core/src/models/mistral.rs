@@ -8,8 +8,7 @@ use std::sync::Arc;
 use crate::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
-    pipeline::{extract_logits, Cache, IsqModel, NormalModel},
-    DeviceMapMetadata,
+    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -280,21 +279,11 @@ impl Model {
         cfg: &Config,
         vb: VarBuilder,
         is_gptx: bool,
-        mapper: DeviceMapMetadata,
-        loading_isq: bool,
-        real_device: Device,
+        normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let vb_lm_head = vb.pp("lm_head");
-        Self::new_inner(
-            cfg,
-            vb_m,
-            vb_lm_head,
-            is_gptx,
-            mapper,
-            loading_isq,
-            real_device,
-        )
+        Self::new_inner(cfg, vb_m, vb_lm_head, is_gptx, normal_loading_metadata)
     }
 
     pub fn new_inner(
@@ -302,11 +291,11 @@ impl Model {
         vb_m: VarBuilder,
         vb_lm_head: VarBuilder,
         is_gptx: bool,
-        mapper: DeviceMapMetadata,
-        loading_isq: bool,
-        real_device: Device,
+        normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Self> {
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
+        let mapper = normal_loading_metadata
+            .mapper
+            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -320,7 +309,9 @@ impl Model {
                 cfg.rope_theta as f32,
                 head_dim,
                 cfg.max_position_embeddings,
-                mapper.device_for(layer_idx, false).unwrap_or(&real_device),
+                mapper
+                    .device_for(layer_idx, false)
+                    .unwrap_or(&normal_loading_metadata.real_device),
                 is_gptx,
                 vb_m.dtype(),
             )?);
@@ -330,7 +321,7 @@ impl Model {
                 vb_l.pp(layer_idx),
                 &*mapper,
                 layer_idx,
-                loading_isq,
+                normal_loading_metadata.loading_isq,
             )?;
             layers.push(layer)
         }
@@ -342,7 +333,7 @@ impl Model {
         let lm_head = linear_no_bias(
             cfg.hidden_size,
             cfg.vocab_size,
-            mapper.set_nm_device(vb_lm_head, loading_isq),
+            mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
         )?;
         Ok(Self {
             embed_tokens,
@@ -350,7 +341,7 @@ impl Model {
             norm,
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             sliding_window: cfg.sliding_window,
-            device: real_device,
+            device: normal_loading_metadata.real_device,
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: cfg.max_position_embeddings,
             mapper,

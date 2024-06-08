@@ -16,6 +16,7 @@ use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
+use crate::utils::debug::setup_logger_and_debug;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
@@ -56,6 +57,7 @@ pub struct GGMLPipeline {
     metadata: GeneralMetadata,
 }
 
+/// A loader for a GGML model.
 pub struct GGMLLoader {
     model_id: String,
     config: GGMLSpecificConfig,
@@ -165,6 +167,8 @@ impl GGMLLoaderBuilder {
     }
 
     pub fn build(self) -> Box<dyn Loader> {
+        setup_logger_and_debug();
+
         Box::new(GGMLLoader {
             model_id: self.model_id.unwrap(),
             config: self.config,
@@ -196,6 +200,8 @@ impl GGMLLoader {
         tokenizer_json: Option<String>,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
+        setup_logger_and_debug();
+
         let model_id = if let Some(id) = model_id {
             id
         } else {
@@ -369,7 +375,7 @@ impl Loader for GGMLLoader {
             revision,
             self,
             self.quantized_model_id,
-            self.quantized_filename,
+            Some(vec![self.quantized_filename.as_ref().unwrap().clone()]),
             silent
         );
         self.load_model_from_path(&paths?, _dtype, device, silent, mapper, in_situ_quant)

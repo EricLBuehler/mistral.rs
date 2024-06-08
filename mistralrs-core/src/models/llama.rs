@@ -10,8 +10,7 @@ use std::sync::Arc;
 use crate::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
-    pipeline::{extract_logits, IsqModel, NormalModel},
-    DeviceMapMetadata,
+    pipeline::{extract_logits, IsqModel, NormalLoadingMetadata, NormalModel},
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -294,11 +293,11 @@ impl Llama {
         cfg: &Config,
         vb: VarBuilder,
         is_gptx: bool,
-        mapper: DeviceMapMetadata,
-        loading_isq: bool,
-        real_device: Device,
+        normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Self> {
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
+        let mapper = normal_loading_metadata
+            .mapper
+            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -307,7 +306,7 @@ impl Llama {
         let lm_head = linear(
             cfg.hidden_size,
             cfg.vocab_size,
-            mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
+            mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
         )?;
         let ln_f = RmsNorm::new(
             cfg.hidden_size,
@@ -322,7 +321,9 @@ impl Llama {
                         cfg.rope_theta,
                         head_dim,
                         cfg.max_position_embeddings,
-                        mapper.device_for(i, false).unwrap_or(&real_device),
+                        mapper
+                            .device_for(i, false)
+                            .unwrap_or(&normal_loading_metadata.real_device),
                         is_gptx,
                         vb.dtype(),
                     )
@@ -333,7 +334,7 @@ impl Llama {
                     cfg,
                     &*mapper,
                     i,
-                    loading_isq,
+                    normal_loading_metadata.loading_isq,
                     rotary_emb,
                 )
                 .expect("Failed to load block.")
@@ -346,7 +347,7 @@ impl Llama {
             ln_f,
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             kv_cache: crate::pipeline::Cache::new(cfg.num_hidden_layers, false),
-            device: real_device,
+            device: normal_loading_metadata.real_device,
             mapper,
         })
     }

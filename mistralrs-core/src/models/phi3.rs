@@ -4,7 +4,6 @@
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
 use candle_nn::{linear_no_bias, VarBuilder};
-use either::Either;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
@@ -13,8 +12,9 @@ use crate::{
         repeat_kv, CausalMasker, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm,
         ScaledDotProductAttention,
     },
-    pipeline::{extract_logits, Cache, IsqModel, NormalModel},
-    DeviceMapMetadata,
+    pipeline::{
+        extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel, Phi3RopeScaling,
+    },
 };
 
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
@@ -31,7 +31,7 @@ pub struct Config {
     pub rope_theta: f64,
     pub bos_token_id: Option<u32>,
     pub eos_token_id: Option<u32>,
-    pub rope_scaling: Option<HashMap<String, Either<Vec<f32>, String>>>,
+    pub rope_scaling: Option<HashMap<String, Phi3RopeScaling>>,
     pub max_position_embeddings: usize,
     pub use_flash_attn: bool,
     pub sliding_window: Option<usize>,
@@ -291,12 +291,12 @@ impl Model {
         cfg: &Config,
         vb: VarBuilder,
         _is_gptx: bool,
-        mapper: DeviceMapMetadata,
-        loading_isq: bool,
-        real_device: Device,
+        normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
+        let mapper = normal_loading_metadata
+            .mapper
+            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -308,7 +308,9 @@ impl Model {
             let rotary_emb = Arc::new(PhiRotaryEmbedding::new(
                 vb.dtype(),
                 cfg.clone(),
-                mapper.device_for(layer_idx, false).unwrap_or(&real_device),
+                mapper
+                    .device_for(layer_idx, false)
+                    .unwrap_or(&normal_loading_metadata.real_device),
             )?);
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
@@ -316,7 +318,7 @@ impl Model {
                 vb_l.pp(layer_idx),
                 &*mapper,
                 layer_idx,
-                loading_isq,
+                normal_loading_metadata.loading_isq,
             )?;
             layers.push(layer)
         }
@@ -328,14 +330,14 @@ impl Model {
         let lm_head = linear_no_bias(
             cfg.hidden_size,
             cfg.vocab_size,
-            mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
+            mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
         )?;
         Ok(Self {
             embed_tokens,
             layers,
             norm,
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
-            device: real_device,
+            device: normal_loading_metadata.real_device,
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: cfg.max_position_embeddings,
             mapper,

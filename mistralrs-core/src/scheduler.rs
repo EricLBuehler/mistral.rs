@@ -64,8 +64,9 @@ pub trait BucketingManager<Backer: FcfsBacker> {
     ) -> BucketedSeqs<Backer>;
 }
 
-// (adapters, cache length)
-type BucketKey = (Option<Vec<String>>, usize);
+// (adapters, cache length, (has_imgs && is_prompt))
+// Buckey by that metric for images because if we are not a prompt, then this doesn't apply
+type BucketKey = (Option<Vec<String>>, usize, bool);
 
 struct FixedBucketingManager;
 
@@ -84,19 +85,42 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
         let mut seq_priorities: HashMap<BucketKey, f64> = HashMap::new();
         for seq in running {
             let len = seq.len();
-            match seq_buckets.get_mut(&(seq.get_adapters(), len)) {
+            match seq_buckets.get_mut(&(
+                seq.get_adapters(),
+                len,
+                seq.images().is_some() && seq.is_prompt(),
+            )) {
                 Some(bucket) => {
                     if !discrete {
-                        *seq_priorities.get_mut(&(seq.get_adapters(), len)).unwrap() +=
-                            seq.compute_priority();
+                        *seq_priorities
+                            .get_mut(&(
+                                seq.get_adapters(),
+                                len,
+                                seq.images().is_some() && seq.is_prompt(),
+                            ))
+                            .unwrap() += seq.compute_priority();
                     }
                     bucket.push(seq);
                 }
                 None => {
                     if !discrete {
-                        seq_priorities.insert((seq.get_adapters(), len), seq.compute_priority());
+                        seq_priorities.insert(
+                            (
+                                seq.get_adapters(),
+                                len,
+                                seq.images().is_some() && seq.is_prompt(),
+                            ),
+                            seq.compute_priority(),
+                        );
                     }
-                    seq_buckets.insert((seq.get_adapters(), len), vec![seq]);
+                    seq_buckets.insert(
+                        (
+                            seq.get_adapters(),
+                            len,
+                            seq.images().is_some() && seq.is_prompt(),
+                        ),
+                        vec![seq],
+                    );
                 }
             }
         }
@@ -112,7 +136,7 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
             // Allow the min seqs to catch up.
             let min = seq_buckets
                 .keys()
-                .min_by_key(|(_, x)| *x)
+                .min_by_key(|(_, x, _)| *x)
                 .expect("No sequence buckets.")
                 .clone();
             let len = if !discrete {

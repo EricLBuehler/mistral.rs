@@ -1,8 +1,7 @@
 mod cache_manager;
-mod chat_template;
+pub mod chat_template;
 mod ggml;
 mod gguf;
-mod gguf_tokenizer;
 mod inputs_processor;
 mod isq;
 mod macros;
@@ -23,15 +22,15 @@ use candle_core::quantized::GgmlDType;
 use chat_template::ChatTemplate;
 use core::fmt;
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
-pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
+pub use gguf::{GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 pub use isq::IsqModel;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 pub use normal_loaders::{
-    GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, NormalModelLoader,
-    Phi2Loader, Phi3Loader, Qwen2Loader,
+    GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
+    NormalLoadingMetadata, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3RopeScaling, Qwen2Loader,
 };
 pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths, XLoraPaths};
-pub(crate) use processing::{apply_chat_template, BasicProcessor, Processor, ProcessorCreator};
+pub(crate) use processing::{BasicProcessor, MessagesAction, Processor, ProcessorCreator};
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 use std::any::Any;
@@ -40,8 +39,6 @@ use std::sync::Arc;
 use std::{collections::HashMap, path::PathBuf, str::FromStr};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
-pub use vision_loaders::{VisionLoaderType, VisionModelLoader};
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -62,12 +59,14 @@ pub trait ModelPaths {
     /// Model weights files (multiple files supported).
     fn get_weight_filenames(&self) -> &[PathBuf];
 
-    /// Retrieve the PretrainedConfig file.
-    /// See: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/configuration#transformers.PretrainedConfig
+    /// Retrieve the [`PretrainedConfig`] file.
+    ///
+    /// [`PretrainedConfig`]: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/configuration#transformers.PretrainedConfig
     fn get_config_filename(&self) -> &PathBuf;
 
-    /// A serialised `tokenizers.Tokenizer` HuggingFace object.
-    /// See: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/tokenizer
+    /// A serialised [`tokenizers.Tokenizer`] HuggingFace object.
+    ///
+    /// [`tokenizers.Tokenizer`]: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/tokenizer
     fn get_tokenizer_filename(&self) -> &PathBuf;
 
     /// Content expected to deserialize to [`ChatTemplate`].
@@ -102,6 +101,7 @@ pub trait ModelPaths {
 }
 
 #[derive(Clone)]
+/// All local paths and metadata necessary to load a model.
 pub struct LocalModelPaths<P> {
     tokenizer_filename: P,
     config_filename: P,
@@ -439,7 +439,7 @@ pub enum CacheInstruction {
 
 pub trait PreProcessingMixin: MetadataMixin {
     fn get_processor(&self) -> Arc<dyn Processor> {
-        BasicProcessor::new_processor()
+        Arc::new(BasicProcessor)
     }
     fn get_chat_template(&self) -> Arc<ChatTemplate>;
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>>;
@@ -661,7 +661,7 @@ pub(crate) fn extract_logits(
 
 #[cfg(test)]
 mod tests {
-    use crate::Content;
+    use crate::MessageContent;
     use either::Either;
     use indexmap::IndexMap;
 
@@ -687,7 +687,7 @@ mod tests {
     fn test_with_inputs(
         templates: &[(bool, &str, &str, &str, &str)],
         expected_outputs: &[&str],
-        inputs: Vec<IndexMap<String, Content>>,
+        inputs: Vec<IndexMap<String, MessageContent>>,
     ) {
         use super::chat_template::apply_chat_template_to;
         let mut failed = Vec::new();
@@ -801,11 +801,11 @@ mod tests {
     /// ```
     fn test_image_chat_templates() {
         let templates = [
-            // HuggingFaceM4/idefics2-8b-chatty: first run, without images
+            // HuggingFaceM4/idefics2-8b-chatty
             (true, "<s>", "</s>", "<unk>", "{% for message in messages %}{{message['role'].capitalize()}}{% if message['content'][0]['type'] == 'image' %}{{':'}}{% else %}{{': '}}{% endif %}{% for line in message['content'] %}{% if line['type'] == 'text' %}{{line['text']}}{% elif line['type'] == 'image' %}{{ '<image>' }}{% endif %}{% endfor %}<end_of_utterance>\n{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"),
         ];
         let expected_outputs = [
-            // HuggingFaceM4/idefics2-8b-chatty: first run, without images
+            // HuggingFaceM4/idefics2-8b-chatty
             "System: You are a helpful assistant<end_of_utterance>\nUser:<image>Hello, please describe the above.<end_of_utterance>\nAssistant: Hi there<end_of_utterance>\nUser:<image>This is me, who are you<end_of_utterance>\nAssistant:    I am an assistant   <end_of_utterance>\nUser:<image>Another question, what is this?<end_of_utterance>\nAssistant:",
         ];
 
