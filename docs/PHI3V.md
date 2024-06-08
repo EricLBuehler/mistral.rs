@@ -1,6 +1,6 @@
 # Phi 3 Vision Support: `microsoft/Phi-3-vision-128k-instruct`
 
-The Phi 3 Vision Model has support in the Rust, Python, and HTTP APIs.
+The Phi 3 Vision Model has support in the Rust, Python, and HTTP APIs. The Phi 3 Vision Model supports ISQ for increased performance.
 
 > Note: The Phi 3 Vision model works best with one image although it is supported to send multiple images.
 
