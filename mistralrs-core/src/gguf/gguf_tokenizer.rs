@@ -209,14 +209,17 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokens
         vocab.insert(token.clone(), i as u32);
     }
 
-    let bpe = BpeBuilder::new()
-        .vocab_and_merges(vocab, merges)
-        .build()
-        .map_err(anyhow::Error::msg)?;
+    let PropsGGUF { eos, bos, unk, .. } = *p;
+
+    let mut bpe = BpeBuilder::new().vocab_and_merges(vocab, merges);
+    if let Some(unk) = unk {
+        bpe = bpe.unk_token(p.tokens[unk as usize].to_string());
+    };
+
+    let bpe = bpe.build().map_err(anyhow::Error::msg)?;
     let mut tokenizer = Tokenizer::new(ModelWrapper::BPE(bpe));
     tokenizer.with_decoder(decoders::byte_level::ByteLevel::new(true, true, true));
 
-    let PropsGGUF { eos, bos, unk, .. } = *p;
     let special_tokens = add_special_tokens(p, &mut tokenizer, bos, eos, unk);
 
     Ok((tokenizer, TokenizerKind::Bpe, special_tokens))
