@@ -1,5 +1,6 @@
 use anyhow::Result;
 use candle_core::quantized::gguf_file::Content;
+use tracing::info;
 
 use crate::utils::gguf_metadata::ContentMetadata;
 
@@ -28,5 +29,8 @@ pub fn get_gguf_chat_template(content: &Content) -> Result<Option<String>> {
         metadata: &content.metadata,
     };
     let props = PropsGGUFTemplate::try_from(metadata)?;
+    if let Some(ref chat_template) = props.chat_template {
+        info!("Discovered and using GGUF chat template: `{chat_template}`");
+    }
     Ok(props.chat_template)
 }
