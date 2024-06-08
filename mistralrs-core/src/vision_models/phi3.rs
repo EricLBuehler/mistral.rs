@@ -8,14 +8,13 @@ use candle_core::{
 };
 use candle_nn::{linear_b, linear_no_bias, VarBuilder};
 use either::Either;
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
 
 use crate::{
     device_map::DeviceMapper,
     layers::{
-        repeat_kv, CausalMasker, FusedBiasLinear, MatMul, PhiRopeConfig, PhiRotaryEmbedding,
-        RmsNorm, ScaledDotProductAttention,
+        repeat_kv, CausalMasker, FusedBiasLinear, MatMul, Nonzero, PhiRopeConfig,
+        PhiRotaryEmbedding, RmsNorm, ScaledDotProductAttention,
     },
     pipeline::{extract_logits, Cache, IsqModel, Phi3RopeScaling, VisionModel},
     serde_default_fn,
@@ -352,35 +351,6 @@ impl DecoderLayer {
 
 const MAX_INPUT_ID: f64 = 1e9;
 
-/// torch.nonzero(lt & gt, as_tuple=False)
-fn nonzero_between_as_tuple_false(lt: &Tensor, gt: &Tensor) -> Result<Tensor> {
-    let dev = lt.device();
-    let lt = lt.to_vec2::<u8>()?;
-    let gt = gt.to_vec2::<u8>()?;
-    // lt & gt
-    let res = lt
-        .par_iter()
-        .zip(gt)
-        .enumerate()
-        .flat_map(|(i, (lt_row, gt_row))| {
-            lt_row
-                .par_iter()
-                .zip(gt_row)
-                .enumerate()
-                .filter_map(|(j, (lt, gt))| {
-                    if (lt & gt) != 0 {
-                        Some(vec![i as u32, j as u32])
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>()
-        })
-        .map(|x| Tensor::from_slice(&x, (x.len(),), dev))
-        .collect::<Result<Vec<_>>>()?;
-    Tensor::stack(&res, 0)
-}
-
 #[derive(Debug)]
 struct EmbeddingLayers(Vec<Box<dyn ModuleWithMetadata>>);
 
@@ -566,7 +536,7 @@ impl ImageEmbedding {
         let input_ids_lt = input_ids.lt(0.0f64)?;
         let input_ids_gt = input_ids.gt(-MAX_INPUT_ID)?;
         // positions = torch.nonzero((input_ids < 0) & (input_ids > -MAX_INPUT_ID), as_tuple=False)
-        let positions = nonzero_between_as_tuple_false(&input_ids_lt, &input_ids_gt)?;
+        let positions = Nonzero.nonzero_and::<u8>(&input_ids_lt, &input_ids_gt)?;
 
         let target_dev = self.layers.0[0].device();
         let target_dtype = self.layers.0[0].dtype();
@@ -950,49 +920,5 @@ impl VisionModel for Model {
     }
     fn has_conv2d(&self) -> bool {
         true
-    }
-}
-
-mod tests {
-
-    #[test]
-    fn nonzero() {
-        use super::nonzero_between_as_tuple_false;
-        use candle_core::{Device, Tensor};
-
-        let input1 = Tensor::from_vec(
-            vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7],
-            (10,),
-            &Device::Cpu,
-        )
-        .unwrap();
-        let input2 = Tensor::from_vec(
-            vec![-1i64, 2, 3, -1, 1, -1, -1, 4, 5, 7],
-            (10,),
-            &Device::Cpu,
-        )
-        .unwrap();
-        let input = Tensor::stack(&[input1, input2], 0).unwrap();
-
-        let lt = input.lt(0.0).unwrap();
-        let gt = input.gt(-10.0).unwrap();
-        let res = nonzero_between_as_tuple_false(&lt, &gt)
-            .unwrap()
-            .to_vec2::<u32>()
-            .unwrap();
-
-        assert_eq!(
-            res,
-            [
-                [0, 3],
-                [0, 4],
-                [0, 5],
-                [0, 6],
-                [1, 0],
-                [1, 3],
-                [1, 5],
-                [1, 6]
-            ]
-        );
     }
 }
