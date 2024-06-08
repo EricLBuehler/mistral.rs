@@ -185,6 +185,8 @@ fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTo
 }
 
 fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokensCollection)> {
+    // BPE merges have each string item as a space-delimited pair:
+    // https://github.com/EricLBuehler/mistral.rs/pull/397#discussion_r1631988370
     let merges = p
         .merges
         .as_ref()
