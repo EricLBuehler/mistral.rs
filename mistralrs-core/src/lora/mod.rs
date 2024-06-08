@@ -23,6 +23,7 @@ pub struct PreloadAdapter {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+/// Adapter model ordering information.
 pub struct Ordering {
     #[serde(rename = "order")]
     pub adapters: Option<Vec<String>>,

@@ -56,6 +56,9 @@ impl FromStr for VisionLoaderType {
 
 // ======================== Phi 3 loader
 
+/// [`VisionLoader`] for a Phi 3 Vision model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
 pub struct Phi3Loader;
 
 impl VisionModelLoader for Phi3Loader {

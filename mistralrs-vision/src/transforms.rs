@@ -72,8 +72,7 @@ impl ImageTransform for Normalize {
     }
 }
 
-/// Do what `ToTensor` does, but also resize the image without preserving
-/// aspect ratio.
+/// Resize the image via nearest interpolation.
 pub struct InterpolateResize {
     pub target_w: usize,
     pub target_h: usize,
