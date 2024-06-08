@@ -89,6 +89,39 @@ impl ImageTransform for InterpolateResize {
     }
 }
 
+impl<T: ImageTransform<Input = E, Output = E>, E: Clone> ImageTransform for Option<T> {
+    type Input = T::Input;
+    type Output = T::Output;
+
+    fn map(&self, x: &T::Input, dev: &Device) -> Result<T::Output> {
+        if let Some(this) = self {
+            this.map(x, dev)
+        } else {
+            Ok(x.clone())
+        }
+    }
+}
+
+/// Multiply the pixe values by the provided factor.
+///
+/// Each pixel value is calculated as follows: x = x * factor
+pub struct Rescale {
+    pub factor: Option<f64>,
+}
+
+impl ImageTransform for Rescale {
+    type Input = Tensor;
+    type Output = Self::Input;
+
+    fn map(&self, x: &Self::Input, _: &Device) -> Result<Self::Output> {
+        if let Some(factor) = self.factor {
+            x * factor
+        } else {
+            Ok(x.clone())
+        }
+    }
+}
+
 mod tests {
     #[test]
     fn test_to_tensor() {

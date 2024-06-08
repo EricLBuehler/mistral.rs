@@ -5,7 +5,6 @@ use engine::Engine;
 pub use engine::TERMINATE_ALL_NEXT_STEP;
 pub use lora::Ordering;
 use pipeline::ModelCategory;
-use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
 use std::{
     cell::RefCell,
@@ -43,7 +42,6 @@ mod sequence;
 mod toml_selector;
 mod utils;
 mod vision_models;
-mod vision_models;
 mod xlora_models;
 
 pub use device_map::{DeviceMapMetadata, LayerDeviceMapper};
@@ -53,8 +51,7 @@ pub use pipeline::{
     Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader,
     NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader,
     Phi3VLoader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline,
-    TokenSource, VisionLoader, VisionLoaderBuilder,
-    VisionModelLoader, VisionSpecificConfig, VisionLoader, VisionLoaderBuilder, VisionLoaderType, VisionModelLoader,
+    TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType, VisionModelLoader,
     VisionSpecificConfig,
 };
 pub use request::{Constraint, MessageContent, NormalRequest, Request, RequestMessage};

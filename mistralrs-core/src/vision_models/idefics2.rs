@@ -13,8 +13,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, RmsNorm},
     models::mistral::Model as Mistral,
-    pipeline::{Cache, IsqModel, NormalModel, VisionModel},
-    DeviceMapMetadata,
+    pipeline::{Cache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel},
 };
 
 use crate::models::mistral;
@@ -841,9 +840,7 @@ impl Idefics2 {
         config: &Config,
         vb: VarBuilder,
         is_gptx: bool,
-        mapper: DeviceMapMetadata,
-        loading_isq: bool,
-        real_device: Device,
+        normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let vision_model = VisionTransformer::new(&config.vision_config, vb_m.pp("vision_model"))?;
@@ -853,9 +850,7 @@ impl Idefics2 {
             vb_m.pp("text_model"),
             vb.pp("lm_head"),
             is_gptx,
-            mapper,
-            loading_isq,
-            real_device,
+            normal_loading_metadata,
         )?;
         Ok(Self {
             vision_model,

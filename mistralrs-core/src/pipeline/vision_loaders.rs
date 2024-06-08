@@ -10,12 +10,12 @@ use pyo3::pyclass;
 use serde::Deserialize;
 
 use super::{NormalLoadingMetadata, Processor, ProcessorCreator, VisionModel};
+use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
+use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
-use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
-use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 
 pub trait VisionModelLoader {
     fn load(
@@ -48,7 +48,6 @@ impl FromStr for VisionLoaderType {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-
             "phi3v" => Ok(Self::Phi3V),
             "idefics2" => Ok(Self::Idefics2),
             a => Err(format!("Unknown architecture `{a}`")),
@@ -99,6 +98,9 @@ impl VisionModelLoader for Phi3VLoader {
 
 // ======================== Idefics 2 loader
 
+/// [`VisionLoader`] for an Idefics 2 Vision model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
 pub struct Idefics2Loader;
 
 impl VisionModelLoader for Idefics2Loader {
@@ -107,9 +109,7 @@ impl VisionModelLoader for Idefics2Loader {
         config: &str,
         use_flash_attn: bool,
         vb: VarBuilder,
-        mapper: DeviceMapMetadata,
-        loading_isq: bool,
-        device: Device,
+        normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
         let mut config: Idefics2Config = serde_json::from_str(config)?;
         config.text_config.use_flash_attn = use_flash_attn;
@@ -117,9 +117,7 @@ impl VisionModelLoader for Idefics2Loader {
             &config,
             vb,
             self.is_gptx(),
-            mapper,
-            loading_isq,
-            device,
+            normal_loading_metadata,
         )?))
     }
     fn is_gptx(&self) -> bool {

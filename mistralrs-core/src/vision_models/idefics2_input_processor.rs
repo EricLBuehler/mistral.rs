@@ -5,25 +5,23 @@ use std::{any::Any, sync::Arc};
 use candle_core::{Device, Result, Tensor};
 use image::{DynamicImage, GenericImageView};
 use indexmap::IndexMap;
+use mistralrs_vision::{ApplyTransforms, Normalize, Rescale, ToTensor, Transforms};
 use tokenizers::Tokenizer;
 
 use crate::{
     pipeline::{
         apply_chat_template,
         text_models_inputs_processor::{self, get_completion_input, get_prompt_input},
-        InputsProcessor, InputsProcessorType, Processor,
+        InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
     sequence::Sequence,
-    vision_models::{
-        image_processor::{from_pixel_data, get_pixel_data, make_pixel_values},
-        ModelInputs,
-    },
-    Content, Pipeline,
+    vision_models::ModelInputs,
+    MessageContent, Pipeline,
 };
 
 use super::{
     image_processor::{ImagePreProcessor, PreprocessedImages},
-    preprocessor_config::PreProcessorConfig,
+    preprocessor_config::{PreProcessorConfig, ToFilter},
     processor_config::ProcessorConfig,
 };
 
@@ -52,10 +50,15 @@ impl Processor for Idefics2Processor {
     fn process(
         &self,
         pipeline: &dyn Pipeline,
-        messages: Vec<IndexMap<String, Content>>,
+        messages: Vec<IndexMap<String, MessageContent>>,
         add_generation_prompt: bool,
     ) -> anyhow::Result<Vec<u32>> {
-        let mut prompt = apply_chat_template(pipeline, messages, add_generation_prompt)?;
+        let mut prompt = apply_chat_template(
+            pipeline,
+            messages,
+            add_generation_prompt,
+            self.template_action(),
+        )?;
 
         let mut image_str = format!(
             "{}{}{}",
@@ -63,7 +66,11 @@ impl Processor for Idefics2Processor {
             self.image_token.repeat(self.config.image_seq_len),
             self.fake_image_token
         );
-        if self.preprocessor_config.do_image_splitting {
+        if self
+            .preprocessor_config
+            .do_image_splitting
+            .is_some_and(|x| x)
+        {
             // 4 patches + 1 original
             image_str = image_str.repeat(5);
         }
@@ -89,49 +96,10 @@ impl Processor for Idefics2Processor {
     fn get_special_tokens(&self) -> &[&'static str] {
         &["<fake_token_around_image>", "<image>", "<end_of_utterance>"]
     }
-}
 
-/// Generate pixel mask. 1 indicates valid pixel, 0 indicates padding
-/// Shape is (h,w)
-fn make_pixel_mask(
-    image: &DynamicImage,
-    max_h: usize,
-    max_w: usize,
-    device: &Device,
-) -> Result<Tensor> {
-    let (img_w, img_h) = image.dimensions();
-    let data = (0..max_h as u32)
-        .map(|h| {
-            (0..max_w as u32)
-                .map(|w| if w >= img_w || h >= img_h { 0u8 } else { 1u8 })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-    let mut accum = Vec::new();
-    for row in data {
-        accum.push(Tensor::from_vec(row, (1, max_w), device)?)
+    fn template_action(&self) -> MessagesAction {
+        MessagesAction::Keep
     }
-    Tensor::cat(&accum, 0)
-}
-
-/// Pad image to bottom and the right to the largest height and width.
-/// Returns the new image and the pixel mask
-fn pad(
-    image: &DynamicImage,
-    max_h: usize,
-    max_w: usize,
-    device: &Device,
-) -> Result<(DynamicImage, Tensor)> {
-    let new_image = from_pixel_data(
-        get_pixel_data(
-            image,
-            image.dimensions().1 as usize,
-            image.dimensions().0 as usize,
-        ),
-        max_h,
-        max_w,
-    );
-    Ok((new_image, make_pixel_mask(image, max_h, max_w, device)?))
 }
 
 impl InputsProcessor for Idefics2ImageProcessor {
@@ -193,6 +161,8 @@ impl InputsProcessor for Idefics2ImageProcessor {
                 let PreprocessedImages {
                     pixel_values,
                     pixel_attention_mask,
+                    image_sizes: _,
+                    num_img_tokens: _,
                 } = self.preprocess(
                     seq.take_images()
                         .expect("Need to have images by this point."),
@@ -200,7 +170,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
                     device,
                 )?;
                 pixel_values_accum.push(pixel_values.unsqueeze(0)?);
-                pixel_attention_mask_accum.push(pixel_attention_mask.unsqueeze(0)?);
+                pixel_attention_mask_accum.push(pixel_attention_mask.unwrap().unsqueeze(0)?);
             }
             (
                 Some(Tensor::cat(&pixel_values_accum, 0)?),
@@ -238,7 +208,7 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
         let mut pixel_values = Vec::new();
 
         // Image splitting
-        if config.do_image_splitting {
+        if config.do_image_splitting.is_some_and(|x| x) {
             let mut new_images = Vec::new();
             for image in images {
                 let (w, h) = image.dimensions();
@@ -255,8 +225,25 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
 
         for image in images.iter_mut() {
             // Resize
-            if config.do_resize {
-                *image = super::image_processor::resize(image, &config.size, config.resampling)?;
+            if config.do_resize.is_some_and(|x| x) {
+                let size = config.size.as_ref().unwrap();
+                let (h, w) = if size.contains_key("shortest_edge")
+                    && size.contains_key("longest_edge")
+                {
+                    mistralrs_vision::get_resize_image_size(
+                        (image.dimensions().1 as usize, image.dimensions().0 as usize),
+                        (
+                            size["shortest_edge"] as usize,
+                            size["longest_edge"] as usize,
+                        ),
+                    )
+                } else if size.contains_key("height") && size.contains_key("width") {
+                    (size["height"] as usize, size["width"] as usize)
+                } else {
+                    candle_core::bail!("Size must be a map of `shortest_edge` and `longest_edge` or `height` and `width`.");
+                };
+
+                *image = image.resize_exact(w as u32, h as u32, config.resampling.to_filter()?);
             }
         }
 
@@ -274,38 +261,50 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
 
         for image in images.iter_mut() {
             // Convert to rgb
-            if config.do_convert_rgb {
+            if config.do_convert_rgb.is_some_and(|x| x) {
                 *image = DynamicImage::ImageRgb8(image.to_rgb8());
             }
 
-            // Rescale
-            if config.do_rescale {
-                *image = self.rescale(image, config.rescale_factor);
-            }
+            let transforms = Transforms {
+                input: &ToTensor,
+                inner_transforms: &[
+                    &config
+                        .do_rescale
+                        .is_some_and(|x| x)
+                        .then_some(())
+                        .map(|_| Rescale {
+                            factor: config.rescale_factor,
+                        }),
+                    &config
+                        .do_normalize
+                        .is_some_and(|x| x)
+                        .then_some(())
+                        .map(|_| Normalize {
+                            mean: config.image_mean.unwrap_or(Self::DEFAULT_MEAN).to_vec(),
+                            std: config.image_std.unwrap_or(Self::DEFAULT_STD).to_vec(),
+                        }),
+                ],
+            };
 
-            // Normalize
-            if config.do_normalize {
-                *image = self.normalize(
-                    image,
-                    config.image_mean.unwrap_or(Self::DEFAULT_MEAN),
-                    config.image_std.unwrap_or(Self::DEFAULT_STD),
-                );
-            }
-
+            let mut image = image.apply(transforms, device)?;
             // Pad images, calculating attention mask.
-            if config.do_pad {
-                let (new_image, mask) = pad(image, max_h as usize, max_w as usize, device)?;
-                *image = new_image;
+            if config.do_pad.is_some_and(|x| x) {
+                let (_c, h, w) = image.dims3()?;
+                let padded = mistralrs_vision::pad(&image, max_h as usize, max_w as usize)?;
+                let mask = mistralrs_vision::make_pixel_mask(&padded, h, w)?;
                 patch_masks.push(mask.unsqueeze(0)?);
+                image = padded;
             }
 
             // Get pixel values
-            pixel_values.push(make_pixel_values(image, device)?.unsqueeze(0)?)
+            pixel_values.push(image.unsqueeze(0)?)
         }
 
         Ok(PreprocessedImages {
             pixel_values: Tensor::cat(&pixel_values, 0)?,
-            pixel_attention_mask: Tensor::cat(&patch_masks, 0)?,
+            pixel_attention_mask: Some(Tensor::cat(&patch_masks, 0)?),
+            image_sizes: None,
+            num_img_tokens: None,
         })
     }
 }
