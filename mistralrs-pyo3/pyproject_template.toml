@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "$name"
-version = "0.1.15"
+version = "0.1.16"
 requires-python = ">=3.8"
 classifiers = [
     "Programming Language :: Rust",
