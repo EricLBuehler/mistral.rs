@@ -17,7 +17,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         Some("chat_templates/mistral.json".to_string()),
         None,
         ".".to_string(),
-        vec!["mistral-7b-instruct-v0.1.Q4_K_M.gguf".to_string()],
+        "mistral-7b-instruct-v0.1.Q4_K_M.gguf".to_string(),
     )
     .build();
     // Load, into a Pipeline
