@@ -4,7 +4,9 @@ use anyhow::Result;
 use candle_core::quantized::gguf_file::Content;
 use itertools::Itertools;
 use tokenizers::{
-    decoders::{self, byte_fallback::ByteFallback, fuse::Fuse, strip::Strip},
+    decoders::{
+        self, byte_fallback::ByteFallback, byte_level::ByteLevel, fuse::Fuse, strip::Strip,
+    },
     models::{bpe::BpeBuilder, unigram::Unigram},
     normalizers::{self, Prepend, Replace},
     AddedToken, DecoderWrapper, ModelWrapper, NormalizerWrapper, Tokenizer,
@@ -211,8 +213,11 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokens
     };
 
     let bpe = bpe.build().map_err(anyhow::Error::msg)?;
-    let mut tokenizer = Tokenizer::new(ModelWrapper::BPE(bpe));
-    tokenizer.with_decoder(decoders::byte_level::ByteLevel::new(true, true, true));
+
+    let mut tokenizer = TokenizerX::try_builder()
+        .with_model(bpe)
+        .with_decoder(Decoder::ByteLevel(true, true, true))
+        .build()?;
 
     let special_tokens = add_special_tokens(p, &mut tokenizer, bos, eos, unk);
 
@@ -255,6 +260,7 @@ enum Decoder<'a> {
     Replace(&'a str, &'a str),
     Strip(char, usize, usize),
     Sequence(Vec<Self>),
+    ByteLevel(bool, bool, bool),
 }
 
 // Convert into upstream type wrapped enum variants:
@@ -276,6 +282,9 @@ impl TryFrom<Decoder<'_>> for DecoderWrapper {
                     .collect::<Result<Vec<DecoderWrapper>>>()?;
 
                 decoders::sequence::Sequence::new(seq).into()
+            }
+            Decoder::ByteLevel(add_prefix_space, trim_offsets, use_regex) => {
+                ByteLevel::new(add_prefix_space, trim_offsets, use_regex).into()
             }
         };
 
