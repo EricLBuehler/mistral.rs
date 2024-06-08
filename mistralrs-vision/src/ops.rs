@@ -20,7 +20,7 @@ pub fn make_pixel_mask(image: &Tensor, h: usize, w: usize) -> Result<Tensor> {
 }
 
 /// Given the image sizes (h, w) and the minimum and maximum lengths, calculate the image dimensions
-/// which will preseve aspect ration while respecing the minimum and maximum lengths.
+/// which will preserve aspect ration while respecing the minimum and maximum lengths.
 pub fn get_resize_image_size(
     (h, w): (usize, usize),
     (min_len, max_len): (usize, usize),
