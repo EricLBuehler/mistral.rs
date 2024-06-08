@@ -13,10 +13,11 @@ pub fn pad(image: &Tensor, max_h: usize, max_w: usize) -> Result<Tensor> {
 /// The input tensor is of shape (c, max_h, max_w) and the output mask is the same shape and
 /// represents where pixels are. The mask shape is in the top left corner is passed as `h` and `w`.
 pub fn make_pixel_mask(image: &Tensor, h: usize, w: usize) -> Result<Tensor> {
-    let (c, _, _) = image.dims3()?;
-    let mask = Tensor::ones((c, h, w), image.dtype(), image.device())?;
+    let (_c, max_h, max_w) = image.dims3()?;
+    let mask = Tensor::ones((h, w), image.dtype(), image.device())?;
+    let zeros = Tensor::zeros((max_h, max_w), image.dtype(), image.device())?;
     // TODO(EricLBuehler): https://github.com/huggingface/candle/pull/2223 will make this nicer
-    image.slice_assign(&[0..c, 0..h, 0..w], &mask)
+    zeros.slice_assign(&[0..h, 0..w], &mask)
 }
 
 /// Given the image sizes (h, w) and the minimum and maximum lengths, calculate the image dimensions
