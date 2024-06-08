@@ -651,9 +651,9 @@
 };
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
+<span class="kw">use </span><span class="kw">crate</span>::gguf::{convert_gguf_to_hf_tokenizer, GgufTokenizerConversion};
 <span class="kw">use </span><span class="kw">crate</span>::lora::Ordering;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::gguf_tokenizer::{convert_ggml_to_hf_tokenizer, ConversionResult};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{get_chat_template, Cache};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{ChatTemplate, LocalModelPaths};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
@@ -723,7 +723,7 @@
 
 <span class="attr">#[derive(Debug, EnumString)]
 #[strum(serialize_all = <span class="string">"kebab-case"</span>)]
-</span><span class="kw">enum </span>GGUFArchitecture {
+</span><span class="kw">pub enum </span>GGUFArchitecture {
     Llama,
     Mpt,
     Gptneox,
@@ -1002,15 +1002,15 @@
             <span class="macro">info!</span>(<span class="string">"Debug is enabled, wrote the names and information about each tensor to `mistralrs_gguf_tensors.txt`."</span>);
         }
 
-        <span class="kw">let </span>ConversionResult {
+        <span class="kw">let </span>GgufTokenizerConversion {
             tokenizer,
             bos,
             eos,
             unk,
         } = <span class="kw">if </span>paths.get_tokenizer_filename().to_string_lossy().is_empty() {
-            convert_ggml_to_hf_tokenizer(<span class="kw-2">&amp;</span>model)<span class="question-mark">?
+            convert_gguf_to_hf_tokenizer(<span class="kw-2">&amp;</span>model)<span class="question-mark">?
         </span>} <span class="kw">else </span>{
-            ConversionResult {
+            GgufTokenizerConversion {
                 tokenizer: get_tokenizer(paths.get_tokenizer_filename(), <span class="prelude-val">None</span>)<span class="question-mark">?</span>,
                 bos: <span class="prelude-val">None</span>,
                 eos: <span class="prelude-val">None</span>,

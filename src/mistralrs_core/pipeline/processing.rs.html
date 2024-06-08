@@ -93,19 +93,83 @@
 <a href="#91" id="91">91</a>
 <a href="#92" id="92">92</a>
 <a href="#93" id="93">93</a>
+<a href="#94" id="94">94</a>
+<a href="#95" id="95">95</a>
+<a href="#96" id="96">96</a>
+<a href="#97" id="97">97</a>
+<a href="#98" id="98">98</a>
+<a href="#99" id="99">99</a>
+<a href="#100" id="100">100</a>
+<a href="#101" id="101">101</a>
+<a href="#102" id="102">102</a>
+<a href="#103" id="103">103</a>
+<a href="#104" id="104">104</a>
+<a href="#105" id="105">105</a>
+<a href="#106" id="106">106</a>
+<a href="#107" id="107">107</a>
+<a href="#108" id="108">108</a>
+<a href="#109" id="109">109</a>
+<a href="#110" id="110">110</a>
+<a href="#111" id="111">111</a>
+<a href="#112" id="112">112</a>
+<a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+<a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 
-<span class="kw">use crate</span>::{Content, Pipeline};
+<span class="kw">use crate</span>::{
+    vision_models::{preprocessor_config::PreProcessorConfig, processor_config::ProcessorConfig},
+    MessageContent, Pipeline,
+};
 
 <span class="kw">use super</span>::{chat_template::apply_chat_template_to, text_models_inputs_processor, InputsProcessor};
 
 <span class="doccomment">/// Trait to create processors.
 </span><span class="kw">pub trait </span>ProcessorCreator {
-    <span class="kw">fn </span>new_processor() -&gt; Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt;;
+    <span class="kw">fn </span>new_processor(
+        <span class="kw">_</span>: <span class="prelude-ty">Option</span>&lt;ProcessorConfig&gt;,
+        <span class="kw">_</span>: PreProcessorConfig,
+    ) -&gt; Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt;;
+}
+
+<span class="kw">pub enum </span>MessagesAction {
+    <span class="comment">// For idefics2
+    </span>Keep,
+    <span class="comment">// For everything else
+    </span>FlattenOnlyText,
 }
 
 <span class="doccomment">/// Processor for messages.
@@ -115,10 +179,15 @@
     <span class="kw">fn </span>process(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         pipeline: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline,
-        messages: Vec&lt;IndexMap&lt;String, Content&gt;&gt;,
+        messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
         add_generation_prompt: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u32&gt;&gt; {
-        <span class="kw">let </span>prompt = apply_chat_template(pipeline, messages, add_generation_prompt)<span class="question-mark">?</span>;
+        <span class="kw">let </span>prompt = apply_chat_template(
+            pipeline,
+            messages,
+            add_generation_prompt,
+            <span class="self">self</span>.template_action(),
+        )<span class="question-mark">?</span>;
         <span class="kw">let </span>encoding = pipeline
             .tokenizer()
             .encode(prompt, <span class="bool-val">false</span>)
@@ -127,13 +196,49 @@
     }
     <span class="kw">fn </span>inputs_processor(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;<span class="kw">dyn </span>InputsProcessor&gt;;
     <span class="kw">fn </span>get_special_tokens(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str];
+    <span class="kw">fn </span>template_action(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; MessagesAction;
 }
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>apply_chat_template(
     pipeline: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline,
-    messages: Vec&lt;IndexMap&lt;String, Content&gt;&gt;,
+    messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
     add_generation_prompt: bool,
+    action: MessagesAction,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
+    <span class="kw">let </span>messages = <span class="kw">match </span>action {
+        MessagesAction::Keep =&gt; messages,
+        MessagesAction::FlattenOnlyText =&gt; {
+            <span class="comment">// This is really only for image models. If they need to flatten it s.t. they only see
+            // the text, do that.
+            </span><span class="kw">let </span><span class="kw-2">mut </span>new_messages = Vec::new();
+            <span class="kw">for </span>message <span class="kw">in </span>messages {
+                <span class="kw">let </span><span class="kw-2">mut </span>new_message = IndexMap::new();
+                <span class="kw">for </span>(k, v) <span class="kw">in </span>message {
+                    <span class="kw">if </span>k == <span class="string">"content" </span>{
+                        <span class="kw">match </span>v {
+                            Either::Left(lv) =&gt; {
+                                new_message.insert(k, Either::Left(lv));
+                            }
+                            Either::Right(rv) =&gt; {
+                                <span class="lifetime">'outer</span>: <span class="kw">for </span>content_row <span class="kw">in </span>rv {
+                                    <span class="kw">for </span>(content_k, content_v) <span class="kw">in </span>content_row {
+                                        <span class="kw">if </span>content_k == <span class="string">"text" </span>{
+                                            new_message.insert(k, Either::Left(content_v));
+                                            <span class="kw">break </span><span class="lifetime">'outer</span>;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } <span class="kw">else </span>{
+                        new_message.insert(k, Either::Left(v.left().unwrap()));
+                    }
+                }
+                new_messages.push(new_message)
+            }
+            new_messages
+        }
+    };
     <span class="kw">let </span>chat_template = pipeline.get_chat_template();
     <span class="kw">let </span>template = chat_template.chat_template.as_ref().unwrap();
     <span class="kw">let </span>bos_tok = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>bos) = pipeline.get_chat_template().bos_token {
@@ -172,18 +277,15 @@
 
 <span class="kw">pub struct </span>BasicProcessor;
 
-<span class="kw">impl </span>ProcessorCreator <span class="kw">for </span>BasicProcessor {
-    <span class="kw">fn </span>new_processor() -&gt; Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt; {
-        Arc::new(<span class="self">Self</span>)
-    }
-}
-
 <span class="kw">impl </span>Processor <span class="kw">for </span>BasicProcessor {
     <span class="kw">fn </span>inputs_processor(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;<span class="kw">dyn </span>InputsProcessor&gt; {
         Arc::new(text_models_inputs_processor::TextInputsProcessor)
     }
     <span class="kw">fn </span>get_special_tokens(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str] {
         <span class="kw-2">&amp;</span>[]
+    }
+    <span class="kw">fn </span>template_action(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; MessagesAction {
+        MessagesAction::FlattenOnlyText
     }
 }
 </code></pre></div></section></main></body></html>
