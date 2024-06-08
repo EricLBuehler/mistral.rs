@@ -216,8 +216,8 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokens
     let mut tokenizer = Tokenizer::new(ModelWrapper::BPE(bpe));
     tokenizer.with_decoder(decoders::byte_level::ByteLevel::new(true, true, true));
 
-    let PropsGGUF { eos, bos, .. } = *p;
-    let special_tokens = add_special_tokens(p, &mut tokenizer, bos, eos, None);
+    let PropsGGUF { eos, bos, unk, .. } = *p;
+    let special_tokens = add_special_tokens(p, &mut tokenizer, bos, eos, unk);
 
     Ok((tokenizer, TokenizerKind::Bpe, special_tokens))
 }
