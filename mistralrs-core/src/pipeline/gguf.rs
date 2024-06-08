@@ -67,6 +67,7 @@ pub struct GGUFPipeline {
     metadata: GeneralMetadata,
 }
 
+/// Loader for a GGUF model.
 pub struct GGUFLoader {
     model_id: Option<String>,
     config: GGUFSpecificConfig,

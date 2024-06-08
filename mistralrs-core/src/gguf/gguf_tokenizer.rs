@@ -16,7 +16,7 @@ use tracing::info;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::DEBUG;
 
-pub struct GgufTokenizerConversion {
+pub(crate) struct GgufTokenizerConversion {
     pub tokenizer: Tokenizer,
     pub bos: Option<String>,
     pub eos: Option<String>,

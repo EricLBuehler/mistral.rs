@@ -9,6 +9,7 @@ use crate::{
     VisionSpecificConfig,
 };
 
+/// A builder for a loader using the selected model.
 pub struct LoaderBuilder {
     model: ModelSelected,
     no_kv_cache: bool,

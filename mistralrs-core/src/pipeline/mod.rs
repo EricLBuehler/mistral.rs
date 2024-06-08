@@ -103,6 +103,7 @@ pub trait ModelPaths {
 }
 
 #[derive(Clone)]
+/// All local paths and metadata necessary to load a model.
 pub struct LocalModelPaths<P> {
     tokenizer_filename: P,
     config_filename: P,

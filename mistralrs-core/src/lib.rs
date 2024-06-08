@@ -27,7 +27,7 @@ mod model_selected;
 pub use model_selected::ModelSelected;
 
 mod cublaslt;
-pub mod gguf;
+mod gguf;
 pub mod layers;
 mod layers_masker;
 mod layers_utils;
@@ -45,7 +45,6 @@ mod vision_models;
 mod xlora_models;
 
 pub use device_map::{DeviceMapMetadata, LayerDeviceMapper};
-pub use gguf::{convert_gguf_to_hf_tokenizer, GgufTokenizerConversion};
 pub use pipeline::{
     chat_template::ChatTemplate, GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig,
     GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader, LlamaLoader,
@@ -61,7 +60,7 @@ pub use sampler::{SamplingParams, StopTokens, TopLogprob};
 pub use scheduler::SchedulerMethod;
 use serde::Serialize;
 use tokio::runtime::Runtime;
-pub use toml_selector::{TomlLoaderArgs, TomlSelector};
+use toml_selector::{TomlLoaderArgs, TomlSelector};
 
 /// `true` if `MISTRALRS_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);

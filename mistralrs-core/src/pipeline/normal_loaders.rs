@@ -223,6 +223,9 @@ impl GemmaBasicConfig {
     }
 }
 
+/// [`NormalLoader`] for a Gemma model.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
 pub struct GemmaLoader;
 
 impl NormalModelLoader for GemmaLoader {
@@ -313,6 +316,9 @@ impl LlamaBasicConfig {
     }
 }
 
+/// [`NormalLoader`] for a Llama model.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
 pub struct LlamaLoader;
 
 impl NormalModelLoader for LlamaLoader {
@@ -495,6 +501,9 @@ impl Phi2BasicConfig {
     }
 }
 
+/// [`NormalLoader`] for a Phi 2 model.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
 pub struct Phi2Loader;
 
 impl NormalModelLoader for Phi2Loader {
@@ -593,6 +602,9 @@ impl Phi3BasicConfig {
     }
 }
 
+/// [`NormalLoader`] for a Phi 3 model.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
 pub struct Phi3Loader;
 
 impl NormalModelLoader for Phi3Loader {
@@ -686,6 +698,9 @@ impl Qwen2BasicConfig {
     }
 }
 
+/// [`NormalLoader`] for a Qwen 2 model.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
 pub struct Qwen2Loader;
 
 impl NormalModelLoader for Qwen2Loader {

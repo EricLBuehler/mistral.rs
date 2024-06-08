@@ -1,3 +1,4 @@
+#[doc(hidden)]
 #[macro_export]
 macro_rules! finish_and_add_tokens_to_seq {
     ($this:expr, $prefix_cacher:expr, $seq:expr, $logprobs:expr, $eos_tok:expr, $use_prefix_cacher:expr) => {{
@@ -177,6 +178,7 @@ macro_rules! finish_and_add_tokens_to_seq {
 }
 
 /// Sample and add to the prefix cache.
+#[doc(hidden)]
 #[macro_export]
 macro_rules! do_sample {
     ($this:expr, $seqs:expr, $logits:expr, $prefix_cacher:expr, $disable_eos_stop:expr, $rng:expr) => {{
