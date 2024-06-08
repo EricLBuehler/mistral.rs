@@ -806,7 +806,7 @@ impl XLoraModel {
 }
 
 impl IsqModel for XLoraModel {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_tensors(&mut self) -> Result<(Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper)> {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
@@ -838,7 +838,7 @@ impl IsqModel for XLoraModel {
                 tensors.push((Arc::get_mut(&mut expert.w3).unwrap().inner(), Some(i)));
             }
         }
-        (tensors, &*self.mapper)
+        Ok((tensors, &*self.mapper))
     }
 }
 

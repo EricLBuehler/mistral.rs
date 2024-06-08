@@ -381,10 +381,18 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_tensors(&mut self) -> Result<(Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper)> {
         let mut tensors = Vec::new();
         tensors.push((self.lm_head.inner(), None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
+            // Be sure to also cast the biases
+            layer.self_attn.q_proj.bias_to_device(&self.device)?;
+            layer.self_attn.k_proj.bias_to_device(&self.device)?;
+            layer.self_attn.v_proj.bias_to_device(&self.device)?;
+            layer.self_attn.dense.bias_to_device(&self.device)?;
+            layer.mlp.fc1.bias_to_device(&self.device)?;
+            layer.mlp.fc2.bias_to_device(&self.device)?;
+
             tensors.push((layer.self_attn.q_proj.inner(), Some(i)));
             tensors.push((layer.self_attn.k_proj.inner(), Some(i)));
             tensors.push((layer.self_attn.v_proj.inner(), Some(i)));
@@ -392,7 +400,7 @@ impl IsqModel for Model {
             tensors.push((layer.mlp.fc1.inner(), Some(i)));
             tensors.push((layer.mlp.fc2.inner(), Some(i)));
         }
-        (tensors, &*self.mapper)
+        Ok((tensors, &*self.mapper))
     }
 }
 

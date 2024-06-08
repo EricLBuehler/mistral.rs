@@ -4,7 +4,7 @@ use std::{collections::HashSet, fmt::Debug, sync::Arc};
 
 use candle_core::{
     quantized::{QMatMul, QTensor},
-    IndexOp, Result, Tensor, D,
+    Device, IndexOp, Result, Tensor, D,
 };
 use candle_nn::{init, Linear, Module, VarBuilder};
 use loralinear::LoraLinear;
@@ -98,7 +98,6 @@ fn make_adapter(
 
 /// Any layer that is linear-like.
 pub trait LinearLayerLike: Debug + Merge + AdapterSwapper {
-    fn inner(&mut self) -> &mut QMatMul;
     fn is_quant(&self) -> bool;
     fn weight(&self) -> &Tensor;
     fn bias(&self) -> Option<&Tensor>;
@@ -109,6 +108,10 @@ pub trait LinearLayerLike: Debug + Merge + AdapterSwapper {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor>;
+
+    // ISQ functions
+    fn inner(&mut self) -> &mut QMatMul;
+    fn bias_to_device(&mut self, device: &Device) -> Result<()>;
 }
 
 pub trait Merge {
@@ -151,6 +154,9 @@ impl AdapterSwapper for Linear {
 
 impl LinearLayerLike for Linear {
     fn inner(&mut self) -> &mut QMatMul {
+        unreachable!()
+    }
+    fn bias_to_device(&mut self, _: &Device) -> Result<()> {
         unreachable!()
     }
     fn bias(&self) -> Option<&Tensor> {

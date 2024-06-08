@@ -208,6 +208,9 @@ impl LinearLayerLike for LoraLinear {
     fn inner(&mut self) -> &mut QMatMul {
         self.old.inner()
     }
+    fn bias_to_device(&mut self, device: &candle_core::Device) -> Result<()> {
+        self.old.bias_to_device(device)
+    }
     fn is_quant(&self) -> bool {
         self.old.is_quant()
     }

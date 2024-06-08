@@ -527,6 +527,13 @@ impl QLinear {
     pub fn bias(&self) -> Option<&Tensor> {
         self.bias.as_ref()
     }
+
+    pub fn bias_to_device(&mut self, device: &Device) -> Result<()> {
+        if let Some(bias) = &mut self.bias {
+            *bias = bias.to_device(device)?;
+        }
+        Ok(())
+    }
 }
 
 impl Module for QLinear {

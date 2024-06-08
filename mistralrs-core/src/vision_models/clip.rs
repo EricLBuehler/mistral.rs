@@ -413,10 +413,30 @@ impl ClipVisionTransformer {
 }
 
 impl IsqModel for ClipVisionTransformer {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_tensors(&mut self) -> Result<(Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper)> {
         // TODO(EricLBuehler): more?
         let mut tensors: Vec<(&mut QMatMul, Option<usize>)> = Vec::new();
         for (i, layer) in self.encoder.layers.iter_mut().enumerate() {
+            // Be sure to also cast the biases
+            layer
+                .self_attn
+                .q_proj
+                .bias_to_device(&self.encoder.device)?;
+            layer
+                .self_attn
+                .k_proj
+                .bias_to_device(&self.encoder.device)?;
+            layer
+                .self_attn
+                .v_proj
+                .bias_to_device(&self.encoder.device)?;
+            layer
+                .self_attn
+                .out_proj
+                .bias_to_device(&self.encoder.device)?;
+            layer.mlp.fc1.bias_to_device(&self.encoder.device)?;
+            layer.mlp.fc2.bias_to_device(&self.encoder.device)?;
+
             tensors.push((layer.self_attn.q_proj.inner(), Some(i)));
             tensors.push((layer.self_attn.k_proj.inner(), Some(i)));
             tensors.push((layer.self_attn.v_proj.inner(), Some(i)));
@@ -424,6 +444,6 @@ impl IsqModel for ClipVisionTransformer {
             tensors.push((layer.mlp.fc1.inner(), Some(i)));
             tensors.push((layer.mlp.fc2.inner(), Some(i)));
         }
-        (tensors, &*self.encoder.mapper)
+        Ok((tensors, &*self.encoder.mapper))
     }
 }

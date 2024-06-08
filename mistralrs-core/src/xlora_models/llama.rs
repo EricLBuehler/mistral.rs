@@ -651,7 +651,7 @@ impl XLoraLlama {
 }
 
 impl IsqModel for XLoraLlama {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_tensors(&mut self) -> Result<(Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper)> {
         let mut tensors = Vec::new();
         tensors.push((self.lm_head.inner(), None));
         for (i, layer) in self.blocks.iter_mut().enumerate() {
@@ -678,7 +678,7 @@ impl IsqModel for XLoraLlama {
                 Some(i),
             ));
         }
-        (tensors, &*self.mapper)
+        Ok((tensors, &*self.mapper))
     }
 }
 

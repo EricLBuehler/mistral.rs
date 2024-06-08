@@ -354,7 +354,7 @@ impl Llama {
 }
 
 impl IsqModel for Llama {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_tensors(&mut self) -> Result<(Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper)> {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.blocks.iter_mut().enumerate() {
@@ -366,7 +366,7 @@ impl IsqModel for Llama {
             tensors.push((&mut layer.mlp.c_fc2, Some(i)));
             tensors.push((&mut layer.mlp.c_proj, Some(i)));
         }
-        (tensors, &*self.mapper)
+        Ok((tensors, &*self.mapper))
     }
 }
 

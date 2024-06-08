@@ -390,7 +390,7 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_tensors(&mut self) -> Result<(Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper)> {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
@@ -399,7 +399,7 @@ impl IsqModel for Model {
             tensors.push((&mut layer.mlp.gate_up_proj, Some(i)));
             tensors.push((&mut layer.mlp.down_proj, Some(i)));
         }
-        (tensors, &*self.mapper)
+        Ok((tensors, &*self.mapper))
     }
 }
 

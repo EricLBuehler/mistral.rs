@@ -74,10 +74,15 @@ macro_rules! generate_isq {
 }
 
 pub trait IsqModel {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper);
+    /// This function is guaranteed to be called just prior to a quantization.
+    /// It returns the tensor, it's layer index if applicable, and the device mapper.
+    #[allow(clippy::type_complexity)]
+    fn get_tensors(
+        &mut self,
+    ) -> candle_core::Result<(Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper)>;
     /// Quantize the model in-situ.
     fn quantize(&mut self, dtype: GgmlDType, device: Device) -> candle_core::Result<()> {
-        let (tensors, mapper) = self.get_tensors();
+        let (tensors, mapper) = self.get_tensors()?;
         let total_tensors = tensors.len();
         let n_quantized = AtomicUsize::new(0);
         info!(

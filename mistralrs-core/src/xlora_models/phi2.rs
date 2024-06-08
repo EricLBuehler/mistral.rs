@@ -649,10 +649,30 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_tensors(&mut self) -> Result<(Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper)> {
         let mut tensors = Vec::new();
         tensors.push((self.lm_head.inner(), None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
+            // Be sure to also cast the biases
+            Arc::get_mut(&mut layer.self_attn.q_proj)
+                .unwrap()
+                .bias_to_device(&self.device)?;
+            Arc::get_mut(&mut layer.self_attn.k_proj)
+                .unwrap()
+                .bias_to_device(&self.device)?;
+            Arc::get_mut(&mut layer.self_attn.v_proj)
+                .unwrap()
+                .bias_to_device(&self.device)?;
+            Arc::get_mut(&mut layer.self_attn.dense)
+                .unwrap()
+                .bias_to_device(&self.device)?;
+            Arc::get_mut(&mut layer.mlp.fc1)
+                .unwrap()
+                .bias_to_device(&self.device)?;
+            Arc::get_mut(&mut layer.mlp.fc2)
+                .unwrap()
+                .bias_to_device(&self.device)?;
+
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner(),
                 Some(i),
@@ -672,7 +692,7 @@ impl IsqModel for Model {
             tensors.push((Arc::get_mut(&mut layer.mlp.fc1).unwrap().inner(), Some(i)));
             tensors.push((Arc::get_mut(&mut layer.mlp.fc2).unwrap().inner(), Some(i)));
         }
-        (tensors, &*self.mapper)
+        Ok((tensors, &*self.mapper))
     }
 }
 

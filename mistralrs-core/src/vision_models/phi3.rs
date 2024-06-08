@@ -877,7 +877,7 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_tensors(&mut self) -> Result<(Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper)> {
         // TODO(EricLBuehler): more?
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
@@ -887,8 +887,8 @@ impl IsqModel for Model {
             tensors.push((&mut layer.mlp.gate_up_proj, Some(i)));
             tensors.push((&mut layer.mlp.down_proj, Some(i)));
         }
-        tensors.extend(self.vision_embed_tokens.image_processor.get_tensors().0);
-        (tensors, &*self.mapper)
+        tensors.extend(self.vision_embed_tokens.image_processor.get_tensors()?.0);
+        Ok((tensors, &*self.mapper))
     }
 }
 
