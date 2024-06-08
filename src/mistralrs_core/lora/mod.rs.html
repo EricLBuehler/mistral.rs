@@ -322,6 +322,7 @@
 <a href="#320" id="320">320</a>
 <a href="#321" id="321">321</a>
 <a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashSet, fmt::Debug, sync::Arc};
@@ -347,6 +348,7 @@
 }
 
 <span class="attr">#[derive(Clone, Debug, Deserialize)]
+</span><span class="doccomment">/// Adapter model ordering information.
 </span><span class="kw">pub struct </span>Ordering {
     <span class="attr">#[serde(rename = <span class="string">"order"</span>)]
     </span><span class="kw">pub </span>adapters: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,

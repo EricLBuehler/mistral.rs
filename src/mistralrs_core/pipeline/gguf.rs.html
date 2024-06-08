@@ -639,6 +639,7 @@
 <a href="#637" id="637">637</a>
 <a href="#638" id="638">638</a>
 <a href="#639" id="639">639</a>
+<a href="#640" id="640">640</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -708,7 +709,8 @@
     metadata: GeneralMetadata,
 }
 
-<span class="kw">pub struct </span>GGUFLoader {
+<span class="doccomment">/// Loader for a GGUF model.
+</span><span class="kw">pub struct </span>GGUFLoader {
     model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     config: GGUFSpecificConfig,
     quantized_model_id: String,

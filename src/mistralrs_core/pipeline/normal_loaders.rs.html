@@ -728,6 +728,21 @@
 <a href="#726" id="726">726</a>
 <a href="#727" id="727">727</a>
 <a href="#728" id="728">728</a>
+<a href="#729" id="729">729</a>
+<a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a>
+<a href="#733" id="733">733</a>
+<a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a>
+<a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a>
+<a href="#742" id="742">742</a>
+<a href="#743" id="743">743</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, fmt::Debug, str::FromStr};
 
 <span class="kw">use </span><span class="kw">crate</span>::lora::{LoraConfig, Ordering};
@@ -953,7 +968,10 @@
     }
 }
 
-<span class="kw">pub struct </span>GemmaLoader;
+<span class="doccomment">/// [`NormalLoader`] for a Gemma model.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+</span><span class="kw">pub struct </span>GemmaLoader;
 
 <span class="kw">impl </span>NormalModelLoader <span class="kw">for </span>GemmaLoader {
     <span class="kw">fn </span>load(
@@ -1043,7 +1061,10 @@
     }
 }
 
-<span class="kw">pub struct </span>LlamaLoader;
+<span class="doccomment">/// [`NormalLoader`] for a Llama model.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+</span><span class="kw">pub struct </span>LlamaLoader;
 
 <span class="kw">impl </span>NormalModelLoader <span class="kw">for </span>LlamaLoader {
     <span class="kw">fn </span>load(
@@ -1225,7 +1246,10 @@
     }
 }
 
-<span class="kw">pub struct </span>Phi2Loader;
+<span class="doccomment">/// [`NormalLoader`] for a Phi 2 model.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+</span><span class="kw">pub struct </span>Phi2Loader;
 
 <span class="kw">impl </span>NormalModelLoader <span class="kw">for </span>Phi2Loader {
     <span class="kw">fn </span>load(
@@ -1323,7 +1347,10 @@
     }
 }
 
-<span class="kw">pub struct </span>Phi3Loader;
+<span class="doccomment">/// [`NormalLoader`] for a Phi 3 model.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+</span><span class="kw">pub struct </span>Phi3Loader;
 
 <span class="kw">impl </span>NormalModelLoader <span class="kw">for </span>Phi3Loader {
     <span class="kw">fn </span>load(
@@ -1416,7 +1443,10 @@
     }
 }
 
-<span class="kw">pub struct </span>Qwen2Loader;
+<span class="doccomment">/// [`NormalLoader`] for a Qwen 2 model.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+</span><span class="kw">pub struct </span>Qwen2Loader;
 
 <span class="kw">impl </span>NormalModelLoader <span class="kw">for </span>Qwen2Loader {
     <span class="kw">fn </span>load(

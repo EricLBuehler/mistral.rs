@@ -84,6 +84,7 @@
 <a href="#82" id="82">82</a>
 <a href="#83" id="83">83</a>
 <a href="#84" id="84">84</a>
+<a href="#85" id="85">85</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::quantized::GgmlDType;
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
@@ -119,6 +120,7 @@
 }
 
 <span class="attr">#[derive(Clone)]
+</span><span class="doccomment">/// A normal request request to the `MistralRs`
 </span><span class="kw">pub struct </span>NormalRequest {
     <span class="kw">pub </span>messages: RequestMessage,
     <span class="kw">pub </span>sampling_params: SamplingParams,

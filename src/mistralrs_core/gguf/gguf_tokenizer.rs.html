@@ -404,7 +404,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::utils::gguf_metadata::ContentMetadata;
 <span class="kw">use </span><span class="kw">crate</span>::DEBUG;
 
-<span class="kw">pub struct </span>GgufTokenizerConversion {
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>GgufTokenizerConversion {
     <span class="kw">pub </span>tokenizer: Tokenizer,
     <span class="kw">pub </span>bos: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub </span>eos: <span class="prelude-ty">Option</span>&lt;String&gt;,

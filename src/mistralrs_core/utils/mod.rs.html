@@ -245,6 +245,15 @@
 <a href="#243" id="243">243</a>
 <a href="#244" id="244">244</a>
 <a href="#245" id="245">245</a>
+<a href="#246" id="246">246</a>
+<a href="#247" id="247">247</a>
+<a href="#248" id="248">248</a>
+<a href="#249" id="249">249</a>
+<a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
+<a href="#253" id="253">253</a>
+<a href="#254" id="254">254</a>
 </pre></div><pre class="rust"><code><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>debug;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>gguf_metadata;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>model_config;
@@ -253,7 +262,8 @@
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>tokens;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>varbuilder_utils;
 
-<span class="attr">#[macro_export]
+<span class="attr">#[doc(hidden)]
+#[macro_export]
 </span><span class="macro">macro_rules!</span> get_mut_arcmutex {
     (<span class="macro-nonterminal">$thing</span>:expr) =&gt; {
         <span class="kw">loop </span>{
@@ -264,7 +274,8 @@
     };
 }
 
-<span class="attr">#[macro_export]
+<span class="attr">#[doc(hidden)]
+#[macro_export]
 </span><span class="macro">macro_rules!</span> handle_seq_error {
     (<span class="macro-nonterminal">$fallible</span>:expr, <span class="macro-nonterminal">$response</span>:expr) =&gt; {
         <span class="kw">match </span><span class="macro-nonterminal">$fallible </span>{
@@ -281,7 +292,8 @@
     };
 }
 
-<span class="attr">#[macro_export]
+<span class="attr">#[doc(hidden)]
+#[macro_export]
 </span><span class="macro">macro_rules!</span> handle_seq_error_ok {
     (<span class="macro-nonterminal">$fallible</span>:expr, <span class="macro-nonterminal">$response</span>:expr) =&gt; {
         <span class="kw">match </span><span class="macro-nonterminal">$fallible </span>{
@@ -298,7 +310,8 @@
     };
 }
 
-<span class="attr">#[macro_export]
+<span class="attr">#[doc(hidden)]
+#[macro_export]
 </span><span class="macro">macro_rules!</span> handle_seq_error_stateaware_ok {
     (<span class="macro-nonterminal">$fallible</span>:expr, <span class="macro-nonterminal">$seq</span>:expr) =&gt; {
         <span class="kw">match </span><span class="macro-nonterminal">$fallible </span>{
@@ -317,7 +330,8 @@
     };
 }
 
-<span class="attr">#[macro_export]
+<span class="attr">#[doc(hidden)]
+#[macro_export]
 </span><span class="macro">macro_rules!</span> handle_pipeline_forward_error {
     (<span class="macro-nonterminal">$stage</span>: tt, <span class="macro-nonterminal">$fallible</span>:expr, <span class="macro-nonterminal">$seq_slice</span>:expr, <span class="macro-nonterminal">$pipeline</span>:expr, <span class="macro-nonterminal">$label</span>:tt, <span class="macro-nonterminal">$prefix_cacher</span>:expr) =&gt; {
         <span class="kw">match </span><span class="macro-nonterminal">$fallible </span>{
@@ -424,7 +438,8 @@
     };
 }
 
-<span class="attr">#[macro_export]
+<span class="attr">#[doc(hidden)]
+#[macro_export]
 </span><span class="macro">macro_rules!</span> get_mut_group {
     (<span class="macro-nonterminal">$this</span>:expr) =&gt; {
         <span class="kw">loop </span>{
@@ -435,7 +450,8 @@
     };
 }
 
-<span class="attr">#[macro_export]
+<span class="attr">#[doc(hidden)]
+#[macro_export]
 </span><span class="macro">macro_rules!</span> get_bias_if_not_allowed {
     (<span class="macro-nonterminal">$tok_trie</span>:expr, <span class="macro-nonterminal">$rx</span>:expr, <span class="macro-nonterminal">$next_token_id</span>:expr) =&gt; {
         <span class="kw">if </span><span class="macro-nonterminal">$tok_trie</span>.token_allowed(<span class="macro-nonterminal">$rx</span>, <span class="macro-nonterminal">$next_token_id</span>) {
@@ -448,7 +464,8 @@
     };
 }
 
-<span class="attr">#[macro_export]
+<span class="attr">#[doc(hidden)]
+#[macro_export]
 </span><span class="macro">macro_rules!</span> sample_async {
     (
         <span class="macro-nonterminal">$use_async_pool</span>: expr,
@@ -482,7 +499,8 @@
     };
 }
 
-<span class="attr">#[macro_export]
+<span class="attr">#[doc(hidden)]
+#[macro_export]
 </span><span class="macro">macro_rules!</span> serde_default_fn {
     (<span class="macro-nonterminal">$t</span>:ty, <span class="macro-nonterminal">$name</span>:ident, <span class="macro-nonterminal">$v</span>:expr) =&gt; {
         <span class="kw">fn </span><span class="macro-nonterminal">$name</span>() -&gt; <span class="macro-nonterminal">$t </span>{

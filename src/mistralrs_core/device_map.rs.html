@@ -152,6 +152,8 @@
 <a href="#150" id="150">150</a>
 <a href="#151" id="151">151</a>
 <a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::fmt::Debug;
 
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
@@ -160,6 +162,7 @@
 <span class="kw">use </span>tracing::info;
 
 <span class="attr">#[derive(Debug, Default, Deserialize, Clone)]
+</span><span class="doccomment">/// Metadata to initialize the device mapper.
 </span><span class="kw">pub struct </span>DeviceMapMetadata {
     device_layers: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     host_layers: <span class="prelude-ty">Option</span>&lt;usize&gt;,
@@ -234,6 +237,7 @@
 }
 
 <span class="attr">#[derive(Debug)]
+</span><span class="doccomment">/// A device mapper which does device mapping per hidden layer.
 </span><span class="kw">pub struct </span>LayerDeviceMapper {
     mappings: Vec&lt;Device&gt;,
     nm_device: Device,

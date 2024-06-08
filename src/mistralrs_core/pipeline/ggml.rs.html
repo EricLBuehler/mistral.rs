@@ -519,6 +519,7 @@
 <a href="#517" id="517">517</a>
 <a href="#518" id="518">518</a>
 <a href="#519" id="519">519</a>
+<a href="#520" id="520">520</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -578,7 +579,8 @@
     metadata: GeneralMetadata,
 }
 
-<span class="kw">pub struct </span>GGMLLoader {
+<span class="doccomment">/// A loader for a GGML model.
+</span><span class="kw">pub struct </span>GGMLLoader {
     model_id: String,
     config: GGMLSpecificConfig,
     quantized_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,

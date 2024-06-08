@@ -577,6 +577,8 @@
 <a href="#575" id="575">575</a>
 <a href="#576" id="576">576</a>
 <a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     iter::zip,
@@ -605,7 +607,8 @@
     IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
 };
 
-<span class="kw">pub struct </span>SpeculativeLoader {
+<span class="doccomment">/// A loader for a speculative pipeline using 2 [`Loader`]s.
+</span><span class="kw">pub struct </span>SpeculativeLoader {
     <span class="kw">pub </span>target: Box&lt;<span class="kw">dyn </span>Loader&gt;,
     <span class="kw">pub </span>draft: Box&lt;<span class="kw">dyn </span>Loader&gt;,
     <span class="kw">pub </span>config: SpeculativeConfig,
@@ -717,6 +720,7 @@
 }
 
 <span class="attr">#[derive(Copy, Clone)]
+</span><span class="doccomment">/// Metadata for a speculative pipeline
 </span><span class="kw">pub struct </span>SpeculativeConfig {
     <span class="doccomment">/// γ completions to run of the draft model
     </span><span class="kw">pub </span>gamma: usize,

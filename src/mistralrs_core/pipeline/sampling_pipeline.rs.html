@@ -228,7 +228,10 @@
 <a href="#226" id="226">226</a>
 <a href="#227" id="227">227</a>
 <a href="#228" id="228">228</a>
-</pre></div><pre class="rust"><code><span class="attr">#[macro_export]
+<a href="#229" id="229">229</a>
+<a href="#230" id="230">230</a>
+</pre></div><pre class="rust"><code><span class="attr">#[doc(hidden)]
+#[macro_export]
 </span><span class="macro">macro_rules!</span> finish_and_add_tokens_to_seq {
     (<span class="macro-nonterminal">$this</span>:expr, <span class="macro-nonterminal">$prefix_cacher</span>:expr, <span class="macro-nonterminal">$seq</span>:expr, <span class="macro-nonterminal">$logprobs</span>:expr, <span class="macro-nonterminal">$eos_tok</span>:expr, <span class="macro-nonterminal">$use_prefix_cacher</span>:expr) =&gt; {{
         <span class="kw">let </span>is_done = <span class="macro-nonterminal">$seq</span>.is_done(<span class="macro-nonterminal">$logprobs</span>.token, <span class="macro-nonterminal">$eos_tok</span>, <span class="macro-nonterminal">$this</span>.metadata.max_seq_len);
@@ -407,7 +410,8 @@
 }
 
 <span class="doccomment">/// Sample and add to the prefix cache.
-</span><span class="attr">#[macro_export]
+</span><span class="attr">#[doc(hidden)]
+#[macro_export]
 </span><span class="macro">macro_rules!</span> do_sample {
     (<span class="macro-nonterminal">$this</span>:expr, <span class="macro-nonterminal">$seqs</span>:expr, <span class="macro-nonterminal">$logits</span>:expr, <span class="macro-nonterminal">$prefix_cacher</span>:expr, <span class="macro-nonterminal">$disable_eos_stop</span>:expr, <span class="macro-nonterminal">$rng</span>:expr) =&gt; {{
         <span class="kw">let </span>seqs_len = <span class="macro-nonterminal">$seqs</span>.len();

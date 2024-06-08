@@ -299,6 +299,7 @@
 <a href="#297" id="297">297</a>
 <a href="#298" id="298">298</a>
 <a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::fs::{<span class="self">self</span>, File};
 
 <span class="kw">use crate</span>::{
@@ -310,7 +311,8 @@
     VisionSpecificConfig,
 };
 
-<span class="kw">pub struct </span>LoaderBuilder {
+<span class="doccomment">/// A builder for a loader using the selected model.
+</span><span class="kw">pub struct </span>LoaderBuilder {
     model: ModelSelected,
     no_kv_cache: bool,
     chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,

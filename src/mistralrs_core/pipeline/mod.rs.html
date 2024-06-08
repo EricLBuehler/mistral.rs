@@ -904,6 +904,7 @@
 <a href="#902" id="902">902</a>
 <a href="#903" id="903">903</a>
 <a href="#904" id="904">904</a>
+<a href="#905" id="905">905</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>cache_manager;
 <span class="kw">pub mod </span>chat_template;
 <span class="kw">mod </span>ggml;
@@ -1009,6 +1010,7 @@
 }
 
 <span class="attr">#[derive(Clone)]
+</span><span class="doccomment">/// All local paths and metadata necessary to load a model.
 </span><span class="kw">pub struct </span>LocalModelPaths&lt;P&gt; {
     tokenizer_filename: P,
     config_filename: P,
