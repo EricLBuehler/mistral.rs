@@ -17,7 +17,7 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 ---
 
 **Image:**
-<img src="https://upload.wikimedia.org/wikipedia/commons/e/e7/Everest_North_Face_toward_Base_Camp_Tibet_Luca_Galuzzi_2006.jpg" alt="Mount Everest" width = "1000" height = "666">
+<img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "1000" height = "666">
 
 **Prompt:**
 ```
@@ -26,7 +26,7 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 
 **Output:**
 ```
-The image shows a large, snow-covered mountain with a clear blue sky. There are no visible clouds or precipitation, and the mountain appears to be quite steep with visible crevices and ridges. The surrounding landscape includes rocky terrain at the base of the mountain.
+The image shows a snow-covered mountain with a clear sky above and trees at the base. There appears to be a trail or path leading up the mountain, and some structures can be seen on the peak.
 ```
 
 ---
@@ -53,7 +53,7 @@ completion = openai.chat.completions.create(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": "https://upload.wikimedia.org/wikipedia/commons/e/e7/Everest_North_Face_toward_Base_Camp_Tibet_Luca_Galuzzi_2006.jpg"
+                        "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
                     },
                 },
                 {
