@@ -689,7 +689,7 @@
             .reshape((b_sz, seq_len, <span class="self">self</span>.n_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>k = k
-            .reshape((b_sz, seq_len, <span class="self">self</span>.n_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
+            .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>v = v
             .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
@@ -871,8 +871,8 @@
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
-                cos: cos.clone(),
-                sin: sin.clone(),
+                cos: cos.to_device(device)<span class="question-mark">?</span>,
+                sin: sin.to_device(device)<span class="question-mark">?</span>,
                 sliding_window: context_window,
             })
         }
