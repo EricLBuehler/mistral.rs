@@ -274,6 +274,7 @@ impl VisionEmbeddings {
 
         let mut new_position_ids = Vec::new();
         for (b_idx, p_attn_mask) in patch_attention_mask.chunk(bs, 0)?.iter().enumerate() {
+            let p_attn_mask = p_attn_mask.squeeze(0)?;
             let nb_patches_h = p_attn_mask.i((.., 0))?.sum_all()?;
             let nb_patches_w = p_attn_mask.i((0,))?.sum_all()?;
 
