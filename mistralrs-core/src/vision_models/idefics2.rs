@@ -587,9 +587,9 @@ impl Mlp {
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.down_proj
-            .forward(&self.activation.forward(&self.gate_proj.forward(x)?)?)?
-            * self.up_proj.forward(x)?
+        self.down_proj.forward(
+            &(self.activation.forward(&self.gate_proj.forward(x)?)? * self.up_proj.forward(x)?)?,
+        )
     }
 }
 
