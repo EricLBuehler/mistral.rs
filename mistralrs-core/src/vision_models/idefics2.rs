@@ -638,6 +638,7 @@ impl PerceiverAttention {
         attention_mask: &Tensor,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = latents.dims3()?;
+        let kv_seq_len = q_len + context.dims()[1];
 
         let hidden_states = Tensor::cat(&[context, latents], D::Minus2)?;
 
@@ -649,10 +650,10 @@ impl PerceiverAttention {
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
         let k = k
-            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+            .reshape((b_sz, kv_seq_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
         let v = v
-            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+            .reshape((b_sz, kv_seq_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
