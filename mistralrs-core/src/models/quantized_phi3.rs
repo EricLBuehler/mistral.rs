@@ -282,8 +282,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
-                cos: cos.clone(),
-                sin: sin.clone(),
+                cos: cos.to_device(&device)?,
+                sin: sin.to_device(&device)?,
                 sliding_window: context_window,
             })
         }
