@@ -1029,7 +1029,10 @@ mod tests {
 
         use super::unfold_dim3_in_1;
 
-        let input = Tensor::arange(0f32, 2. * 3. * 4., &Device::Cpu).unwrap();
+        let input = Tensor::arange(0f32, 2. * 3. * 4., &Device::Cpu)
+            .unwrap()
+            .reshape((1, 2, 3, 4))
+            .unwrap();
         let res = unfold_dim3_in_1(&input, 2, 1).unwrap().i((0, 0)).unwrap();
         let data = res.to_vec3::<f32>().unwrap();
         assert_eq!(
