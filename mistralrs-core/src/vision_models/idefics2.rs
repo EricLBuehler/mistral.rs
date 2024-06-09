@@ -304,7 +304,7 @@ impl VisionEmbeddings {
                 .flatten_all()?;
 
             let position_ids_b = position_ids.i(b_idx)?;
-            new_position_ids.push(p_attn_mask.where_cond(&pos_ids, &position_ids_b)?);
+            new_position_ids.push(p_attn_mask.flatten_all()?.where_cond(&pos_ids, &position_ids_b)?);
         }
         let position_ids = Tensor::cat(&new_position_ids, 0)?;
         let position_ids = position_ids.to_device(self.position_embedding.embeddings().device())?;
