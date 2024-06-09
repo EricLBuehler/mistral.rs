@@ -659,15 +659,16 @@ impl PerceiverAttention {
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * (self.head_dim as f64).sqrt())?;
+        let attn_weights = (q.contiguous()?.matmul(&k.transpose(2, 3)?.contiguous()?)?
+            * (self.head_dim as f64).sqrt())?;
 
         let attn_weights = CausalMasker.apply_mask_one_and_zero(
-            &Some(attention_mask.clone()),
+            &Some(attention_mask.to_dtype(DType::U8)?),
             attn_weights,
             &self.neg_inf,
         )?;
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-        let attn_output = attn_weights.matmul(&v)?;
+        let attn_output = attn_weights.matmul(&v.contiguous()?)?;
 
         attn_output
             .transpose(1, 2)?
