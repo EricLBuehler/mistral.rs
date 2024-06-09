@@ -224,26 +224,6 @@ fn bucketize_right(xs: &[f32], boundaries: &[f32], device: &Device) -> Result<Te
     Tensor::from_vec(accum, (xs.len(),), device)
 }
 
-fn unfold_inner(xs: &Tensor, size: usize, step: usize) -> Result<Tensor> {
-    let num_windows = (xs.dim(1)? - size) / step + 1;
-    let mut windows = Vec::new();
-    for i in 0..num_windows {
-        let start = i * step;
-        windows.push(xs.narrow(1, start, size)?);
-    }
-    Tensor::stack(&windows, 1)
-}
-
-/// Pytorch equiv: x.unfold(dim=1, ...) where len(x)==3
-fn unfold_dim3_in_1(xs: &Tensor, size: usize, step: usize) -> Result<Tensor> {
-    unfold_inner(xs, size, step)?.permute((0, 1, 3, 2))
-}
-
-/// Pytorch equiv: x.unfold(dim=2, ...) where len(x)==4
-fn unfold_dim4_in_2(xs: &Tensor, size: usize, step: usize) -> Result<Tensor> {
-    unfold_inner(xs, size, step)?.permute((0, 1, 2, 4, 3))
-}
-
 impl VisionEmbeddings {
     fn new(config: &VisionConfig, vb: VarBuilder) -> Result<Self> {
         let conv_config = Conv2dConfig {
@@ -930,8 +910,8 @@ impl Idefics2 {
             };
 
             let patch_size = self.config.vision_config.patch_size;
-            let patches_subgrid = unfold_dim3_in_1(&pixel_attention_mask, patch_size, patch_size)?;
-            let patches_subgrid = unfold_dim4_in_2(&patches_subgrid, patch_size, patch_size)?;
+            let patches_subgrid = pixel_attention_mask.unfold(1, patch_size, patch_size)?;
+            let patches_subgrid = patches_subgrid.unfold(2, patch_size, patch_size)?;
             let patch_attention_mask = patches_subgrid
                 .flatten(D::Minus2, D::Minus1)?
                 .sum(D::Minus1)?
@@ -1012,29 +992,5 @@ impl VisionModel for Idefics2 {
     }
     fn has_conv2d(&self) -> bool {
         true
-    }
-}
-
-mod tests {
-    #[test]
-    fn test_unfold_dim1() {
-        use candle_core::{Device, IndexOp, Tensor};
-
-        use super::unfold_dim3_in_1;
-
-        let input = Tensor::arange(0f32, 2. * 3. * 4., &Device::Cpu)
-            .unwrap()
-            .reshape((1, 2, 3, 4))
-            .unwrap();
-        let res = unfold_dim3_in_1(&input, 2, 1).unwrap().i((0, 0)).unwrap();
-        let data = res.to_vec3::<f32>().unwrap();
-        assert_eq!(
-            data,
-            vec![
-                [[0f32, 12.], [1., 13.], [2., 14.], [3., 15.]],
-                [[4., 16.], [5., 17.], [6., 18.], [7., 19.]],
-                [[8., 20.], [9., 21.], [10., 22.], [11., 23.]]
-            ]
-        );
     }
 }
