@@ -29,9 +29,9 @@ pub fn get_resize_image_size(
     let aspect_ratio = w as f64 / h as f64;
 
     let (new_h, new_w) = if w >= h && w > max_len {
-        ((w as f64 / aspect_ratio) as usize, max_len)
+        ((max_len as f64 / aspect_ratio) as usize, max_len)
     } else if h > w && h > max_len {
-        (max_len, (h as f64 * aspect_ratio) as usize)
+        (max_len, (max_len as f64 * aspect_ratio) as usize)
     } else {
         (h, w)
     };

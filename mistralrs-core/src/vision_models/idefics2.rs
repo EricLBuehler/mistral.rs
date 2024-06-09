@@ -1021,3 +1021,24 @@ impl VisionModel for Idefics2 {
         true
     }
 }
+
+mod tests {
+    #[test]
+    fn test_unfold_dim1() {
+        use candle_core::{Device, IndexOp, Tensor};
+
+        use super::unfold_dim3_in_1;
+
+        let input = Tensor::arange(0f32, 2. * 3. * 4., &Device::Cpu).unwrap();
+        let res = unfold_dim3_in_1(&input, 2, 1).unwrap().i((0, 0)).unwrap();
+        let data = res.to_vec3::<f32>().unwrap();
+        assert_eq!(
+            data,
+            vec![
+                [[0f32, 12.], [1., 13.], [2., 14.], [3., 15.]],
+                [[4., 16.], [5., 17.], [6., 18.], [7., 19.]],
+                [[8., 20.], [9., 21.], [10., 22.], [11., 23.]]
+            ]
+        );
+    }
+}
