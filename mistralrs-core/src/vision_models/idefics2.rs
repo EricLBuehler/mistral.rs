@@ -323,14 +323,7 @@ impl VisionEmbeddings {
                 .flatten_all()?;
 
             let position_ids_b = position_ids.i(b_idx)?;
-            let p_attn_mask = p_attn_mask.flatten_all()?;
-            let mask_true = p_attn_mask.to_dtype(DType::U32)?.eq(&Tensor::arange(
-                0u32,
-                p_attn_mask.dims()[0] as u32,
-                p_attn_mask.device(),
-            )?)?;
-            // position_ids[batch_idx][p_attn_mask.view(-1).cpu()] = pos_ids
-            new_position_ids.push(mask_true.where_cond(&pos_ids, &position_ids_b)?);
+            new_position_ids.push(p_attn_mask.where_cond(&pos_ids, &position_ids_b)?);
         }
         let position_ids = Tensor::cat(&new_position_ids, 0)?;
         let position_ids = position_ids.to_device(self.position_embedding.embeddings().device())?;
