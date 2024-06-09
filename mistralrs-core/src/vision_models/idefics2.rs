@@ -304,9 +304,13 @@ impl VisionEmbeddings {
                 .flatten_all()?;
 
             let position_ids_b = position_ids.i(b_idx)?;
-            new_position_ids.push(p_attn_mask.flatten_all()?.where_cond(&pos_ids, &position_ids_b)?);
+            new_position_ids.push(
+                p_attn_mask
+                    .flatten_all()?
+                    .where_cond(&pos_ids, &position_ids_b)?,
+            );
         }
-        let position_ids = Tensor::cat(&new_position_ids, 0)?;
+        let position_ids = Tensor::stack(&new_position_ids, 0)?;
         let position_ids = position_ids.to_device(self.position_embedding.embeddings().device())?;
         embeddings.broadcast_add(&self.position_embedding.forward(&position_ids)?)
     }
@@ -373,15 +377,16 @@ impl Attention {
 
         let (k, v) = Cache::update_kv_cache(vision_transformer_kv_cache, k, v, false)?;
 
-        let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * self.scale)?;
+        let attn_weights =
+            (q.contiguous()?.matmul(&k.transpose(2, 3)?.contiguous()?)? * self.scale)?;
 
         let attn_weights = CausalMasker.apply_mask_one_and_zero(
-            &attention_mask.cloned(),
+            &attention_mask.map(|x| x.to_dtype(DType::U8).unwrap()),
             attn_weights,
             &self.neg_inf,
         )?;
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-        let attn_output = attn_weights.matmul(&v)?;
+        let attn_output = attn_weights.matmul(&v.contiguous()?)?;
 
         attn_output
             .transpose(1, 2)?
@@ -540,8 +545,10 @@ impl VisionTransformer {
         let attention_mask = if attention_mask.is_none() {
             None
         } else {
-            let mask = patch_attention_mask.reshape((patch_attention_mask.dim(0)?, ()))?;
-            Some(CausalMasker.expand_mask(&mask, patch_attention_mask.dtype(), None)?)
+            let mask = patch_attention_mask
+                .reshape((patch_attention_mask.dim(0)?, ()))?
+                .to_dtype(hidden_states.dtype())?;
+            Some(CausalMasker.expand_mask(&mask, hidden_states.dtype(), None)?)
         };
         let hidden_states = self
             .encoder
