@@ -23,6 +23,24 @@ impl ContentMetadata<'_> {
             .or_else(|e| anyhow::bail!("`{prop_key}` `{e}`"))
     }
 
+    // Retrieve a prop the struct needs by querying the metadata content:
+    pub fn get_option_value<T: TryFromValue>(
+        &self,
+        field_name: &str,
+    ) -> Result<Option<T>, anyhow::Error> {
+        let prop_key = format!("{prefix}.{field_name}", prefix = self.path_prefix);
+        let value = self.metadata.get(&prop_key).cloned();
+
+        // Unwrap the inner value of the `Value` enum via trait method,
+        // otherwise format error with prop key as context:
+        value
+            .map(|v| {
+                v.try_value_into()
+                    .or_else(|e| anyhow::bail!("`{prop_key}` `{e}`"))
+            })
+            .map_or(Ok(None), |res| res.map(Some))
+    }
+
     // Fail early - Catch all missing mandatory keys upfront:
     pub fn has_required_keys(&self, fields: &[&str]) -> Result<()> {
         let mut all_props_are_present = true;

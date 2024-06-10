@@ -71,8 +71,8 @@ pub trait ModelPaths {
     /// [`tokenizers.Tokenizer`]: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/tokenizer
     fn get_tokenizer_filename(&self) -> &PathBuf;
 
-    /// Content expected to deserialize to [`ChatTemplate`].
-    fn get_template_filename(&self) -> &PathBuf;
+    /// File where the content is expected to deserialize to [`ChatTemplate`].
+    fn get_template_filename(&self) -> &Option<PathBuf>;
 
     /// Optional adapter files. `(String, PathBuf)` is of the form `(id name, path)`.
     fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>>;
@@ -107,7 +107,7 @@ pub trait ModelPaths {
 pub struct LocalModelPaths<P> {
     tokenizer_filename: P,
     config_filename: P,
-    template_filename: P,
+    template_filename: Option<P>,
     filenames: Vec<P>,
     xlora_adapter_filenames: Option<Vec<(String, P)>>,
     xlora_adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
@@ -140,7 +140,7 @@ impl<P> LocalModelPaths<P> {
         Self {
             tokenizer_filename,
             config_filename,
-            template_filename,
+            template_filename: Some(template_filename),
             filenames,
             xlora_adapter_filenames,
             xlora_adapter_configs,
@@ -180,7 +180,7 @@ impl ModelPaths for LocalModelPaths<PathBuf> {
     fn get_ordering(&self) -> &Option<Ordering> {
         &self.xlora_ordering
     }
-    fn get_template_filename(&self) -> &PathBuf {
+    fn get_template_filename(&self) -> &Option<PathBuf> {
         &self.template_filename
     }
     fn get_gen_conf_filename(&self) -> Option<&PathBuf> {

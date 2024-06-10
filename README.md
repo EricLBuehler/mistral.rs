@@ -309,7 +309,13 @@ Throughout mistral.rs, any model ID argument or option may be a local path and s
 
 ### Running GGUF models locally
 
-To run GGUF models fully locally, you do not need to specify the tokenizer model ID argument and instead should pass a path to the
+To run GGUF models fully locally, the only mandatory arguments are the quantized model ID and the quantized filename. 
+
+#### Chat template
+
+The chat template can be automatically detected and loaded from the GGUF file if no other chat template source is specified including the tokenizer model ID.
+
+you do not need to specify the tokenizer model ID argument and instead should pass a path to the
 chat template JSON file (examples [here](chat_templates), you will need to create your own by specifying the chat template and `bos`/`eos` tokens) as well as specifying a local model ID. For example:
 
 ```bash
@@ -317,6 +323,8 @@ chat template JSON file (examples [here](chat_templates), you will need to creat
 ```
 
 If you do not specify a chat template, then the `--tok-model-id`/`-t` tokenizer model ID argument is expected where the `tokenizer_config.json` file should be provided. If that model ID contains a `tokenizer.json`, then that will be used over the GGUF tokenizer.
+
+#### Tokenizer
 
 The following tokenizer model types are currently supported. If you would like one to be added, please raise an issue. Otherwise,
 please consider using the method demonstrated in examples below, where the tokenizer is sourced from Hugging Face.
