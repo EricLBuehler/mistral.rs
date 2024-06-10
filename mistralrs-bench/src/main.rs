@@ -3,8 +3,8 @@ use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
     Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder,
-    ModelSelected, NormalRequest, Request, RequestMessage, Response, SamplingParams,
-    SchedulerMethod, TokenSource, Usage,
+    ModelSelected, NonQuantizedDType, NormalRequest, Request, RequestMessage, Response,
+    SamplingParams, SchedulerMethod, TokenSource, Usage,
 };
 use std::fmt::Display;
 use std::sync::Arc;
@@ -313,7 +313,7 @@ fn main() -> anyhow::Result<()> {
     let pipeline = loader.load_model_from_hf(
         None,
         token_source,
-        None,
+        &NonQuantizedDType::Auto,
         &device,
         false,
         args.num_device_layers

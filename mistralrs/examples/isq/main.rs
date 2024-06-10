@@ -3,8 +3,8 @@ use tokio::sync::mpsc::channel;
 
 use mistralrs::{
     Constraint, Device, DeviceMapMetadata, GgmlDType, MistralRs, MistralRsBuilder,
-    NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig, Request,
-    RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
+    NonQuantizedDType, NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig,
+    Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
 };
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {
@@ -23,7 +23,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
     let pipeline = loader.load_model_from_hf(
         None,
         TokenSource::CacheToken,
-        None,
+        &NonQuantizedDType::Auto,
         &Device::cuda_if_available(0)?,
         false,
         DeviceMapMetadata::dummy(),

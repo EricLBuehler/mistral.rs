@@ -19,9 +19,10 @@ use candle_core::Device;
 use mistralrs_core::{
     ChatCompletionResponse, CompletionResponse, Constraint, DeviceMapMetadata, GGMLLoaderBuilder,
     GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder,
-    NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, Request as _Request, RequestMessage,
-    Response, SamplingParams, SchedulerMethod, SpeculativeConfig, SpeculativeLoader, StopTokens,
-    TokenSource, VisionLoaderBuilder, VisionSpecificConfig,
+    NonQuantizedDType, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig,
+    Request as _Request, RequestMessage, Response, SamplingParams, SchedulerMethod,
+    SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource, VisionLoaderBuilder,
+    VisionSpecificConfig,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
@@ -412,7 +413,7 @@ impl Runner {
                 None,
                 TokenSource::from_str(token_source)
                     .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                None,
+                &NonQuantizedDType::Auto,
                 &device,
                 true, // Silent for jupyter
                 num_device_layers
