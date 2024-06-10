@@ -640,6 +640,19 @@
 <a href="#638" id="638">638</a>
 <a href="#639" id="639">639</a>
 <a href="#640" id="640">640</a>
+<a href="#641" id="641">641</a>
+<a href="#642" id="642">642</a>
+<a href="#643" id="643">643</a>
+<a href="#644" id="644">644</a>
+<a href="#645" id="645">645</a>
+<a href="#646" id="646">646</a>
+<a href="#647" id="647">647</a>
+<a href="#648" id="648">648</a>
+<a href="#649" id="649">649</a>
+<a href="#650" id="650">650</a>
+<a href="#651" id="651">651</a>
+<a href="#652" id="652">652</a>
+<a href="#653" id="653">653</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -652,18 +665,23 @@
 };
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
-<span class="kw">use </span><span class="kw">crate</span>::gguf::{convert_gguf_to_hf_tokenizer, GgufTokenizerConversion};
+<span class="kw">use </span><span class="kw">crate</span>::gguf::{
+    get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
+};
 <span class="kw">use </span><span class="kw">crate</span>::lora::Ordering;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{get_chat_template, Cache};
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::{ChatTemplate, LocalModelPaths};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
 <span class="kw">use </span><span class="kw">crate</span>::utils::debug::setup_logger_and_debug;
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
-<span class="kw">use crate</span>::{do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, Pipeline, DEBUG};
+<span class="kw">use crate</span>::{
+    do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths, Pipeline,
+    DEBUG,
+};
 <span class="kw">use crate</span>::{
     models::quantized_llama::ModelWeights <span class="kw">as </span>QLlama,
     models::quantized_phi2::ModelWeights <span class="kw">as </span>QPhi,
@@ -1020,6 +1038,14 @@
             }
         };
 
+        <span class="comment">// Only load gguf chat template if there is nothing else
+        </span><span class="kw">let </span>gguf_chat_template =
+            <span class="kw">if </span>paths.get_template_filename().is_none() &amp;&amp; <span class="self">self</span>.chat_template.is_none() {
+                get_gguf_chat_template(<span class="kw-2">&amp;</span>model)<span class="question-mark">?
+            </span>} <span class="kw">else </span>{
+                <span class="prelude-val">None
+            </span>};
+
         <span class="kw">let </span>has_adapter = <span class="self">self</span>.kind.is_adapted();
         <span class="kw">let </span>is_xlora = <span class="self">self</span>.kind.is_adapted_and(|a| a.is_x_lora());
 
@@ -1063,7 +1089,7 @@
         <span class="kw">let </span>gen_conf: <span class="prelude-ty">Option</span>&lt;GenerationConfig&gt; = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap()).unwrap());
-        <span class="kw">let </span><span class="kw-2">mut </span>chat_template = get_chat_template(paths, <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template);
+        <span class="kw">let </span><span class="kw-2">mut </span>chat_template = get_chat_template(paths, <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template, gguf_chat_template);
 
         <span class="kw">let </span>max_seq_len = <span class="kw">match </span>model {
             Model::Llama(<span class="kw-2">ref </span>l) =&gt; l.max_seq_len,

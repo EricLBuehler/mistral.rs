@@ -125,6 +125,24 @@
 <a href="#123" id="123">123</a>
 <a href="#124" id="124">124</a>
 <a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>akin::akin;
 <span class="kw">use </span>anyhow::ensure;
 <span class="kw">use </span>anyhow::Result;
@@ -148,6 +166,24 @@
         </span>value
             .try_value_into()
             .or_else(|e| <span class="macro">anyhow::bail!</span>(<span class="string">"`{prop_key}` `{e}`"</span>))
+    }
+
+    <span class="comment">// Retrieve a prop the struct needs by querying the metadata content:
+    </span><span class="kw">pub fn </span>get_option_value&lt;T: TryFromValue&gt;(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        field_name: <span class="kw-2">&amp;</span>str,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;T&gt;, anyhow::Error&gt; {
+        <span class="kw">let </span>prop_key = <span class="macro">format!</span>(<span class="string">"{prefix}.{field_name}"</span>, prefix = <span class="self">self</span>.path_prefix);
+        <span class="kw">let </span>value = <span class="self">self</span>.metadata.get(<span class="kw-2">&amp;</span>prop_key).cloned();
+
+        <span class="comment">// Unwrap the inner value of the `Value` enum via trait method,
+        // otherwise format error with prop key as context:
+        </span>value
+            .map(|v| {
+                v.try_value_into()
+                    .or_else(|e| <span class="macro">anyhow::bail!</span>(<span class="string">"`{prop_key}` `{e}`"</span>))
+            })
+            .map_or(<span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>), |res| res.map(<span class="prelude-val">Some</span>))
     }
 
     <span class="comment">// Fail early - Catch all missing mandatory keys upfront:

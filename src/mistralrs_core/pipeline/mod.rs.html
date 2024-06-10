@@ -978,8 +978,8 @@
     /// [`tokenizers.Tokenizer`]: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/tokenizer
     </span><span class="kw">fn </span>get_tokenizer_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf;
 
-    <span class="doccomment">/// Content expected to deserialize to [`ChatTemplate`].
-    </span><span class="kw">fn </span>get_template_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf;
+    <span class="doccomment">/// File where the content is expected to deserialize to [`ChatTemplate`].
+    </span><span class="kw">fn </span>get_template_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt;;
 
     <span class="doccomment">/// Optional adapter files. `(String, PathBuf)` is of the form `(id name, path)`.
     </span><span class="kw">fn </span>get_adapter_filenames(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Vec&lt;(String, PathBuf)&gt;&gt;;
@@ -1014,7 +1014,7 @@
 </span><span class="kw">pub struct </span>LocalModelPaths&lt;P&gt; {
     tokenizer_filename: P,
     config_filename: P,
-    template_filename: P,
+    template_filename: <span class="prelude-ty">Option</span>&lt;P&gt;,
     filenames: Vec&lt;P&gt;,
     xlora_adapter_filenames: <span class="prelude-ty">Option</span>&lt;Vec&lt;(String, P)&gt;&gt;,
     xlora_adapter_configs: <span class="prelude-ty">Option</span>&lt;Vec&lt;((String, String), LoraConfig)&gt;&gt;,
@@ -1047,7 +1047,7 @@
         <span class="self">Self </span>{
             tokenizer_filename,
             config_filename,
-            template_filename,
+            template_filename: <span class="prelude-val">Some</span>(template_filename),
             filenames,
             xlora_adapter_filenames,
             xlora_adapter_configs,
@@ -1087,7 +1087,7 @@
     <span class="kw">fn </span>get_ordering(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Ordering&gt; {
         <span class="kw-2">&amp;</span><span class="self">self</span>.xlora_ordering
     }
-    <span class="kw">fn </span>get_template_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf {
+    <span class="kw">fn </span>get_template_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt; {
         <span class="kw-2">&amp;</span><span class="self">self</span>.template_filename
     }
     <span class="kw">fn </span>get_gen_conf_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>PathBuf&gt; {

@@ -453,6 +453,20 @@
 <a href="#451" id="451">451</a>
 <a href="#452" id="452">452</a>
 <a href="#453" id="453">453</a>
+<a href="#454" id="454">454</a>
+<a href="#455" id="455">455</a>
+<a href="#456" id="456">456</a>
+<a href="#457" id="457">457</a>
+<a href="#458" id="458">458</a>
+<a href="#459" id="459">459</a>
+<a href="#460" id="460">460</a>
+<a href="#461" id="461">461</a>
+<a href="#462" id="462">462</a>
+<a href="#463" id="463">463</a>
+<a href="#464" id="464">464</a>
+<a href="#465" id="465">465</a>
+<a href="#466" id="466">466</a>
+<a href="#467" id="467">467</a>
 </pre></div><pre class="rust"><code><span class="attr">#[doc(hidden)]
 #[macro_export]
 </span><span class="macro">macro_rules!</span> api_dir_list {
@@ -623,8 +637,17 @@
             <span class="prelude-val">None
         </span>};
 
-        <span class="macro">info!</span>(<span class="string">"Loading `tokenizer_config.json` at `{}`"</span>, <span class="macro-nonterminal">$this</span>.model_id);
-        <span class="kw">let </span>template_filename = <span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(<span class="macro-nonterminal">api</span>, <span class="string">"tokenizer_config.json"</span>, model_id);
+        <span class="kw">let </span>template_filename = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>p) = <span class="macro-nonterminal">$this</span>.chat_template {
+            <span class="macro">info!</span>(<span class="string">"Using chat template file at `{p}`"</span>);
+            <span class="prelude-val">Some</span>(PathBuf::from_str(p)<span class="question-mark">?</span>)
+        } <span class="kw">else </span>{
+            <span class="macro">info!</span>(<span class="string">"Loading `tokenizer_config.json` at `{}`"</span>, <span class="macro-nonterminal">$this</span>.model_id);
+            <span class="prelude-val">Some</span>(<span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(
+                <span class="macro-nonterminal">api</span>,
+                <span class="string">"tokenizer_config.json"</span>,
+                model_id
+            ))
+        };
 
         <span class="prelude-val">Ok</span>(Box::new(<span class="macro-nonterminal">$path_name </span>{
             tokenizer_filename,
@@ -664,18 +687,23 @@
         <span class="kw">let </span>chat_template = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>p) = <span class="macro-nonterminal">$this</span>.chat_template {
             <span class="kw">if </span>p.ends_with(<span class="string">".json"</span>) {
                 <span class="macro">info!</span>(<span class="string">"Using chat template file at `{p}`"</span>);
-                PathBuf::from_str(p)<span class="question-mark">?
-            </span>} <span class="kw">else </span>{
-                PathBuf::from_str(<span class="string">""</span>)<span class="question-mark">?
-            </span>}
+                <span class="prelude-val">Some</span>(PathBuf::from_str(p)<span class="question-mark">?</span>)
+            } <span class="kw">else </span>{
+                <span class="macro">panic!</span>(<span class="string">"Specified chat template file must end with .json"</span>);
+            }
         } <span class="kw">else </span>{
-            <span class="macro">info!</span>(<span class="string">"Loading `tokenizer_config.json` at `{}` because no chat template file was specified."</span>, this_model_id);
-            <span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(
-                <span class="macro-nonterminal">api</span>,
-                <span class="string">"tokenizer_config.json"</span>,
-                model_id
-            ) <span class="comment">// Will be loaded from inside gguf file
-        </span>};
+            <span class="kw">if </span><span class="macro-nonterminal">$this</span>.model_id.is_none() {
+                <span class="prelude-val">None
+            </span>} <span class="kw">else </span>{
+                <span class="macro">info!</span>(<span class="string">"Loading `tokenizer_config.json` at `{}` because no chat template file was specified."</span>, this_model_id);
+                <span class="kw">let </span>res = <span class="macro-nonterminal">$</span><span class="macro">crate::api_get_file!</span>(
+                    <span class="macro-nonterminal">api</span>,
+                    <span class="string">"tokenizer_config.json"</span>,
+                    model_id
+                );
+                <span class="prelude-val">Some</span>(res)
+            }
+        };
 
         <span class="kw">let </span>filenames = get_model_paths(
             revision.clone(),

@@ -3,7 +3,11 @@
     <main><nav class="sub"><form class="search-form"><span></span><div id="sidebar-button" tabindex="-1"><a href="../../../mistralrs_core/all.html" title="show sidebar"></a></div><input class="search-input" name="search" aria-label="Run search in the documentation" autocomplete="off" spellcheck="false" placeholder="Click or press ‘S’ to search, ‘?’ for more options…" type="search"><div id="help-button" tabindex="-1"><a href="../../../help.html" title="help">?</a></div><div id="settings-menu" tabindex="-1"><a href="../../../settings.html" title="settings"><img width="22" height="22" alt="Change settings" src="../../../static.files/wheel-7b819b6101059cd0.svg"></a></div></form></nav><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
-</pre></div><pre class="rust"><code><span class="kw">mod </span>gguf_tokenizer;
+<a href="#4" id="4">4</a>
+<a href="#5" id="5">5</a>
+</pre></div><pre class="rust"><code><span class="kw">mod </span>chat_template;
+<span class="kw">mod </span>gguf_tokenizer;
 
+<span class="kw">pub use </span>chat_template::get_gguf_chat_template;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>gguf_tokenizer::{convert_gguf_to_hf_tokenizer, GgufTokenizerConversion};
 </code></pre></div></section></main></body></html>

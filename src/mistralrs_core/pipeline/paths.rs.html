@@ -378,6 +378,20 @@
 <a href="#376" id="376">376</a>
 <a href="#377" id="377">377</a>
 <a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a>
+<a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a>
+<a href="#382" id="382">382</a>
+<a href="#383" id="383">383</a>
+<a href="#384" id="384">384</a>
+<a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a>
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
+<a href="#392" id="392">392</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fs,
@@ -667,46 +681,60 @@
 <span class="doccomment">/// Find and parse the appropriate [`ChatTemplate`], and ensure is has a valid [`ChatTemplate.chat_template`].
 /// If the the provided `tokenizer_config.json` from [`ModelPaths.get_template_filename`] does not
 /// have a `chat_template`, use the provided one.
+///
+/// - Uses `chat_template_fallback` if `paths` does not contain a chat template file. This may be a literal or .json file.
+/// - `chat_template_ovrd` (GGUF chat template content) causes the usage of that string chat template initially.
+///   Falls back to `chat_template_file` if it is invalid. *The user must add the bos/unk/eos tokens manually if this
+///   is used.*
 </span><span class="attr">#[allow(clippy::borrowed_box)]
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_chat_template(
     paths: <span class="kw-2">&amp;</span>Box&lt;<span class="kw">dyn </span>ModelPaths&gt;,
-    chat_template: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;String&gt;,
+    chat_template_fallback: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;String&gt;,
+    chat_template_ovrd: <span class="prelude-ty">Option</span>&lt;String&gt;,
 ) -&gt; ChatTemplate {
-    <span class="kw">let </span>template_filename = <span class="kw">if </span>paths.get_template_filename().to_string_lossy().is_empty() {
-        PathBuf::from(
-            chat_template
-                .as_ref()
-                .expect(<span class="string">"A tokenizer config or chat template file path must be specified."</span>),
-        )
-    } <span class="kw">else </span>{
-        paths.get_template_filename().clone()
-    };
-    <span class="kw">if </span>template_filename
-        .extension()
-        .expect(<span class="string">"Template filename must be a file"</span>)
-        .to_string_lossy()
-        != <span class="string">"json"
-    </span>{
-        <span class="macro">panic!</span>(<span class="string">"Template filename {template_filename:?} must end with `.json`."</span>);
-    }
-
-    <span class="kw">let </span><span class="kw-2">mut </span>template: ChatTemplate =
-        serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(<span class="kw-2">&amp;</span>template_filename).unwrap()).unwrap();
-    <span class="kw">let </span>processor_conf: <span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::vision_models::processor_config::ProcessorConfig&gt; = paths
-        .get_processor_config()
-        .as_ref()
-        .map(|f| serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap()).unwrap());
-    <span class="kw">if let </span><span class="prelude-val">Some</span>(processor_conf) = processor_conf {
-        <span class="kw">if </span>processor_conf.chat_template.is_some() {
-            template.chat_template = processor_conf.chat_template;
+    <span class="comment">// Get template content, this may be overridden.
+    </span><span class="kw">let </span>template_content = <span class="kw">if let </span><span class="prelude-val">Some</span>(template_filename) = paths.get_template_filename() {
+        <span class="kw">if </span>template_filename
+            .extension()
+            .expect(<span class="string">"Template filename must be a file"</span>)
+            .to_string_lossy()
+            != <span class="string">"json"
+        </span>{
+            <span class="macro">panic!</span>(<span class="string">"Template filename {template_filename:?} must end with `.json`."</span>);
         }
-    }
+        <span class="prelude-val">Some</span>(fs::read_to_string(template_filename).expect(<span class="string">"Loading chat template failed."</span>))
+    } <span class="kw">else if </span>chat_template_fallback
+        .as_ref()
+        .is_some_and(|f| f.ends_with(<span class="string">".json"</span>))
+    {
+        <span class="comment">// User specified a file
+        </span><span class="kw">let </span>template_filename = chat_template_fallback
+            .as_ref()
+            .expect(<span class="string">"A tokenizer config or chat template file path must be specified."</span>);
+        <span class="prelude-val">Some</span>(fs::read_to_string(template_filename).expect(<span class="string">"Loading chat template failed."</span>))
+    } <span class="kw">else if </span>chat_template_ovrd.is_some() {
+        <span class="prelude-val">None
+    </span>} <span class="kw">else </span>{
+        <span class="macro">panic!</span>(<span class="string">"Expected chat template file to end with .json, or you can specify a tokenizer model ID to load the chat template there."</span>);
+    };
+
+    <span class="kw">let </span>template: ChatTemplate = <span class="kw">match </span>chat_template_ovrd {
+        <span class="prelude-val">Some</span>(chat_template) =&gt; {
+            <span class="comment">// In this case the override chat template is being used. The user must add the bos/eos/unk toks themselves.
+            </span><span class="macro">info!</span>(<span class="string">"Using literal chat template."</span>);
+            <span class="kw">let </span><span class="kw-2">mut </span>template = ChatTemplate::default();
+            template.chat_template = <span class="prelude-val">Some</span>(chat_template);
+            template
+        }
+        <span class="prelude-val">None </span>=&gt; serde_json::from_str(<span class="kw-2">&amp;</span>template_content.as_ref().unwrap().clone()).unwrap(),
+    };
 
     <span class="attr">#[derive(Debug, serde::Deserialize)]
     </span><span class="kw">struct </span>SpecifiedTemplate {
         chat_template: String,
         bos_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
         eos_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
+        unk_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
     }
 
     <span class="kw">match </span><span class="kw-2">&amp;</span>template.chat_template {
@@ -714,34 +742,34 @@
         <span class="prelude-val">None </span>=&gt; {
             <span class="macro">info!</span>(<span class="string">"`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template."</span>);
             <span class="kw">let </span><span class="kw-2">mut </span>deser: HashMap&lt;String, Value&gt; =
-                serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(<span class="kw-2">&amp;</span>template_filename).unwrap()).unwrap();
+                serde_json::from_str(<span class="kw-2">&amp;</span>template_content.unwrap()).unwrap();
 
-            <span class="kw">match </span>chat_template.clone() {
+            <span class="kw">match </span>chat_template_fallback.clone() {
                 <span class="prelude-val">Some</span>(t) =&gt; {
-                    <span class="kw">if </span>t.ends_with(<span class="string">".json"</span>) {
-                        <span class="macro">info!</span>(<span class="string">"Loading specified loading chat template file at `{t}`."</span>);
-                        <span class="kw">let </span>templ: SpecifiedTemplate =
-                            serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(t.clone()).unwrap()).unwrap();
+                    <span class="macro">info!</span>(<span class="string">"Loading specified loading chat template file at `{t}`."</span>);
+                    <span class="kw">let </span>templ: SpecifiedTemplate =
+                        serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(t.clone()).unwrap()).unwrap();
+                    deser.insert(
+                        <span class="string">"chat_template"</span>.to_string(),
+                        Value::String(templ.chat_template),
+                    );
+                    <span class="kw">if </span>templ.bos_token.is_some() {
                         deser.insert(
-                            <span class="string">"chat_template"</span>.to_string(),
-                            Value::String(templ.chat_template),
+                            <span class="string">"bos_token"</span>.to_string(),
+                            Value::String(templ.bos_token.unwrap()),
                         );
-                        <span class="kw">if </span>templ.bos_token.is_some() {
-                            deser.insert(
-                                <span class="string">"bos_token"</span>.to_string(),
-                                Value::String(templ.bos_token.unwrap()),
-                            );
-                        }
-                        <span class="kw">if </span>templ.eos_token.is_some() {
-                            deser.insert(
-                                <span class="string">"eos_token"</span>.to_string(),
-                                Value::String(templ.eos_token.unwrap()),
-                            );
-                        }
-                        <span class="macro">info!</span>(<span class="string">"Loaded chat template file."</span>);
-                    } <span class="kw">else </span>{
-                        deser.insert(<span class="string">"chat_template"</span>.to_string(), Value::String(t));
-                        <span class="macro">info!</span>(<span class="string">"Loaded specified literal chat template."</span>);
+                    }
+                    <span class="kw">if </span>templ.eos_token.is_some() {
+                        deser.insert(
+                            <span class="string">"eos_token"</span>.to_string(),
+                            Value::String(templ.eos_token.unwrap()),
+                        );
+                    }
+                    <span class="kw">if </span>templ.unk_token.is_some() {
+                        deser.insert(
+                            <span class="string">"unk_token"</span>.to_string(),
+                            Value::String(templ.unk_token.unwrap()),
+                        );
                     }
                 }
                 <span class="prelude-val">None </span>=&gt; {
