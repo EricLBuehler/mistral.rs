@@ -19,7 +19,7 @@ use candle_core::Device;
 use mistralrs_core::{
     ChatCompletionResponse, CompletionResponse, Constraint, DeviceMapMetadata, GGMLLoaderBuilder,
     GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder,
-    NonQuantizedDType, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig,
+    ModelDType, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig,
     Request as _Request, RequestMessage, Response, SamplingParams, SchedulerMethod,
     SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource, VisionLoaderBuilder,
     VisionSpecificConfig,
@@ -413,7 +413,7 @@ impl Runner {
                 None,
                 TokenSource::from_str(token_source)
                     .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                &NonQuantizedDType::Auto,
+                &ModelDType::Auto,
                 &device,
                 true, // Silent for jupyter
                 num_device_layers

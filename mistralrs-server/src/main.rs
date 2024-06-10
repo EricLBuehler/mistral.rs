@@ -9,7 +9,7 @@ use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
 use mistralrs_core::{
     get_tgt_non_granular_index, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs,
-    MistralRsBuilder, ModelSelected, NonQuantizedDType, Request, SchedulerMethod, TokenSource,
+    MistralRsBuilder, ModelSelected, ModelDType, Request, SchedulerMethod, TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use serde::{Deserialize, Serialize};
@@ -270,7 +270,7 @@ async fn main() -> Result<()> {
     let pipeline = loader.load_model_from_hf(
         None,
         args.token_source,
-        &NonQuantizedDType::Auto,
+        &ModelDType::Auto,
         &device,
         false,
         args.num_device_layers

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
 use mistralrs::{
-    Constraint, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder, NonQuantizedDType,
+    Constraint, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder, ModelDType,
     NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig, Request,
     RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
 };
@@ -23,7 +23,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
     let pipeline = loader.load_model_from_hf(
         None,
         TokenSource::CacheToken,
-        &NonQuantizedDType::Auto,
+        &ModelDType::Auto,
         &Device::cuda_if_available(0)?,
         false,
         DeviceMapMetadata::dummy(),

@@ -62,7 +62,7 @@ pub use scheduler::SchedulerMethod;
 use serde::Serialize;
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
-pub use utils::normal::{NonQuantizedDType, TryIntoDType};
+pub use utils::normal::{ModelDType, TryIntoDType};
 
 /// `true` if `MISTRALRS_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);

@@ -4,10 +4,13 @@ use tracing::info;
 
 #[derive(Clone, Copy, Default)]
 /// DType for the model.
+///
+/// If the model is quantized, this is ignored so it is reasonable to use the [`Default`] impl.
+///
 /// ## `Auto` rules
 /// - If CUDA device or CPU, use BF16
 /// - Fallback to F16
-pub enum NonQuantizedDType {
+pub enum ModelDType {
     #[default]
     Auto,
     BF16,
@@ -30,7 +33,7 @@ impl TryIntoDType for DType {
     }
 }
 
-impl TryIntoDType for NonQuantizedDType {
+impl TryIntoDType for ModelDType {
     fn try_into_dtype(&self, device: &Device) -> Result<DType> {
         match self {
             Self::Auto => {
