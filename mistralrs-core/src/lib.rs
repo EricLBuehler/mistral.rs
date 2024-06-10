@@ -5,6 +5,7 @@ use engine::Engine;
 pub use engine::TERMINATE_ALL_NEXT_STEP;
 pub use lora::Ordering;
 pub use pipeline::Pipeline;
+use pyo3::exceptions::PyValueError;
 use std::{
     cell::RefCell,
     error::Error,
@@ -84,6 +85,29 @@ struct RebootState {
     no_prefix_cache: bool,
     prefix_cache_n: usize,
     disable_eos_stop: bool,
+}
+
+#[derive(Debug)]
+pub enum MistralRsError {
+    EnginePoisoned,
+    SenderPoisoned,
+}
+
+impl std::fmt::Display for MistralRsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MistralRsError::EnginePoisoned => write!(f, "Engine poisoned"),
+            MistralRsError::SenderPoisoned => write!(f, "Sender poisoned"),
+        }
+    }
+}
+
+impl std::error::Error for MistralRsError {}
+
+impl From<MistralRsError> for pyo3::PyErr {
+    fn from(value: MistralRsError) -> Self {
+        PyValueError::new_err(format!("{:?}", value))
+    }
 }
 
 /// The MistralRsBuilder takes the pipeline and a scheduler method and constructs
@@ -263,28 +287,23 @@ impl MistralRs {
 
     /// attempts to reboot the engine, if the sender (only way to communicate with
     /// the engine) is closed
-    // TODO(GregSzumel): don't use anyhow for these errors?
-    fn reboot_engine(&self) -> anyhow::Result<()> {
-        tracing::info!("trying to reboot");
+    fn reboot_engine(&self) -> Result<(), MistralRsError> {
         let (new_sender, rx) = channel(10_000);
         let reboot_state = self.reboot_state.clone();
-        let mut sender_lock = self
-            .sender
-            .write()
-            .map_err(|err| anyhow::Error::msg(err.to_string()))?;
-        tracing::info!("locked sender");
-        let mut engine_lock = self
-            .engine_handler
-            .write()
-            .map_err(|err| anyhow::Error::msg(err.to_string()))?;
-        tracing::info!("locked engine");
+        let mut sender_lock = self.sender.write().map_err(|_| {
+            tracing::warn!("couldn't get write lock on the sender during reboot attempt");
+            MistralRsError::SenderPoisoned
+        })?;
+        let mut engine_lock = self.engine_handler.write().map_err(|_| {
+            tracing::warn!("couldn't get write lock on the engine during reboot attempt");
+            MistralRsError::EnginePoisoned
+        })?;
 
         if !engine_lock.is_finished() {
             tracing::info!("engine already running, returning ok");
             Ok(())
         } else {
             // critical section. A panic here could lead to poisoned locks
-            tracing::info!("starting engine");
             let new_engine_handler = thread::spawn(move || {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
@@ -301,35 +320,31 @@ impl MistralRs {
                     engine.run().await;
                 });
             });
-            tracing::info!("updating sender and engine handler");
             *sender_lock = new_sender;
             *engine_lock = new_engine_handler;
+            tracing::info!("Successfully rebooted engine and updated sender + engine handler");
             Ok(())
         }
     }
 
-    fn engine_dead(&self) -> anyhow::Result<bool> {
+    fn engine_dead(&self) -> Result<bool, MistralRsError> {
         match self.engine_handler.read() {
             Ok(handler) => Ok(handler.is_finished()),
             Err(_) => {
-                tracing::info!("couldn't get read lock, engine is being rebooted");
-                Err(anyhow::Error::msg("couldn't get engine read lock"))
+                tracing::warn!("couldn't get read lock on engine!");
+                Err(MistralRsError::EnginePoisoned)
             }
         }
     }
 
-    pub fn get_sender(&self) -> anyhow::Result<Sender<Request>> {
-        tracing::info!("checking if engine is dead");
+    pub fn get_sender(&self) -> Result<Sender<Request>, MistralRsError> {
         if self.engine_dead()? {
-            tracing::info!("engine is dead");
+            tracing::warn!("engine is dead, rebooting");
             self.reboot_engine()?
         }
         match self.sender.read() {
             Ok(sender) => Ok(sender.clone()),
-            Err(err) => {
-                let err_msg = format!("could not get sender read lock: {}", err);
-                Err(anyhow::Error::msg(err_msg))
-            }
+            Err(_) => Err(MistralRsError::SenderPoisoned),
         }
     }
 
