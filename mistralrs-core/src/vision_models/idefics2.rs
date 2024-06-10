@@ -861,16 +861,23 @@ impl Idefics2 {
         - To fit the format of that sequence, `input_ids`, `input_embeds`, `attention_mask` are all 3 adapted to insert the image hidden states.
         */
         let (_, _, vision_hidden_size) = image_hidden_states.dims3()?;
+        let bs = input_ids.dim(0)?;
         let special_image_token_mask = input_ids.eq(self.config.image_token_id as f64)?;
-        let new_inputs_embeds = input_embeds.clone();
-        let reshaped_image_hidden_states = image_hidden_states.reshape(((), vision_hidden_size))?;
-        special_image_token_mask
-            .eq(&Tensor::arange(
-                0u32,
-                new_inputs_embeds.dim(0)? as u32,
-                new_inputs_embeds.device(),
-            )?)?
-            .where_cond(&reshaped_image_hidden_states, &new_inputs_embeds)
+        let mut new_inputs_embeds = input_embeds.clone();
+        let reshaped_image_hidden_states =
+            image_hidden_states.reshape((bs, (), vision_hidden_size))?;
+        assert_eq!(input_embeds.dim(0)?, 1); // TODO
+        assert_eq!(reshaped_image_hidden_states.dim(0)?, 1); // TODO
+        let special_image_token_mask = special_image_token_mask.i(0)?.to_vec1::<u8>()?;
+        for (i, v) in special_image_token_mask.iter().enumerate() {
+            if *v != 0 {
+                new_inputs_embeds = new_inputs_embeds.slice_assign(
+                    &[&.., &i, &..],
+                    &reshaped_image_hidden_states.i((.., i, ..))?,
+                )?;
+            }
+        }
+        Ok(new_inputs_embeds)
     }
 
     fn forward_inner(
