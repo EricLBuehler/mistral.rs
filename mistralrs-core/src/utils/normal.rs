@@ -66,7 +66,7 @@ impl TryIntoDType for DType {
 
 impl TryIntoDType for ModelDType {
     fn try_into_dtype(&self, device: &Device) -> Result<DType> {
-        match self {
+        let dtype = match self {
             Self::Auto => {
                 if device.is_cuda() || device.is_cpu() {
                     Ok(DType::BF16)
@@ -77,6 +77,8 @@ impl TryIntoDType for ModelDType {
             Self::BF16 => Ok(DType::BF16),
             Self::F16 => Ok(DType::F16),
             Self::F32 => Ok(DType::F32),
-        }
+        };
+        info!("DType selected is {:?}.", dtype.as_ref().unwrap());
+        dtype
     }
 }
