@@ -100,10 +100,7 @@ pub enum MistralRsError {
 
 impl std::fmt::Display for MistralRsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MistralRsError::EnginePoisoned => write!(f, "Engine poisoned"),
-            MistralRsError::SenderPoisoned => write!(f, "Sender poisoned"),
-        }
+        write!(f, "{:?}", &self)
     }
 }
 
