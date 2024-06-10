@@ -318,7 +318,7 @@ pub(crate) fn get_chat_template(
             .as_ref()
             .expect("A tokenizer config or chat template file path must be specified.");
         Some(fs::read_to_string(template_filename).expect("Loading chat template failed."))
-    } else if chat_template_ovrd.is_none() {
+    } else if chat_template_ovrd.is_some() {
         None
     } else {
         panic!("Expected chat template file to end with .json, or you can specify a tokenizer model ID to load the chat template there.");
