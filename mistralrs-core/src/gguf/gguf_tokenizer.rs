@@ -9,6 +9,11 @@ use tokenizers::{
     },
     models::{bpe::BpeBuilder, unigram::Unigram},
     normalizers::{self, Prepend, Replace},
+    pre_tokenizers,
+    processors::{
+        self,
+        template::{self, TemplateProcessing},
+    },
     AddedToken, DecoderWrapper, ModelWrapper, NormalizerWrapper, Tokenizer,
 };
 use tracing::info;
@@ -32,6 +37,7 @@ struct PropsGGUF {
     unk: Option<u32>,
     eos: u32,
     bos: u32,
+    add_bos_token: Option<bool>,
 }
 
 impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
@@ -50,6 +56,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             unk: c.get_value("unknown_token_id").ok(),
             eos: c.get_value("eos_token_id")?,
             bos: c.get_value("bos_token_id")?,
+            add_bos_token: c.get_value("add_bos_token").ok(),
         };
 
         Ok(props)
@@ -207,7 +214,13 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokens
         vocab.insert(token.clone(), i as u32);
     }
 
-    let PropsGGUF { eos, bos, unk, .. } = *p;
+    let PropsGGUF {
+        eos,
+        bos,
+        unk,
+        add_bos_token,
+        ..
+    } = *p;
 
     let mut bpe = BpeBuilder::new().vocab_and_merges(vocab, merges);
     if let Some(unk) = unk {
@@ -220,6 +233,33 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokens
         .with_model(bpe)
         .with_decoder(Decoder::ByteLevel(true, true, true))
         .build()?;
+    tokenizer.with_pre_tokenizer(pre_tokenizers::byte_level::ByteLevel::new(
+        false, true, true,
+    ));
+    if add_bos_token.is_some_and(|x| x) {
+        let mut special_toks = HashMap::new();
+        special_toks.insert(
+            p.tokens[bos as usize].clone(),
+            template::SpecialToken::new(
+                p.tokens[bos as usize].clone(),
+                vec![bos],
+                vec![p.tokens[bos as usize].clone()],
+            )
+            .unwrap(),
+        );
+        tokenizer.with_post_processor(
+            TemplateProcessing::builder()
+                .try_single(format!("{}:0 $A:0", p.tokens[bos as usize]))
+                .unwrap()
+                .try_pair(format!("{}:0 $A:0 $B:1", p.tokens[bos as usize]))
+                .unwrap()
+                .special_tokens(special_toks)
+                .build()
+                .unwrap(),
+        );
+    } else {
+        tokenizer.with_post_processor(processors::byte_level::ByteLevel::new(true, false, true));
+    }
 
     let special_tokens = add_special_tokens(p, &mut tokenizer, bos, eos, unk);
 
