@@ -869,12 +869,16 @@ impl Idefics2 {
         assert_eq!(input_embeds.dim(0)?, 1); // TODO
         assert_eq!(reshaped_image_hidden_states.dim(0)?, 1); // TODO
         let special_image_token_mask = special_image_token_mask.i(0)?.to_vec1::<u8>()?;
+        let mut image_hidden_state_i = 0;
         for (i, v) in special_image_token_mask.iter().enumerate() {
             if *v != 0 {
                 new_inputs_embeds = new_inputs_embeds.slice_assign(
                     &[&.., &i, &..],
-                    &reshaped_image_hidden_states.i((.., i, ..))?,
+                    &reshaped_image_hidden_states
+                        .i((.., image_hidden_state_i, ..))?
+                        .unsqueeze(1)?,
                 )?;
+                image_hidden_state_i += 1;
             }
         }
         Ok(new_inputs_embeds)
