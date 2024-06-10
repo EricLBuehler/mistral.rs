@@ -341,6 +341,8 @@ Additionally, for models without quantization, the model architecture should be 
 
 ### Architecture for plain models
 
+> Note: for plain models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`plain`).
+
 - `mistral`
 - `gemma`
 - `mixtral`
@@ -350,6 +352,8 @@ Additionally, for models without quantization, the model architecture should be 
 - `qwen2`
 
 ### Architecture for vision models
+
+> Note: for vision models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`vision-plain`).
 
 - `phi3v`
 
@@ -495,6 +499,8 @@ If you want to add a new model, please contact us via an issue and we can coordi
 - Error: `recompile with -fPIE`:
     - Some Linux distributions require compiling with `-fPIE`.
     - Set the `CUDA_NVCC_FLAGS` environment variable to `-fPIE` during build: `CUDA_NVCC_FLAGS=-fPIE`
+- Error `CUDA_ERROR_NOT_FOUND` or symbol not found when using a normal or vison model:
+    - For non-quantized models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device.
 
 ## Credits
 This project would not be possible without the excellent work at [`candle`](https://github.com/huggingface/candle). Additionally, thank you to all contributors! Contributing can range from raising an issue or suggesting a feature to adding some new functionality.

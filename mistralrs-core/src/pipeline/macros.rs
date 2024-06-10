@@ -330,11 +330,11 @@ macro_rules! get_paths_gguf {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! normal_model_loader {
-    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
+    ($paths:expr, $dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
         let vb = from_mmaped_safetensors(
             $paths.get_weight_filenames().to_vec(),
             Vec::new(),
-            $dtype.unwrap_or($default_dtype),
+            $dtype,
             $device,
             $silent,
         )?;
@@ -355,11 +355,11 @@ macro_rules! normal_model_loader {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! vision_normal_model_loader {
-    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
+    ($paths:expr, $dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
         let vb = from_mmaped_safetensors(
             $paths.get_weight_filenames().to_vec(),
             Vec::new(),
-            $dtype.unwrap_or($default_dtype),
+            $dtype,
             $device,
             $silent,
         )?;
@@ -380,7 +380,7 @@ macro_rules! vision_normal_model_loader {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! xlora_model_loader {
-    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
+    ($paths:expr, $dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
         let mut safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
         safetensors_paths.push($paths.get_classifier_path().as_ref().unwrap());
         let vb = from_mmaped_safetensors(
@@ -395,7 +395,7 @@ macro_rules! xlora_model_loader {
                 .iter()
                 .map(|(_, x)| (*x).to_owned())
                 .collect::<Vec<_>>(),
-            $dtype.unwrap_or($default_dtype),
+            $dtype,
             $device,
             $silent,
         )?;
@@ -412,12 +412,7 @@ macro_rules! xlora_model_loader {
                 loading_isq: $loading_isq,
                 real_device: $real_device,
             },
-            &$crate::utils::varbuilder_utils::load_preload_adapters(
-                $paths.get_lora_preload_adapter_info(),
-                $dtype.unwrap_or($default_dtype),
-                $device,
-                $silent,
-            )?,
+            &None,
         )?
     }};
 }
@@ -425,7 +420,7 @@ macro_rules! xlora_model_loader {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! lora_model_loader {
-    ($paths:expr, $dtype:expr, $default_dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
+    ($paths:expr, $dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
         let safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
         let vb = from_mmaped_safetensors(
             safetensors_paths
@@ -439,7 +434,7 @@ macro_rules! lora_model_loader {
                 .iter()
                 .map(|(_, x)| (*x).to_owned())
                 .collect::<Vec<_>>(),
-            $dtype.unwrap_or($default_dtype),
+            $dtype,
             $device,
             $silent,
         )?;
@@ -458,7 +453,7 @@ macro_rules! lora_model_loader {
             },
             &$crate::utils::varbuilder_utils::load_preload_adapters(
                 $paths.get_lora_preload_adapter_info(),
-                $dtype.unwrap_or($default_dtype),
+                $dtype,
                 $device,
                 $silent,
             )?,

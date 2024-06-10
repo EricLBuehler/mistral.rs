@@ -20,14 +20,16 @@ use crate::utils::debug::setup_logger_and_debug;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
-use crate::{do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, Pipeline, DEBUG};
+use crate::{
+    do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, Pipeline, TryIntoDType, DEBUG,
+};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama, utils::tokens::get_token,
     xlora_models::XLoraQLlama,
 };
 use anyhow::Result;
 use candle_core::quantized::{ggml_file, GgmlDType};
-use candle_core::{DType, Device, Tensor};
+use candle_core::{Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
@@ -232,7 +234,7 @@ impl Loader for GGMLLoader {
     fn load_model_from_path(
         &self,
         paths: &Box<dyn ModelPaths>,
-        _dtype: Option<DType>,
+        _: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -363,7 +365,7 @@ impl Loader for GGMLLoader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        _dtype: Option<DType>,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -378,7 +380,7 @@ impl Loader for GGMLLoader {
             Some(vec![self.quantized_filename.as_ref().unwrap().clone()]),
             silent
         );
-        self.load_model_from_path(&paths?, _dtype, device, silent, mapper, in_situ_quant)
+        self.load_model_from_path(&paths?, dtype, device, silent, mapper, in_situ_quant)
     }
 
     fn get_id(&self) -> String {
