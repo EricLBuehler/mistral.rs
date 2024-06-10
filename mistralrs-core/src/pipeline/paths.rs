@@ -308,7 +308,7 @@ pub(crate) fn get_chat_template(
         {
             panic!("Template filename {template_filename:?} must end with `.json`.");
         }
-        fs::read_to_string(template_filename).expect("Loading chat template failed.")
+        Some(fs::read_to_string(template_filename).expect("Loading chat template failed."))
     } else if chat_template_fallback
         .as_ref()
         .is_some_and(|f| f.ends_with(".json"))
@@ -317,7 +317,9 @@ pub(crate) fn get_chat_template(
         let template_filename = chat_template_fallback
             .as_ref()
             .expect("A tokenizer config or chat template file path must be specified.");
-        fs::read_to_string(template_filename).expect("Loading chat template failed.")
+        Some(fs::read_to_string(template_filename).expect("Loading chat template failed."))
+    } else if chat_template_ovrd.is_none() {
+        None
     } else {
         panic!("Expected chat template file to end with .json, or you can specify a tokenizer model ID to load the chat template there.");
     };
@@ -330,7 +332,7 @@ pub(crate) fn get_chat_template(
             template.chat_template = Some(chat_template);
             template
         }
-        None => serde_json::from_str(&template_content).unwrap(),
+        None => serde_json::from_str(&template_content.as_ref().unwrap().clone()).unwrap(),
     };
 
     #[derive(Debug, serde::Deserialize)]
@@ -346,7 +348,7 @@ pub(crate) fn get_chat_template(
         None => {
             info!("`tokenizer_config.json` does not contain a chat template, attempting to use specified JINJA chat template.");
             let mut deser: HashMap<String, Value> =
-                serde_json::from_str(&template_content).unwrap();
+                serde_json::from_str(&template_content.unwrap()).unwrap();
 
             match chat_template_fallback.clone() {
                 Some(t) => {

@@ -30,7 +30,10 @@ pub fn get_gguf_chat_template(content: &Content) -> Result<Option<String>> {
     };
     let props = PropsGGUFTemplate::try_from(metadata)?;
     if let Some(ref chat_template) = props.chat_template {
-        info!("Discovered and using GGUF chat template: `{chat_template}`");
+        info!(
+            "Discovered and using GGUF chat template: `{}`",
+            chat_template.replace('\n', "\\n")
+        );
     }
     Ok(props.chat_template)
 }
