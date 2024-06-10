@@ -360,14 +360,14 @@ impl ModelKind {
 ///
 /// # Example
 /// ```no_run
-/// use mistralrs_core::{Loader, TokenSource, DeviceMapMetadata};
+/// use mistralrs_core::{Loader, TokenSource, DeviceMapMetadata, ModelDType};
 /// use candle_core::Device;
 ///
 /// let loader: Box<dyn Loader> = todo!();
 /// let pipeline = loader.load_model_from_hf(
 ///     None,
 ///     TokenSource::CacheToken,
-///     None,
+///     &ModelDType::Auto,
 ///     &Device::cuda_if_available(0).unwrap(),
 ///     false,
 ///     DeviceMapMetadata::dummy(),
