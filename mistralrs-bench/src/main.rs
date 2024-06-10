@@ -2,9 +2,9 @@ use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
-    Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder,
-    ModelSelected, ModelDType, NormalRequest, Request, RequestMessage, Response,
-    SamplingParams, SchedulerMethod, TokenSource, Usage,
+    Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelDType,
+    ModelSelected, NormalRequest, Request, RequestMessage, Response, SamplingParams,
+    SchedulerMethod, TokenSource, Usage,
 };
 use std::fmt::Display;
 use std::sync::Arc;

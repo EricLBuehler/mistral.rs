@@ -2,9 +2,9 @@ use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
 use mistralrs::{
-    Constraint, Device, DeviceMapMetadata, GgmlDType, MistralRs, MistralRsBuilder,
-    ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig,
-    Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
+    Constraint, Device, DeviceMapMetadata, GgmlDType, MistralRs, MistralRsBuilder, ModelDType,
+    NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig, Request,
+    RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
 };
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {

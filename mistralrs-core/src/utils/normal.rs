@@ -1,8 +1,11 @@
+use std::{fmt::Display, str::FromStr};
+
 use anyhow::Result;
 use candle_core::{DType, Device};
+use serde::Deserialize;
 use tracing::info;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug, Deserialize)]
 /// DType for the model.
 ///
 /// If the model is quantized, this is ignored so it is reasonable to use the [`Default`] impl.
@@ -12,10 +15,38 @@ use tracing::info;
 /// - Fallback to F16
 pub enum ModelDType {
     #[default]
+    #[serde(rename = "auto")]
     Auto,
+    #[serde(rename = "bf16")]
     BF16,
+    #[serde(rename = "f16")]
     F16,
+    #[serde(rename = "f32")]
     F32,
+}
+
+impl Display for ModelDType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Auto => write!(f, "auto"),
+            Self::BF16 => write!(f, "bf16"),
+            Self::F16 => write!(f, "f16"),
+            Self::F32 => write!(f, "f32"),
+        }
+    }
+}
+
+impl FromStr for ModelDType {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "bf16" => Ok(Self::BF16),
+            "f16" => Ok(Self::F16),
+            "f32" => Ok(Self::F32),
+            other => Err(format!("Model DType `{other}` is not supported.")),
+        }
+    }
 }
 
 /// Type which can be converted to a DType

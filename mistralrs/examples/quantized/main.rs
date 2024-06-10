@@ -3,8 +3,8 @@ use tokio::sync::mpsc::channel;
 
 use mistralrs::{
     Constraint, Device, DeviceMapMetadata, GGUFLoaderBuilder, GGUFSpecificConfig, MistralRs,
-    MistralRsBuilder, ModelDType, NormalRequest, Request, RequestMessage, Response,
-    SamplingParams, SchedulerMethod, TokenSource,
+    MistralRsBuilder, ModelDType, NormalRequest, Request, RequestMessage, Response, SamplingParams,
+    SchedulerMethod, TokenSource,
 };
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {

@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 use crate::{
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
-    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
+    ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
     SpeculativeLoader, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
 };
 
@@ -18,7 +18,7 @@ fn default_one() -> usize {
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-enum TomlModelSelected {
+pub enum TomlModelSelected {
     /// Select a plain model, without quantization or adapters
     Plain {
         /// Model ID to load from. This may be a HF hub repo or a local path.
@@ -26,6 +26,9 @@ enum TomlModelSelected {
 
         /// The architecture of the model.
         arch: NormalLoaderType,
+
+        /// Model data type. Defaults to `auto`.
+        dtype: ModelDType,
     },
 
     /// Select an X-LoRA architecture
@@ -45,6 +48,9 @@ enum TomlModelSelected {
 
         /// The architecture of the model.
         arch: NormalLoaderType,
+
+        /// Model data type. Defaults to `auto`.
+        dtype: ModelDType,
     },
 
     /// Select a LoRA architecture
@@ -60,6 +66,9 @@ enum TomlModelSelected {
 
         /// The architecture of the model.
         arch: NormalLoaderType,
+
+        /// Model data type. Defaults to `auto`.
+        dtype: ModelDType,
     },
 
     /// Select a GGUF model.
@@ -199,6 +208,9 @@ enum TomlModelSelected {
 
         /// The architecture of the model.
         arch: VisionLoaderType,
+
+        /// Model data type. Defaults to `auto`.
+        dtype: ModelDType,
     },
 }
 
@@ -242,13 +254,32 @@ pub struct TomlLoaderArgs {
     pub no_kv_cache: bool,
 }
 
+pub fn get_toml_selected_model_dtype(model: &TomlSelector) -> ModelDType {
+    match model.model {
+        TomlModelSelected::Plain { dtype, .. }
+        | TomlModelSelected::Lora { dtype, .. }
+        | TomlModelSelected::XLora { dtype, .. }
+        | TomlModelSelected::VisionPlain { dtype, .. } => dtype,
+        TomlModelSelected::GGUF { .. }
+        | TomlModelSelected::LoraGGUF { .. }
+        | TomlModelSelected::GGML { .. }
+        | TomlModelSelected::LoraGGML { .. }
+        | TomlModelSelected::XLoraGGUF { .. }
+        | TomlModelSelected::XLoraGGML { .. } => ModelDType::Auto,
+    }
+}
+
 fn loader_from_selected(
     args: TomlLoaderInnerParams,
     model: TomlModelSelected,
 ) -> anyhow::Result<Box<dyn Loader>> {
     let use_flash_attn = args.use_flash_attn;
     let loader: Box<dyn Loader> = match model {
-        TomlModelSelected::Plain { model_id, arch } => NormalLoaderBuilder::new(
+        TomlModelSelected::Plain {
+            model_id,
+            arch,
+            dtype: _,
+        } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 repeat_last_n: args.repeat_last_n,
@@ -264,6 +295,7 @@ fn loader_from_selected(
             order,
             tgt_non_granular_index,
             arch,
+            dtype: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -288,6 +320,7 @@ fn loader_from_selected(
             adapters_model_id,
             order,
             arch,
+            dtype: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -440,7 +473,11 @@ fn loader_from_selected(
             )?,
         )
         .build(),
-        TomlModelSelected::VisionPlain { model_id, arch } => VisionLoaderBuilder::new(
+        TomlModelSelected::VisionPlain {
+            model_id,
+            arch,
+            dtype: _,
+        } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
                 repeat_last_n: args.repeat_last_n,

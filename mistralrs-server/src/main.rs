@@ -8,8 +8,8 @@ use axum::{
 use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
 use mistralrs_core::{
-    get_tgt_non_granular_index, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs,
-    MistralRsBuilder, ModelSelected, ModelDType, Request, SchedulerMethod, TokenSource,
+    get_model_dtype, get_tgt_non_granular_index, DeviceMapMetadata, Loader, LoaderBuilder,
+    MistralRs, MistralRsBuilder, ModelSelected, Request, SchedulerMethod, TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use serde::{Deserialize, Serialize};
@@ -236,6 +236,7 @@ async fn main() -> Result<()> {
     let use_flash_attn = true;
 
     let tgt_non_granular_index = get_tgt_non_granular_index(&args.model);
+    let dtype = get_model_dtype(&args.model)?;
 
     if tgt_non_granular_index.is_some() {
         args.max_seqs = 1;
@@ -270,7 +271,7 @@ async fn main() -> Result<()> {
     let pipeline = loader.load_model_from_hf(
         None,
         args.token_source,
-        &ModelDType::Auto,
+        &dtype,
         &device,
         false,
         args.num_device_layers

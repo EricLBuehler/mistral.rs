@@ -5,8 +5,8 @@ use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
 use mistralrs::{
-    Constraint, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder, ModelDType,
-    NormalRequest, Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
+    Constraint, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder, ModelDType, NormalRequest,
+    Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
     VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
 };
 
