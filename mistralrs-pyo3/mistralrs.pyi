@@ -7,9 +7,13 @@ class ChatCompletionRequest:
     """
     A ChatCompletionRequest represents a request sent to the mistral.rs engine. It encodes information
     about input data, sampling, and how to return the response.
+
+    The messages type is as follows: (for normal chat completion, for chat completion with images, pretemplated prompt)
     """
 
-    messages: list[dict[str, str]] | str
+    messages: (
+        list[dict[str, str]] | list[dict[str, list[dict[str, str | dict[str, str]]]]]
+    ) | str
     model: str
     logit_bias: dict[int, float] | None = None
     logprobs: bool = False
@@ -59,6 +63,10 @@ class Architecture(Enum):
     Mixtral = "mixtral"
     Llama = "llama"
     Phi2 = "phi2"
+
+@dataclass
+class VisionArchitecture(Enum):
+    Phi3V = "phi3v"
 
 class Which(Enum):
     """
@@ -140,6 +148,12 @@ class Which(Enum):
         order: str
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
+    @dataclass
+    class VisionPlain:
+        model_id: str
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
+        arch: VisionArchitecture
 
 class Runner:
     def __init__(

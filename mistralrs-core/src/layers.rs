@@ -2,7 +2,7 @@
 
 use std::{
     collections::HashMap,
-    ops::Mul,
+    ops::{BitAnd, Mul},
     str::FromStr,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -12,15 +12,15 @@ use std::{
 
 use candle_core::{
     quantized::{gguf_file, QMatMul, QTensor},
-    DType, Device, IndexOp, Result, Tensor,
+    DType, Device, IndexOp, Result, Shape, Tensor, WithDType, D,
 };
 use candle_nn::{Linear, Module, VarBuilder};
-use either::Either;
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 pub use crate::layers_masker::CausalMasker;
-pub use crate::layers_utils::{flash_attn, repeat_kv, verify_sanity_gguf};
+pub use crate::layers_utils::{flash_attn, repeat_kv};
 
-use crate::{cublaslt::CUBLASLT_HANDLE, INHIBIT_GEMM_F16};
+use crate::{cublaslt::CUBLASLT_HANDLE, pipeline::Phi3RopeScaling, INHIBIT_GEMM_F16};
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
@@ -103,7 +103,7 @@ struct ScaledRopeParams {
 }
 
 pub struct PhiRopeConfig {
-    pub rope_scaling: Option<HashMap<String, Either<Vec<f32>, String>>>,
+    pub rope_scaling: Option<HashMap<String, Phi3RopeScaling>>,
     pub max_position_embeddings: usize,
     pub original_max_position_embeddings: usize,
     pub rope_theta: f64,
@@ -114,9 +114,9 @@ impl PhiRotaryEmbedding {
     pub fn new(dtype: DType, cfg: impl Into<PhiRopeConfig>, dev: &Device) -> Result<Self> {
         let cfg: PhiRopeConfig = cfg.into();
         let scaled_params = cfg.rope_scaling.as_ref().map(|r| ScaledRopeParams {
-            short_factor: r["short_factor"].clone().left().unwrap(),
-            long_factor: r["long_factor"].clone().left().unwrap(),
-            scaling_type: r["type"].clone().right().unwrap().parse().unwrap(),
+            short_factor: r["short_factor"].clone().0.left().unwrap(),
+            long_factor: r["long_factor"].clone().0.left().unwrap(),
+            scaling_type: r["type"].clone().0.right().unwrap().parse().unwrap(),
         });
         let max_seq_len = cfg.max_position_embeddings;
         let dim = cfg.head_dim;
@@ -398,6 +398,57 @@ impl ScaledDotProductAttention {
     }
 }
 
+/// Linear layer with fused bias matmul.
+#[derive(Debug, Clone)]
+pub struct FusedBiasLinear {
+    pub(crate) w: Tensor,
+    pub(crate) b: Tensor,
+}
+
+impl TryFrom<Linear> for FusedBiasLinear {
+    type Error = candle_core::Error;
+
+    fn try_from(x: Linear) -> Result<Self> {
+        if let Some(bias) = x.bias() {
+            Ok(Self {
+                w: x.weight().clone(),
+                b: bias.clone(),
+            })
+        } else {
+            candle_core::bail!("`FusedBiasLinear` expects a Linear layer with bias.")
+        }
+    }
+}
+
+impl Module for FusedBiasLinear {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let w = match *x.dims() {
+            [b1, b2, _, _] => self.w.broadcast_left((b1, b2))?,
+            [bsize, _, _] => self.w.broadcast_left(bsize)?,
+            _ => self.w.clone(),
+        };
+        let mut tgt_shape = x.dims().to_vec();
+        tgt_shape[x.dims().len() - 1] = w.dim(D::Minus2)?;
+        let b = self.b.broadcast_as(Shape::from_dims(&tgt_shape))?;
+
+        if let (Device::Cuda(_), Some(cublaslt)) = (x.device(), *CUBLASLT_HANDLE.lock().unwrap()) {
+            cublaslt
+                .batch_matmul(
+                    x,
+                    &w,
+                    Some(&b.t()?.contiguous()?),
+                    None,
+                    Some(1.0),
+                    None,
+                    None,
+                )?
+                .t()
+        } else {
+            x.matmul(&w.t()?)? + b
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct QLinear {
     inner: QMatMul,
@@ -491,5 +542,231 @@ impl Module for QLinear {
         } else {
             forward_fn(&self.inner, &xs)?.to_dtype(self.dtype)
         }
+    }
+}
+
+/// Equivalent functions to `torch.nonzero`
+pub struct Nonzero;
+
+impl Nonzero {
+    /// Equivalent to: `torch.nonzero(lt & gt, as_tuple=False)`
+    ///
+    /// This performs the operation on the CPU and as such triggers a device synchronization.
+    /// The output tensor is `DType::U8` and the device will be the same as the input.
+    /// The input tensors must be of the same data type and on the same device.
+    pub fn nonzero_and<T: WithDType>(&self, lt: &Tensor, gt: &Tensor) -> Result<Tensor>
+    where
+        for<'a> &'a T: BitAnd<T, Output = T>,
+    {
+        let dev = lt.device();
+        let lt = lt.to_vec2::<T>()?;
+        let gt = gt.to_vec2::<T>()?;
+        // lt & gt
+        let res = lt
+            .par_iter()
+            .zip(gt)
+            .enumerate()
+            .flat_map(|(i, (lt_row, gt_row))| {
+                lt_row
+                    .par_iter()
+                    .zip(gt_row)
+                    .enumerate()
+                    .filter_map(|(j, (lt, gt))| {
+                        if (lt & gt) != T::zero() {
+                            Some(vec![i as u32, j as u32])
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .map(|x| Tensor::from_slice(&x, (x.len(),), dev))
+            .collect::<Result<Vec<_>>>()?;
+        Tensor::stack(&res, 0)
+    }
+
+    /// Equivalent to: `torch.nonzero(x, as_tuple=False)`
+    ///
+    /// This performs the operation on the CPU and as such triggers a device synchronization.
+    /// The output tensor is `DType::U8` and the device will be the same as the input.
+    pub fn nonzero<T: WithDType>(&self, x: &Tensor) -> Result<Tensor> {
+        let dev = x.device();
+        let x = x.to_vec2::<T>()?;
+        // lt & gt
+        let res = x
+            .par_iter()
+            .enumerate()
+            .flat_map(|(i, x_row)| {
+                x_row
+                    .par_iter()
+                    .enumerate()
+                    .filter_map(|(j, x)| {
+                        if *x != T::zero() {
+                            Some(vec![i as u32, j as u32])
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .map(|x| Tensor::from_slice(&x, (x.len(),), dev))
+            .collect::<Result<Vec<_>>>()?;
+        Tensor::stack(&res, 0)
+    }
+}
+
+mod tests {
+
+    #[test]
+    fn fused_bias_linear() {
+        use candle_core::{DType, Device, IndexOp, Tensor};
+        use candle_nn::{Linear, Module};
+
+        use crate::cublaslt::setup_cublas_lt_wrapper;
+        use crate::layers::FusedBiasLinear;
+
+        const IN: usize = 1921;
+        const OUT: usize = 4096;
+        const INNER: usize = 1024;
+
+        let dev = Device::cuda_if_available(0).unwrap();
+        setup_cublas_lt_wrapper();
+
+        let inner_dtype = if dev.is_cuda() {
+            DType::BF16
+        } else {
+            DType::F32
+        };
+
+        let w = Tensor::arange(0f32, (OUT * IN) as f32, &dev)
+            .unwrap()
+            .to_dtype(inner_dtype)
+            .unwrap()
+            .reshape((OUT, IN))
+            .unwrap();
+        let b = Tensor::arange(0f32, OUT as f32, &dev)
+            .unwrap()
+            .to_dtype(inner_dtype)
+            .unwrap()
+            .reshape((OUT,))
+            .unwrap();
+
+        let xs = Tensor::arange(0f32, (INNER * IN) as f32, &dev)
+            .unwrap()
+            .to_dtype(inner_dtype)
+            .unwrap()
+            .reshape((1, INNER, IN))
+            .unwrap();
+
+        let lin = Linear::new(w.clone(), Some(b.clone()));
+        let truth_out = lin.forward(&xs).unwrap();
+        let truth_y = truth_out
+            .to_dtype(DType::F32)
+            .unwrap()
+            .to_vec3::<f32>()
+            .unwrap();
+
+        let fused = FusedBiasLinear { w, b };
+        let fused_out = fused.forward(&xs).unwrap();
+        let fused_y = fused_out
+            .to_dtype(DType::F32)
+            .unwrap()
+            .to_vec3::<f32>()
+            .unwrap();
+
+        assert_eq!(truth_out.shape(), fused_out.shape());
+        if truth_y != fused_y {
+            panic!(
+                "Truth does not match fused kernel. Diff fused - truth:\n{:#?}",
+                &(&fused_out - &truth_out)
+                    .unwrap()
+                    .i((0, 5..10, 0..5))
+                    .unwrap()
+                    .to_dtype(DType::F32)
+                    .unwrap()
+                    .to_vec2::<f32>()
+            )
+        }
+    }
+
+    #[test]
+    fn nonzero_and() {
+        use crate::layers::Nonzero;
+        use candle_core::{Device, Tensor};
+
+        let input1 = Tensor::from_vec(
+            vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7],
+            (10,),
+            &Device::Cpu,
+        )
+        .unwrap();
+        let input2 = Tensor::from_vec(
+            vec![-1i64, 2, 3, -1, 1, -1, -1, 4, 5, 7],
+            (10,),
+            &Device::Cpu,
+        )
+        .unwrap();
+        let input = Tensor::stack(&[input1, input2], 0).unwrap();
+
+        let lt = input.lt(0.0).unwrap();
+        let gt = input.gt(-10.0).unwrap();
+        let res = Nonzero
+            .nonzero_and::<u8>(&lt, &gt)
+            .unwrap()
+            .to_vec2::<u32>()
+            .unwrap();
+
+        assert_eq!(
+            res,
+            [
+                [0, 3],
+                [0, 4],
+                [0, 5],
+                [0, 6],
+                [1, 0],
+                [1, 3],
+                [1, 5],
+                [1, 6]
+            ]
+        );
+    }
+
+    #[test]
+    fn nonzero() {
+        use crate::layers::Nonzero;
+        use candle_core::{Device, Tensor};
+
+        let input1 =
+            Tensor::from_vec(vec![1i64, 2, 0, -1, -1, 0, 0, 0, 5, 7], (10,), &Device::Cpu).unwrap();
+        let input2 = Tensor::from_vec(
+            vec![-1i64, 0, 3, -1, 1, -1, 0, 0, 0, 0],
+            (10,),
+            &Device::Cpu,
+        )
+        .unwrap();
+        let input = Tensor::stack(&[input1, input2], 0).unwrap();
+
+        let res = Nonzero
+            .nonzero::<i64>(&input)
+            .unwrap()
+            .to_vec2::<u32>()
+            .unwrap();
+
+        assert_eq!(
+            res,
+            [
+                [0, 0],
+                [0, 1],
+                [0, 3],
+                [0, 4],
+                [0, 8],
+                [0, 9],
+                [1, 0],
+                [1, 2],
+                [1, 3],
+                [1, 4],
+                [1, 5]
+            ]
+        );
     }
 }

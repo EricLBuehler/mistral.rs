@@ -10,17 +10,23 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
+use crate::gguf::{
+    get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
+};
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
-use crate::pipeline::gguf_tokenizer::{convert_ggml_to_hf_tokenizer, ConversionResult};
+use crate::pipeline::ChatTemplate;
 use crate::pipeline::{get_chat_template, Cache};
-use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
+use crate::utils::debug::setup_logger_and_debug;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
-use crate::{do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, Pipeline, DEBUG};
+use crate::{
+    do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths, Pipeline,
+    DEBUG,
+};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
     models::quantized_phi2::ModelWeights as QPhi,
@@ -46,8 +52,6 @@ use strum::EnumString;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::info;
-use tracing::level_filters::LevelFilter;
-use tracing_subscriber::EnvFilter;
 
 enum Model {
     Llama(QLlama),
@@ -68,6 +72,7 @@ pub struct GGUFPipeline {
     metadata: GeneralMetadata,
 }
 
+/// Loader for a GGUF model.
 pub struct GGUFLoader {
     model_id: Option<String>,
     config: GGUFSpecificConfig,
@@ -83,7 +88,7 @@ pub struct GGUFLoader {
 
 #[derive(Debug, EnumString)]
 #[strum(serialize_all = "kebab-case")]
-enum GGUFArchitecture {
+pub enum GGUFArchitecture {
     Llama,
     Mpt,
     Gptneox,
@@ -202,6 +207,8 @@ impl GGUFLoaderBuilder {
     }
 
     pub fn build(self) -> Box<dyn Loader> {
+        setup_logger_and_debug();
+
         Box::new(GGUFLoader {
             model_id: self.model_id,
             config: self.config,
@@ -231,6 +238,8 @@ impl GGUFLoader {
         chat_template: Option<String>,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
+        setup_logger_and_debug();
+
         let model_id = if let Some(id) = model_id {
             Some(id)
         } else if let Some(xlora_order) = xlora_order.clone() {
@@ -313,20 +322,6 @@ impl Loader for GGUFLoader {
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let is_debug = std::env::var("MISTRALRS_DEBUG")
-            .unwrap_or_default()
-            .contains('1');
-        DEBUG.store(is_debug, std::sync::atomic::Ordering::Relaxed);
-
-        let filter = EnvFilter::builder()
-            .with_default_directive(if is_debug {
-                LevelFilter::INFO.into()
-            } else {
-                LevelFilter::DEBUG.into()
-            })
-            .from_env_lossy();
-        tracing_subscriber::fmt().with_env_filter(filter).init();
-
         if in_situ_quant.is_some() {
             anyhow::bail!(
                 "You are trying to in-situ quantize a GGUF model. This will not do anything."
@@ -372,21 +367,29 @@ impl Loader for GGUFLoader {
             info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_gguf_tensors.txt`.");
         }
 
-        let ConversionResult {
+        let GgufTokenizerConversion {
             tokenizer,
             bos,
             eos,
             unk,
         } = if paths.get_tokenizer_filename().to_string_lossy().is_empty() {
-            convert_ggml_to_hf_tokenizer(&model)?
+            convert_gguf_to_hf_tokenizer(&model)?
         } else {
-            ConversionResult {
+            GgufTokenizerConversion {
                 tokenizer: get_tokenizer(paths.get_tokenizer_filename(), None)?,
                 bos: None,
                 eos: None,
                 unk: None,
             }
         };
+
+        // Only load gguf chat template if there is nothing else
+        let gguf_chat_template =
+            if paths.get_template_filename().is_none() && self.chat_template.is_none() {
+                get_gguf_chat_template(&model)?
+            } else {
+                None
+            };
 
         let has_adapter = self.kind.is_adapted();
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
@@ -431,7 +434,7 @@ impl Loader for GGUFLoader {
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
-        let mut chat_template = get_chat_template(paths, &self.chat_template);
+        let mut chat_template = get_chat_template(paths, &self.chat_template, gguf_chat_template);
 
         let max_seq_len = match model {
             Model::Llama(ref l) => l.max_seq_len,

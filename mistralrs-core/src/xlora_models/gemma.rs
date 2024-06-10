@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     layers::ScaledDotProductAttention,
     lora::{linear_b as linear, LinearLayerLike, LoraConfig, Ordering},
-    pipeline::IsqModel,
+    pipeline::{IsqModel, NormalLoadingMetadata},
 };
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
 use candle_nn::{RotaryEmbedding, VarBuilder};
@@ -17,7 +17,6 @@ use crate::{
     layers::{repeat_kv, CausalMasker, QLinear},
     models::gemma::Config,
     pipeline::{extract_logits, Cache, NormalModel},
-    DeviceMapMetadata,
 };
 
 use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -471,13 +470,13 @@ impl XLoraModel {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         is_gptx: bool,
-        mapper: DeviceMapMetadata,
-        loading_isq: bool,
-        real_device: Device,
+        normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
+        let mapper = normal_loading_metadata
+            .mapper
+            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -491,7 +490,9 @@ impl XLoraModel {
                 cfg.rope_theta as f32,
                 cfg.head_dim,
                 cfg.max_position_embeddings,
-                mapper.device_for(layer_idx, false).unwrap_or(&real_device),
+                mapper
+                    .device_for(layer_idx, false)
+                    .unwrap_or(&normal_loading_metadata.real_device),
                 is_gptx,
                 vb.dtype(),
             )?);
@@ -504,7 +505,7 @@ impl XLoraModel {
                 &xlora_ordering,
                 &*mapper,
                 layer_idx,
-                loading_isq,
+                normal_loading_metadata.loading_isq,
                 preload_adapters,
             )?;
             layers.push(layer)
@@ -548,7 +549,7 @@ impl XLoraModel {
             layers,
             norm,
             lm_head: QLinear::from_linear(lm_head),
-            device: real_device,
+            device: normal_loading_metadata.real_device,
             dtype: vb.dtype(),
             hidden_size: cfg.hidden_size,
             cache: Cache::new(cfg.num_hidden_layers, true),

@@ -17,7 +17,6 @@ candle-core.workspace = true
 candle-nn.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-candle-transformers = { git = "https://github.com/EricLBuehler/candle.git", version = "0.5.0" }
 candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.5.0", optional = true }
 dirs = "5.0.1"
 hf-hub = "0.3.2"
@@ -60,16 +59,17 @@ akin = "0.4.0"
 variantly = "0.4.0"
 buildstructor = "0.5.4"
 tracing-subscriber.workspace = true
-reqwest = { version = "0.12.4", features = ["blocking"] }
+derive-new = "0.6.0"
 itertools = "0.13.0"
+mistralrs-vision = { version = "0.1.13", path = "../mistralrs-vision" }
 
 [features]
 pyo3_macros = ["pyo3"]
-cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
 cudnn = ["candle-core/cudnn"]
-metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
-flash-attn = ["cuda", "candle-transformers/flash-attn", "dep:candle-flash-attn"]
-accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
-mkl = ["candle-core/mkl", "candle-nn/mkl", "candle-transformers/mkl"]
+metal = ["candle-core/metal", "candle-nn/metal"]
+flash-attn = ["cuda", "dep:candle-flash-attn"]
+accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
+mkl = ["candle-core/mkl", "candle-nn/mkl"]
 profile = []
 

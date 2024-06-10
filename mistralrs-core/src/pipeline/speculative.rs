@@ -26,6 +26,7 @@ use super::{
     IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
 };
 
+/// A loader for a speculative pipeline using 2 [`Loader`]s.
 pub struct SpeculativeLoader {
     pub target: Box<dyn Loader>,
     pub draft: Box<dyn Loader>,
@@ -117,7 +118,7 @@ impl Loader for SpeculativeLoader {
     }
 }
 
-/// Speculative decoding pipeline: https://arxiv.org/pdf/2211.17192
+/// Speculative decoding pipeline: <https://arxiv.org/pdf/2211.17192>
 ///
 /// # Algorithm
 /// Given draft model q and target model p with probability distributions \
@@ -138,6 +139,7 @@ pub struct SpeculativePipeline {
 }
 
 #[derive(Copy, Clone)]
+/// Metadata for a speculative pipeline
 pub struct SpeculativeConfig {
     /// γ completions to run of the draft model
     pub gamma: usize,

@@ -4,7 +4,6 @@ use std::collections::HashMap;
 
 use crate::device_map::DeviceMapper;
 use crate::layers::repeat_kv;
-use crate::layers::verify_sanity_gguf;
 use crate::layers::CausalMasker;
 use crate::layers::MatMul;
 use crate::layers::RmsNorm;
@@ -33,6 +32,8 @@ use super::Cache;
 use super::NonGranularState;
 use super::ScalingsMaker;
 use super::XLoraConfig;
+use crate::models::quantized_phi3::PropsGGUF;
+use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 
 const SUPPORTED_LAYERS: [&str; 4] = [
@@ -140,7 +141,7 @@ impl LayerWeights {
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
             .transpose(1, 2)?;
         let k = k
-            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
             .transpose(1, 2)?;
         let v = v
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
@@ -226,22 +227,24 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         mapper: DeviceMapMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
-        let md_get = |s: &str| match ct.metadata.get(s) {
-            None => candle_core::bail!("cannot find {s} in metadata"),
-            Some(v) => Ok(v),
-        };
-        verify_sanity_gguf(md_get("general.architecture")?.to_string().unwrap(), "phi3")?;
         verify_sanity_adapters(ordering, &SUPPORTED_LAYERS)?;
 
         // Parameter extraction from metadata.
-        let head_count = md_get("phi3.attention.head_count")?.to_u32()? as usize;
-        let head_count_kv = md_get("phi3.attention.head_count_kv")?.to_u32()? as usize;
-        let block_count = md_get("phi3.block_count")?.to_u32()? as usize;
-        let embedding_length = md_get("phi3.embedding_length")?.to_u32()? as usize;
-        let i_size = md_get("phi3.feed_forward_length")?.to_u32()? as usize;
-        let rope_dim = md_get("phi3.rope.dimension_count")?.to_u32()? as usize;
-        let rms_eps = md_get("phi3.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
-        let context_window = md_get("phi3.context_length")?.to_u32()? as usize;
+        let metadata = ContentMetadata {
+            path_prefix: "phi3",
+            metadata: &ct.metadata,
+        };
+        let PropsGGUF {
+            head_count,
+            head_count_kv,
+            block_count,
+            embedding_length,
+            i_size,
+            rope_dim,
+            rms_eps,
+            context_window,
+        } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
+
         let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, context_window)?;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
@@ -320,8 +323,8 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
-                cos: cos.clone(),
-                sin: sin.clone(),
+                cos: cos.to_device(device)?,
+                sin: sin.to_device(device)?,
                 sliding_window: context_window,
             })
         }

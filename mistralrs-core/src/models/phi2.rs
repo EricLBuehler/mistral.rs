@@ -14,8 +14,7 @@ use serde::Deserialize;
 use crate::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, QLinear, ScaledDotProductAttention},
-    pipeline::{extract_logits, Cache, IsqModel, NormalModel},
-    DeviceMapMetadata,
+    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
 };
 
 // https://huggingface.co/microsoft/phi-2/blob/main/configuration_phi.py
@@ -287,12 +286,12 @@ impl Model {
         cfg: &Config,
         vb: VarBuilder,
         is_gptx: bool,
-        mapper: DeviceMapMetadata,
-        loading_isq: bool,
-        real_device: Device,
+        normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
+        let mapper = normal_loading_metadata
+            .mapper
+            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
         let embed_tokens = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -312,7 +311,9 @@ impl Model {
                 cfg.head_dim(),
                 (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
                 cfg.max_position_embeddings,
-                mapper.device_for(layer_idx, false).unwrap_or(&real_device),
+                mapper
+                    .device_for(layer_idx, false)
+                    .unwrap_or(&normal_loading_metadata.real_device),
                 is_gptx,
                 vb.dtype(),
             )?;
@@ -321,7 +322,7 @@ impl Model {
                 vb_m.pp(layer_idx),
                 &*mapper,
                 layer_idx,
-                loading_isq,
+                normal_loading_metadata.loading_isq,
                 rotary_emb,
             )?;
             layers.push(layer)
@@ -329,7 +330,7 @@ impl Model {
         let lm_head = linear(
             cfg.hidden_size,
             cfg.vocab_size,
-            mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
+            mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
         )?;
         Ok(Self {
             embed_tokens,
@@ -337,7 +338,7 @@ impl Model {
             final_layernorm,
             lm_head: QLinear::from_linear(lm_head),
             cache: Cache::new(cfg.num_hidden_layers, false),
-            device: real_device,
+            device: normal_loading_metadata.real_device,
             max_seq_len: cfg.max_position_embeddings,
             mapper,
         })

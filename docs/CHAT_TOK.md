@@ -11,6 +11,8 @@ For example, to use the `chatml` template, `--chat-template` is specified *befor
 ./mitralrs-server --port 1234 --log output.log --chat-template ./chat_templates/chatml.json llama
 ```
 
+> Note: For GGUF models, the chat template may be loaded directly from the GGUF file by omitting any other chat template sources.
+
 ## Tokenizer
 
 Some models do not provide a `tokenizer.json` file although mistral.rs expects one. To solve this, please run [this](../scripts/get_tokenizers_json.py) script. It will output the `tokenizer.json` file for your specific model. This may be used by passing the `--tokenizer-json` flag *after* the model architecture. For example:
@@ -25,3 +27,5 @@ Putting it all together, to run, for example, an [Orca](https://huggingface.co/m
 1) Generate the `tokenizer.json` by running the script at `scripts/get_tokenizers_json.py`. This will output some files including `tokenizer.json` in the working directory.
 2) Find and copy the correct chat template from `chat-templates` to the working directory (eg., `cp chat_templates/chatml.json .`)
 3) Run `mistralrs-server`, specifying the tokenizer and chat template: `cargo run --release --features cuda -- --port 1234 --log output.txt --chat-template chatml.json plain -m microsoft/Orca-2-13b -t tokenizer.json -a llama`
+
+> Note: For GGUF models, the tokenizer may be loaded directly from the GGUF file by omitting the tokenizer model ID.

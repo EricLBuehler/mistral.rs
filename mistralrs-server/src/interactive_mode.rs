@@ -1,7 +1,7 @@
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    Constraint, Content, MistralRs, NormalRequest, Request, RequestMessage, Response,
+    Constraint, MessageContent, MistralRs, NormalRequest, Request, RequestMessage, Response,
     SamplingParams, TERMINATE_ALL_NEXT_STEP,
 };
 use once_cell::sync::Lazy;
@@ -25,7 +25,7 @@ static CTRLC_HANDLER: Lazy<Mutex<&'static (dyn Fn() + Sync)>> =
 
 pub async fn interactive_mode(mistralrs: Arc<MistralRs>) {
     let sender = mistralrs.get_sender().unwrap();
-    let mut messages: Vec<IndexMap<String, Content>> = Vec::new();
+    let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
 
     let sampling_params = SamplingParams {
         temperature: Some(0.1),
@@ -64,7 +64,7 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>) {
         // Set the handler to terminate all seqs, so allowing cancelling running
         *CTRLC_HANDLER.lock().unwrap() = &terminate_handler;
 
-        let mut user_message: IndexMap<String, Content> = IndexMap::new();
+        let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
         user_message.insert("role".to_string(), Either::Left("user".to_string()));
         user_message.insert("content".to_string(), Either::Left(prompt));
         messages.push(user_message);
