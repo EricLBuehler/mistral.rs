@@ -300,15 +300,43 @@
 <a href="#298" id="298">298</a>
 <a href="#299" id="299">299</a>
 <a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
+<a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::fs::{<span class="self">self</span>, File};
 
 <span class="kw">use crate</span>::{
+    get_toml_selected_model_dtype,
     pipeline::{
         GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
         NormalSpecificConfig,
     },
-    Loader, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector, VisionLoaderBuilder,
-    VisionSpecificConfig,
+    Loader, ModelDType, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector,
+    VisionLoaderBuilder, VisionSpecificConfig,
 };
 
 <span class="doccomment">/// A builder for a loader using the selected model.
@@ -372,6 +400,28 @@
     }
 }
 
+<span class="kw">pub fn </span>get_model_dtype(model: <span class="kw-2">&amp;</span>ModelSelected) -&gt; anyhow::Result&lt;ModelDType&gt; {
+    <span class="kw">match </span>model {
+        ModelSelected::Plain { dtype, .. }
+        | ModelSelected::Lora { dtype, .. }
+        | ModelSelected::XLora { dtype, .. }
+        | ModelSelected::VisionPlain { dtype, .. } =&gt; <span class="prelude-val">Ok</span>(<span class="kw-2">*</span>dtype),
+        ModelSelected::GGUF { .. }
+        | ModelSelected::LoraGGUF { .. }
+        | ModelSelected::GGML { .. }
+        | ModelSelected::LoraGGML { .. }
+        | ModelSelected::XLoraGGUF { .. }
+        | ModelSelected::XLoraGGML { .. } =&gt; <span class="prelude-val">Ok</span>(ModelDType::Auto),
+        ModelSelected::Toml { file } =&gt; {
+            <span class="kw">let </span>selector: TomlSelector = toml::from_str(
+                <span class="kw-2">&amp;</span>fs::read_to_string(file.clone())
+                    .unwrap_or_else(|<span class="kw">_</span>| <span class="macro">panic!</span>(<span class="string">"Could not load toml selector file at {file}"</span>)),
+            )<span class="question-mark">?</span>;
+            <span class="prelude-val">Ok</span>(get_toml_selected_model_dtype(<span class="kw-2">&amp;</span>selector))
+        }
+    }
+}
+
 <span class="kw">fn </span>loader_from_model_selected(args: LoaderBuilder) -&gt; anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>Loader&gt;&gt; {
     <span class="kw">let </span>use_flash_attn = args.use_flash_attn;
     <span class="kw">let </span>loader: Box&lt;<span class="kw">dyn </span>Loader&gt; = <span class="kw">match </span>args.model {
@@ -392,6 +442,7 @@
             repeat_last_n,
             tokenizer_json,
             arch,
+            dtype: <span class="kw">_</span>,
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -410,6 +461,7 @@
             tokenizer_json,
             tgt_non_granular_index,
             arch,
+            dtype: <span class="kw">_</span>,
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -436,6 +488,7 @@
             repeat_last_n,
             order,
             arch,
+            dtype: <span class="kw">_</span>,
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -587,6 +640,7 @@
             repeat_last_n,
             tokenizer_json,
             arch,
+            dtype: <span class="kw">_</span>,
         } =&gt; VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,

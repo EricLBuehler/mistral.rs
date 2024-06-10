@@ -312,6 +312,7 @@
 <a href="#310" id="310">310</a>
 <a href="#311" id="311">311</a>
 <a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{Json, State},
@@ -322,8 +323,8 @@
 <span class="kw">use </span>candle_core::{quantized::GgmlDType, Device};
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>mistralrs_core::{
-    get_tgt_non_granular_index, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs,
-    MistralRsBuilder, ModelSelected, Request, SchedulerMethod, TokenSource,
+    get_model_dtype, get_tgt_non_granular_index, DeviceMapMetadata, Loader, LoaderBuilder,
+    MistralRs, MistralRsBuilder, ModelSelected, Request, SchedulerMethod, TokenSource,
 };
 <span class="kw">use </span>openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
@@ -550,6 +551,7 @@
     </span><span class="kw">let </span>use_flash_attn = <span class="bool-val">true</span>;
 
     <span class="kw">let </span>tgt_non_granular_index = get_tgt_non_granular_index(<span class="kw-2">&amp;</span>args.model);
+    <span class="kw">let </span>dtype = get_model_dtype(<span class="kw-2">&amp;</span>args.model)<span class="question-mark">?</span>;
 
     <span class="kw">if </span>tgt_non_granular_index.is_some() {
         args.max_seqs = <span class="number">1</span>;
@@ -584,7 +586,7 @@
     <span class="kw">let </span>pipeline = loader.load_model_from_hf(
         <span class="prelude-val">None</span>,
         args.token_source,
-        <span class="prelude-val">None</span>,
+        <span class="kw-2">&amp;</span>dtype,
         <span class="kw-2">&amp;</span>device,
         <span class="bool-val">false</span>,
         args.num_device_layers

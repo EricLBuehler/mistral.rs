@@ -447,15 +447,6 @@
 <a href="#445" id="445">445</a>
 <a href="#446" id="446">446</a>
 <a href="#447" id="447">447</a>
-<a href="#448" id="448">448</a>
-<a href="#449" id="449">449</a>
-<a href="#450" id="450">450</a>
-<a href="#451" id="451">451</a>
-<a href="#452" id="452">452</a>
-<a href="#453" id="453">453</a>
-<a href="#454" id="454">454</a>
-<a href="#455" id="455">455</a>
-<a href="#456" id="456">456</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::normal_loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
@@ -484,11 +475,11 @@
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
 <span class="kw">use crate</span>::{
     do_sample, get_mut_arcmutex, get_paths, lora_model_loader, normal_model_loader,
-    xlora_model_loader, DeviceMapMetadata, Pipeline,
+    xlora_model_loader, DeviceMapMetadata, Pipeline, TryIntoDType,
 };
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::quantized::GgmlDType;
-<span class="kw">use </span>candle_core::{DType, Device, Tensor};
+<span class="kw">use </span>candle_core::{Device, Tensor};
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>std::any::Any;
@@ -644,7 +635,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
         token_source: TokenSource,
-        _dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
+        dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType,
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -659,27 +650,21 @@
             <span class="prelude-val">None</span>,
             silent
         );
-        <span class="self">self</span>.load_model_from_path(<span class="kw-2">&amp;</span>paths<span class="question-mark">?</span>, _dtype, device, silent, mapper, in_situ_quant)
+        <span class="self">self</span>.load_model_from_path(<span class="kw-2">&amp;</span>paths<span class="question-mark">?</span>, dtype, device, silent, mapper, in_situ_quant)
     }
 
     <span class="attr">#[allow(clippy::type_complexity, clippy::too_many_arguments)]
     </span><span class="kw">fn </span>load_model_from_path(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         paths: <span class="kw-2">&amp;</span>Box&lt;<span class="kw">dyn </span>ModelPaths&gt;,
-        dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
+        dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType,
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>config = std::fs::read_to_string(paths.get_config_filename())<span class="question-mark">?</span>;
-        <span class="kw">let </span>default_dtype = <span class="kw">if </span>device.is_cuda() &amp;&amp; mapper.is_dummy() {
-            DType::BF16
-        } <span class="kw">else if </span>!mapper.is_dummy() {
-            DType::F16
-        } <span class="kw">else </span>{
-            DType::F32
-        };
+        <span class="kw">let </span>dtype = dtype.try_into_dtype(device)<span class="question-mark">?</span>;
         <span class="comment">// Otherwise, the device mapper will print it
         </span><span class="kw">if </span>mapper.is_dummy() {
             <span class="macro">info!</span>(<span class="string">"Loading model `{}` on {device:?}..."</span>, <span class="self">self</span>.get_id());
@@ -703,7 +688,6 @@
             ModelKind::Normal =&gt; <span class="macro">normal_model_loader!</span>(
                 paths,
                 dtype,
-                default_dtype,
                 <span class="kw-2">&amp;</span>load_device,
                 config,
                 <span class="self">self</span>.inner,
@@ -718,7 +702,6 @@
             } =&gt; <span class="macro">xlora_model_loader!</span>(
                 paths,
                 dtype,
-                default_dtype,
                 <span class="kw-2">&amp;</span>load_device,
                 config,
                 <span class="self">self</span>.inner,
@@ -733,7 +716,6 @@
             } =&gt; <span class="macro">lora_model_loader!</span>(
                 paths,
                 dtype,
-                default_dtype,
                 <span class="kw-2">&amp;</span>load_device,
                 config,
                 <span class="self">self</span>.inner,

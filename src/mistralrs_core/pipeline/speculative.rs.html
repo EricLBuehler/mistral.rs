@@ -586,7 +586,7 @@
 };
 
 <span class="kw">use </span>anyhow::Result <span class="kw">as </span>anyhowResult;
-<span class="kw">use </span>candle_core::{quantized::GgmlDType, DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor};
+<span class="kw">use </span>candle_core::{quantized::GgmlDType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>tokenizers::Tokenizer;
 
@@ -598,7 +598,7 @@
     },
     prefix_cacher::PrefixCacheManager,
     sequence::{Sequence, SequenceRecognizer},
-    DeviceMapMetadata, Loader, ModelKind, Pipeline, TokenSource,
+    DeviceMapMetadata, Loader, ModelKind, Pipeline, TokenSource, TryIntoDType,
 };
 
 <span class="kw">use super</span>::{
@@ -620,7 +620,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
         token_source: TokenSource,
-        dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
+        dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType,
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -655,7 +655,7 @@
     </span><span class="kw">fn </span>load_model_from_path(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         paths: <span class="kw-2">&amp;</span>Box&lt;<span class="kw">dyn </span>ModelPaths&gt;,
-        dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
+        dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType,
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,

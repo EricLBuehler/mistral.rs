@@ -924,7 +924,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">mod </span>sampling_pipeline;
 <span class="kw">use </span><span class="kw">crate</span>::lora::{LoraConfig, Ordering};
-<span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
+<span class="kw">use crate</span>::{DeviceMapMetadata, TryIntoDType};
 <span class="kw">use </span>candle_core::quantized::GgmlDType;
 <span class="kw">use </span>chat_template::ChatTemplate;
 <span class="kw">use </span>core::fmt;
@@ -950,7 +950,7 @@
 <span class="kw">pub use </span>vision_loaders::{Phi3VLoader, VisionLoaderType, VisionModelLoader};
 
 <span class="kw">use </span>anyhow::Result;
-<span class="kw">use </span>candle_core::{DType, Device, Tensor};
+<span class="kw">use </span>candle_core::{Device, Tensor};
 
 <span class="kw">use crate</span>::{
     sequence::Sequence,
@@ -1267,14 +1267,14 @@
 ///
 /// # Example
 /// ```no_run
-/// use mistralrs_core::{Loader, TokenSource, DeviceMapMetadata};
+/// use mistralrs_core::{Loader, TokenSource, DeviceMapMetadata, ModelDType};
 /// use candle_core::Device;
 ///
 /// let loader: Box&lt;dyn Loader&gt; = todo!();
 /// let pipeline = loader.load_model_from_hf(
 ///     None,
 ///     TokenSource::CacheToken,
-///     None,
+///     &amp;ModelDType::Auto,
 ///     &amp;Device::cuda_if_available(0).unwrap(),
 ///     false,
 ///     DeviceMapMetadata::dummy(),
@@ -1290,7 +1290,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
         token_source: TokenSource,
-        dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
+        dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType,
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -1307,7 +1307,7 @@
     </span><span class="kw">fn </span>load_model_from_path(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         paths: <span class="kw-2">&amp;</span>Box&lt;<span class="kw">dyn </span>ModelPaths&gt;,
-        _dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
+        dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType,
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,

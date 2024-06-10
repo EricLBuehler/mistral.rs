@@ -349,11 +349,6 @@
 <a href="#347" id="347">347</a>
 <a href="#348" id="348">348</a>
 <a href="#349" id="349">349</a>
-<a href="#350" id="350">350</a>
-<a href="#351" id="351">351</a>
-<a href="#352" id="352">352</a>
-<a href="#353" id="353">353</a>
-<a href="#354" id="354">354</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::vision_loaders::{Phi3VLoader, VisionLoaderType};
 <span class="kw">use super</span>::{
@@ -376,10 +371,11 @@
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::ModelInputs;
 <span class="kw">use crate</span>::{
     do_sample, get_paths, vision_normal_model_loader, DeviceMapMetadata, Ordering, Pipeline,
+    TryIntoDType,
 };
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::quantized::GgmlDType;
-<span class="kw">use </span>candle_core::{DType, Device, Tensor};
+<span class="kw">use </span>candle_core::{Device, Tensor};
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>std::any::Any;
@@ -472,7 +468,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
         token_source: TokenSource,
-        _dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
+        dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType,
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -487,27 +483,22 @@
             <span class="prelude-val">None</span>,
             silent
         );
-        <span class="self">self</span>.load_model_from_path(<span class="kw-2">&amp;</span>paths<span class="question-mark">?</span>, _dtype, device, silent, mapper, in_situ_quant)
+        <span class="self">self</span>.load_model_from_path(<span class="kw-2">&amp;</span>paths<span class="question-mark">?</span>, dtype, device, silent, mapper, in_situ_quant)
     }
 
     <span class="attr">#[allow(clippy::type_complexity, clippy::too_many_arguments)]
     </span><span class="kw">fn </span>load_model_from_path(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         paths: <span class="kw-2">&amp;</span>Box&lt;<span class="kw">dyn </span>ModelPaths&gt;,
-        dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
+        dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType,
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>config = std::fs::read_to_string(paths.get_config_filename())<span class="question-mark">?</span>;
-        <span class="kw">let </span>default_dtype = <span class="kw">if </span>device.is_cuda() &amp;&amp; mapper.is_dummy() {
-            DType::BF16
-        } <span class="kw">else if </span>!mapper.is_dummy() {
-            DType::F16
-        } <span class="kw">else </span>{
-            DType::F32
-        };
+        <span class="kw">let </span>dtype = dtype.try_into_dtype(device)<span class="question-mark">?</span>;
+
         <span class="comment">// Otherwise, the device mapper will print it
         </span><span class="kw">if </span>mapper.is_dummy() {
             <span class="macro">info!</span>(<span class="string">"Loading model `{}` on {device:?}..."</span>, <span class="self">self</span>.get_id());
@@ -529,7 +520,6 @@
             ModelKind::Normal =&gt; <span class="macro">vision_normal_model_loader!</span>(
                 paths,
                 dtype,
-                default_dtype,
                 <span class="kw-2">&amp;</span>load_device,
                 config,
                 <span class="self">self</span>.inner,
