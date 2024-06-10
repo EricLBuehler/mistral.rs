@@ -322,7 +322,7 @@ pub(crate) fn get_chat_template(
         panic!("Expected chat template file to end with .json, or you can specify a tokenizer model ID to load the chat template there.");
     };
 
-    let template: ChatTemplate = match chat_template_ovrd {
+    let mut template: ChatTemplate = match chat_template_ovrd {
         Some(chat_template) => {
             // In this case the override chat template is being used. The user must add the bos/eos/unk toks themselves.
             info!("Using literal chat template.");
@@ -333,8 +333,6 @@ pub(crate) fn get_chat_template(
         None => serde_json::from_str(&template_content.as_ref().unwrap().clone()).unwrap(),
     };
 
-    let mut template: ChatTemplate =
-        serde_json::from_str(&fs::read_to_string(&template_filename).unwrap()).unwrap();
     let processor_conf: Option<crate::vision_models::processor_config::ProcessorConfig> = paths
         .get_processor_config()
         .as_ref()
