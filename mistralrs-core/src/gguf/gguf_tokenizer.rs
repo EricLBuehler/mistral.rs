@@ -406,6 +406,24 @@ mod tests {
                 .map_err(anyhow::Error::msg)
                 .map(|res| res.tokenizer)
             }
+            TokenizerType::Gpt2 => {
+                let api = ApiBuilder::new().with_progress(true).build().unwrap();
+                let api = api.repo(Repo::with_revision(
+                    "QuantFactory/Meta-Llama-3-8B-Instruct-GGUF".to_string(),
+                    RepoType::Model,
+                    "main".to_string(),
+                ));
+
+                let filename = api.get("Meta-Llama-3-8B-Instruct.Q2_K.gguf").unwrap();
+                let mut file = std::fs::File::open(&filename)?;
+                convert_gguf_to_hf_tokenizer(
+                    &Content::read(&mut file)
+                        .map_err(|e| e.with_path(filename))
+                        .map_err(anyhow::Error::msg)?,
+                )
+                .map_err(anyhow::Error::msg)
+                .map(|res| res.tokenizer)
+            }
             other => anyhow::bail!("Cannot get testing HF tokenizer for type {other:?}"),
         }
     }
@@ -421,6 +439,17 @@ mod tests {
                 ));
 
                 let tokenizer_filename = api.get("tokenizer.json").unwrap();
+                Ok(Tokenizer::from_file(tokenizer_filename).unwrap())
+            }
+            TokenizerType::Gpt2 => {
+                let api = ApiBuilder::new().with_progress(true).build().unwrap();
+                let api = api.repo(Repo::with_revision(
+                    "EricB/mistralrs_tests".to_string(),
+                    RepoType::Model,
+                    "main".to_string(),
+                ));
+
+                let tokenizer_filename = api.get("tokenizer_gpt2.json").unwrap();
                 Ok(Tokenizer::from_file(tokenizer_filename).unwrap())
             }
             other => anyhow::bail!("Cannot get testing HF tokenizer for type {other:?}"),
@@ -484,12 +513,62 @@ mod tests {
     }
 
     #[test]
+    fn test_encode_gpt2() -> Result<()> {
+        let passage = get_test_passage();
+        let hf_tokenizer = get_hf_tokenizer(TokenizerType::Gpt2)?;
+        let gguf_tokenizer = get_gguf_tokenizer(TokenizerType::Gpt2)?;
+
+        // Without adding special tokens
+        let hf_decoded = codec_roundtrip(&hf_tokenizer, passage.as_str(), false)?;
+        let gguf_decoded = codec_roundtrip(&gguf_tokenizer, passage.as_str(), false)?;
+        assert_eq!(hf_decoded, gguf_decoded);
+        assert_eq!(passage, gguf_decoded);
+
+        // With special tokens added
+        // SKIPPED:
+        // - Bugged the GGUF tokenizer does not prepend `<s> `
+        // - Due to HF tokenizer using BPE (tokenizer.json) while GGUF tokenizer uses Unigram (metadata)?
+        /*
+        let hf_decoded = codec_roundtrip(&hf_tokenizer, passage.as_str(), true)?;
+        let gguf_decoded = codec_roundtrip(&gguf_tokenizer, passage.as_str(), true)?;
+        assert_eq!(hf_decoded, gguf_decoded);
+        */
+
+        Ok(())
+    }
+
+    #[test]
     fn test_decode_llama() -> Result<()> {
         use rand::seq::SliceRandom;
         use rand::thread_rng;
 
         let hf_tokenizer = get_hf_tokenizer(TokenizerType::Llama)?;
         let gguf_tokenizer = get_gguf_tokenizer(TokenizerType::Llama)?;
+
+        #[allow(clippy::cast_possible_truncation)]
+        let mut tokens = (0..hf_tokenizer.get_vocab_size(false) as u32).collect::<Vec<_>>();
+        tokens.shuffle(&mut thread_rng());
+
+        // Without skipping special tokens
+        let hf_decoded = decode(&hf_tokenizer, &tokens, false)?;
+        let gguf_decoded = decode(&gguf_tokenizer, &tokens, false)?;
+        assert_eq!(hf_decoded, gguf_decoded);
+
+        // With skipping special tokens
+        let hf_decoded = decode(&hf_tokenizer, &tokens, true)?;
+        let gguf_decoded = decode(&gguf_tokenizer, &tokens, true)?;
+        assert_eq!(hf_decoded, gguf_decoded);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_decode_gpt2() -> Result<()> {
+        use rand::seq::SliceRandom;
+        use rand::thread_rng;
+
+        let hf_tokenizer = get_hf_tokenizer(TokenizerType::Gpt2)?;
+        let gguf_tokenizer = get_gguf_tokenizer(TokenizerType::Gpt2)?;
 
         #[allow(clippy::cast_possible_truncation)]
         let mut tokens = (0..hf_tokenizer.get_vocab_size(false) as u32).collect::<Vec<_>>();
