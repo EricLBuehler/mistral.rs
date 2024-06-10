@@ -322,7 +322,8 @@ The following tokenizer model types are currently supported. If you would like o
 please consider using the method demonstrated in examples below, where the tokenizer is sourced from Hugging Face.
 
 **Supported GGUF tokenizer types**
-- `llama`
+- `llama` (sentencepiece)
+- `gpt2` (BPE)
 
 ## Run with the CLI
 
