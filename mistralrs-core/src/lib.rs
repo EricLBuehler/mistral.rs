@@ -297,16 +297,16 @@ impl MistralRs {
         let (new_sender, rx) = channel(10_000);
         let reboot_state = self.reboot_state.clone();
         let mut sender_lock = self.sender.write().map_err(|_| {
-            tracing::warn!("couldn't get write lock on the sender during reboot attempt");
+            tracing::warn!("Couldn't get write lock on the sender during reboot attempt");
             MistralRsError::SenderPoisoned
         })?;
         let mut engine_lock = self.engine_handler.write().map_err(|_| {
-            tracing::warn!("couldn't get write lock on the engine during reboot attempt");
+            tracing::warn!("Couldn't get write lock on the engine during reboot attempt");
             MistralRsError::EnginePoisoned
         })?;
 
         if !engine_lock.is_finished() {
-            tracing::info!("engine already running, returning ok");
+            tracing::info!("Engine already running, returning ok");
             Ok(())
         } else {
             // critical section. A panic here could lead to poisoned locks
@@ -337,7 +337,7 @@ impl MistralRs {
         match self.engine_handler.read() {
             Ok(handler) => Ok(handler.is_finished()),
             Err(_) => {
-                tracing::warn!("couldn't get read lock on engine!");
+                tracing::warn!("Couldn't get read lock on engine!");
                 Err(MistralRsError::EnginePoisoned)
             }
         }
@@ -345,7 +345,7 @@ impl MistralRs {
 
     pub fn get_sender(&self) -> Result<Sender<Request>, MistralRsError> {
         if self.engine_dead()? {
-            tracing::warn!("engine is dead, rebooting");
+            tracing::warn!("Engine is dead, rebooting");
             self.reboot_engine()?
         }
         match self.sender.read() {
