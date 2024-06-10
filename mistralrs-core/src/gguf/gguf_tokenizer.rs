@@ -1,3 +1,5 @@
+// https://github.com/huggingface/transformers/blob/8685b3c5d2dd2550527773d2a02499495a759e31/src/transformers/convert_slow_tokenizer.py
+
 use std::{collections::HashMap, sync::atomic::Ordering};
 
 use anyhow::Result;
