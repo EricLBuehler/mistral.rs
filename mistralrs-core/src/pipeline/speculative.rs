@@ -154,7 +154,7 @@ impl SpeculativePipeline {
         if get_mut_arcmutex!(target).tokenizer().get_vocab(true)
             != get_mut_arcmutex!(draft).tokenizer().get_vocab(true)
         {
-            candle_core::bail!("Target and draft models' tokenzier vocab do not match. This is required for speculative decoding.");
+            candle_core::bail!("Target and draft models' tokenizer vocab do not match. This is required for speculative decoding.");
         }
         if get_mut_arcmutex!(target).category() != get_mut_arcmutex!(draft).category() {
             candle_core::bail!("Target and draft models' category do not match. This is required for speculative decoding.");
