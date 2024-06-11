@@ -18,6 +18,8 @@ use std::{
 use tokio::sync::mpsc::{channel, Sender};
 
 mod aici;
+mod cuda;
+mod ops;
 mod device_map;
 mod engine;
 mod lora;

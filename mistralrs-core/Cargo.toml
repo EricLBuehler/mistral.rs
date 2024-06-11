@@ -73,3 +73,7 @@ accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
 mkl = ["candle-core/mkl", "candle-nn/mkl"]
 profile = []
 
+[build-dependencies]
+bindgen_cuda = { workspace = true }
+
+
