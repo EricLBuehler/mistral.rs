@@ -25,7 +25,8 @@ tokenizers = "0.19.1"
 tqdm = "0.7.0"
 range-checked = { git = "https://github.com/EricLBuehler/range-checked.git", version = "0.1.0" }
 chrono = "0.4.34"
-minijinja = "2.0.1"
+minijinja = "2.0.2"
+minijinja-contrib = { version = "2.0.2", features = ["pycompat"] }
 either.workspace = true
 indexmap.workspace = true
 half = "2.4.0"
