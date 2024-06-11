@@ -212,7 +212,6 @@
 <a href="#210" id="210">210</a>
 <a href="#211" id="211">211</a>
 <a href="#212" id="212">212</a>
-<a href="#213" id="213">213</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>anyhow::Result;
@@ -395,6 +394,10 @@
     unk_tok: <span class="prelude-ty">Option</span>&lt;String&gt;,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
     <span class="kw">let </span><span class="kw-2">mut </span>env = Environment::new();
+
+    <span class="comment">// enable python methods such as .strip()
+    </span>env.set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
+
     <span class="comment">// https://github.com/huggingface/transformers/blob/76a33a10923ccc1074917f6b6a1e719e626b7dc9/src/transformers/tokenization_utils_base.py#L1842
     </span>env.set_lstrip_blocks(<span class="bool-val">true</span>);
     env.set_trim_blocks(<span class="bool-val">true</span>);
@@ -410,12 +413,7 @@
         new_messages.push(new_message);
     }
 
-    <span class="kw">let </span>template = template
-        .replace(<span class="string">".strip()"</span>, <span class="string">"|trim"</span>)
-        .replace(<span class="string">".upper()"</span>, <span class="string">"|upper"</span>)
-        .replace(<span class="string">".lower()"</span>, <span class="string">"|lower"</span>)
-        .replace(<span class="string">".capitalize()"</span>, <span class="string">"|capitalize "</span>);
-    env.add_template(<span class="string">"chat_template"</span>, template.as_str())<span class="question-mark">?</span>;
+    env.add_template(<span class="string">"chat_template"</span>, template)<span class="question-mark">?</span>;
     env.add_function(<span class="string">"raise_exception"</span>, raise_exception);
     <span class="kw">let </span>tmpl = env.get_template(<span class="string">"chat_template"</span>).unwrap();
     <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context!</span> {
