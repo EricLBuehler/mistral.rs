@@ -22,9 +22,10 @@ mod device_map;
 mod engine;
 mod lora;
 mod model_loader;
-pub use model_loader::{get_tgt_non_granular_index, LoaderBuilder};
+pub use model_loader::{get_model_dtype, get_tgt_non_granular_index, LoaderBuilder};
 mod model_selected;
 pub use model_selected::ModelSelected;
+pub use toml_selector::get_toml_selected_model_dtype;
 
 mod cublaslt;
 mod gguf;
@@ -62,6 +63,7 @@ pub use scheduler::SchedulerMethod;
 use serde::Serialize;
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
+pub use utils::normal::{ModelDType, TryIntoDType};
 
 /// `true` if `MISTRALRS_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
