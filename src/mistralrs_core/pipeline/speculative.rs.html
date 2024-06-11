@@ -735,7 +735,7 @@
         <span class="kw">if </span><span class="macro">get_mut_arcmutex!</span>(target).tokenizer().get_vocab(<span class="bool-val">true</span>)
             != <span class="macro">get_mut_arcmutex!</span>(draft).tokenizer().get_vocab(<span class="bool-val">true</span>)
         {
-            <span class="macro">candle_core::bail!</span>(<span class="string">"Target and draft models' tokenzier vocab do not match. This is required for speculative decoding."</span>);
+            <span class="macro">candle_core::bail!</span>(<span class="string">"Target and draft models' tokenizer vocab do not match. This is required for speculative decoding."</span>);
         }
         <span class="kw">if </span><span class="macro">get_mut_arcmutex!</span>(target).category() != <span class="macro">get_mut_arcmutex!</span>(draft).category() {
             <span class="macro">candle_core::bail!</span>(<span class="string">"Target and draft models' category do not match. This is required for speculative decoding."</span>);
