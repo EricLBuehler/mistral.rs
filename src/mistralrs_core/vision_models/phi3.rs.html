@@ -940,9 +940,10 @@
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
     layers::{
-        repeat_kv, CausalMasker, FusedBiasLinear, MatMul, Nonzero, PhiRopeConfig,
-        PhiRotaryEmbedding, RmsNorm, ScaledDotProductAttention,
+        repeat_kv, CausalMasker, FusedBiasLinear, MatMul, PhiRopeConfig, PhiRotaryEmbedding,
+        RmsNorm, ScaledDotProductAttention,
     },
+    ops::{BitWiseOp, NonZeroOp},
     pipeline::{
         extract_logits, Cache, IsqModel, NormalLoadingMetadata, Phi3RopeScaling, VisionModel,
     },
@@ -1464,8 +1465,7 @@
         <span class="kw">let </span>input_ids_lt = input_ids.lt(<span class="number">0.0f64</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>input_ids_gt = input_ids.gt(-MAX_INPUT_ID)<span class="question-mark">?</span>;
         <span class="comment">// positions = torch.nonzero((input_ids &lt; 0) &amp; (input_ids &gt; -MAX_INPUT_ID), as_tuple=False)
-        </span><span class="kw">let </span>positions = Nonzero.nonzero_and::&lt;u8&gt;(<span class="kw-2">&amp;</span>input_ids_lt, <span class="kw-2">&amp;</span>input_ids_gt)<span class="question-mark">?</span>;
-
+        </span><span class="kw">let </span>positions = input_ids_lt.bitwise_and(<span class="kw-2">&amp;</span>input_ids_gt)<span class="question-mark">?</span>.nonzero()<span class="question-mark">?</span>;
         <span class="kw">let </span>target_dev = <span class="self">self</span>.layers.<span class="number">0</span>[<span class="number">0</span>].device();
         <span class="kw">let </span>target_dtype = <span class="self">self</span>.layers.<span class="number">0</span>[<span class="number">0</span>].dtype();
 
