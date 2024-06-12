@@ -17,7 +17,7 @@ candle-core.workspace = true
 candle-nn.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", commit = "f52e2347b6237d19ffd7af26315f543c22f9f286", optional = true }
+candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "f52e2347b6237d19ffd7af26315f543c22f9f286", optional = true }
 dirs = "5.0.1"
 hf-hub = "0.3.2"
 thiserror = "1.0.57"
@@ -48,14 +48,16 @@ tokio.workspace = true
 tokio-rayon = "2.1.0"
 rand_isaac = "0.3.0"
 futures.workspace = true
-pyo3 = {workspace = true, optional = true }
+pyo3 = { workspace = true, optional = true }
 indicatif = { version = "0.17.8", features = ["rayon"] }
 async-trait = "0.1.80"
 once_cell.workspace = true
 toml = "0.8.12"
 strum = { version = "0.26", features = ["derive"] }
 image.workspace = true
-derive_more = { version = "0.99.17", default-features = false, features = ["from"] }
+derive_more = { version = "0.99.17", default-features = false, features = [
+    "from",
+] }
 akin = "0.4.0"
 variantly = "0.4.0"
 buildstructor = "0.5.4"
@@ -66,7 +68,7 @@ mistralrs-vision = { version = "0.1.13", path = "../mistralrs-vision" }
 
 [features]
 pyo3_macros = ["pyo3"]
-cuda = ["candle-core/cuda", "candle-nn/cuda"]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda"]
 cudnn = ["candle-core/cudnn"]
 metal = ["candle-core/metal", "candle-nn/metal"]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
@@ -74,3 +76,5 @@ accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
 mkl = ["candle-core/mkl", "candle-nn/mkl"]
 profile = []
 
+[build-dependencies]
+bindgen_cuda = { version = "0.1.5", optional = true }
