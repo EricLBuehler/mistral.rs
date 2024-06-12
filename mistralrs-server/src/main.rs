@@ -30,7 +30,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 // NOTE(EricLBuehler): Accept up to 50mb input
 const N_INPUT_SIZE: usize = 50;
-const MB_TO_B: usize = 1024;
+const MB_TO_B: usize = 1024 * 1024; // 1024 kb in a mb
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
