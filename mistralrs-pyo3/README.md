@@ -21,19 +21,19 @@ sudo apt install pkg-config
 
 - CUDA
 
-  `pip install mistralrs-cuda`
+  `pip install mistralrs-cuda -v`
 - Metal
 
-  `pip install mistralrs-metal`
+  `pip install mistralrs-metal -v`
 - Apple Accelerate
 
-  `pip install mistralrs-accelerate`
+  `pip install mistralrs-accelerate -v`
 - Intel MKL
 
-  `pip install mistralrs-mkl`
+  `pip install mistralrs-mkl -v`
 - Without accelerators
 
-  `pip install mistralrs`
+  `pip install mistralrs -v`
 
 All installations will install the `mistralrs` package. The suffix on the package installed by `pip` only controls the feature activation.
 

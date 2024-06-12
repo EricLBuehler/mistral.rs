@@ -198,10 +198,11 @@ Please submit more benchmarks via raising an issue!
 ## Installation and Build
 
 1) Install required packages
-    - `openssl` (ex., `sudo apt install libssl-dev`)
-    - `pkg-config` (ex., `sudo apt install pkg-config`)
+    - `openssl` (ex. on Ubuntu, `sudo apt install libssl-dev`)
+    - `pkg-config` (ex. on Ubuntu, `sudo apt install pkg-config`)
 
 2) Install Rust: https://rustup.rs/
+    *Example on Ubuntu:*
     ```bash
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     source $HOME/.cargo/env
