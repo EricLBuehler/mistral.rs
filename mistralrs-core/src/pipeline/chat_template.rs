@@ -180,6 +180,10 @@ pub fn apply_chat_template_to(
     unk_tok: Option<String>,
 ) -> Result<String> {
     let mut env = Environment::new();
+
+    // enable python methods such as .strip()
+    env.set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
+
     // https://github.com/huggingface/transformers/blob/76a33a10923ccc1074917f6b6a1e719e626b7dc9/src/transformers/tokenization_utils_base.py#L1842
     env.set_lstrip_blocks(true);
     env.set_trim_blocks(true);
@@ -195,12 +199,7 @@ pub fn apply_chat_template_to(
         new_messages.push(new_message);
     }
 
-    let template = template
-        .replace(".strip()", "|trim")
-        .replace(".upper()", "|upper")
-        .replace(".lower()", "|lower")
-        .replace(".capitalize()", "|capitalize ");
-    env.add_template("chat_template", template.as_str())?;
+    env.add_template("chat_template", template)?;
     env.add_function("raise_exception", raise_exception);
     let tmpl = env.get_template("chat_template").unwrap();
     Ok(tmpl.render(context! {
