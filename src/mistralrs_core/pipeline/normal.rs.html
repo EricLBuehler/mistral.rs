@@ -444,9 +444,6 @@
 <a href="#442" id="442">442</a>
 <a href="#443" id="443">443</a>
 <a href="#444" id="444">444</a>
-<a href="#445" id="445">445</a>
-<a href="#446" id="446">446</a>
-<a href="#447" id="447">447</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::normal_loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
@@ -469,7 +466,6 @@
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{ChatTemplate, LocalModelPaths};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
-<span class="kw">use </span><span class="kw">crate</span>::utils::debug::setup_logger_and_debug;
 <span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
 <span class="kw">use </span><span class="kw">crate</span>::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
@@ -603,8 +599,6 @@
     }
 
     <span class="kw">pub fn </span>build(<span class="self">self</span>, loader: NormalLoaderType) -&gt; Box&lt;<span class="kw">dyn </span>Loader&gt; {
-        setup_logger_and_debug();
-
         <span class="kw">let </span>loader: Box&lt;<span class="kw">dyn </span>NormalModelLoader&gt; = <span class="kw">match </span>loader {
             NormalLoaderType::Mistral =&gt; Box::new(MistralLoader),
             NormalLoaderType::Gemma =&gt; Box::new(GemmaLoader),

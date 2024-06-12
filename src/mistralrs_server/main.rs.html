@@ -318,6 +318,8 @@
 <a href="#316" id="316">316</a>
 <a href="#317" id="317">317</a>
 <a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
@@ -328,8 +330,9 @@
 <span class="kw">use </span>candle_core::{quantized::GgmlDType, Device};
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>mistralrs_core::{
-    get_model_dtype, get_tgt_non_granular_index, DeviceMapMetadata, Loader, LoaderBuilder,
-    MistralRs, MistralRsBuilder, ModelSelected, Request, SchedulerMethod, TokenSource,
+    get_model_dtype, get_tgt_non_granular_index, initialize_logging, DeviceMapMetadata, Loader,
+    LoaderBuilder, MistralRs, MistralRsBuilder, ModelSelected, Request, SchedulerMethod,
+    TokenSource,
 };
 <span class="kw">use </span>openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
@@ -554,6 +557,7 @@
 <span class="attr">#[tokio::main]
 </span><span class="kw">async fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
     <span class="kw">let </span><span class="kw-2">mut </span>args = Args::parse();
+    initialize_logging();
 
     <span class="attr">#[cfg(not(feature = <span class="string">"flash-attn"</span>))]
     </span><span class="kw">let </span>use_flash_attn = <span class="bool-val">false</span>;

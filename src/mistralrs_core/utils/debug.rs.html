@@ -21,25 +21,35 @@
 <a href="#19" id="19">19</a>
 <a href="#20" id="20">20</a>
 <a href="#21" id="21">21</a>
+<a href="#22" id="22">22</a>
+<a href="#23" id="23">23</a>
+<a href="#24" id="24">24</a>
+<a href="#25" id="25">25</a>
+<a href="#26" id="26">26</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>tracing::level_filters::LevelFilter;
 <span class="kw">use </span>tracing_subscriber::EnvFilter;
 
 <span class="kw">use </span><span class="kw">crate</span>::DEBUG;
 
-<span class="comment">// This should be called in each `Loader` when it is created.
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>setup_logger_and_debug() {
+<span class="kw">static </span>LOGGER: std::sync::OnceLock&lt;()&gt; = std::sync::OnceLock::new();
+
+<span class="doccomment">/// This should be called to initialize the debug flag and logging.
+/// This should not be called in mistralrs-core code due to Rust usage.
+</span><span class="kw">pub fn </span>initialize_logging() {
     <span class="kw">let </span>is_debug = std::env::var(<span class="string">"MISTRALRS_DEBUG"</span>)
         .unwrap_or_default()
         .contains(<span class="string">'1'</span>);
     DEBUG.store(is_debug, std::sync::atomic::Ordering::Relaxed);
 
-    <span class="kw">let </span>filter = EnvFilter::builder()
-        .with_default_directive(<span class="kw">if </span>is_debug {
-            LevelFilter::DEBUG.into()
-        } <span class="kw">else </span>{
-            LevelFilter::INFO.into()
-        })
-        .from_env_lossy();
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    LOGGER.get_or_init(|| {
+        <span class="kw">let </span>filter = EnvFilter::builder()
+            .with_default_directive(<span class="kw">if </span>is_debug {
+                LevelFilter::DEBUG.into()
+            } <span class="kw">else </span>{
+                LevelFilter::INFO.into()
+            })
+            .from_env_lossy();
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+    });
 }
 </code></pre></div></section></main></body></html>

@@ -379,13 +379,15 @@
 <a href="#377" id="377">377</a>
 <a href="#378" id="378">378</a>
 <a href="#379" id="379">379</a>
+<a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 <span class="kw">use </span>mistralrs_core::{
-    Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelDType,
-    ModelSelected, NormalRequest, Request, RequestMessage, Response, SamplingParams,
-    SchedulerMethod, TokenSource, Usage,
+    initialize_logging, Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs,
+    MistralRsBuilder, ModelDType, ModelSelected, NormalRequest, Request, RequestMessage, Response,
+    SamplingParams, SchedulerMethod, TokenSource, Usage,
 };
 <span class="kw">use </span>std::fmt::Display;
 <span class="kw">use </span>std::sync::Arc;
@@ -658,6 +660,8 @@
 
 <span class="kw">fn </span>main() -&gt; anyhow::Result&lt;()&gt; {
     <span class="kw">let </span><span class="kw-2">mut </span>args = Args::parse();
+    initialize_logging();
+
     args.concurrency = <span class="prelude-val">Some</span>(args.concurrency.unwrap_or(<span class="macro">vec!</span>[<span class="number">1</span>]));
 
     <span class="attr">#[cfg(not(feature = <span class="string">"flash-attn"</span>))]
