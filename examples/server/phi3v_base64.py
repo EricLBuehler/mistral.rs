@@ -66,4 +66,4 @@ payload = {
 }
 
 response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload)
-print(response)
+print(response.json())
