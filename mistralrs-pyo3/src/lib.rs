@@ -615,20 +615,18 @@ impl Runner {
                                             return Err(PyValueError::new_err(format!("{e}")))
                                         }
                                     }
+                                } else if let Ok(mut f) = File::open(&url) {
+                                    // Read from local file
+                                    let metadata = fs::metadata(&url)
+                                        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                                    let mut buffer = vec![0; metadata.len() as usize];
+                                    f.read_exact(&mut buffer)?;
+                                    buffer
                                 } else {
-                                    if let Ok(mut f) = File::open(&url) {
-                                        // Read from local file
-                                        let metadata = fs::metadata(&url)
-                                            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-                                        let mut buffer = vec![0; metadata.len() as usize];
-                                        f.read(&mut buffer)?;
-                                        buffer
-                                    } else {
-                                        // Decode with base64
-                                        general_purpose::STANDARD
-                                            .decode(url)
-                                            .map_err(|e| PyValueError::new_err(e.to_string()))?
-                                    }
+                                    // Decode with base64
+                                    general_purpose::STANDARD
+                                        .decode(url)
+                                        .map_err(|e| PyValueError::new_err(e.to_string()))?
                                 };
                                 images.push(
                                     image::load_from_memory(&bytes)

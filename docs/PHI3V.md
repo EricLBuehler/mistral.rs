@@ -2,12 +2,17 @@
 
 The Phi 3 Vision Model has support in the Rust, Python, and HTTP APIs. The Phi 3 Vision Model supports ISQ for increased performance.
 
-The Python and HTTP APIs support sending images as a URL, a path to a local image, or a base64 encoded string.
+The Python and HTTP APIs support sending images as:
+- URL
+- Path to a local image
+- [Base64](https://en.wikipedia.org/wiki/Base64) encoded string
+
+The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
 > Note: The Phi 3 Vision model works best with one image although it is supported to send multiple images.
 
 > Note: when sending multiple images, they will be resized to the minimum dimension by which all will fit without cropping.
-> Aspect ratio is not preserved.
+> Aspect ratio is not preserved in that case.
 
 ## HTTP server
 You can find this example [here](../examples/server/phi3v.py).
