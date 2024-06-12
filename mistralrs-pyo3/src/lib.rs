@@ -4,11 +4,12 @@ use base64::{engine::general_purpose, Engine};
 use candle_core::{quantized::GgmlDType, Result};
 use either::Either;
 use indexmap::IndexMap;
-use reqwest::StatusCode;
 use std::{
     cell::RefCell,
     collections::HashMap,
     fmt::Debug,
+    fs,
+    io::Read,
     str::FromStr,
     sync::{Arc, Mutex},
 };
@@ -603,22 +604,29 @@ impl Runner {
                         if !image_urls.is_empty() {
                             let mut images = Vec::new();
                             for url in image_urls {
-                                let bytes = match reqwest::blocking::get(url.clone()) {
-                                    Ok(http_resp) => http_resp
-                                        .bytes()
-                                        .map_err(|e| PyValueError::new_err(e.to_string()))?
-                                        .to_vec(),
-                                    Err(e) => {
-                                        if e.status()
-                                            .is_some_and(|code| code == StatusCode::NOT_FOUND)
-                                        {
-                                            general_purpose::STANDARD
-                                                .decode(url)
-                                                .map_err(|e| PyValueError::new_err(e.to_string()))?
-                                        } else {
-                                            return Err(PyValueError::new_err(e.to_string()));
+                                let bytes = if url.contains("http") {
+                                    // Read from http
+                                    match reqwest::blocking::get(url.clone()) {
+                                        Ok(http_resp) => http_resp
+                                            .bytes()
+                                            .map_err(|e| PyValueError::new_err(e.to_string()))?
+                                            .to_vec(),
+                                        Err(e) => {
+                                            return Err(PyValueError::new_err(format!("{e}")))
                                         }
                                     }
+                                } else if let Ok(mut f) = File::open(&url) {
+                                    // Read from local file
+                                    let metadata = fs::metadata(&url)
+                                        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                                    let mut buffer = vec![0; metadata.len() as usize];
+                                    f.read_exact(&mut buffer)?;
+                                    buffer
+                                } else {
+                                    // Decode with base64
+                                    general_purpose::STANDARD
+                                        .decode(url)
+                                        .map_err(|e| PyValueError::new_err(e.to_string()))?
                                 };
                                 images.push(
                                     image::load_from_memory(&bytes)

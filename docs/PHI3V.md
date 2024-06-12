@@ -2,10 +2,17 @@
 
 The Phi 3 Vision Model has support in the Rust, Python, and HTTP APIs. The Phi 3 Vision Model supports ISQ for increased performance.
 
+The Python and HTTP APIs support sending images as:
+- URL
+- Path to a local image
+- [Base64](https://en.wikipedia.org/wiki/Base64) encoded string
+
+The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
+
 > Note: The Phi 3 Vision model works best with one image although it is supported to send multiple images.
 
 > Note: when sending multiple images, they will be resized to the minimum dimension by which all will fit without cropping.
-> Aspect ratio is not preserved.
+> Aspect ratio is not preserved in that case.
 
 ## HTTP server
 You can find this example [here](../examples/server/phi3v.py).
@@ -18,6 +25,7 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 
 **Image:**
 <img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "1000" height = "666">
+<h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
 
 **Prompt:**
 ```
@@ -72,6 +80,9 @@ resp = completion.choices[0].message.content
 print(resp)
 
 ```
+
+- You can find an example of encoding the [image via base64 here](../examples/server/phi3v_base64.py).
+- You can find an example of loading an [image locally base64 here](../examples/server/phi3v_local_img.py).
 
 ---
 
@@ -202,3 +213,6 @@ res = runner.send_chat_completion_request(
 print(res.choices[0].message.content)
 print(res.usage)
 ```
+
+- You can find an example of encoding the [image via base64 here](../examples/python/phi3v_base64.py).
+- You can find an example of loading an [image locally base64 here](../examples/python/phi3v_local_img.py).

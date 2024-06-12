@@ -3,6 +3,8 @@ use std::{
     collections::HashMap,
     env,
     error::Error,
+    fs::{self, File},
+    io::Read,
     ops::Deref,
     pin::Pin,
     sync::Arc,
@@ -256,15 +258,21 @@ async fn parse_request(
             if !image_urls.is_empty() {
                 let mut images = Vec::new();
                 for url in image_urls {
-                    let bytes = match reqwest::get(url.clone()).await {
-                        Ok(http_resp) => http_resp.bytes().await?.to_vec(),
-                        Err(e) => {
-                            if e.status().is_some_and(|code| code == StatusCode::NOT_FOUND) {
-                                general_purpose::STANDARD.decode(url)?
-                            } else {
-                                anyhow::bail!(e)
-                            }
+                    let bytes = if url.contains("http") {
+                        // Read from http
+                        match reqwest::get(url.clone()).await {
+                            Ok(http_resp) => http_resp.bytes().await?.to_vec(),
+                            Err(e) => anyhow::bail!(e),
                         }
+                    } else if let Ok(mut f) = File::open(&url) {
+                        // Read from local file
+                        let metadata = fs::metadata(&url)?;
+                        let mut buffer = vec![0; metadata.len() as usize];
+                        f.read_exact(&mut buffer)?;
+                        buffer
+                    } else {
+                        // Decode with base64
+                        general_purpose::STANDARD.decode(url)?
                     };
                     images.push(image::load_from_memory(&bytes)?);
                 }
