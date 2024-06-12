@@ -198,10 +198,11 @@ Please submit more benchmarks via raising an issue!
 ## Installation and Build
 
 1) Install required packages
-    - `openssl` (ex. on Ubuntu, `sudo apt install libssl-dev`)
-    - `pkg-config` (ex. on Ubuntu, `sudo apt install pkg-config`)
+    - `openssl` (*Example on Ubuntu:* `sudo apt install libssl-dev`)
+    - `pkg-config` (*Example on Ubuntu:* `sudo apt install pkg-config`)
 
 2) Install Rust: https://rustup.rs/
+
     *Example on Ubuntu:*
     ```bash
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -252,6 +253,8 @@ Please submit more benchmarks via raising an issue!
         cargo install --path mistralrs-server --features cuda
         ```
 6) The build process will output a binary `misralrs-server` at `./target/release/mistralrs-server` which may be copied into the working directory with the following command:
+    
+    *Example on Ubuntu:*
     ```
     cp ./target/release/mistralrs-server ./mistralrs_server
     ```
