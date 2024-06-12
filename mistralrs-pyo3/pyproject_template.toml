@@ -18,3 +18,4 @@ dynamic = ["description"]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
+profile = "release"
