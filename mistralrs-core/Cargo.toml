@@ -17,7 +17,7 @@ candle-core.workspace = true
 candle-nn.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.5.0", optional = true }
+candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "f52e2347b6237d19ffd7af26315f543c22f9f286", optional = true }
 dirs = "5.0.1"
 hf-hub = "0.3.2"
 thiserror = "1.0.57"
@@ -25,7 +25,8 @@ tokenizers = "0.19.1"
 tqdm = "0.7.0"
 range-checked = { git = "https://github.com/EricLBuehler/range-checked.git", version = "0.1.0" }
 chrono = "0.4.34"
-minijinja = "2.0.1"
+minijinja = "2.0.2"
+minijinja-contrib = { version = "2.0.2", features = ["pycompat"] }
 either.workspace = true
 indexmap.workspace = true
 half = "2.4.0"
