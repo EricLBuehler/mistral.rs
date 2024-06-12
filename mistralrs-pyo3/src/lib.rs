@@ -18,11 +18,12 @@ use tokio::sync::mpsc::channel;
 
 use candle_core::Device;
 use mistralrs_core::{
-    ChatCompletionResponse, CompletionResponse, Constraint, DeviceMapMetadata, GGMLLoaderBuilder,
-    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder,
-    ModelDType, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, Request as _Request,
-    RequestMessage, Response, SamplingParams, SchedulerMethod, SpeculativeConfig,
-    SpeculativeLoader, StopTokens, TokenSource, VisionLoaderBuilder, VisionSpecificConfig,
+    initialize_logging, ChatCompletionResponse, CompletionResponse, Constraint, DeviceMapMetadata,
+    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
+    MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalRequest,
+    NormalSpecificConfig, Request as _Request, RequestMessage, Response, SamplingParams,
+    SchedulerMethod, SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource,
+    VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
@@ -1029,6 +1030,8 @@ impl ChatCompletionRequest {
 
 #[pymodule]
 fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    initialize_logging();
+
     m.add_class::<Runner>()?;
     m.add_class::<Which>()?;
     m.add_class::<ChatCompletionRequest>()?;
