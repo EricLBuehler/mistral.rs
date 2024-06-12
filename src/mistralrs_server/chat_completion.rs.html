@@ -395,11 +395,21 @@
 <a href="#393" id="393">393</a>
 <a href="#394" id="394">394</a>
 <a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
+<a href="#400" id="400">400</a>
+<a href="#401" id="401">401</a>
+<a href="#402" id="402">402</a>
+<a href="#403" id="403">403</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>base64::{engine::general_purpose, Engine};
 <span class="kw">use </span>std::{
     collections::HashMap,
     env,
     error::Error,
+    fs::{<span class="self">self</span>, File},
+    io::Read,
     ops::Deref,
     pin::Pin,
     sync::Arc,
@@ -653,16 +663,22 @@
             <span class="kw">if </span>!image_urls.is_empty() {
                 <span class="kw">let </span><span class="kw-2">mut </span>images = Vec::new();
                 <span class="kw">for </span>url <span class="kw">in </span>image_urls {
-                    <span class="kw">let </span>bytes = <span class="kw">match </span>reqwest::get(url.clone()).<span class="kw">await </span>{
-                        <span class="prelude-val">Ok</span>(http_resp) =&gt; http_resp.bytes().<span class="kw">await</span><span class="question-mark">?</span>.to_vec(),
-                        <span class="prelude-val">Err</span>(e) =&gt; {
-                            <span class="kw">if </span>e.status().is_some_and(|code| code == StatusCode::NOT_FOUND) {
-                                general_purpose::STANDARD.decode(url)<span class="question-mark">?
-                            </span>} <span class="kw">else </span>{
-                                <span class="macro">anyhow::bail!</span>(e)
-                            }
+                    <span class="kw">let </span>bytes = <span class="kw">if </span>url.contains(<span class="string">"http"</span>) {
+                        <span class="comment">// Read from http
+                        </span><span class="kw">match </span>reqwest::get(url.clone()).<span class="kw">await </span>{
+                            <span class="prelude-val">Ok</span>(http_resp) =&gt; http_resp.bytes().<span class="kw">await</span><span class="question-mark">?</span>.to_vec(),
+                            <span class="prelude-val">Err</span>(e) =&gt; <span class="macro">anyhow::bail!</span>(e),
                         }
-                    };
+                    } <span class="kw">else if let </span><span class="prelude-val">Ok</span>(<span class="kw-2">mut </span>f) = File::open(<span class="kw-2">&amp;</span>url) {
+                        <span class="comment">// Read from local file
+                        </span><span class="kw">let </span>metadata = fs::metadata(<span class="kw-2">&amp;</span>url)<span class="question-mark">?</span>;
+                        <span class="kw">let </span><span class="kw-2">mut </span>buffer = <span class="macro">vec!</span>[<span class="number">0</span>; metadata.len() <span class="kw">as </span>usize];
+                        f.read_exact(<span class="kw-2">&amp;mut </span>buffer)<span class="question-mark">?</span>;
+                        buffer
+                    } <span class="kw">else </span>{
+                        <span class="comment">// Decode with base64
+                        </span>general_purpose::STANDARD.decode(url)<span class="question-mark">?
+                    </span>};
                     images.push(image::load_from_memory(<span class="kw-2">&amp;</span>bytes)<span class="question-mark">?</span>);
                 }
                 RequestMessage::VisionChat { messages, images }

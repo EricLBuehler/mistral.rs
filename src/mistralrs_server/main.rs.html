@@ -313,9 +313,14 @@
 <a href="#311" id="311">311</a>
 <a href="#312" id="312">312</a>
 <a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
-    extract::{Json, State},
+    extract::{DefaultBodyLimit, Json, State},
     http::{<span class="self">self</span>, Method},
     routing::{get, post},
     Router,
@@ -343,7 +348,11 @@
 <span class="kw">use </span>utoipa::{OpenApi, ToSchema};
 <span class="kw">use </span>utoipa_swagger_ui::SwaggerUi;
 
-<span class="kw">fn </span>parse_token_source(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;TokenSource, String&gt; {
+<span class="comment">// NOTE(EricLBuehler): Accept up to 50mb input
+</span><span class="kw">const </span>N_INPUT_SIZE: usize = <span class="number">50</span>;
+<span class="kw">const </span>MB_TO_B: usize = <span class="number">1024 </span>* <span class="number">1024</span>; <span class="comment">// 1024 kb in a mb
+
+</span><span class="kw">fn </span>parse_token_source(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;TokenSource, String&gt; {
     s.parse()
 }
 
@@ -538,6 +547,7 @@
         .route(<span class="string">"/"</span>, get(health))
         .route(<span class="string">"/activate_adapters"</span>, post(activate_adapters))
         .route(<span class="string">"/re_isq"</span>, post(re_isq))
+        .layer(DefaultBodyLimit::max(N_INPUT_SIZE * MB_TO_B))
         .with_state(state)
 }
 
