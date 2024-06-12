@@ -1,4 +1,4 @@
-import openai
+import requests
 import httpx
 import textwrap, json
 import base64
@@ -28,8 +28,7 @@ def log_response(response: httpx.Response):
         print(f"    {key}: {value}")
 
 
-openai.api_key = "EMPTY"
-openai.base_url = "http://localhost:1234/v1/"
+BASE_URL = "http://localhost:1234/v1"
 
 # Enable this to log requests and responses
 # openai.http_client = httpx.Client(
@@ -38,31 +37,33 @@ openai.base_url = "http://localhost:1234/v1/"
 
 FILENAME = "picture.jpg"
 with open(FILENAME, "rb") as image_file:
-    encoded_string = base64.b64encode(image_file.read())
+    encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
 
-completion = openai.chat.completions.create(
-    model="phi3v",
-    messages=[
-        {
-            "role": "user",
-            "content": [
+headers = {
+  "Content-Type": "application/json",
+}
+
+payload = {
+  "model": "phi3v",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": encoded_string,
+                        "url": str(encoded_string),
                     },
                 },
                 {
                     "type": "text",
                     "text": "<|image_1|>\nWhat is shown in this image?",
                 },
-            ],
-        },
-    ],
-    max_tokens=32,
-    frequency_penalty=1.0,
-    top_p=0.1,
-    temperature=0,
-)
-resp = completion.choices[0].message.content
-print(resp)
+      ]
+    }
+  ],
+  "max_tokens": 300
+}
+
+response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload)
+print(response)

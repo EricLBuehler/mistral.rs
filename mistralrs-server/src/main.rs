@@ -1,6 +1,6 @@
 use anyhow::Result;
 use axum::{
-    extract::{Json, State},
+    extract::{DefaultBodyLimit, Json, State},
     http::{self, Method},
     routing::{get, post},
     Router,
@@ -27,6 +27,10 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{info, warn};
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
+
+// NOTE(EricLBuehler): Accept up to 50mb input
+const N_INPUT_SIZE: usize = 50;
+const MB_TO_B: usize = 1024;
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
@@ -223,6 +227,7 @@ fn get_router(state: Arc<MistralRs>) -> Router {
         .route("/", get(health))
         .route("/activate_adapters", post(activate_adapters))
         .route("/re_isq", post(re_isq))
+        .layer(DefaultBodyLimit::max(N_INPUT_SIZE * MB_TO_B))
         .with_state(state)
 }
 
