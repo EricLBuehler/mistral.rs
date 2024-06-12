@@ -18,6 +18,7 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 
 **Image:**
 <img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "1000" height = "666">
+<h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a><h6>
 
 **Prompt:**
 ```
@@ -72,6 +73,8 @@ resp = completion.choices[0].message.content
 print(resp)
 
 ```
+
+You can find an example of encoding [via base64 here](../examples/server/phi3v_base64.py).
 
 ---
 
@@ -202,3 +205,5 @@ res = runner.send_chat_completion_request(
 print(res.choices[0].message.content)
 print(res.usage)
 ```
+
+You can find an example of encoding [via base64 here](../examples/python/phi3v_base64.py).
