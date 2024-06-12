@@ -27,6 +27,9 @@ intel-mkl-src = { workspace = true, optional = true }
 either.workspace = true
 futures.workspace = true
 tokio.workspace = true
+image.workspace = true
+reqwest.workspace = true
+base64.workspace = true
 
 [build-dependencies]
 pyo3-build-config = "0.21"
