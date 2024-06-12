@@ -4,6 +4,8 @@
 
 ## Installation from PyPi
 0) Install Rust: https://rustup.rs/
+
+    *Example on Ubuntu:*
     ```bash
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     source $HOME/.cargo/env
@@ -11,7 +13,7 @@
 
 1) `mistralrs` depends on the `openssl` library.
 
-To install it on Ubuntu:
+*Example on Ubuntu:*
 ```
 sudo apt install libssl-dev
 sudo apt install pkg-config
@@ -39,16 +41,20 @@ All installations will install the `mistralrs` package. The suffix on the packag
 
 ## Installation from source
 1) Install required packages
-    - `openssl` (ex., `sudo apt install libssl-dev`)
-    - `pkg-config` (ex., `sudo apt install pkg-config`)
+    - `openssl` (*Example on Ubuntu:* `sudo apt install libssl-dev`)
+    - `pkg-config` (*Example on Ubuntu:* `sudo apt install pkg-config`)
 
 2) Install Rust: https://rustup.rs/
+    
+    *Example on Ubuntu:*
     ```bash
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     source $HOME/.cargo/env
     ```
 
 3) Set HF token correctly (skip if already set or your model is not gated, or if you want to use the `token_source` parameters in Python or the command line.)
+    
+    *Example on Ubuntu:*
     ```bash
     mkdir ~/.cache/huggingface
     touch ~/.cache/huggingface/token
