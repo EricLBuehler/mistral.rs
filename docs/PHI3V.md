@@ -82,7 +82,7 @@ print(resp)
 ```
 
 - You can find an example of encoding the [image via base64 here](../examples/server/phi3v_base64.py).
-- You can find an example of loading an [image locally base64 here](../examples/server/phi3v_local_img.py).
+- You can find an example of loading an [image locally here](../examples/server/phi3v_local_img.py).
 
 ---
 
@@ -215,4 +215,4 @@ print(res.usage)
 ```
 
 - You can find an example of encoding the [image via base64 here](../examples/python/phi3v_base64.py).
-- You can find an example of loading an [image locally base64 here](../examples/python/phi3v_local_img.py).
+- You can find an example of loading an [image locally here](../examples/python/phi3v_local_img.py).
