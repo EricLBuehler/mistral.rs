@@ -36,8 +36,6 @@ BASE_URL = "http://localhost:1234/v1"
 # )
 
 FILENAME = "picture.jpg"
-with open(FILENAME, "rb") as image_file:
-    encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
 
 headers = {
     "Content-Type": "application/json",
@@ -52,7 +50,7 @@ payload = {
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": str(encoded_string),
+                        "url": FILENAME,
                     },
                 },
                 {

@@ -11,8 +11,6 @@ runner = Runner(
 )
 
 FILENAME = "picture.jpg"
-with open(FILENAME, "rb") as image_file:
-    encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
@@ -24,7 +22,7 @@ res = runner.send_chat_completion_request(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": str(encoded_string),
+                            "url": FILENAME,
                         },
                     },
                     {
