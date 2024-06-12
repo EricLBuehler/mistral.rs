@@ -2,7 +2,7 @@
 
 use std::{
     collections::HashMap,
-    ops::{BitAnd, Mul},
+    ops::Mul,
     str::FromStr,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -12,10 +12,9 @@ use std::{
 
 use candle_core::{
     quantized::{gguf_file, QMatMul, QTensor},
-    DType, Device, IndexOp, Result, Shape, Tensor, WithDType, D,
+    DType, Device, IndexOp, Result, Shape, Tensor, D,
 };
 use candle_nn::{Linear, Module, VarBuilder};
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 pub use crate::layers_masker::CausalMasker;
 pub use crate::layers_utils::{flash_attn, repeat_kv};
@@ -545,76 +544,6 @@ impl Module for QLinear {
     }
 }
 
-/// Equivalent functions to `torch.nonzero`
-pub struct Nonzero;
-
-impl Nonzero {
-    /// Equivalent to: `torch.nonzero(lt & gt, as_tuple=False)`
-    ///
-    /// This performs the operation on the CPU and as such triggers a device synchronization.
-    /// The output tensor is `DType::U8` and the device will be the same as the input.
-    /// The input tensors must be of the same data type and on the same device.
-    pub fn nonzero_and<T: WithDType>(&self, lt: &Tensor, gt: &Tensor) -> Result<Tensor>
-    where
-        for<'a> &'a T: BitAnd<T, Output = T>,
-    {
-        let dev = lt.device();
-        let lt = lt.to_vec2::<T>()?;
-        let gt = gt.to_vec2::<T>()?;
-        // lt & gt
-        let res = lt
-            .par_iter()
-            .zip(gt)
-            .enumerate()
-            .flat_map(|(i, (lt_row, gt_row))| {
-                lt_row
-                    .par_iter()
-                    .zip(gt_row)
-                    .enumerate()
-                    .filter_map(|(j, (lt, gt))| {
-                        if (lt & gt) != T::zero() {
-                            Some(vec![i as u32, j as u32])
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .map(|x| Tensor::from_slice(&x, (x.len(),), dev))
-            .collect::<Result<Vec<_>>>()?;
-        Tensor::stack(&res, 0)
-    }
-
-    /// Equivalent to: `torch.nonzero(x, as_tuple=False)`
-    ///
-    /// This performs the operation on the CPU and as such triggers a device synchronization.
-    /// The output tensor is `DType::U8` and the device will be the same as the input.
-    pub fn nonzero<T: WithDType>(&self, x: &Tensor) -> Result<Tensor> {
-        let dev = x.device();
-        let x = x.to_vec2::<T>()?;
-        // lt & gt
-        let res = x
-            .par_iter()
-            .enumerate()
-            .flat_map(|(i, x_row)| {
-                x_row
-                    .par_iter()
-                    .enumerate()
-                    .filter_map(|(j, x)| {
-                        if *x != T::zero() {
-                            Some(vec![i as u32, j as u32])
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .map(|x| Tensor::from_slice(&x, (x.len(),), dev))
-            .collect::<Result<Vec<_>>>()?;
-        Tensor::stack(&res, 0)
-    }
-}
-
 mod tests {
 
     #[test]
@@ -687,86 +616,5 @@ mod tests {
                     .to_vec2::<f32>()
             )
         }
-    }
-
-    #[test]
-    fn nonzero_and() {
-        use crate::layers::Nonzero;
-        use candle_core::{Device, Tensor};
-
-        let input1 = Tensor::from_vec(
-            vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7],
-            (10,),
-            &Device::Cpu,
-        )
-        .unwrap();
-        let input2 = Tensor::from_vec(
-            vec![-1i64, 2, 3, -1, 1, -1, -1, 4, 5, 7],
-            (10,),
-            &Device::Cpu,
-        )
-        .unwrap();
-        let input = Tensor::stack(&[input1, input2], 0).unwrap();
-
-        let lt = input.lt(0.0).unwrap();
-        let gt = input.gt(-10.0).unwrap();
-        let res = Nonzero
-            .nonzero_and::<u8>(&lt, &gt)
-            .unwrap()
-            .to_vec2::<u32>()
-            .unwrap();
-
-        assert_eq!(
-            res,
-            [
-                [0, 3],
-                [0, 4],
-                [0, 5],
-                [0, 6],
-                [1, 0],
-                [1, 3],
-                [1, 5],
-                [1, 6]
-            ]
-        );
-    }
-
-    #[test]
-    fn nonzero() {
-        use crate::layers::Nonzero;
-        use candle_core::{Device, Tensor};
-
-        let input1 =
-            Tensor::from_vec(vec![1i64, 2, 0, -1, -1, 0, 0, 0, 5, 7], (10,), &Device::Cpu).unwrap();
-        let input2 = Tensor::from_vec(
-            vec![-1i64, 0, 3, -1, 1, -1, 0, 0, 0, 0],
-            (10,),
-            &Device::Cpu,
-        )
-        .unwrap();
-        let input = Tensor::stack(&[input1, input2], 0).unwrap();
-
-        let res = Nonzero
-            .nonzero::<i64>(&input)
-            .unwrap()
-            .to_vec2::<u32>()
-            .unwrap();
-
-        assert_eq!(
-            res,
-            [
-                [0, 0],
-                [0, 1],
-                [0, 3],
-                [0, 4],
-                [0, 8],
-                [0, 9],
-                [1, 0],
-                [1, 2],
-                [1, 3],
-                [1, 4],
-                [1, 5]
-            ]
-        );
     }
 }

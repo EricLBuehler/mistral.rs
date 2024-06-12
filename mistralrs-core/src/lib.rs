@@ -18,10 +18,12 @@ use std::{
 use tokio::sync::mpsc::{channel, Sender};
 
 mod aici;
+mod cuda;
 mod device_map;
 mod engine;
 mod lora;
 mod model_loader;
+mod ops;
 pub use model_loader::{get_model_dtype, get_tgt_non_granular_index, LoaderBuilder};
 mod model_selected;
 pub use model_selected::ModelSelected;
