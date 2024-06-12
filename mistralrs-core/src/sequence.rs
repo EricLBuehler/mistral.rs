@@ -197,12 +197,16 @@ impl Sequence {
         mut self,
         cache: LayerCaches,
         xlora_cache: Option<LayerCaches>,
-        toks: Vec<u32>,
+        remaining_toks: Option<Vec<u32>>,
     ) -> Self {
         self.cache = cache;
         self.xlora_cache = xlora_cache;
-        self.prefill_prompt_toks = Some(toks);
-        self.set_state(SequenceState::RunningPrefillPrompt);
+        if let Some(remaining_toks) = remaining_toks {
+            self.prefill_prompt_toks = Some(remaining_toks);
+            self.set_state(SequenceState::RunningPrefillPrompt);
+        } else {
+            self.set_state(SequenceState::RunningCompletion);
+        }
         self
     }
 
@@ -236,7 +240,6 @@ impl Sequence {
     pub fn is_running(&self) -> bool {
         *self.state.read().unwrap() == SequenceState::RunningCompletion
             || *self.state.read().unwrap() == SequenceState::RunningPrompt
-            || *self.state.read().unwrap() == SequenceState::RunningPrefillPrompt
     }
 
     pub fn is_completion(&self) -> bool {
@@ -248,6 +251,10 @@ impl Sequence {
             || *self.state.read().unwrap() == SequenceState::RunningPrefillPrompt
     }
 
+    pub fn is_currently_prefill_prompt(&self) -> bool {
+        self.prefill_prompt_toks.is_some()
+    }
+
     pub fn is_waiting(&self) -> bool {
         *self.state.read().unwrap() == SequenceState::Waiting
     }
@@ -256,6 +263,10 @@ impl Sequence {
         if let Some(toks) = &self.prefill_prompt_toks {
             return toks;
         }
+        self.get_raw_toks()
+    }
+
+    pub fn get_raw_toks(&self) -> &[u32] {
         &self.tokens
     }
 
@@ -267,8 +278,12 @@ impl Sequence {
         &self.completion_bytes
     }
 
-    pub fn cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
+    pub fn cache_mut(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
         &mut self.cache
+    }
+
+    pub fn cache(&self) -> &Vec<Option<(Tensor, Tensor)>> {
+        &self.cache
     }
 
     pub fn draft_cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {

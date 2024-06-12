@@ -75,6 +75,8 @@ pub mod text_models_inputs_processor {
         for (seq, mut ctxt) in input_seqs.iter().zip(toks) {
             let offset = if let Some((_, offset)) = last_n_context_len {
                 offset
+            } else if let Some((_, x)) = &seq.cache()[0] {
+                x.dims()[2]
             } else {
                 0
             };
@@ -91,24 +93,15 @@ pub mod text_models_inputs_processor {
         }
 
         let mut tmp = Vec::new();
-        if last_n_context_len.is_some() {
-            for pos in (0..seqs_tensors.len())
-                .map(|i| {
-                    (*seqlen_offsets.get(i).unwrap() as i64
-                        ..*seqlen_offsets.get(i).unwrap() as i64 + max_len as i64)
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>()
-            {
-                tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
-            }
-        } else {
-            for pos in (0..seqs_tensors.len())
-                .map(|_| (0..max_len).map(|x| x as i64).collect::<Vec<_>>())
-                .collect::<Vec<_>>()
-            {
-                tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
-            }
+        for pos in (0..seqs_tensors.len())
+            .map(|i| {
+                (*seqlen_offsets.get(i).unwrap() as i64
+                    ..*seqlen_offsets.get(i).unwrap() as i64 + max_len as i64)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+        {
+            tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
         }
         let positions_kernel = Tensor::cat(&tmp, 0)?;
         let input = Tensor::cat(&seqs_tensors, 0).unwrap();
@@ -145,7 +138,7 @@ pub mod text_models_inputs_processor {
         for (seq, ctxt) in input_seqs.iter().zip(toks) {
             let start_pos = ctxt.len().saturating_sub(1);
             let ctxt = ctxt[start_pos..].to_vec();
-            seqlen_offsets.push(start_pos);
+            seqlen_offsets.push(seq.cache()[0].as_ref().unwrap().0.dims()[2]);
             context_lens.push((0, 1));
             position_ids.push(seq.len());
 

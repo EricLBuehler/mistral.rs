@@ -516,8 +516,21 @@ impl Engine {
                 }
             };
 
+            let initial_prompt = prompt.clone();
+            let (prefill, prompt) = if let Some(prefill_cache) = prefill_cache.clone() {
+                (
+                    Some((
+                        prefill_cache.normal,
+                        prefill_cache.xlora,
+                        prefill_cache.remaining_toks,
+                    )),
+                    prefill_cache.current_toks,
+                )
+            } else {
+                (None, prompt.clone())
+            };
             let seq = Sequence::new_waiting(
-                prompt.clone(),
+                prompt,
                 self.id,
                 now.as_millis(),
                 num_hidden_layers,
@@ -537,7 +550,7 @@ impl Engine {
                     Some(
                         get_mut_arcmutex!(self.pipeline)
                             .tokenizer()
-                            .decode(&prompt, false)
+                            .decode(&initial_prompt, false)
                             .expect("cannot decode completion tokens"),
                     )
                 } else {
@@ -546,12 +559,8 @@ impl Engine {
                 request.adapters.clone(),
                 images.clone(),
             );
-            let seq = if let Some(prefill_cache) = prefill_cache.clone() {
-                seq.prefill(
-                    prefill_cache.normal,
-                    prefill_cache.xlora,
-                    prefill_cache.toks,
-                )
+            let seq = if let Some((normal, xlora, remaining_toks)) = prefill {
+                seq.prefill(normal, xlora, remaining_toks)
             } else {
                 seq
             };

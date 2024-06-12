@@ -1,21 +1,14 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use candle_core::{Device, Result, Tensor};
-use radix_trie::{Trie, TrieCommon, TrieKey};
 
 use crate::{get_mut_arcmutex, pipeline::LayerCaches, sequence::Sequence};
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Hash)]
 struct Tokens(Vec<u32>);
-
-impl TrieKey for Tokens {
-    fn encode_bytes(&self) -> Vec<u8> {
-        self.0
-            .iter()
-            .flat_map(|x| bytemuck::bytes_of(x).to_vec())
-            .collect::<Vec<u8>>()
-    }
-}
 
 impl From<Vec<u32>> for Tokens {
     fn from(value: Vec<u32>) -> Self {
@@ -25,9 +18,37 @@ impl From<Vec<u32>> for Tokens {
 
 type EvictionCacheGroup = (Arc<Mutex<LayerCaches>>, Option<Arc<Mutex<LayerCaches>>>);
 
+trait SubsetCacheUtils
+where
+    Self: Sized,
+{
+    fn narrow(self, found_idx: usize) -> Result<Self>;
+    fn to(self, device: &Device) -> Result<Self>;
+}
+
+impl SubsetCacheUtils for Option<(Tensor, Tensor)> {
+    fn narrow(self, found_idx: usize) -> Result<Self> {
+        if let Some((k, v)) = self {
+            Ok(Some((
+                k.narrow(2, 0, found_idx)?,
+                v.narrow(2, 0, found_idx)?,
+            )))
+        } else {
+            Ok(None)
+        }
+    }
+    fn to(self, device: &Device) -> Result<Self> {
+        if let Some((k, v)) = self {
+            Ok(Some((k.to_device(device)?, v.to_device(device)?)))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
 pub struct PrefixCacheManager {
-    caches: Trie<Tokens, Arc<Mutex<LayerCaches>>>,
-    xlora_caches: Option<Trie<Tokens, Arc<Mutex<LayerCaches>>>>,
+    caches: HashMap<Tokens, Arc<Mutex<LayerCaches>>>,
+    xlora_caches: Option<HashMap<Tokens, Arc<Mutex<LayerCaches>>>>,
     device: Device,
     pub n_on_device: usize,
     no_prefix_cache: bool,
@@ -38,14 +59,15 @@ pub struct PrefixCacheManager {
 pub struct MatchingCache {
     pub normal: LayerCaches,
     pub xlora: Option<LayerCaches>,
-    pub toks: Vec<u32>,
+    pub current_toks: Vec<u32>,
+    pub remaining_toks: Option<Vec<u32>>,
 }
 
 impl PrefixCacheManager {
     pub fn new(device: Device, n_on_device: usize, is_xlora: bool, no_prefix_cache: bool) -> Self {
         PrefixCacheManager {
-            caches: Trie::new(),
-            xlora_caches: if is_xlora { Some(Trie::new()) } else { None },
+            caches: HashMap::new(),
+            xlora_caches: if is_xlora { Some(HashMap::new()) } else { None },
             device,
             n_on_device,
             no_prefix_cache,
@@ -59,7 +81,7 @@ impl PrefixCacheManager {
         if self.no_prefix_cache {
             return;
         }
-        let cache = Arc::new(Mutex::new(seq.cache().clone()));
+        let cache = Arc::new(Mutex::new(seq.cache_mut().clone()));
         self.caches
             .insert(seq.get_toks().to_vec().into(), cache.clone());
         if seq.is_xlora() {
@@ -166,6 +188,7 @@ impl PrefixCacheManager {
         }
 
         let toks = Tokens(toks.to_vec());
+        // Try to get a verbatim match
         if let Some(cache) = self.caches.get(&toks) {
             Self::cache_to(get_mut_arcmutex!(cache.as_ref()).iter_mut(), &self.device)?;
             let cache = get_mut_arcmutex!(cache.as_ref()).clone();
@@ -176,21 +199,63 @@ impl PrefixCacheManager {
             } else {
                 None
             };
-            let ancestor = &self
-                .caches
-                .get_ancestor(&toks)
-                .expect("No ancestor.")
-                .key()
-                .expect("Cannot get the key.")
-                .0;
-            // Know ancestor.len() < toks.len(), and toks[0..ancestor.len()] == toks
             Ok(Some(MatchingCache {
                 normal: cache,
                 xlora: xlora_cache,
-                toks: toks.0[ancestor.len()..].to_vec(),
+                current_toks: toks.0,
+                remaining_toks: None,
             }))
         } else {
-            Ok(None)
+            // We could not find a verbatim match, so now look for matches where the target toks are a superset
+            // of the found tokens (ie there are some tokens added)
+            // TODO(EricLBuehler): n^2 performance here...
+            let mut found = None;
+            for candidate in self.caches.keys() {
+                for i in 1..(candidate.0.len().min(toks.0.len())) {
+                    let candidate_tokens = &candidate.0[0..i];
+                    let needle_tokens = &toks.0[0..i];
+                    if candidate_tokens == needle_tokens && !toks.0[i..].is_empty() {
+                        found = Some((i, candidate));
+                    }
+                }
+            }
+            if let Some((found_idx, candidate)) = found {
+                // We now have the index `i` of a candidate whose cache up to `i` can be used.
+                // Get the caches
+                let cache = self.caches[candidate].clone();
+                let cache = get_mut_arcmutex!(cache.as_ref()).clone();
+                let xlora_cache = self
+                    .xlora_caches
+                    .as_ref()
+                    .map(|cache| cache[candidate].clone())
+                    .map(|cache| get_mut_arcmutex!(cache.as_ref()).clone());
+                // Tokens for which the cache has been computed
+                let current_toks = candidate.0[..found_idx].to_vec();
+                // Narrow the caches
+                let mut new_cache = vec![None; cache.len()];
+                for (i, layer) in cache.into_iter().enumerate() {
+                    new_cache[i] = layer.narrow(current_toks.len())?.to(&self.device)?;
+                }
+                let xlora_cache = if let Some(xlora_cache) = xlora_cache {
+                    let mut new_cache = vec![None; xlora_cache.len()];
+                    for (i, layer) in xlora_cache.into_iter().enumerate() {
+                        new_cache[i] = layer.narrow(current_toks.len())?.to(&self.device)?;
+                    }
+                    Some(new_cache)
+                } else {
+                    None
+                };
+                // These tokens will be run on the next step.
+                let next_toks = toks.0[found_idx..].to_vec();
+                Ok(Some(MatchingCache {
+                    normal: new_cache,
+                    xlora: xlora_cache,
+                    current_toks,
+                    remaining_toks: Some(next_toks),
+                }))
+            } else {
+                Ok(None)
+            }
         }
     }
 }

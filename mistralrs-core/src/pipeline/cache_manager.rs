@@ -179,7 +179,7 @@ fn clone_in_cache(
         let mut v_vec = Vec::new();
         for seq in &mut *seqs {
             let src_cache = match src {
-                SeqCache::Normal => seq.cache(),
+                SeqCache::Normal => seq.cache_mut(),
                 SeqCache::XLora => seq.xlora_cache(),
                 SeqCache::Draft => seq.draft_cache(),
             };
@@ -224,7 +224,7 @@ fn clone_out_cache(
 
         for (seq_i, seq) in seqs.iter_mut().enumerate() {
             let output_cache = match target {
-                SeqCache::Normal => seq.cache(),
+                SeqCache::Normal => seq.cache_mut(),
                 SeqCache::XLora => seq.xlora_cache(),
                 SeqCache::Draft => seq.draft_cache(),
             };
