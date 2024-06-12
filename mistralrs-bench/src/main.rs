@@ -2,9 +2,9 @@ use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
-    Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelDType,
-    ModelSelected, NormalRequest, Request, RequestMessage, Response, SamplingParams,
-    SchedulerMethod, TokenSource, Usage,
+    initialize_logging, Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs,
+    MistralRsBuilder, ModelDType, ModelSelected, NormalRequest, Request, RequestMessage, Response,
+    SamplingParams, SchedulerMethod, TokenSource, Usage,
 };
 use std::fmt::Display;
 use std::sync::Arc;
@@ -277,6 +277,8 @@ struct Args {
 
 fn main() -> anyhow::Result<()> {
     let mut args = Args::parse();
+    initialize_logging();
+
     args.concurrency = Some(args.concurrency.unwrap_or(vec![1]));
 
     #[cfg(not(feature = "flash-attn"))]

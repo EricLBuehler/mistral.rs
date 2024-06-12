@@ -8,8 +8,9 @@ use axum::{
 use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
 use mistralrs_core::{
-    get_model_dtype, get_tgt_non_granular_index, DeviceMapMetadata, Loader, LoaderBuilder,
-    MistralRs, MistralRsBuilder, ModelSelected, Request, SchedulerMethod, TokenSource,
+    get_model_dtype, get_tgt_non_granular_index, initialize_logging, DeviceMapMetadata, Loader,
+    LoaderBuilder, MistralRs, MistralRsBuilder, ModelSelected, Request, SchedulerMethod,
+    TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use serde::{Deserialize, Serialize};
@@ -234,6 +235,7 @@ fn get_router(state: Arc<MistralRs>) -> Router {
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut args = Args::parse();
+    initialize_logging();
 
     #[cfg(not(feature = "flash-attn"))]
     let use_flash_attn = false;
