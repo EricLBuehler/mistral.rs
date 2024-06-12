@@ -173,7 +173,26 @@ impl CustomOp2 for BitWise {
                 let d_out = unsafe { dev.alloc::<u8>(elem_count) }.w()?;
                 let d_out_ptr = *d_out.device_ptr() as *mut c_void;
                 unsafe {
-                    ffi::bitwise_and_u8(d_in1_ptr, d_in2_ptr, d_out_ptr, u32::try_from(elem_count)?)
+                    match self.op {
+                        BitWiseOpEnum::And => ffi::bitwise_and_u8(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr,
+                            u32::try_from(elem_count)?,
+                        ),
+                        BitWiseOpEnum::Or => ffi::bitwise_or_u8(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr,
+                            u32::try_from(elem_count)?,
+                        ),
+                        BitWiseOpEnum::Xor => ffi::bitwise_xor_u8(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr,
+                            u32::try_from(elem_count)?,
+                        ),
+                    }
                 };
                 CudaStorage::wrap_cuda_slice(d_out, dev)
             }
@@ -181,12 +200,26 @@ impl CustomOp2 for BitWise {
                 let d_out = unsafe { dev.alloc::<u32>(elem_count) }.w()?;
                 let d_out_ptr = *d_out.device_ptr() as *mut c_void;
                 unsafe {
-                    ffi::bitwise_and_u32(
-                        d_in1_ptr,
-                        d_in2_ptr,
-                        d_out_ptr,
-                        u32::try_from(elem_count)?,
-                    )
+                    match self.op {
+                        BitWiseOpEnum::And => ffi::bitwise_and_u32(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr,
+                            u32::try_from(elem_count)?,
+                        ),
+                        BitWiseOpEnum::Or => ffi::bitwise_or_u32(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr,
+                            u32::try_from(elem_count)?,
+                        ),
+                        BitWiseOpEnum::Xor => ffi::bitwise_xor_u32(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr,
+                            u32::try_from(elem_count)?,
+                        ),
+                    }
                 };
                 CudaStorage::wrap_cuda_slice(d_out, dev)
             }
@@ -194,12 +227,26 @@ impl CustomOp2 for BitWise {
                 let d_out = unsafe { dev.alloc::<i64>(elem_count) }.w()?;
                 let d_out_ptr = *d_out.device_ptr() as *mut c_void;
                 unsafe {
-                    ffi::bitwise_and_i64(
-                        d_in1_ptr,
-                        d_in2_ptr,
-                        d_out_ptr,
-                        u32::try_from(elem_count)?,
-                    )
+                    match self.op {
+                        BitWiseOpEnum::And => ffi::bitwise_and_i64(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr,
+                            u32::try_from(elem_count)?,
+                        ),
+                        BitWiseOpEnum::Or => ffi::bitwise_or_i64(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr,
+                            u32::try_from(elem_count)?,
+                        ),
+                        BitWiseOpEnum::Xor => ffi::bitwise_xor_i64(
+                            d_in1_ptr,
+                            d_in2_ptr,
+                            d_out_ptr,
+                            u32::try_from(elem_count)?,
+                        ),
+                    }
                 };
                 CudaStorage::wrap_cuda_slice(d_out, dev)
             }
@@ -419,6 +466,83 @@ mod tests {
         .unwrap();
         let b = a.nonzero().unwrap().to_vec2::<u32>().unwrap();
         assert_eq!(b, [[0, 0], [0, 2], [1, 0], [1, 2]]);
+    }
+
+    #[test]
+    fn test_bitwise_and_cpu() {
+        use crate::ops::BitWiseOp;
+        use candle_core::Tensor;
+        let device = candle_core::Device::Cpu;
+        let a =
+            Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
+        let b =
+            Tensor::from_vec(vec![-1i64, 2, 3, -1, 1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
+        let c = a.bitwise_and(&b).unwrap().to_vec2::<i64>().unwrap();
+        assert_eq!(c, [[1, 2], [3, -1], [1, -1], [-1, 4], [5, 7]]);
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_bitwise_and_cuda() {
+        use crate::ops::BitWiseOp;
+        use candle_core::Tensor;
+        let device = candle_core::Device::new_cuda(0).unwrap();
+        let a =
+            Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
+        let b =
+            Tensor::from_vec(vec![-1i64, 2, 3, -1, 1, -1, -1, 4, 0, 7], (5, 2), &device).unwrap();
+        let c = a.bitwise_and(&b).unwrap().to_vec2::<i64>().unwrap();
+        assert_eq!(c, [[1, 2], [3, -1], [1, -1], [-1, 4], [0, 7]]);
+    }
+
+    #[test]
+    fn test_bitwise_or_cpu() {
+        use crate::ops::BitWiseOp;
+        use candle_core::Tensor;
+        let device = candle_core::Device::Cpu;
+        let a =
+            Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
+        let b = Tensor::from_vec(vec![-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
+        let c = a.bitwise_or(&b).unwrap().to_vec2::<i64>().unwrap();
+        assert_eq!(c, [[-1, 2], [3, -1], [-1, -1], [-1, 4], [5, 15]]);
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_bitwise_or_cuda() {
+        use crate::ops::BitWiseOp;
+        use candle_core::Tensor;
+        let device = candle_core::Device::new_cuda(0).unwrap();
+        let a =
+            Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
+        let b = Tensor::from_vec(vec![-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
+        let c = a.bitwise_or(&b).unwrap().to_vec2::<i64>().unwrap();
+        assert_eq!(c, [[-1, 2], [3, -1], [-1, -1], [-1, 4], [5, 15]]);
+    }
+
+    #[test]
+    fn test_bitwise_xor_cpu() {
+        use crate::ops::BitWiseOp;
+        use candle_core::Tensor;
+        let device = candle_core::Device::Cpu;
+        let a =
+            Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
+        let b = Tensor::from_vec(vec![-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
+        let c = a.bitwise_xor(&b).unwrap().to_vec2::<i64>().unwrap();
+        assert_eq!(c, [[-2, 2], [3, -1], [-1, -1], [-1, 4], [5, 15]]);
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_bitwise_xor_cuda() {
+        use crate::ops::BitWiseOp;
+        use candle_core::Tensor;
+        let device = candle_core::Device::new_cuda(0).unwrap();
+        let a =
+            Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
+        let b = Tensor::from_vec(vec![-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
+        let c = a.bitwise_xor(&b).unwrap().to_vec2::<i64>().unwrap();
+        assert_eq!(c, [[-2, 2], [3, -1], [-1, -1], [-1, 4], [5, 15]]);
     }
 
     #[test]
