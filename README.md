@@ -45,9 +45,9 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
 - φ³ 📷 Run the Phi 3 vision model: [documentation and guide here](docs/PHI3V.md)
 
-    <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/2/2e/White_Mountains_12_30_09_81.jpg/544px-White_Mountains_12_30_09_81.jpg" width = "400" height = "267">
-    <h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a><h6>
-    
+    <img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "400" height = "267">
+    <h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
+
     *After following installation instructions*
 
     ```
