@@ -407,12 +407,10 @@ impl ImageEmbedding {
                 hidden_size: 1024,
                 image_size: 336,
                 intermediate_size: 4096,
-                layer_norm_eps: 1e-05,
                 num_attention_heads: 16,
                 num_channels: 3,
                 num_hidden_layers: 24,
                 patch_size: 14,
-                projection_dim: 768,
             },
         )?;
 

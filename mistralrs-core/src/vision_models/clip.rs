@@ -21,13 +21,11 @@ impl Module for Activation {
 
 serde_default_fn!(usize, d_hidden_size, 768);
 serde_default_fn!(usize, d_intermediate_size, 3072);
-serde_default_fn!(usize, d_projection_dim, 512);
 serde_default_fn!(usize, d_num_hidden_layers, 12);
 serde_default_fn!(usize, d_num_attention_heads, 12);
 serde_default_fn!(usize, d_num_channels, 3);
 serde_default_fn!(usize, d_image_size, 224);
 serde_default_fn!(usize, d_patch_size, 32);
-serde_default_fn!(f32, d_layer_norm_eps, 1e-5);
 serde_default_fn!(Activation, d_act, Activation::QuickGelu);
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -36,8 +34,6 @@ pub struct ClipConfig {
     pub hidden_size: usize,
     #[serde(default = "d_intermediate_size")]
     pub intermediate_size: usize,
-    #[serde(default = "d_projection_dim")]
-    pub projection_dim: usize,
     #[serde(default = "d_num_hidden_layers")]
     pub num_hidden_layers: usize,
     #[serde(default = "d_num_attention_heads")]
@@ -50,8 +46,6 @@ pub struct ClipConfig {
     pub patch_size: usize,
     #[serde(default = "d_act")]
     pub hidden_act: Activation,
-    #[serde(default = "d_layer_norm_eps")]
-    pub layer_norm_eps: f32,
 }
 
 // https://github.com/huggingface/transformers/blob/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip/modeling_clip.py#L112
