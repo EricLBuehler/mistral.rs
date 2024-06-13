@@ -20,17 +20,16 @@ use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
-use crate::utils::debug::setup_logger_and_debug;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
 use crate::{
     do_sample, get_mut_arcmutex, get_paths, lora_model_loader, normal_model_loader,
-    xlora_model_loader, DeviceMapMetadata, Pipeline,
+    xlora_model_loader, DeviceMapMetadata, Pipeline, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
-use candle_core::{DType, Device, Tensor};
+use candle_core::{Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
@@ -154,8 +153,6 @@ impl NormalLoaderBuilder {
     }
 
     pub fn build(self, loader: NormalLoaderType) -> Box<dyn Loader> {
-        setup_logger_and_debug();
-
         let loader: Box<dyn NormalModelLoader> = match loader {
             NormalLoaderType::Mistral => Box::new(MistralLoader),
             NormalLoaderType::Gemma => Box::new(GemmaLoader),
@@ -186,7 +183,7 @@ impl Loader for NormalLoader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        _dtype: Option<DType>,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -201,27 +198,21 @@ impl Loader for NormalLoader {
             None,
             silent
         );
-        self.load_model_from_path(&paths?, _dtype, device, silent, mapper, in_situ_quant)
+        self.load_model_from_path(&paths?, dtype, device, silent, mapper, in_situ_quant)
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
         paths: &Box<dyn ModelPaths>,
-        dtype: Option<DType>,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
-        let default_dtype = if device.is_cuda() && mapper.is_dummy() {
-            DType::BF16
-        } else if !mapper.is_dummy() {
-            DType::F16
-        } else {
-            DType::F32
-        };
+        let dtype = dtype.try_into_dtype(device)?;
         // Otherwise, the device mapper will print it
         if mapper.is_dummy() {
             info!("Loading model `{}` on {device:?}...", self.get_id());
@@ -245,7 +236,6 @@ impl Loader for NormalLoader {
             ModelKind::Normal => normal_model_loader!(
                 paths,
                 dtype,
-                default_dtype,
                 &load_device,
                 config,
                 self.inner,
@@ -260,7 +250,6 @@ impl Loader for NormalLoader {
             } => xlora_model_loader!(
                 paths,
                 dtype,
-                default_dtype,
                 &load_device,
                 config,
                 self.inner,
@@ -275,7 +264,6 @@ impl Loader for NormalLoader {
             } => lora_model_loader!(
                 paths,
                 dtype,
-                default_dtype,
                 &load_device,
                 config,
                 self.inner,

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "$name"
-version = "0.1.16"
+version = "0.1.18"
 requires-python = ">=3.8"
 classifiers = [
     "Programming Language :: Rust",
@@ -18,3 +18,4 @@ dynamic = ["description"]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
+profile = "release"

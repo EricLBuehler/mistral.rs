@@ -17,7 +17,7 @@ use crate::aici::toktree::TokTrie;
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
 use crate::lora::{LoraConfig, Ordering};
-use crate::DeviceMapMetadata;
+use crate::{DeviceMapMetadata, TryIntoDType};
 use candle_core::quantized::GgmlDType;
 use chat_template::ChatTemplate;
 use core::fmt;
@@ -43,7 +43,7 @@ pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
 pub use vision_loaders::{Phi3VLoader, VisionLoaderType, VisionModelLoader};
 
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor};
+use candle_core::{Device, Tensor};
 
 use crate::{
     sequence::Sequence,
@@ -360,14 +360,14 @@ impl ModelKind {
 ///
 /// # Example
 /// ```no_run
-/// use mistralrs_core::{Loader, TokenSource, DeviceMapMetadata};
+/// use mistralrs_core::{Loader, TokenSource, DeviceMapMetadata, ModelDType};
 /// use candle_core::Device;
 ///
 /// let loader: Box<dyn Loader> = todo!();
 /// let pipeline = loader.load_model_from_hf(
 ///     None,
 ///     TokenSource::CacheToken,
-///     None,
+///     &ModelDType::Auto,
 ///     &Device::cuda_if_available(0).unwrap(),
 ///     false,
 ///     DeviceMapMetadata::dummy(),
@@ -383,7 +383,7 @@ pub trait Loader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        dtype: Option<DType>,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -400,7 +400,7 @@ pub trait Loader {
     fn load_model_from_path(
         &self,
         paths: &Box<dyn ModelPaths>,
-        _dtype: Option<DType>,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,

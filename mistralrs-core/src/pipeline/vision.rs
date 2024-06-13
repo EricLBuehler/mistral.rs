@@ -12,7 +12,6 @@ use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::{get_chat_template, ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
-use crate::utils::debug::setup_logger_and_debug;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
@@ -20,10 +19,11 @@ use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
     do_sample, get_paths, vision_normal_model_loader, DeviceMapMetadata, Ordering, Pipeline,
+    TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
-use candle_core::{DType, Device, Tensor};
+use candle_core::{Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
@@ -92,8 +92,6 @@ impl VisionLoaderBuilder {
     }
 
     pub fn build(self, loader: VisionLoaderType) -> Box<dyn Loader> {
-        setup_logger_and_debug();
-
         let loader: Box<dyn VisionModelLoader> = match loader {
             VisionLoaderType::Phi3V => Box::new(Phi3VLoader),
         };
@@ -116,7 +114,7 @@ impl Loader for VisionLoader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        _dtype: Option<DType>,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -131,27 +129,22 @@ impl Loader for VisionLoader {
             None,
             silent
         );
-        self.load_model_from_path(&paths?, _dtype, device, silent, mapper, in_situ_quant)
+        self.load_model_from_path(&paths?, dtype, device, silent, mapper, in_situ_quant)
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
         paths: &Box<dyn ModelPaths>,
-        dtype: Option<DType>,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
-        let default_dtype = if device.is_cuda() && mapper.is_dummy() {
-            DType::BF16
-        } else if !mapper.is_dummy() {
-            DType::F16
-        } else {
-            DType::F32
-        };
+        let dtype = dtype.try_into_dtype(device)?;
+
         // Otherwise, the device mapper will print it
         if mapper.is_dummy() {
             info!("Loading model `{}` on {device:?}...", self.get_id());
@@ -173,7 +166,6 @@ impl Loader for VisionLoader {
             ModelKind::Normal => vision_normal_model_loader!(
                 paths,
                 dtype,
-                default_dtype,
                 &load_device,
                 config,
                 self.inner,

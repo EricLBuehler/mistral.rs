@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::Result as anyhowResult;
-use candle_core::{quantized::GgmlDType, DType, Device, IndexOp, Result, Tensor};
+use candle_core::{quantized::GgmlDType, Device, IndexOp, Result, Tensor};
 use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
 
@@ -17,7 +17,7 @@ use crate::{
     },
     prefix_cacher::PrefixCacheManager,
     sequence::{Sequence, SequenceRecognizer},
-    DeviceMapMetadata, Loader, ModelKind, Pipeline, TokenSource,
+    DeviceMapMetadata, Loader, ModelKind, Pipeline, TokenSource, TryIntoDType,
 };
 
 use super::{
@@ -39,7 +39,7 @@ impl Loader for SpeculativeLoader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        dtype: Option<DType>,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -74,7 +74,7 @@ impl Loader for SpeculativeLoader {
     fn load_model_from_path(
         &self,
         paths: &Box<dyn ModelPaths>,
-        dtype: Option<DType>,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -154,7 +154,7 @@ impl SpeculativePipeline {
         if get_mut_arcmutex!(target).tokenizer().get_vocab(true)
             != get_mut_arcmutex!(draft).tokenizer().get_vocab(true)
         {
-            candle_core::bail!("Target and draft models' tokenzier vocab do not match. This is required for speculative decoding.");
+            candle_core::bail!("Target and draft models' tokenizer vocab do not match. This is required for speculative decoding.");
         }
         if get_mut_arcmutex!(target).category() != get_mut_arcmutex!(draft).category() {
             candle_core::bail!("Target and draft models' category do not match. This is required for speculative decoding.");

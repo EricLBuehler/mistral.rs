@@ -16,18 +16,19 @@ use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
-use crate::utils::debug::setup_logger_and_debug;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
-use crate::{do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, Pipeline, DEBUG};
+use crate::{
+    do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, Pipeline, TryIntoDType, DEBUG,
+};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama, utils::tokens::get_token,
     xlora_models::XLoraQLlama,
 };
 use anyhow::Result;
 use candle_core::quantized::{ggml_file, GgmlDType};
-use candle_core::{DType, Device, Tensor};
+use candle_core::{Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
@@ -37,9 +38,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::level_filters::LevelFilter;
 use tracing::{info, warn};
-use tracing_subscriber::EnvFilter;
 
 enum Model {
     Llama(QLlama),
@@ -167,8 +166,6 @@ impl GGMLLoaderBuilder {
     }
 
     pub fn build(self) -> Box<dyn Loader> {
-        setup_logger_and_debug();
-
         Box::new(GGMLLoader {
             model_id: self.model_id.unwrap(),
             config: self.config,
@@ -200,8 +197,6 @@ impl GGMLLoader {
         tokenizer_json: Option<String>,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
-        setup_logger_and_debug();
-
         let model_id = if let Some(id) = model_id {
             id
         } else {
@@ -232,26 +227,12 @@ impl Loader for GGMLLoader {
     fn load_model_from_path(
         &self,
         paths: &Box<dyn ModelPaths>,
-        _dtype: Option<DType>,
+        _: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let is_debug = std::env::var("MISTRALRS_DEBUG")
-            .unwrap_or_default()
-            .contains('1');
-        DEBUG.store(is_debug, std::sync::atomic::Ordering::Relaxed);
-
-        let filter = EnvFilter::builder()
-            .with_default_directive(if is_debug {
-                LevelFilter::INFO.into()
-            } else {
-                LevelFilter::DEBUG.into()
-            })
-            .from_env_lossy();
-        tracing_subscriber::fmt().with_env_filter(filter).init();
-
         if in_situ_quant.is_some() {
             anyhow::bail!(
                 "You are trying to in-situ quantize a GGML model. This will not do anything."
@@ -363,7 +344,7 @@ impl Loader for GGMLLoader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        _dtype: Option<DType>,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -378,7 +359,7 @@ impl Loader for GGMLLoader {
             Some(vec![self.quantized_filename.as_ref().unwrap().clone()]),
             silent
         );
-        self.load_model_from_path(&paths?, _dtype, device, silent, mapper, in_situ_quant)
+        self.load_model_from_path(&paths?, dtype, device, silent, mapper, in_situ_quant)
     }
 
     fn get_id(&self) -> String {

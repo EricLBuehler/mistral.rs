@@ -46,6 +46,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - φ³ 📷 Run the Phi 3 vision model: [documentation and guide here](docs/PHI3V.md)
 
     <img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "400" height = "267">
+    <h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
 
     *After following installation instructions*
 
@@ -197,10 +198,12 @@ Please submit more benchmarks via raising an issue!
 ## Installation and Build
 
 1) Install required packages
-    - `openssl` (ex., `sudo apt install libssl-dev`)
-    - `pkg-config` (ex., `sudo apt install pkg-config`)
+    - `openssl` (*Example on Ubuntu:* `sudo apt install libssl-dev`)
+    - `pkg-config` (*Example on Ubuntu:* `sudo apt install pkg-config`)
 
 2) Install Rust: https://rustup.rs/
+
+    *Example on Ubuntu:*
     ```bash
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     source $HOME/.cargo/env
@@ -250,6 +253,8 @@ Please submit more benchmarks via raising an issue!
         cargo install --path mistralrs-server --features cuda
         ```
 6) The build process will output a binary `misralrs-server` at `./target/release/mistralrs-server` which may be copied into the working directory with the following command:
+    
+    *Example on Ubuntu:*
     ```
     cp ./target/release/mistralrs-server ./mistralrs_server
     ```
@@ -341,6 +346,8 @@ Additionally, for models without quantization, the model architecture should be 
 
 ### Architecture for plain models
 
+> Note: for plain models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`plain`).
+
 - `mistral`
 - `gemma`
 - `mixtral`
@@ -350,6 +357,8 @@ Additionally, for models without quantization, the model architecture should be 
 - `qwen2`
 
 ### Architecture for vision models
+
+> Note: for vision models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`vision-plain`).
 
 - `phi3v`
 
@@ -495,6 +504,8 @@ If you want to add a new model, please contact us via an issue and we can coordi
 - Error: `recompile with -fPIE`:
     - Some Linux distributions require compiling with `-fPIE`.
     - Set the `CUDA_NVCC_FLAGS` environment variable to `-fPIE` during build: `CUDA_NVCC_FLAGS=-fPIE`
+- Error `CUDA_ERROR_NOT_FOUND` or symbol not found when using a normal or vison model:
+    - For non-quantized models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device.
 
 ## Credits
 This project would not be possible without the excellent work at [`candle`](https://github.com/huggingface/candle). Additionally, thank you to all contributors! Contributing can range from raising an issue or suggesting a feature to adding some new functionality.

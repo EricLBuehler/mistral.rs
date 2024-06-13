@@ -13,12 +13,6 @@ pub enum Architecture {
     Qwen2,
 }
 
-#[pyclass]
-#[derive(Debug, Clone)]
-pub enum VisionArchitecture {
-    Phi3V,
-}
-
 impl From<Architecture> for NormalLoaderType {
     fn from(value: Architecture) -> Self {
         match value {
@@ -31,6 +25,12 @@ impl From<Architecture> for NormalLoaderType {
             Architecture::Qwen2 => Self::Qwen2,
         }
     }
+}
+
+#[pyclass]
+#[derive(Debug, Clone)]
+pub enum VisionArchitecture {
+    Phi3V,
 }
 
 impl From<VisionArchitecture> for VisionLoaderType {

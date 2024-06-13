@@ -19,13 +19,12 @@ use crate::pipeline::ChatTemplate;
 use crate::pipeline::{get_chat_template, Cache};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
-use crate::utils::debug::setup_logger_and_debug;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
     do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths, Pipeline,
-    DEBUG,
+    TryIntoDType, DEBUG,
 };
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
@@ -39,7 +38,7 @@ use candle_core::quantized::{
     gguf_file::{self, Value as GgufValue},
     GgmlDType,
 };
-use candle_core::{DType, Device, Tensor};
+use candle_core::{Device, Tensor};
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
@@ -207,8 +206,6 @@ impl GGUFLoaderBuilder {
     }
 
     pub fn build(self) -> Box<dyn Loader> {
-        setup_logger_and_debug();
-
         Box::new(GGUFLoader {
             model_id: self.model_id,
             config: self.config,
@@ -238,8 +235,6 @@ impl GGUFLoader {
         chat_template: Option<String>,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
-        setup_logger_and_debug();
-
         let model_id = if let Some(id) = model_id {
             Some(id)
         } else if let Some(xlora_order) = xlora_order.clone() {
@@ -294,7 +289,7 @@ impl Loader for GGUFLoader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        _dtype: Option<DType>,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -309,14 +304,14 @@ impl Loader for GGUFLoader {
             self.quantized_filename.clone(),
             silent
         );
-        self.load_model_from_path(&paths?, _dtype, device, silent, mapper, in_situ_quant)
+        self.load_model_from_path(&paths?, dtype, device, silent, mapper, in_situ_quant)
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
         paths: &Box<dyn ModelPaths>,
-        _dtype: Option<DType>,
+        _: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
