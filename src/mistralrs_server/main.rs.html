@@ -486,7 +486,7 @@
     <span class="kw">let </span>repr = <span class="macro">format!</span>(<span class="string">"Adapter activation: {:?}"</span>, request.adapter_names);
     MistralRs::maybe_log_request(state.clone(), repr.clone());
     <span class="kw">let </span>request = Request::ActivateAdapters(request.adapter_names);
-    state.get_sender().send(request).<span class="kw">await</span>.unwrap();
+    state.get_sender().unwrap().send(request).<span class="kw">await</span>.unwrap();
     repr
 }
 
@@ -510,7 +510,7 @@
     <span class="kw">let </span>repr = <span class="macro">format!</span>(<span class="string">"Re ISQ: {:?}"</span>, request.ggml_type);
     MistralRs::maybe_log_request(state.clone(), repr.clone());
     <span class="kw">let </span>request = Request::ReIsq(parse_isq(<span class="kw-2">&amp;</span>request.ggml_type)<span class="question-mark">?</span>);
-    state.get_sender().send(request).<span class="kw">await</span>.unwrap();
+    state.get_sender().unwrap().send(request).<span class="kw">await</span>.unwrap();
     <span class="prelude-val">Ok</span>(repr)
 }
 

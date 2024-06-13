@@ -446,7 +446,7 @@
         logits_bias: <span class="prelude-val">None</span>,
         n_choices: <span class="number">1</span>,
     };
-    <span class="kw">let </span>sender = mistralrs.get_sender();
+    <span class="kw">let </span>sender = mistralrs.get_sender().unwrap();
     <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">10_000</span>);
 
     <span class="kw">let </span>req = Request::Normal(NormalRequest {
@@ -604,7 +604,7 @@
         logits_bias: <span class="prelude-val">None</span>,
         n_choices: <span class="number">1</span>,
     };
-    <span class="kw">let </span>sender = mistralrs.get_sender();
+    <span class="kw">let </span>sender = mistralrs.get_sender().unwrap();
     <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">10_000</span>);
 
     <span class="kw">let </span>req = Request::Normal(NormalRequest {

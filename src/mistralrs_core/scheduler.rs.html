@@ -309,6 +309,17 @@
 <a href="#307" id="307">307</a>
 <a href="#308" id="308">308</a>
 <a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::{HashMap, VecDeque},
     sync::atomic::Ordering,
@@ -358,6 +369,17 @@
 /// is used to allow waiting sequences to run.
 </span><span class="kw">pub enum </span>SchedulerMethod {
     Fixed(UsizeBounded&lt;<span class="number">1</span>, { usize::MAX }, <span class="bool-val">false</span>&gt;),
+}
+
+<span class="kw">impl </span>Clone <span class="kw">for </span>SchedulerMethod {
+    <span class="kw">fn </span>clone(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
+        <span class="kw">match </span><span class="self">self </span>{
+            SchedulerMethod::Fixed(val) =&gt; {
+                <span class="kw">let </span>v = <span class="kw-2">**</span>val;
+                SchedulerMethod::Fixed(v.try_into().unwrap())
+            }
+        }
+    }
 }
 
 <span class="kw">pub struct </span>BucketedSeqs&lt;Backer: FcfsBacker&gt; {

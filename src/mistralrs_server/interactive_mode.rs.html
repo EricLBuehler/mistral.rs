@@ -152,7 +152,7 @@
     Lazy::new(|| Mutex::new(<span class="kw-2">&amp;</span>exit_handler));
 
 <span class="kw">pub async fn </span>interactive_mode(mistralrs: Arc&lt;MistralRs&gt;) {
-    <span class="kw">let </span>sender = mistralrs.get_sender();
+    <span class="kw">let </span>sender = mistralrs.get_sender().unwrap();
     <span class="kw">let </span><span class="kw-2">mut </span>messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt; = Vec::new();
 
     <span class="kw">let </span>sampling_params = SamplingParams {
