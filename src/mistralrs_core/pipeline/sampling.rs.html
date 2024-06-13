@@ -121,8 +121,6 @@
 <a href="#119" id="119">119</a>
 <a href="#120" id="120">120</a>
 <a href="#121" id="121">121</a>
-<a href="#122" id="122">122</a>
-<a href="#123" id="123">123</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
@@ -212,7 +210,6 @@
 
 <span class="attr">#[derive(Clone)]
 </span><span class="kw">pub struct </span>SpeculativeSample {
-    <span class="kw">pub </span>distribution: Tensor,
     <span class="kw">pub </span>sample: Logprobs,
 }
 
@@ -229,7 +226,6 @@
     <span class="kw">let </span><span class="kw-2">mut </span>sampled = Vec::new();
     <span class="kw">for </span>chunk <span class="kw">in </span>logits.chunk(n_toks, <span class="number">1</span>)<span class="question-mark">? </span>{
         sampled.push(SpeculativeSample {
-            distribution: chunk.clone(),
             sample: sample_sequence(
                 chunk,
                 seq,

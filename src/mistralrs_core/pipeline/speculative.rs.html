@@ -576,9 +576,6 @@
 <a href="#574" id="574">574</a>
 <a href="#575" id="575">575</a>
 <a href="#576" id="576">576</a>
-<a href="#577" id="577">577</a>
-<a href="#578" id="578">578</a>
-<a href="#579" id="579">579</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     iter::zip,
@@ -959,10 +956,7 @@
             )
             .<span class="kw">await</span><span class="question-mark">?</span>;
             seq.add_tmp_tok(sample.token);
-            draft_samples.push(SpeculativeSample {
-                sample,
-                distribution: logits.clone(),
-            });
+            draft_samples.push(SpeculativeSample { sample });
         }
         seq.remove_tmp_tok(<span class="self">self</span>.gamma);
 
