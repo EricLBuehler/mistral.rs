@@ -12,7 +12,6 @@ use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::{get_chat_template, ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
-use crate::utils::debug::setup_logger_and_debug;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
@@ -93,8 +92,6 @@ impl VisionLoaderBuilder {
     }
 
     pub fn build(self, loader: VisionLoaderType) -> Box<dyn Loader> {
-        setup_logger_and_debug();
-
         let loader: Box<dyn VisionModelLoader> = match loader {
             VisionLoaderType::Phi3V => Box::new(Phi3VLoader),
             VisionLoaderType::Idefics2 => Box::new(Idefics2Loader),

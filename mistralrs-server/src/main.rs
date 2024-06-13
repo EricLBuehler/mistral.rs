@@ -1,6 +1,6 @@
 use anyhow::Result;
 use axum::{
-    extract::{Json, State},
+    extract::{DefaultBodyLimit, Json, State},
     http::{self, Method},
     routing::{get, post},
     Router,
@@ -8,8 +8,9 @@ use axum::{
 use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
 use mistralrs_core::{
-    get_model_dtype, get_tgt_non_granular_index, DeviceMapMetadata, Loader, LoaderBuilder,
-    MistralRs, MistralRsBuilder, ModelSelected, Request, SchedulerMethod, TokenSource,
+    get_model_dtype, get_tgt_non_granular_index, initialize_logging, DeviceMapMetadata, Loader,
+    LoaderBuilder, MistralRs, MistralRsBuilder, ModelSelected, Request, SchedulerMethod,
+    TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,10 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{info, warn};
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
+
+// NOTE(EricLBuehler): Accept up to 50mb input
+const N_INPUT_SIZE: usize = 50;
+const MB_TO_B: usize = 1024 * 1024; // 1024 kb in a mb
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
@@ -223,12 +228,14 @@ fn get_router(state: Arc<MistralRs>) -> Router {
         .route("/", get(health))
         .route("/activate_adapters", post(activate_adapters))
         .route("/re_isq", post(re_isq))
+        .layer(DefaultBodyLimit::max(N_INPUT_SIZE * MB_TO_B))
         .with_state(state)
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut args = Args::parse();
+    initialize_logging();
 
     #[cfg(not(feature = "flash-attn"))]
     let use_flash_attn = false;
