@@ -164,7 +164,7 @@ async fn activate_adapters(
     let repr = format!("Adapter activation: {:?}", request.adapter_names);
     MistralRs::maybe_log_request(state.clone(), repr.clone());
     let request = Request::ActivateAdapters(request.adapter_names);
-    state.get_sender().send(request).await.unwrap();
+    state.get_sender().unwrap().send(request).await.unwrap();
     repr
 }
 
@@ -188,7 +188,7 @@ async fn re_isq(
     let repr = format!("Re ISQ: {:?}", request.ggml_type);
     MistralRs::maybe_log_request(state.clone(), repr.clone());
     let request = Request::ReIsq(parse_isq(&request.ggml_type)?);
-    state.get_sender().send(request).await.unwrap();
+    state.get_sender().unwrap().send(request).await.unwrap();
     Ok(repr)
 }
 

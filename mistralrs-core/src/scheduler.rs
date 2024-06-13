@@ -49,6 +49,17 @@ pub enum SchedulerMethod {
     Fixed(UsizeBounded<1, { usize::MAX }, false>),
 }
 
+impl Clone for SchedulerMethod {
+    fn clone(&self) -> Self {
+        match self {
+            SchedulerMethod::Fixed(val) => {
+                let v = **val;
+                SchedulerMethod::Fixed(v.try_into().unwrap())
+            }
+        }
+    }
+}
+
 pub struct BucketedSeqs<Backer: FcfsBacker> {
     running: Vec<Sequence>,
     waiting: Backer,

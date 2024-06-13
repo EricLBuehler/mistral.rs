@@ -60,7 +60,7 @@ fn main() -> anyhow::Result<()> {
         suffix: None,
         adapters: None,
     });
-    mistralrs.get_sender().blocking_send(request)?;
+    mistralrs.get_sender()?.blocking_send(request)?;
 
     let response = rx.blocking_recv().unwrap();
     match response {

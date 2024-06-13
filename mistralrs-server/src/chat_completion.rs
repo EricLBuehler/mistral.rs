@@ -344,7 +344,7 @@ pub async fn chatcompletions(
             return ChatCompletionResponder::InternalError(e.into());
         }
     };
-    let sender = state.get_sender();
+    let sender = state.get_sender().unwrap();
 
     if let Err(e) = sender.send(request).await {
         let e = anyhow::Error::msg(e.to_string());

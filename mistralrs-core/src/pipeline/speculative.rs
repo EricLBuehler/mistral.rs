@@ -378,10 +378,7 @@ impl Pipeline for SpeculativePipeline {
             )
             .await?;
             seq.add_tmp_tok(sample.token);
-            draft_samples.push(SpeculativeSample {
-                sample,
-                distribution: logits.clone(),
-            });
+            draft_samples.push(SpeculativeSample { sample });
         }
         seq.remove_tmp_tok(self.gamma);
 

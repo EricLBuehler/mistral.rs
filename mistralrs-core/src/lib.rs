@@ -6,13 +6,14 @@ pub use engine::TERMINATE_ALL_NEXT_STEP;
 pub use lora::Ordering;
 use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
+use pyo3::exceptions::PyValueError;
 use std::{
     cell::RefCell,
     error::Error,
     fs::OpenOptions,
     io::Write,
-    sync::{atomic::AtomicBool, Arc, Mutex},
-    thread,
+    sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
+    thread::{self, JoinHandle},
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::mpsc::{channel, Sender};
@@ -76,11 +77,44 @@ pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
 /// `Sender` and `Receiver` primitives to send and receive requests to the
 /// engine.
 pub struct MistralRs {
-    sender: Sender<Request>,
+    sender: RwLock<Sender<Request>>,
     log: Option<String>,
     id: String,
     creation_time: u64,
     next_request_id: Mutex<RefCell<usize>>,
+    reboot_state: RebootState,
+    engine_handler: RwLock<JoinHandle<()>>,
+}
+
+#[derive(Clone)]
+struct RebootState {
+    pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
+    method: SchedulerMethod,
+    truncate_sequence: bool,
+    no_kv_cache: bool,
+    no_prefix_cache: bool,
+    prefix_cache_n: usize,
+    disable_eos_stop: bool,
+}
+
+#[derive(Debug)]
+pub enum MistralRsError {
+    EnginePoisoned,
+    SenderPoisoned,
+}
+
+impl std::fmt::Display for MistralRsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", &self)
+    }
+}
+
+impl std::error::Error for MistralRsError {}
+
+impl From<MistralRsError> for pyo3::PyErr {
+    fn from(value: MistralRsError) -> Self {
+        PyValueError::new_err(format!("{:?}", value))
+    }
 }
 
 /// The MistralRsBuilder takes the pipeline and a scheduler method and constructs
@@ -216,19 +250,22 @@ impl MistralRs {
         let prefix_cache_n = prefix_cache_n.unwrap_or(16);
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
 
+        let reboot_state = RebootState {
+            pipeline: pipeline.clone(),
+            method: method.clone(),
+            truncate_sequence,
+            no_kv_cache,
+            no_prefix_cache,
+            prefix_cache_n,
+            disable_eos_stop,
+        };
+
         let (tx, rx) = channel(10_000);
 
-        let this = Arc::new(Self {
-            sender: tx,
-            log,
-            id: pipeline.try_lock().unwrap().name(),
-            creation_time: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("Time travel has occurred!")
-                .as_secs(),
-            next_request_id: Mutex::new(RefCell::new(0)),
-        });
-        thread::spawn(move || {
+        let sender = RwLock::new(tx);
+        let id = pipeline.try_lock().unwrap().name();
+
+        let engine_handler = thread::spawn(move || {
             let rt = Runtime::new().unwrap();
             rt.block_on(async move {
                 let mut engine = Engine::new(
@@ -245,11 +282,81 @@ impl MistralRs {
             });
         });
 
-        this
+        Arc::new(Self {
+            sender,
+            log,
+            id,
+            creation_time: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Time travel has occurred!")
+                .as_secs(),
+            next_request_id: Mutex::new(RefCell::new(0)),
+            reboot_state,
+            engine_handler: RwLock::new(engine_handler),
+        })
     }
 
-    pub fn get_sender(&self) -> Sender<Request> {
-        self.sender.clone()
+    /// attempts to reboot the engine, if the sender (only way to communicate with
+    /// the engine) is closed
+    fn reboot_engine(&self) -> Result<(), MistralRsError> {
+        let (new_sender, rx) = channel(10_000);
+        let reboot_state = self.reboot_state.clone();
+        let mut sender_lock = self.sender.write().map_err(|_| {
+            tracing::warn!("Couldn't get write lock on the sender during reboot attempt");
+            MistralRsError::SenderPoisoned
+        })?;
+        let mut engine_lock = self.engine_handler.write().map_err(|_| {
+            tracing::warn!("Couldn't get write lock on the engine during reboot attempt");
+            MistralRsError::EnginePoisoned
+        })?;
+
+        if !engine_lock.is_finished() {
+            tracing::info!("Engine already running, returning ok");
+            Ok(())
+        } else {
+            // critical section. A panic here could lead to poisoned locks
+            let new_engine_handler = thread::spawn(move || {
+                let rt = Runtime::new().unwrap();
+                rt.block_on(async move {
+                    let mut engine = Engine::new(
+                        rx,
+                        reboot_state.pipeline.clone(),
+                        reboot_state.method,
+                        reboot_state.truncate_sequence,
+                        reboot_state.no_kv_cache,
+                        reboot_state.no_prefix_cache,
+                        reboot_state.prefix_cache_n,
+                        reboot_state.disable_eos_stop,
+                    );
+                    engine.run().await;
+                });
+            });
+            *sender_lock = new_sender;
+            *engine_lock = new_engine_handler;
+            tracing::info!("Successfully rebooted engine and updated sender + engine handler");
+            Ok(())
+        }
+    }
+
+    fn engine_dead(&self) -> Result<bool, MistralRsError> {
+        match self.engine_handler.read() {
+            Ok(handler) => Ok(handler.is_finished()),
+            Err(_) => {
+                tracing::warn!("Couldn't get read lock on engine!");
+                Err(MistralRsError::EnginePoisoned)
+            }
+        }
+    }
+
+    pub fn get_sender(&self) -> Result<Sender<Request>, MistralRsError> {
+        if self.engine_dead()? {
+            tracing::warn!("Engine is dead, rebooting");
+            self.reboot_engine()?
+        }
+        match self.sender.read() {
+            Ok(sender) => Ok(sender.clone()),
+            Err(_) => Err(MistralRsError::SenderPoisoned),
+        }
     }
 
     pub fn get_id(&self) -> String {
