@@ -38,6 +38,8 @@ pub trait VisionModelLoader {
 pub enum VisionLoaderType {
     #[serde(rename = "phi3v")]
     Phi3V,
+    #[serde(rename = "llava")]
+    LLaVA,
 }
 
 impl FromStr for VisionLoaderType {
@@ -45,6 +47,7 @@ impl FromStr for VisionLoaderType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "phi3v" => Ok(Self::Phi3V),
+            "llava" => Ok(Self::LLaVA),
             a => Err(format!("Unknown architecture `{a}`")),
         }
     }
@@ -88,5 +91,37 @@ impl VisionModelLoader for Phi3VLoader {
         preprocessor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync> {
         Phi3Processor::new_processor(processor_config, preprocessor_config)
+    }
+}
+
+// ======================== LLaVA loader
+
+/// [`VisionLoader`] for a LLaVA Vision model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+pub struct LLaVALoader;
+impl VisionModelLoader for LLaVALoader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+        println!("config: {}", config);
+        todo!()
+    }
+    fn is_gptx(&self) -> bool {
+        false
+    }
+    fn get_config_repr(&self, _config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        unimplemented!()
+    }
+    fn get_processor(
+        &self,
+        _processor_config: Option<ProcessorConfig>,
+        _preprocessor_config: PreProcessorConfig,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        unimplemented!()
     }
 }
