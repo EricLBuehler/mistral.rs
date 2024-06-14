@@ -905,8 +905,11 @@ impl Idefics2 {
             let nb_values_per_image = pixel_values.dims()[1..].iter().product::<usize>();
             let real_images_inds = pixel_values
                 .eq(0.0f64)?
-                .reshape((batch_size * num_images, num_channels * height * width))?
-                .sum(D::Minus1)?
+                .sum(vec![
+                    pixel_values.dims().len() - 1,
+                    pixel_values.dims().len() - 2,
+                    pixel_values.dims().len() - 3,
+                ])?
                 .ne(nb_values_per_image as f64)?;
             let pixel_values = pixel_values.index_select(&real_images_inds, 0)?;
 
