@@ -496,6 +496,6 @@ impl Pipeline for GGMLPipeline {
         do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
     }
     fn category(&self) -> ModelCategory {
-        ModelCategory::Text
+        ModelCategory::AutoRegressive
     }
 }
