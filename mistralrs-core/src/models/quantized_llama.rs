@@ -421,6 +421,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
                                 )?)?,
                             })
                         }
+                        // Synchronize to complete the copy?
+                        device.synchronize()?;
                     }
                     Err(_) => {
                         for i in 0..n_expert {
