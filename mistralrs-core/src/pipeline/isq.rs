@@ -9,6 +9,9 @@ use tracing::{info, warn};
 
 use crate::device_map::DeviceMapper;
 
+#[cfg(feature = "cuda")]
+const ISQ_THREAD_COUNT: usize = 8;
+
 pub enum QuantizationBehaviour {
     Quantize(GgmlDType),
     Skip,
@@ -104,6 +107,12 @@ pub trait IsqModel {
 
         #[cfg(not(feature = "metal"))]
         {
+            #[cfg(feature = "cuda")]
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(ISQ_THREAD_COUNT)
+                .build_global()
+                .expect("Failed to build global thread pool");
+
             use indicatif::ParallelProgressIterator;
             use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
             tensors
