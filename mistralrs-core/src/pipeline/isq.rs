@@ -1,4 +1,7 @@
-use std::sync::{atomic::AtomicUsize, Arc};
+use std::{
+    sync::{atomic::AtomicUsize, Arc},
+    time::Instant,
+};
 
 use candle_core::{
     quantized::{GgmlDType, QMatMul, QTensor},
@@ -10,7 +13,7 @@ use tracing::{info, warn};
 use crate::device_map::DeviceMapper;
 
 #[cfg(feature = "cuda")]
-const ISQ_THREAD_COUNT: usize = 8;
+const ISQ_THREAD_COUNT: usize = 4;
 
 pub enum QuantizationBehaviour {
     Quantize(GgmlDType),
@@ -105,6 +108,7 @@ pub trait IsqModel {
             devices.push(device.clone());
         }
 
+        let t_start = Instant::now();
         #[cfg(not(feature = "metal"))]
         {
             #[cfg(feature = "cuda")]
@@ -112,6 +116,8 @@ pub trait IsqModel {
                 .num_threads(ISQ_THREAD_COUNT)
                 .build_global()
                 .expect("Failed to build global thread pool");
+
+            info!("Applying ISQ on {} threads.", rayon::current_num_threads());
 
             use indicatif::ParallelProgressIterator;
             use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
@@ -135,7 +141,8 @@ pub trait IsqModel {
                     generate_isq!(tensor, device, dtype, n_quantized)
                 });
         }
-        info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors.");
+        let delta = Instant::now().duration_since(t_start).as_secs_f32();
+        info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors. Took {delta:.2}s", );
 
         Ok(())
     }
