@@ -68,7 +68,8 @@ macro_rules! generate_isq {
                     $n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     QMatMul::QTensor(Arc::new(QTensor::quantize(&t, dtype).unwrap()))
                 }
-            }
+            };
+            $device.synchronize().unwrap();
         }
     };
 }
