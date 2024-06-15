@@ -1,7 +1,7 @@
 use std::{fmt::Display, str::FromStr};
 
 use anyhow::Result;
-use candle_core::{DType, Device};
+use candle_core::{DType, Device, Tensor};
 use serde::Deserialize;
 use tracing::info;
 
@@ -10,9 +10,7 @@ use tracing::info;
 ///
 /// If the model is quantized, this is ignored so it is reasonable to use the [`Default`] impl.
 ///
-/// ## `Auto` rules
-/// - If CUDA device or CPU, use BF16
-/// - Fallback to F16
+/// Note: When using `Auto`, fallback pattern is: BF16 -> F16 -> 32
 pub enum ModelDType {
     #[default]
     #[serde(rename = "auto")]
@@ -64,16 +62,26 @@ impl TryIntoDType for DType {
     }
 }
 
+fn determine_auto_dtype(device: &Device) -> candle_core::Result<DType> {
+    for dtype in [DType::BF16, DType::F16] {
+        // Try a matmul
+        let x = Tensor::zeros((2, 2), dtype, device)?;
+        let y = x.matmul(&x);
+        match y {
+            Ok(_) => return Ok(dtype),
+            Err(e) => match e {
+                candle_core::Error::UnsupportedDTypeForOp(_, _) => continue,
+                other => return Err(other),
+            },
+        }
+    }
+    return Ok(DType::F32);
+}
+
 impl TryIntoDType for ModelDType {
     fn try_into_dtype(&self, device: &Device) -> Result<DType> {
         let dtype = match self {
-            Self::Auto => {
-                if device.is_cuda() || device.is_cpu() {
-                    Ok(DType::BF16)
-                } else {
-                    Ok(DType::F32)
-                }
-            }
+            Self::Auto => Ok(determine_auto_dtype(device).map_err(anyhow::Error::msg)?),
             Self::BF16 => Ok(DType::BF16),
             Self::F16 => Ok(DType::F16),
             Self::F32 => Ok(DType::F32),
