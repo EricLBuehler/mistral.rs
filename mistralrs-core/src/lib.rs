@@ -6,6 +6,7 @@ pub use engine::TERMINATE_ALL_NEXT_STEP;
 pub use lora::Ordering;
 use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
+#[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
 use std::{
     cell::RefCell,
@@ -111,6 +112,7 @@ impl std::fmt::Display for MistralRsError {
 
 impl std::error::Error for MistralRsError {}
 
+#[cfg(feature = "pyo3_macros")]
 impl From<MistralRsError> for pyo3::PyErr {
     fn from(value: MistralRsError) -> Self {
         PyValueError::new_err(format!("{:?}", value))
