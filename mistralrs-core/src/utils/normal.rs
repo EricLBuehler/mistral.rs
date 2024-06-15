@@ -75,7 +75,7 @@ fn determine_auto_dtype(device: &Device) -> candle_core::Result<DType> {
             },
         }
     }
-    return Ok(DType::F32);
+    Ok(DType::F32)
 }
 
 impl TryIntoDType for ModelDType {
