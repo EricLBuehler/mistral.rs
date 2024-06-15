@@ -895,19 +895,10 @@ impl Idefics2 {
     ) -> Result<Tensor> {
         let input_embeds = if let Some(pixel_values) = pixel_values {
             // == START VISUAL INPUTS INTEGRATION ==
-            let pixel_values = Tensor::read_npy("../pixel_values_start.npy")?
-                .to_dtype(pixel_values.dtype())?
-                .to_device(pixel_values.device())?;
             let (batch_size, num_images, _, _, _) = pixel_values.dims5()?;
-            let pixel_values = pixel_values.to_dtype(self.dtype)?;
             let mut s = vec![batch_size * num_images];
             s.extend(pixel_values.dims()[2..].to_vec());
             let pixel_values = pixel_values.reshape(s)?;
-            dbg!(&pixel_values.shape());
-            pixel_values
-                .to_dtype(DType::F32)?
-                .to_device(&Device::Cpu)?
-                .write_npy("pixel_values_reshaped_m.npy");
 
             // Remove padding images which are full of 0s
             let nb_values_per_image = pixel_values.dims()[1..].iter().product::<usize>();
@@ -919,7 +910,18 @@ impl Idefics2 {
                     pixel_values.dims().len() - 3,
                 ])?
                 .ne(nb_values_per_image as f64)?;
-            let pixel_values = pixel_values.index_select(&real_images_inds, 0)?;
+            let mut batches = Vec::new();
+            for (batch, use_it) in pixel_values
+                .chunk(pixel_values.dim(0)?, 0)?
+                .iter()
+                .zip(real_images_inds.chunk(real_images_inds.dim(0)?, 0)?)
+            {
+                let use_it = use_it.squeeze(0)?.to_scalar::<u8>()? != 0;
+                if use_it {
+                    batches.push(batch.clone());
+                }
+            }
+            let pixel_values = Tensor::cat(&batches, 0)?;
 
             // Vision attention mask
             let pixel_attention_mask = if let Some(pixel_attention_mask) = pixel_attention_mask {
@@ -949,6 +951,8 @@ impl Idefics2 {
                 .sum(D::Minus1)?
                 .ge(0.0)?
                 .to_dtype(DType::U8)?;
+
+            let pixel_values = pixel_values.to_dtype(self.dtype)?;
 
             // Get seq from vision encoder
             let image_hidden_states = self
