@@ -895,11 +895,19 @@ impl Idefics2 {
     ) -> Result<Tensor> {
         let input_embeds = if let Some(pixel_values) = pixel_values {
             // == START VISUAL INPUTS INTEGRATION ==
-            let (batch_size, num_images, num_channels, height, width) = pixel_values.dims5()?;
+            let pixel_values = Tensor::read_npy("../pixel_values_start.npy")?
+                .to_dtype(pixel_values.dtype())?
+                .to_device(pixel_values.device())?;
+            let (batch_size, num_images, _, _, _) = pixel_values.dims5()?;
             let pixel_values = pixel_values.to_dtype(self.dtype)?;
             let mut s = vec![batch_size * num_images];
             s.extend(pixel_values.dims()[2..].to_vec());
             let pixel_values = pixel_values.reshape(s)?;
+            dbg!(&pixel_values.shape());
+            pixel_values
+                .to_dtype(DType::F32)?
+                .to_device(&Device::Cpu)?
+                .write_npy("pixel_values_reshaped_m.npy");
 
             // Remove padding images which are full of 0s
             let nb_values_per_image = pixel_values.dims()[1..].iter().product::<usize>();
