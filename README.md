@@ -8,7 +8,6 @@ Blazingly fast LLM inference.
 
 <p align="center">
 | <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust Documentation</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/API.md"><b>Python Documentation</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
-
 </p>
 
 Mistral.rs is a fast LLM inference platform supporting inference on a variety of devices, quantization, and easy-to-use application with an Open-AI API compatible HTTP server and Python bindings. 
@@ -75,6 +74,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from Hugging Face Hub by quantizing them after loading instead of creating a GGUF file.
     - This loads the ISQ-able weights on CPU before quantizing with ISQ and then moving to the device to avoid memory spikes.
     - Provides methods to further reduce memory spikes.
+
 **Powerful**:
 - Fast LoRA support with weight merging.
 - First X-LoRA inference platform with first class support.
@@ -198,9 +198,12 @@ Please submit more benchmarks via raising an issue!
 
 ## Installation and Build
 
+> Note: You can use our [Docker containers here](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs).
+> Learn more about running Docker containers: https://docs.docker.com/engine/reference/run/
+
 1) Install required packages
-    - `openssl` (*Example on Ubuntu:* `sudo apt install libssl-dev`)
-    - `pkg-config` (*Example on Ubuntu:* `sudo apt install pkg-config`)
+    - `OpenSSL` (*Example on Ubuntu:* `sudo apt install libssl-dev`)
+    - <b>*Linux only:*</b> `pkg-config` (*Example on Ubuntu:* `sudo apt install pkg-config`)
 
 2) Install Rust: https://rustup.rs/
 
@@ -210,7 +213,7 @@ Please submit more benchmarks via raising an issue!
     source $HOME/.cargo/env
     ```
 
-3) Set HF token correctly (skip if already set or your model is not gated, or if you want to use the `token_source` parameters in Python or the command line.)
+3) <b>*Optional:*</b> Set HF token correctly (skip if already set or your model is not gated, or if you want to use the `token_source` parameters in Python or the command line.)
     - Note: you can install `huggingface-cli` as documented [here](https://huggingface.co/docs/huggingface_hub/en/installation). 
     ```bash
     huggingface-cli login
