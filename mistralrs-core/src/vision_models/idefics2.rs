@@ -922,6 +922,10 @@ impl Idefics2 {
                 }
             }
             let pixel_values = Tensor::cat(&batches, 0)?;
+            pixel_values
+                .to_dtype(DType::F32)?
+                .to_device(&Device::Cpu)?
+                .write_npy("pixel_values_selected_m.npy")?;
 
             // Vision attention mask
             let pixel_attention_mask = if let Some(pixel_attention_mask) = pixel_attention_mask {
