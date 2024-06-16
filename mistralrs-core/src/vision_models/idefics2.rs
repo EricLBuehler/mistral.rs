@@ -306,13 +306,6 @@ impl VisionEmbeddings {
             let bucket_coords_w =
                 bucketize_right(&fractional_coords_w, &boundaries, pixel_values.device())?;
 
-            println!("saving `bucket_coords_w`");
-            bucket_coords_w
-                .to_dtype(DType::F32)?
-                .to_device(&Device::Cpu)?
-                .write_npy("pixel_values_probe_m.npy")?;
-            println!("saved it");
-
             let pos_ids = bucket_coords_h
                 .unsqueeze(D::Minus1)?
                 .mul(self.num_patches_per_side as f64)?
@@ -976,10 +969,17 @@ impl Idefics2 {
             let patch_size = self.config.vision_config.patch_size;
             let patches_subgrid = pixel_attention_mask.unfold(1, patch_size, patch_size)?;
             let patches_subgrid = patches_subgrid.unfold(2, patch_size, patch_size)?;
+            
+            println!("saving `patches_subgrid`");
+            patches_subgrid
+                .to_dtype(DType::F32)?
+                .to_device(&Device::Cpu)?
+                .write_npy("pixel_values_probe_m.npy")?;
+            println!("saved it");
+    
             let patch_attention_mask = patches_subgrid
-                .flatten(D::Minus2, D::Minus1)?
-                .sum(D::Minus1)?
-                .ge(0.0)?
+                .sum((D::Minus1, D::Minus2))?
+                .gt(0.0)?
                 .to_dtype(DType::U8)?;
 
             let pixel_values = pixel_values.to_dtype(self.dtype)?;
