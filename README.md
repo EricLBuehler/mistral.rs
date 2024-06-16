@@ -8,7 +8,6 @@ Blazingly fast LLM inference.
 
 <p align="center">
 | <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust Documentation</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/API.md"><b>Python Documentation</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
-
 </p>
 
 Mistral.rs is a fast LLM inference platform supporting inference on a variety of devices, quantization, and easy-to-use application with an Open-AI API compatible HTTP server and Python bindings. 
@@ -198,6 +197,9 @@ Enabling features is done by passing `--features ...` to the build system. When 
 Please submit more benchmarks via raising an issue!
 
 ## Installation and Build
+
+> Note: You can use our [Docker containers here](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs).
+> Learn more about running Docker containers: https://docs.docker.com/engine/reference/run/
 
 1) Install required packages
     - `OpenSSL` (*Example on Ubuntu:* `sudo apt install libssl-dev`)
