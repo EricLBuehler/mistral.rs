@@ -577,7 +577,7 @@
         <span class="kw">let </span>mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
             <span class="kw-2">&amp;</span>cache,
-            xs.dtype(),
+            DType::F32,
             <span class="self">self</span>.layers[<span class="number">0</span>].n_head,
         )<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
