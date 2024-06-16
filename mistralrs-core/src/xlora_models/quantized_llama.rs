@@ -761,7 +761,7 @@ impl ModelWeights {
         let mask = CausalMasker.make_causal_mask_as_attn_bias(
             x,
             &cache,
-            x.dtype(),
+            DType::F32,
             self.layers[0].n_head,
         )?;
         for (i, layer) in self.layers.iter_mut().enumerate() {
