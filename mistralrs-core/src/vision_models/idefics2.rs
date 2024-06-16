@@ -5,7 +5,6 @@ use candle_nn::{
     conv2d, embedding, layer_norm, linear_no_bias, Activation, Conv2d, Conv2dConfig, Embedding,
     LayerNorm, Linear, Module, VarBuilder,
 };
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::Deserialize;
 use std::{any::Any, ops::Mul};
 
@@ -209,19 +208,27 @@ struct VisionEmbeddings {
 /// torch.bucketize with right=True
 /// Returns a 1d tensor of shape (xs.len(),) on the CPU
 fn bucketize_right(xs: &[f32], boundaries: &[f32], device: &Device) -> Result<Tensor> {
-    let accum = xs
-        .par_iter()
-        .map(|x| {
-            for (i, bounds) in boundaries.windows(2).enumerate() {
-                let (l, r) = (bounds[0], bounds[1]);
-                if x > &l && x <= &r {
-                    return i as u32;
-                }
+    // Initialize a vector to store the bucket indices
+    let mut indices = vec![0; xs.len()];
+
+    // Iterate over each element in `xs`
+    for (i, &x) in xs.iter().enumerate() {
+        // Find the index of the bucket for the current element
+        let mut index = 0;
+        for (j, &boundary) in boundaries.iter().enumerate() {
+            if x < boundary {
+                index = j;
+                break;
             }
-            (boundaries.len() - 1) as u32
-        })
-        .collect::<Vec<_>>();
-    Tensor::from_vec(accum, (xs.len(),), device)
+        }
+        // If the value is greater than or equal to all boundaries, set the index to the length of boundaries
+        if index == 0 && x >= boundaries[boundaries.len() - 1] {
+            index = boundaries.len();
+        }
+        indices[i] = index as u32;
+    }
+
+    Tensor::from_vec(indices, (xs.len(),), device)
 }
 
 impl VisionEmbeddings {
@@ -255,13 +262,6 @@ impl VisionEmbeddings {
         let (bs, _, max_im_h, max_im_w) = pixel_values.dims4()?;
 
         let patch_embeds = self.patch_embedding.forward(pixel_values)?;
-            
-        println!("saving `patch_embeds`");
-        patch_embeds
-            .to_dtype(DType::F32)?
-            .to_device(&Device::Cpu)?
-            .write_npy("pixel_values_probe_m.npy")?;
-        println!("saved it");
 
         let embeddings = patch_embeds.flatten(2, D::Minus1)?.transpose(1, 2)?;
 
@@ -305,6 +305,14 @@ impl VisionEmbeddings {
                 bucketize_right(&fractional_coords_h, &boundaries, pixel_values.device())?;
             let bucket_coords_w =
                 bucketize_right(&fractional_coords_w, &boundaries, pixel_values.device())?;
+
+            println!("saving `bucket_coords_w`");
+            bucket_coords_w
+                .to_dtype(DType::F32)?
+                .to_device(&Device::Cpu)?
+                .write_npy("pixel_values_probe_m.npy")?;
+            println!("saved it");
+
             let pos_ids = bucket_coords_h
                 .unsqueeze(D::Minus1)?
                 .mul(self.num_patches_per_side as f64)?
