@@ -8,7 +8,6 @@ use pyo3_special_method_derive::{Dict, Dir, Getattr, Repr, Str};
 use std::{
     cell::RefCell,
     collections::HashMap,
-    fmt::Debug,
     fs,
     io::Read,
     str::FromStr,
