@@ -65,9 +65,10 @@ tracing-subscriber.workspace = true
 derive-new = "0.6.0"
 itertools = "0.13.0"
 mistralrs-vision = { version = "0.1.13", path = "../mistralrs-vision" }
+pyo3_special_method_derive = { workspace = true, optional = true }
 
 [features]
-pyo3_macros = ["pyo3"]
+pyo3_macros = ["pyo3", "pyo3_special_method_derive"]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda"]
 cudnn = ["candle-core/cudnn"]
 metal = ["candle-core/metal", "candle-nn/metal"]

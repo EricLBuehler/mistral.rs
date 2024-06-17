@@ -1963,6 +1963,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "inventory"
+version = "0.3.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f958d3d68f4167080a18141e10381e7634563984a537f2a49a30fd8e53ac5767"
+
+[[package]]
 name = "ipnet"
 version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2355,6 +2361,7 @@ dependencies = [
  "mistralrs-vision",
  "once_cell",
  "pyo3",
+ "pyo3_special_method_derive",
  "radix_trie",
  "rand",
  "rand_isaac",
@@ -2392,6 +2399,7 @@ dependencies = [
  "mistralrs-core",
  "pyo3",
  "pyo3-build-config",
+ "pyo3_special_method_derive",
  "reqwest",
  "serde",
  "serde_json",
@@ -3018,6 +3026,7 @@ dependencies = [
  "hashbrown",
  "indexmap",
  "indoc",
+ "inventory",
  "libc",
  "memoffset",
  "num-bigint",
@@ -3079,6 +3088,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyo3_special_method_derive"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e831c9f620de245243f105f2d764c59c32a853bd1c9fb34504116e0d6d094fad"
+dependencies = [
+ "proc-macro2",
+ "pyo3",
+ "quote",
+ "quote_into",
+ "syn 2.0.66",
+]
+
+[[package]]
 name = "qoi"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3100,6 +3122,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fa76aaf39101c457836aec0ce2316dbdc3ab723cdda1c6bd4e6ad4208acaca7"
 dependencies = [
  "proc-macro2",
+]
+
+[[package]]
+name = "quote_into"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93886ed56f228a5d960fc4d26afa3736df12a251872869cf24f5efe5f07699b9"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "quote_into_macro",
+]
+
+[[package]]
+name = "quote_into_macro"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36b828998c40452b5afe441c75194e93181432e669585f4ceb7b0d32a3f73525"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]
