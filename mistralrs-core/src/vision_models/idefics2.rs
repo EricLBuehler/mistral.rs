@@ -342,7 +342,7 @@ impl Attention {
         let embed_dim = config.hidden_size;
         let num_heads = config.num_attn_heads;
         let head_dim = embed_dim / num_heads;
-        let scale = (head_dim as f64).sqrt();
+        let scale = 1.0 / (head_dim as f64).sqrt();
 
         let q_proj = linear_no_bias(embed_dim, embed_dim, vb.pp("q_proj"))?;
         let k_proj = linear_no_bias(embed_dim, embed_dim, vb.pp("k_proj"))?;
@@ -669,7 +669,7 @@ impl PerceiverAttention {
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
         let attn_weights = (q.contiguous()?.matmul(&k.transpose(2, 3)?.contiguous()?)?
-            * (self.head_dim as f64).sqrt())?;
+            / (self.head_dim as f64).sqrt())?;
 
         let attn_weights = CausalMasker.apply_mask_one_and_zero(
             &Some(attention_mask.to_dtype(DType::U8)?),
@@ -969,14 +969,14 @@ impl Idefics2 {
             let patch_size = self.config.vision_config.patch_size;
             let patches_subgrid = pixel_attention_mask.unfold(1, patch_size, patch_size)?;
             let patches_subgrid = patches_subgrid.unfold(2, patch_size, patch_size)?;
-            
+
             println!("saving `patches_subgrid`");
             patches_subgrid
                 .to_dtype(DType::F32)?
                 .to_device(&Device::Cpu)?
                 .write_npy("pixel_values_probe_m.npy")?;
             println!("saved it");
-    
+
             let patch_attention_mask = patches_subgrid
                 .sum((D::Minus1, D::Minus2))?
                 .gt(0.0)?
@@ -1054,7 +1054,7 @@ impl VisionModel for Idefics2 {
         self.text_model.device()
     }
     fn max_seq_len(&self) -> usize {
-        self.text_model.max_seq_len() // Is this correct?
+        self.text_model.max_seq_len() // TODO Is this correct?
     }
     fn has_conv2d(&self) -> bool {
         true
