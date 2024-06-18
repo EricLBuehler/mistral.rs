@@ -10,6 +10,7 @@ use pyo3::pyclass;
 use serde::Deserialize;
 
 use super::{NormalLoadingMetadata, Processor, ProcessorCreator, VisionModel};
+use crate::vision_models::llava::Config as LLaVAConfig;
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
@@ -103,19 +104,20 @@ pub struct LLaVALoader;
 impl VisionModelLoader for LLaVALoader {
     fn load(
         &self,
-        config: &str,
-        use_flash_attn: bool,
-        vb: VarBuilder,
-        normal_loading_metadata: NormalLoadingMetadata,
+        _config: &str,
+        _use_flash_attn: bool,
+        _vb: VarBuilder,
+        _normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        println!("config: {}", config);
-        todo!()
+        //println!("config: {}", config);
+        unimplemented!()
     }
     fn is_gptx(&self) -> bool {
         false
     }
-    fn get_config_repr(&self, _config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        unimplemented!()
+    fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        let config: LLaVAConfig = serde_json::from_str(config)?;
+        Ok(Box::new(config))
     }
     fn get_processor(
         &self,
