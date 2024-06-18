@@ -1,4 +1,5 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+#![deny(clippy::shadow_same, clippy::shadow_reuse, clippy::shadow_unrelated)]
 
 use cublaslt::setup_cublas_lt_wrapper;
 use engine::Engine;
