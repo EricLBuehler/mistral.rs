@@ -266,7 +266,6 @@ impl Llama {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
-        let (_, seq_len, _) = input_embed.dims3()?;
         let mut x = input_embed.clone();
         let mut cache = self.kv_cache.lock();
         let mask = CausalMasker.make_causal_mask_as_attn_bias_with_embed_tensor(

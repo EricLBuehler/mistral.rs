@@ -1,3 +1,4 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use candle_core::quantized::QMatMul;
 use candle_core::{bail, Device, IndexOp, Result, Tensor};
 use candle_nn::{linear, seq, Activation, Module, Sequential, VarBuilder};

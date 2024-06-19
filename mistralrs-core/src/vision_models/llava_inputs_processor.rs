@@ -1,3 +1,4 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 pub fn get_anyres_image_grid_shape(
     image_size: (u32, u32),
     grid_pinpoints: &[(u32, u32)],
