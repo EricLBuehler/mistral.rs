@@ -309,7 +309,7 @@ impl ModelWeights {
             input_ids,
             &cache,
             Some(self.max_seq_len),
-            xs.dtype(),
+            DType::F32,
             self.layers[0].n_head,
         )?;
         for (i, layer) in self.layers.iter_mut().enumerate() {

@@ -14,7 +14,7 @@ pub struct CublasLt(Arc<CudaBlasLT>);
 
 impl CublasLt {
     pub fn new(device: &Device) -> Result<Self> {
-        let dev = match &*device {
+        let dev = match device {
             Device::Cuda(d) => d,
             _ => candle_core::bail!("`device` must be a `cuda` device"),
         };
@@ -420,9 +420,9 @@ pub fn fused_matmul(
     };
 
     if let Some(bias) = bias {
-        a.apply_op3(&b, &bias, op)
+        a.apply_op3(b, bias, op)
     } else {
-        a.apply_op2(&b, op)
+        a.apply_op2(b, op)
     }
 }
 
@@ -524,7 +524,7 @@ impl CublasLTBatchMatmul {
             stride_b: Some(b_l.stride()[0] as i64),
             stride_c: Some(stride_c as i64),
             stride_bias: None,
-            batch_size: Some(batch_size as c_int),
+            batch_size: Some(c_int::try_from(batch_size)?),
         };
 
         unsafe {
@@ -627,7 +627,7 @@ impl CublasLTBatchMatmul {
             stride_b: Some(b_l.stride()[0] as i64),
             stride_c: Some(stride_c as i64),
             stride_bias: None,
-            batch_size: Some(batch_size as c_int),
+            batch_size: Some(c_int::try_from(batch_size)?),
         };
 
         unsafe {
@@ -730,7 +730,7 @@ impl CublasLTBatchMatmul {
             stride_b: Some(b_l.stride()[0] as i64),
             stride_c: Some(stride_c as i64),
             stride_bias: None,
-            batch_size: Some(batch_size as c_int),
+            batch_size: Some(c_int::try_from(batch_size)?),
         };
 
         unsafe {
@@ -851,9 +851,9 @@ pub fn fused_batch_matmul(
     };
 
     if let Some(bias) = bias {
-        a.apply_op3(&b, &bias, op)
+        a.apply_op3(b, bias, op)
     } else {
-        a.apply_op2(&b, op)
+        a.apply_op2(b, op)
     }
 }
 

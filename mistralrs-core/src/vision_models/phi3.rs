@@ -13,9 +13,10 @@ use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
 use crate::{
     device_map::DeviceMapper,
     layers::{
-        repeat_kv, CausalMasker, FusedBiasLinear, MatMul, Nonzero, PhiRopeConfig,
-        PhiRotaryEmbedding, RmsNorm, ScaledDotProductAttention,
+        repeat_kv, CausalMasker, FusedBiasLinear, MatMul, PhiRopeConfig, PhiRotaryEmbedding,
+        RmsNorm, ScaledDotProductAttention,
     },
+    ops::{BitWiseOp, NonZeroOp},
     pipeline::{
         extract_logits, Cache, IsqModel, NormalLoadingMetadata, Phi3RopeScaling, VisionModel,
     },
@@ -406,12 +407,10 @@ impl ImageEmbedding {
                 hidden_size: 1024,
                 image_size: 336,
                 intermediate_size: 4096,
-                layer_norm_eps: 1e-05,
                 num_attention_heads: 16,
                 num_channels: 3,
                 num_hidden_layers: 24,
                 patch_size: 14,
-                projection_dim: 768,
             },
         )?;
 
@@ -537,8 +536,7 @@ impl ImageEmbedding {
         let input_ids_lt = input_ids.lt(0.0f64)?;
         let input_ids_gt = input_ids.gt(-MAX_INPUT_ID)?;
         // positions = torch.nonzero((input_ids < 0) & (input_ids > -MAX_INPUT_ID), as_tuple=False)
-        let positions = Nonzero.nonzero_and::<u8>(&input_ids_lt, &input_ids_gt)?;
-
+        let positions = input_ids_lt.bitwise_and(&input_ids_gt)?.nonzero()?;
         let target_dev = self.layers.0[0].device();
         let target_dtype = self.layers.0[0].dtype();
 

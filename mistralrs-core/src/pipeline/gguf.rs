@@ -19,7 +19,6 @@ use crate::pipeline::ChatTemplate;
 use crate::pipeline::{get_chat_template, Cache};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
-use crate::utils::debug::setup_logger_and_debug;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
@@ -207,8 +206,6 @@ impl GGUFLoaderBuilder {
     }
 
     pub fn build(self) -> Box<dyn Loader> {
-        setup_logger_and_debug();
-
         Box::new(GGUFLoader {
             model_id: self.model_id,
             config: self.config,
@@ -238,8 +235,6 @@ impl GGUFLoader {
         chat_template: Option<String>,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
-        setup_logger_and_debug();
-
         let model_id = if let Some(id) = model_id {
             Some(id)
         } else if let Some(xlora_order) = xlora_order.clone() {

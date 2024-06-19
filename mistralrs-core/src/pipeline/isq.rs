@@ -1,4 +1,7 @@
-use std::sync::{atomic::AtomicUsize, Arc};
+use std::{
+    sync::{atomic::AtomicUsize, Arc},
+    time::Instant,
+};
 
 use candle_core::{
     quantized::{GgmlDType, QMatMul, QTensor},
@@ -8,6 +11,9 @@ use indicatif::{ProgressBar, ProgressStyle};
 use tracing::{info, warn};
 
 use crate::device_map::DeviceMapper;
+
+#[cfg(feature = "cuda")]
+const ISQ_THREAD_COUNT: usize = 4;
 
 pub enum QuantizationBehaviour {
     Quantize(GgmlDType),
@@ -68,7 +74,8 @@ macro_rules! generate_isq {
                     $n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     QMatMul::QTensor(Arc::new(QTensor::quantize(&t, dtype).unwrap()))
                 }
-            }
+            };
+            $device.synchronize().unwrap();
         }
     };
 }
@@ -101,8 +108,21 @@ pub trait IsqModel {
             devices.push(device.clone());
         }
 
+        let t_start = Instant::now();
         #[cfg(not(feature = "metal"))]
         {
+            #[cfg(feature = "cuda")]
+            {
+                let isq_low_mem = std::env::var("ISQ_LOW_MEMORY").is_ok();
+                if isq_low_mem {
+                    rayon::ThreadPoolBuilder::new()
+                        .num_threads(ISQ_THREAD_COUNT)
+                        .build_global()
+                        .expect("Failed to build global thread pool");
+                }
+            }
+            info!("Applying ISQ on {} threads.", rayon::current_num_threads());
+
             use indicatif::ParallelProgressIterator;
             use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
             tensors
@@ -125,7 +145,8 @@ pub trait IsqModel {
                     generate_isq!(tensor, device, dtype, n_quantized)
                 });
         }
-        info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors.");
+        let delta = Instant::now().duration_since(t_start).as_secs_f32();
+        info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors. Took {delta:.2}s", );
 
         Ok(())
     }

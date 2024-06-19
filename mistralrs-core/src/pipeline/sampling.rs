@@ -87,7 +87,6 @@ pub async fn sample_sequence(
 
 #[derive(Clone)]
 pub struct SpeculativeSample {
-    pub distribution: Tensor,
     pub sample: Logprobs,
 }
 
@@ -104,7 +103,6 @@ pub async fn sample_target_sequence_speculative(
     let mut sampled = Vec::new();
     for chunk in logits.chunk(n_toks, 1)? {
         sampled.push(SpeculativeSample {
-            distribution: chunk.clone(),
             sample: sample_sequence(
                 chunk,
                 seq,

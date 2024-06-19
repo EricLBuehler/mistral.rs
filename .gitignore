@@ -1,5 +1,3 @@
 /target
-Cargo.lock
-output.log
 .ruff_cache
 .vscode
