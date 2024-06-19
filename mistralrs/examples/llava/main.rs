@@ -21,7 +21,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         None,
         Some("/root/autodl-tmp/cache/huggingface/hub/models--llava-hf--llava-v1.6-vicuna-7b-hf/snapshots/0524afe4453163103dcefe78eb0a58b3f6424eac".to_string()),
     )
-    .build(VisionLoaderType::LLaVA);
+    .build(VisionLoaderType::LLaVANext);
     // Load, into a Pipeline
     
     let pipeline = loader.load_model_from_hf(
@@ -61,7 +61,7 @@ fn main() -> anyhow::Result<()> {
         suffix: None,
         adapters: None,
     });
-    mistralrs.get_sender().blocking_send(request)?;
+    mistralrs.get_sender()?.blocking_send(request)?;
 
     let response = rx.blocking_recv().unwrap();
     match response {

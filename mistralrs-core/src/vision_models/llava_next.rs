@@ -1,8 +1,13 @@
+use candle_core::quantized::QMatMul;
 use candle_core::{bail, Device, IndexOp, Result, Tensor};
 use candle_nn::{linear, seq, Activation, Module, Sequential, VarBuilder};
 use serde::Deserialize;
 
+use crate::device_map::DeviceMapper;
+use crate::pipeline::IsqModel;
 use crate::pipeline::NormalLoadingMetadata;
+use crate::pipeline::NormalModel;
+use crate::pipeline::VisionModel;
 use crate::serde_default_fn;
 
 use crate::models::llama::Config as LLaMAConfig;
@@ -12,6 +17,7 @@ use crate::vision_models::llava_inputs_processor::get_anyres_image_grid_shape;
 
 use super::clip::{Activation as ClipActivation, ClipVisionTransformer};
 
+const DEFAULT_PROJECTOR_HIDDEN_SIZE: usize = 1024;
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub architectures: Vec<String>,
@@ -102,14 +108,12 @@ impl Config {
         ClipConfig {
             hidden_size: self.vision_config.hidden_size,
             intermediate_size: self.vision_config.intermediate_size,
-            projection_dim: self.vision_config.projection_dim,
             num_hidden_layers: self.vision_config.num_hidden_layers,
             num_attention_heads: self.vision_config.num_attention_heads,
             num_channels: 3,
             image_size: self.vision_config.image_size,
             patch_size: self.vision_config.patch_size,
             hidden_act: ClipActivation::QuickGelu,
-            layer_norm_eps: 1e-5, // default value, seem useless
         }
     }
 }
@@ -121,7 +125,7 @@ pub struct MMProjector {
 impl MMProjector {
     pub fn new(vb: &VarBuilder, config: &Config) -> Result<Self> {
         let mut modules = seq().add(linear(
-            1024,
+            DEFAULT_PROJECTOR_HIDDEN_SIZE,
             config.text_config.hidden_size,
             vb.pp("multi_modal_projector.linear_1"),
         )?);
@@ -266,6 +270,27 @@ impl Model {
         images: &[Tensor],
         image_sizes: &[(u32, u32)],
     ) -> Result<Tensor> {
+        // can be modified if nonzero(already implemented) and other index select ops are implemented
+        let input_ids_vec = input_ids.squeeze(0)?.to_vec1::<i64>()?;
+        let mut image_indices = vec![0_i64];
+        image_indices.extend(
+            input_ids_vec
+                .iter()
+                .enumerate()
+                .filter_map(|(i, x)| {
+                    if *x == self.config.image_token_index as i64 {
+                        Some(i as i64)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<i64>>(),
+        );
+        if image_indices.len() == 1 {
+            //no image, only [0],
+            return self.llama.embed(input_ids);
+        }
+
         let mut x = Tensor::cat(images, 0)?;
         x = self.encode_images(&x)?;
         let split_sizes = images
@@ -317,29 +342,127 @@ impl Model {
             new_image_features.push(new_image_feature);
         }
         image_features = new_image_features; //moved
-        let image_indices = input_ids.squeeze(0)?.eq(self.config.image_token_index as i64)?.nonzero()?;
-        //TODO: replace using nonzero
-        /*
-        let input_ids_vec = input_ids.squeeze(0)?.to_vec1::<i64>()?;
-        let mut image_indices = {
-            let mut image_indices = vec![0_i64];
-            image_indices.extend(
-                input_ids_vec
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, x)| {
-                        if *x == self.config.image_token_index as i64 {
-                            Some(i as i64)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<i64>>(),
-            );
-            image_indices
-        };
-        */
 
-        todo!()
+        let input_ids_noim = input_ids_vec
+            .iter()
+            .filter_map(|x| {
+                if *x != self.config.image_token_index as i64 {
+                    Some(*x)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<i64>>();
+
+        let input_ids_noim_len = input_ids_noim.len();
+        image_indices.push((input_ids_noim_len) as i64);
+
+        let mut cur_input_embeds =
+            Tensor::from_vec(input_ids_noim, input_ids_noim_len, &self.device)?;
+        cur_input_embeds = self.llama.embed(&cur_input_embeds)?;
+        let mut input_embed_no_ims = Vec::new();
+        for i in 0..image_indices.len() - 1 {
+            let start = (image_indices[i]) as usize;
+            let end = image_indices[i + 1] as usize;
+            input_embed_no_ims.push(cur_input_embeds.i((start..end, ..))?)
+        }
+
+        let mut cur_new_input_embeds = Vec::new();
+        for (i, image_feature) in image_features.iter().enumerate() {
+            cur_new_input_embeds.push(input_embed_no_ims[i].clone());
+            cur_new_input_embeds.push(image_feature.clone());
+        }
+        cur_new_input_embeds.push(input_embed_no_ims[image_features.len()].clone());
+        drop(image_features);
+        drop(input_embed_no_ims);
+        let mut new_input_embeds = Tensor::cat(&cur_new_input_embeds, 0)?;
+        let (new_input_embeds_length, _) = new_input_embeds.shape().dims2()?;
+        if new_input_embeds_length > self.config.text_config.max_length {
+            new_input_embeds = new_input_embeds.i((..self.config.text_config.max_length, ..))?;
+        }
+        new_input_embeds.unsqueeze(0)
+    }
+
+    pub fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        pixel_values: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+        image_sizes: Option<Vec<(u32, u32)>>,
+    ) -> Result<Tensor> {
+        if let Some(ref pixel_values) = pixel_values {
+            let input_embed = self.prepare_inputs_labels_for_multimodal(
+                input_ids,
+                &[pixel_values.clone()],
+                &image_sizes.unwrap(),
+            )?;
+            self.llama.forward_input_embed(
+                &input_embed,
+                seqlen_offsets,
+                start_offsets_kernel,
+                context_lens,
+            )
+        } else {
+            self.llama.forward(
+                input_ids,
+                seqlen_offsets,
+                start_offsets_kernel,
+                context_lens,
+            )
+        }
+    }
+}
+
+pub(crate) struct LLaVANextVisionSpecificArgs {
+    pub image_sizes: Option<Vec<(u32, u32)>>,
+}
+
+impl IsqModel for Model {
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+        // I don't really get this part
+        self.llama.get_tensors()
+    }
+}
+
+impl VisionModel for Model {
+    fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        pixel_values: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+        model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
+    ) -> candle_core::Result<Tensor> {
+        let LLaVANextVisionSpecificArgs { image_sizes } = *model_specific_args
+            .downcast()
+            .expect("Cannot downcast into `LLaVANextVisionSpecificArgs`");
+        self.forward(
+            input_ids,
+            pixel_values,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+            image_sizes,
+        )
+    }
+
+    fn device(&self) -> &Device {
+        &self.device
+    }
+
+    fn cache(&self) -> &crate::pipeline::Cache {
+        self.llama.cache()
+    }
+
+    fn max_seq_len(&self) -> usize {
+        self.llama.max_seq_len()
+    }
+
+    fn has_conv2d(&self) -> bool {
+        true
     }
 }
