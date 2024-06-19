@@ -6,9 +6,6 @@ https://github.com/qwopqwop200/GPTQ-for-LLaMa
 #include <cstdint>
 #include <cstdio>
 
-#include <torch/all.h>
-#include <c10/cuda/CUDAGuard.h>
-#include <ATen/cuda/CUDAContext.h>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 
@@ -1765,55 +1762,6 @@ __global__ void make_sequential_8bit_kernel(const uint32_t* __restrict__ w,
   w_new2[w_new2_row * w2_stride + w2_column] = dst;
 }
 
-void shuffle_exllama_weight(uint32_t* q_weight, int* q_perm, int height,
-                            int width, int bit) {
-  if (q_perm) {
-    uint32_t* new_qweight = NULL;
-    cudaMalloc(&new_qweight, height / 32 * bit * width * sizeof(uint32_t));
-
-    dim3 blockDim, gridDim;
-    blockDim.x = THREADS_X;
-    blockDim.y = 1;
-    gridDim.x = DIVIDE(width, THREADS_X);
-    gridDim.y = height / 32 * bit;
-
-    auto kernel = make_sequential_4bit_kernel;
-    if (bit == 2) {
-      kernel = make_sequential_2bit_kernel;
-    } else if (bit == 3) {
-      kernel = make_sequential_3bit_kernel;
-      gridDim.y = height / 32;
-    } else if (bit == 8) {
-      kernel = make_sequential_8bit_kernel;
-    }
-    const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    kernel<<<gridDim, blockDim, 0, stream>>>(q_weight, new_qweight, q_perm,
-                                             width);
-    // Replace qweights
-    cudaMemcpyAsync(q_weight, new_qweight,
-                    height / 32 * bit * width * sizeof(uint32_t),
-                    cudaMemcpyDeviceToDevice);
-    // Cleanup
-    cudaDeviceSynchronize();
-    cudaFree(new_qweight);
-  }
-  dim3 blockDim, gridDim;
-  blockDim.x = THREADS_X;
-  blockDim.y = 1;
-  gridDim.x = DIVIDE(width, THREADS_X);
-  gridDim.y = 1;
-  auto shuffle_kernel = shuffle_4bit_kernel;
-  if (bit == 2) {
-    shuffle_kernel = shuffle_2bit_kernel;
-  } else if (bit == 3) {
-    shuffle_kernel = shuffle_3bit_kernel;
-  } else if (bit == 8) {
-    shuffle_kernel = shuffle_8bit_kernel;
-  }
-  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  shuffle_kernel<<<gridDim, blockDim, 0, stream>>>(q_weight, height, width);
-}
-
 torch::Tensor gptq_gemm(torch::Tensor a, torch::Tensor b_q_weight,
                         torch::Tensor b_gptq_qzeros,
                         torch::Tensor b_gptq_scales, torch::Tensor b_g_idx,
@@ -1839,12 +1787,3 @@ torch::Tensor gptq_gemm(torch::Tensor a, torch::Tensor b_q_weight,
   return c;
 }
 
-void gptq_shuffle(torch::Tensor q_weight, torch::Tensor q_perm, int64_t bit) {
-  const at::cuda::OptionalCUDAGuard device_guard(device_of(q_weight));
-  shuffle_exllama_weight(
-      (uint32_t*)q_weight.data_ptr(),
-      q_perm.device().is_meta() || q_perm.numel() == 0
-          ? NULL
-          : (int*)q_perm.data_ptr(),
-      q_weight.size(0) * 32 / bit, q_weight.size(1), bit);
-}
