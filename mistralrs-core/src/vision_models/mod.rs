@@ -4,11 +4,12 @@ use candle_core::Tensor;
 
 pub(crate) mod clip;
 pub(crate) mod image_processor;
+pub(crate) mod llava_inputs_processor;
+pub(crate) mod llava_next;
 pub(crate) mod phi3;
 pub(crate) mod phi3_inputs_processor;
 pub(crate) mod preprocessor_config;
 pub(crate) mod processor_config;
-pub (crate) mod llava;
 
 pub struct ModelInputs {
     pub input_ids: Tensor,

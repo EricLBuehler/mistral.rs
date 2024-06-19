@@ -10,7 +10,7 @@ use pyo3::pyclass;
 use serde::Deserialize;
 
 use super::{NormalLoadingMetadata, Processor, ProcessorCreator, VisionModel};
-use crate::vision_models::llava::Config as LLaVAConfig;
+use crate::vision_models::llava_next::Config as LLaVAConfig;
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
@@ -39,8 +39,8 @@ pub trait VisionModelLoader {
 pub enum VisionLoaderType {
     #[serde(rename = "phi3v")]
     Phi3V,
-    #[serde(rename = "llava")]
-    LLaVA,
+    #[serde(rename = "llava_next")]
+    LLaVANext,
 }
 
 impl FromStr for VisionLoaderType {
@@ -48,7 +48,7 @@ impl FromStr for VisionLoaderType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "phi3v" => Ok(Self::Phi3V),
-            "llava" => Ok(Self::LLaVA),
+            "llava_next" => Ok(Self::LLaVANext),
             a => Err(format!("Unknown architecture `{a}`")),
         }
     }
@@ -97,11 +97,11 @@ impl VisionModelLoader for Phi3VLoader {
 
 // ======================== LLaVA loader
 
-/// [`VisionLoader`] for a LLaVA Vision model.
+/// [`VisionLoader`] for a LLaVA-Next Vision model.
 ///
 /// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
-pub struct LLaVALoader;
-impl VisionModelLoader for LLaVALoader {
+pub struct LLaVANextLoader;
+impl VisionModelLoader for LLaVANextLoader {
     fn load(
         &self,
         _config: &str,

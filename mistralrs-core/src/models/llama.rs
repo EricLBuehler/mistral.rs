@@ -254,6 +254,47 @@ pub struct Llama {
 }
 
 impl Llama {
+    // required by LLaVA
+    pub fn embed(&self, x: &Tensor) -> Result<Tensor> {
+        self.wte.forward(x)
+    }
+    // required by LLaVA
+    pub fn forward_input_embed(
+        &self,
+        input_embed: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+    ) -> Result<Tensor> {
+        let (_, seq_len, _) = input_embed.dims3()?;
+        let mut x = input_embed.clone();
+        let mut cache = self.kv_cache.lock();
+        let mask = CausalMasker.make_causal_mask_as_attn_bias_with_embed_tensor(
+            &x,
+            &cache,
+            x.dtype(),
+            self.blocks[0].attn.num_attention_heads,
+        )?;
+        for (block_idx, block) in self.blocks.iter().enumerate() {
+            x = self.mapper.map(x, block_idx)?;
+            x = block.forward(
+                &x,
+                &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
+                seqlen_offsets,
+                start_offsets_kernel.clone(),
+                block_idx,
+                &mut cache,
+            )?;
+        }
+        x = x.to_device(&self.device)?;
+        x = self.ln_f.forward(&x)?;
+        if matches!(self.lm_head, QMatMul::QTensor(_)) {
+            x = x.to_dtype(DType::F32)?;
+        }
+        let logits = MatMul.qmatmul(&x, &self.lm_head)?;
+        extract_logits(&logits, context_lens)
+    }
+
     pub fn forward(
         &mut self,
         input_ids: &Tensor,
