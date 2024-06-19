@@ -8,7 +8,6 @@ Blazingly fast LLM inference.
 
 <p align="center">
 | <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust Documentation</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/API.md"><b>Python Documentation</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
-
 </p>
 
 Mistral.rs is a fast LLM inference platform supporting inference on a variety of devices, quantization, and easy-to-use application with an Open-AI API compatible HTTP server and Python bindings. 
@@ -46,6 +45,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - φ³ 📷 Run the Phi 3 vision model: [documentation and guide here](docs/PHI3V.md)
 
     <img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "400" height = "267">
+    <h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
 
     *After following installation instructions*
 
@@ -71,7 +71,9 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - Lightweight OpenAI API compatible HTTP server.
 - Python API.
 - Grammar support with Regex and Yacc.
-- [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from Hugging Face Hub by quantizing them after loading instead of creating a GGUF file. This loads the ISQ-able weights on CPU before quantizing with ISQ and then moving back to the device to avoid memory spikes.
+- [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from Hugging Face Hub by quantizing them after loading instead of creating a GGUF file.
+    - This loads the ISQ-able weights on CPU before quantizing with ISQ and then moving to the device to avoid memory spikes.
+    - Provides methods to further reduce memory spikes.
 
 **Powerful**:
 - Fast LoRA support with weight merging.
@@ -196,17 +198,22 @@ Please submit more benchmarks via raising an issue!
 
 ## Installation and Build
 
+> Note: You can use our [Docker containers here](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs).
+> Learn more about running Docker containers: https://docs.docker.com/engine/reference/run/
+
 1) Install required packages
-    - `openssl` (ex., `sudo apt install libssl-dev`)
-    - `pkg-config` (ex., `sudo apt install pkg-config`)
+    - `OpenSSL` (*Example on Ubuntu:* `sudo apt install libssl-dev`)
+    - <b>*Linux only:*</b> `pkg-config` (*Example on Ubuntu:* `sudo apt install pkg-config`)
 
 2) Install Rust: https://rustup.rs/
+
+    *Example on Ubuntu:*
     ```bash
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     source $HOME/.cargo/env
     ```
 
-3) Set HF token correctly (skip if already set or your model is not gated, or if you want to use the `token_source` parameters in Python or the command line.)
+3) <b>*Optional:*</b> Set HF token correctly (skip if already set or your model is not gated, or if you want to use the `token_source` parameters in Python or the command line.)
     - Note: you can install `huggingface-cli` as documented [here](https://huggingface.co/docs/huggingface_hub/en/installation). 
     ```bash
     huggingface-cli login
@@ -250,6 +257,8 @@ Please submit more benchmarks via raising an issue!
         cargo install --path mistralrs-server --features cuda
         ```
 6) The build process will output a binary `misralrs-server` at `./target/release/mistralrs-server` which may be copied into the working directory with the following command:
+    
+    *Example on Ubuntu:*
     ```
     cp ./target/release/mistralrs-server ./mistralrs_server
     ```

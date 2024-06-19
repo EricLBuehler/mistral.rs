@@ -10,7 +10,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.17"
+version = "0.1.19"
 edition = "2021"
 description = "Fast and easy LLM serving."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
@@ -20,7 +20,7 @@ categories = ["science"]
 license = "MIT"
 
 [workspace.dependencies]
-anyhow = { version = "1.0.80", feature = "std" }
+anyhow = "1.0.80"
 candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "f52e2347b6237d19ffd7af26315f543c22f9f286" }
 candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "f52e2347b6237d19ffd7af26315f543c22f9f286" }
 serde = "1.0.197"

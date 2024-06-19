@@ -160,7 +160,7 @@ pub async fn completions(
         );
     }
     let request = parse_request(oairequest, state.clone(), tx);
-    let sender = state.get_sender();
+    let sender = state.get_sender().unwrap();
 
     if let Err(e) = sender.send(request).await {
         let e = anyhow::Error::msg(e.to_string());

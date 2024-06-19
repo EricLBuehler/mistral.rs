@@ -22,6 +22,16 @@ If a tensor cannot be quantized, the fallback process is as follows:
 1) If using a `K` quant, fallback to a similar `Q` quant.
 2) If that is not possible, use `F32` as the data type.
 
+## Avoiding memory spikes
+
+On non-Metal systems, the tensors will be copied to the device and quantized in parallel. For CUDA devices, this can pose a problem because due to the asynchronous copies of the full precision tensors leading to later deallocation and a (although less than loading the entire model on the GPU) memory spike.
+
+To solve this, for CUDA systems, you can set the `ISQ_LOW_MEMORY` environment variable to significantly reduce the remaining memory spike.
+
+```
+ISQ_LOW_MEMORY=1 cargo run --release --features cuda -- --isq Q4K -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
+```
+
 ## Python Example
 ```python
 runner = Runner(
