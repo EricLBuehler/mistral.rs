@@ -105,9 +105,9 @@ struct PerceiverConfig {
     #[serde(default = "default_96")]
     resampler_head_dim: usize,
     #[serde(default = "default_4")]
-    num_kv_heads: usize,
+    num_key_value_heads: usize,
     #[serde(default = "default_0_0")]
-    attn_dropout: f32,
+    attention_dropout: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -119,7 +119,7 @@ struct VisionConfig {
     #[serde(default = "default_12")]
     num_hidden_layers: usize,
     #[serde(default = "default_12")]
-    num_attn_heads: usize,
+    num_attention_heads: usize,
     #[serde(default = "default_3")]
     num_channels: usize,
     #[serde(default = "default_224")]
@@ -340,7 +340,7 @@ struct Attention {
 impl Attention {
     fn new(config: VisionConfig, vb: VarBuilder) -> Result<Self> {
         let embed_dim = config.hidden_size;
-        let num_heads = config.num_attn_heads;
+        let num_heads = config.num_attention_heads;
         let head_dim = embed_dim / num_heads;
         let scale = 1.0 / (head_dim as f64).sqrt();
 
@@ -388,6 +388,13 @@ impl Attention {
 
         let attn_weights =
             (q.contiguous()?.matmul(&k.transpose(2, 3)?.contiguous()?)? * self.scale)?;
+
+        println!("saving `attn_weights`");
+        attn_weights
+            .to_dtype(DType::F32)?
+            .to_device(&Device::Cpu)?
+            .write_npy("pixel_values_probe_m.npy")?;
+        println!("saved it");
 
         let attn_weights = CausalMasker.apply_mask_one_and_zero(
             &attention_mask.map(|x| x.to_dtype(DType::U8).unwrap()),
@@ -619,7 +626,7 @@ impl PerceiverAttention {
         let hidden_size = config.text_config.hidden_size;
         let num_heads = config.perceiver_config.resampler_n_heads;
         let head_dim = config.perceiver_config.resampler_head_dim;
-        let num_key_value_heads = config.perceiver_config.num_kv_heads;
+        let num_key_value_heads = config.perceiver_config.num_key_value_heads;
         let num_key_value_groups = num_heads / num_key_value_heads;
 
         let q_proj = linear_no_bias(hidden_size, num_heads * head_dim, vb.pp("q_proj"))?;
@@ -969,13 +976,6 @@ impl Idefics2 {
             let patch_size = self.config.vision_config.patch_size;
             let patches_subgrid = pixel_attention_mask.unfold(1, patch_size, patch_size)?;
             let patches_subgrid = patches_subgrid.unfold(2, patch_size, patch_size)?;
-
-            println!("saving `patches_subgrid`");
-            patches_subgrid
-                .to_dtype(DType::F32)?
-                .to_device(&Device::Cpu)?
-                .write_npy("pixel_values_probe_m.npy")?;
-            println!("saved it");
 
             let patch_attention_mask = patches_subgrid
                 .sum((D::Minus1, D::Minus2))?
