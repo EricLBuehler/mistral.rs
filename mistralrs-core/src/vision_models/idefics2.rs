@@ -3,14 +3,14 @@
 use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
     conv2d, embedding, layer_norm, linear, linear_no_bias, Activation, Conv2d, Conv2dConfig,
-    Embedding, LayerNorm, Linear, Module, VarBuilder,
+    Embedding, LayerNorm, Module, VarBuilder,
 };
 use serde::Deserialize;
 use std::{any::Any, ops::Mul};
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, RmsNorm},
+    layers::{repeat_kv, CausalMasker, QLinear, RmsNorm},
     models::mistral::Model as Mistral,
     pipeline::{Cache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel},
 };
@@ -330,10 +330,10 @@ struct Attention {
     num_heads: usize,
     head_dim: usize,
     scale: f64,
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: QLinear,
+    k_proj: QLinear,
+    v_proj: QLinear,
+    o_proj: QLinear,
     neg_inf: Tensor,
 }
 
@@ -354,10 +354,10 @@ impl Attention {
             num_heads,
             head_dim,
             scale,
-            q_proj,
-            k_proj,
-            v_proj,
-            o_proj,
+            q_proj: QLinear::from_linear(q_proj),
+            k_proj: QLinear::from_linear(k_proj),
+            v_proj: QLinear::from_linear(v_proj),
+            o_proj: QLinear::from_linear(o_proj),
             neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())?.to_dtype(vb.dtype())?,
         })
     }
@@ -370,9 +370,19 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let q = self.q_proj.forward(xs)?;
-        let k = self.k_proj.forward(xs)?;
-        let v = self.v_proj.forward(xs)?;
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.q_proj.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        let mut q = self.q_proj.forward(&xs)?;
+        let mut k = self.k_proj.forward(&xs)?;
+        let mut v = self.v_proj.forward(&xs)?;
+        if self.q_proj.is_quant() {
+            q = q.to_dtype(original_dtype)?;
+            k = k.to_dtype(original_dtype)?;
+            v = v.to_dtype(original_dtype)?;
+        }
 
         let q = q
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -395,19 +405,26 @@ impl Attention {
             &self.neg_inf,
         )?;
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-        let attn_output = attn_weights.matmul(&v.contiguous()?)?;
+        let mut attn_output = attn_weights.matmul(&v.contiguous()?)?;
 
-        attn_output
+        if self.q_proj.is_quant() {
+            attn_output = attn_output.to_dtype(DType::F32)?;
+        }
+        let mut res = attn_output
             .transpose(1, 2)?
             .reshape((b_sz, q_len, self.embed_dim))?
-            .apply(&self.o_proj)
+            .apply(&self.o_proj)?;
+        if self.q_proj.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
 struct VisionMLP {
     activation: Activation,
-    fc1: Linear,
-    fc2: Linear,
+    fc1: QLinear,
+    fc2: QLinear,
 }
 
 impl VisionMLP {
@@ -416,15 +433,24 @@ impl VisionMLP {
         let fc2 = linear(config.intermediate_size, config.hidden_size, vb.pp("fc2"))?;
         Ok(Self {
             activation: config.hidden_act,
-            fc1,
-            fc2,
+            fc1: QLinear::from_linear(fc1),
+            fc2: QLinear::from_linear(fc2),
         })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x = self.fc1.forward(x)?;
+        let mut x = x.clone();
+        let original_dtype = x.dtype();
+        if self.fc1.is_quant() {
+            x = x.to_dtype(DType::F32)?;
+        }
+        let x = self.fc1.forward(&x)?;
         let x = self.activation.forward(&x)?;
-        self.fc2.forward(&x)
+        let mut res = self.fc2.forward(&x)?;
+        if self.fc1.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -570,9 +596,9 @@ impl VisionTransformer {
 
 // == START CONNECTOR ==
 struct Mlp {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
+    gate_proj: QLinear,
+    up_proj: QLinear,
+    down_proj: QLinear,
     activation: Activation,
 }
 
@@ -588,17 +614,27 @@ impl Mlp {
         let up_proj = linear_no_bias(hidden_size, intermediate_size, vb.pp("up_proj"))?;
         let down_proj = linear_no_bias(intermediate_size, output_size, vb.pp("down_proj"))?;
         Ok(Self {
-            gate_proj,
-            up_proj,
-            down_proj,
+            gate_proj: QLinear::from_linear(gate_proj),
+            up_proj: QLinear::from_linear(up_proj),
+            down_proj: QLinear::from_linear(down_proj),
             activation,
         })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.down_proj.forward(
-            &(self.activation.forward(&self.gate_proj.forward(x)?)? * self.up_proj.forward(x)?)?,
-        )
+        let mut x = x.clone();
+        let original_dtype = x.dtype();
+        if self.gate_proj.is_quant() {
+            x = x.to_dtype(DType::F32)?;
+        }
+        let mut res = self.down_proj.forward(
+            &(self.activation.forward(&self.gate_proj.forward(&x)?)?
+                * self.up_proj.forward(&x)?)?,
+        )?;
+        if self.gate_proj.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -607,10 +643,10 @@ struct PerceiverAttention {
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: QLinear,
+    k_proj: QLinear,
+    v_proj: QLinear,
+    o_proj: QLinear,
     neg_inf: Tensor,
 }
 
@@ -630,10 +666,10 @@ impl PerceiverAttention {
         Ok(Self {
             num_heads,
             head_dim,
-            q_proj,
-            k_proj,
-            v_proj,
-            o_proj,
+            q_proj: QLinear::from_linear(q_proj),
+            k_proj: QLinear::from_linear(k_proj),
+            v_proj: QLinear::from_linear(v_proj),
+            o_proj: QLinear::from_linear(o_proj),
             neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())?.to_dtype(vb.dtype())?,
             num_kv_heads: num_key_value_heads,
             num_kv_groups: num_key_value_groups,
@@ -649,11 +685,22 @@ impl PerceiverAttention {
         let (b_sz, q_len, _) = latents.dims3()?;
         let kv_seq_len = q_len + context.dims()[1];
 
-        let hidden_states = Tensor::cat(&[context, latents], D::Minus2)?;
+        let mut hidden_states = Tensor::cat(&[context, latents], D::Minus2)?;
 
-        let q = self.q_proj.forward(latents)?;
-        let k = self.k_proj.forward(&hidden_states)?;
-        let v = self.v_proj.forward(&hidden_states)?;
+        let original_dtype = latents.dtype();
+        let mut latents = latents.clone();
+        if self.q_proj.is_quant() {
+            latents = latents.to_dtype(DType::F32)?;
+            hidden_states = hidden_states.to_dtype(DType::F32)?;
+        }
+        let mut q = self.q_proj.forward(&latents)?;
+        let mut k = self.k_proj.forward(&hidden_states)?;
+        let mut v = self.v_proj.forward(&hidden_states)?;
+        if self.q_proj.is_quant() {
+            q = q.to_dtype(original_dtype)?;
+            k = k.to_dtype(original_dtype)?;
+            v = v.to_dtype(original_dtype)?;
+        }
 
         let q = q
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -677,12 +724,19 @@ impl PerceiverAttention {
             &self.neg_inf,
         )?;
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-        let attn_output = attn_weights.matmul(&v.contiguous()?)?;
+        let mut attn_output = attn_weights.matmul(&v.contiguous()?)?;
 
-        attn_output
+        if self.q_proj.is_quant() {
+            attn_output = attn_output.to_dtype(DType::F32)?;
+        }
+        let mut res = attn_output
             .transpose(1, 2)?
             .reshape((b_sz, q_len, self.num_heads * self.head_dim))?
-            .apply(&self.o_proj)
+            .apply(&self.o_proj)?;
+        if self.q_proj.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -875,8 +929,8 @@ impl Idefics2 {
         let mut new_inputs_embeds = input_embeds.clone();
         let reshaped_image_hidden_states =
             image_hidden_states.reshape((bs, (), vision_hidden_size))?;
-        assert_eq!(input_embeds.dim(0)?, 1); // TODO
-        assert_eq!(reshaped_image_hidden_states.dim(0)?, 1); // TODO
+        assert_eq!(input_embeds.dim(0)?, 1);
+        assert_eq!(reshaped_image_hidden_states.dim(0)?, 1);
         let special_image_token_mask = special_image_token_mask.i(0)?.to_vec1::<u8>()?;
         let mut image_hidden_state_i = 0;
         for (i, v) in special_image_token_mask.iter().enumerate() {
@@ -1010,7 +1064,34 @@ impl Idefics2 {
 
 impl IsqModel for Idefics2 {
     fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
-        todo!()
+        let mut tensors = self.text_model.get_tensors();
+        tensors
+            .0
+            .push((self.connector.modality_projection.up_proj.inner(), None));
+        tensors
+            .0
+            .push((self.connector.modality_projection.down_proj.inner(), None));
+        tensors
+            .0
+            .push((self.connector.modality_projection.gate_proj.inner(), None));
+        for layer in &mut self.connector.perceiver_resampler.layers {
+            tensors.0.push((layer.self_attn.q_proj.inner(), None));
+            tensors.0.push((layer.self_attn.k_proj.inner(), None));
+            tensors.0.push((layer.self_attn.v_proj.inner(), None));
+            tensors.0.push((layer.self_attn.o_proj.inner(), None));
+            tensors.0.push((layer.mlp.gate_proj.inner(), None));
+            tensors.0.push((layer.mlp.up_proj.inner(), None));
+            tensors.0.push((layer.mlp.down_proj.inner(), None));
+        }
+        for layer in &mut self.vision_model.encoder.layers {
+            tensors.0.push((layer.attn.q_proj.inner(), None));
+            tensors.0.push((layer.attn.k_proj.inner(), None));
+            tensors.0.push((layer.attn.v_proj.inner(), None));
+            tensors.0.push((layer.attn.o_proj.inner(), None));
+            tensors.0.push((layer.mlp.fc1.inner(), None));
+            tensors.0.push((layer.mlp.fc2.inner(), None));
+        }
+        tensors
     }
 }
 
@@ -1044,7 +1125,7 @@ impl VisionModel for Idefics2 {
         self.text_model.device()
     }
     fn max_seq_len(&self) -> usize {
-        self.text_model.max_seq_len() // TODO Is this correct?
+        self.text_model.max_seq_len()
     }
     fn has_conv2d(&self) -> bool {
         true
