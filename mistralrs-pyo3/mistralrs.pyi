@@ -67,6 +67,7 @@ class Architecture(Enum):
 @dataclass
 class VisionArchitecture(Enum):
     Phi3V = "phi3v"
+    Idefics2 = "idefics2"
 
 class Which(Enum):
     """
