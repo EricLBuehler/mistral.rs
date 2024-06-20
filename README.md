@@ -53,7 +53,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs_server --port 1234 vision-plain -m microsoft/Phi-3-vision-128k-instruct -a phi3v
     ```
 
-- Other models: [see supported models](#supported-models) and [how to run them](#run-with-the-cli)
+- Other models: [see supported models and a support matrix](#supported-models) and [how to run them](#run-with-the-cli)
 
 ## Description
 **Fast**:
@@ -365,6 +365,7 @@ Additionally, for models without quantization, the model architecture should be 
 > Note: for vision models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`vision-plain`).
 
 - `phi3v`
+- `idefics2`
 
 **Interactive mode:**
 
@@ -435,19 +436,20 @@ Mistal.rs supports several model categories:
 - vision (see [the docs](docs/VISION_MODELS.md))
 
 **Quantization support**
-|Model|GGUF|GGML|
+|Model|GGUF|GGML|ISQ|
 |--|--|--|
-|Mistral 7B |✅| |
-|Gemma| | |
-|Llama|✅|✅|
-|Mixtral 8x7B|✅| |
-|Phi 2|✅| |
-|Phi 3|✅| |
-|Qwen 2| | |
-|Phi 3 Vision| | |
+|Mistral 7B |✅| |✅|
+|Gemma| | |✅|
+|Llama|✅|✅|✅|
+|Mixtral 8x7B|✅| |✅|
+|Phi 2|✅| |✅|
+|Phi 3|✅| |✅|
+|Qwen 2| | |✅|
+|Phi 3 Vision| | |✅|
+|Idefics 2| | |✅|
 
 **Device mapping support**
-|Model|Supported|
+|Model category|Supported|
 |--|--|
 |Plain|✅|
 |GGUF|✅|
@@ -465,6 +467,7 @@ Mistal.rs supports several model categories:
 |Phi 3|✅|✅| |
 |Qwen 2| | | |
 |Phi 3 Vision| | | |
+|Idefics 2| | | |
 
 ### Using derivative model
 
