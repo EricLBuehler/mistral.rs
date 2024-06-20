@@ -92,6 +92,7 @@ fn get_dtypes() -> Vec<DType> {
     dtypes
 }
 
+#[cfg(not(feature = "cuda"))]
 fn get_dtypes() -> Vec<DType> {
     vec![DType::BF16, DType::F16]
 }
