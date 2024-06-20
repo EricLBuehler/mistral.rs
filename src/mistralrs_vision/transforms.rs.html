@@ -119,6 +119,62 @@
 <a href="#119" id="119">119</a>
 <a href="#120" id="120">120</a>
 <a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a>
+<a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
+<a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
+<a href="#168" id="168">168</a>
+<a href="#169" id="169">169</a>
+<a href="#170" id="170">170</a>
+<a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
+<a href="#175" id="175">175</a>
+<a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">crate</span>::utils::{get_pixel_data, n_channels};
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>image::{DynamicImage, GenericImageView};
@@ -130,6 +186,31 @@
 </span><span class="kw">pub struct </span>ToTensor;
 
 <span class="kw">impl </span>ToTensor {
+    <span class="kw">fn </span>to_tensor(device: <span class="kw-2">&amp;</span>Device, channels: usize, data: Vec&lt;Vec&lt;Vec&lt;u8&gt;&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        ToTensorNoNorm::to_tensor(device, channels, data)<span class="question-mark">? </span>/ <span class="number">255.0f64
+    </span>}
+}
+
+<span class="kw">impl </span>ImageTransform <span class="kw">for </span>ToTensor {
+    <span class="kw">type </span>Input = DynamicImage;
+    <span class="kw">type </span>Output = Tensor;
+    <span class="kw">fn </span>map(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span><span class="self">Self</span>::Input, device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::Output&gt; {
+        <span class="kw">let </span>num_channels = n_channels(x);
+        <span class="kw">let </span>data = get_pixel_data(
+            num_channels,
+            x.to_rgba8(),
+            x.dimensions().<span class="number">1 </span><span class="kw">as </span>usize,
+            x.dimensions().<span class="number">0 </span><span class="kw">as </span>usize,
+        );
+        <span class="self">Self</span>::to_tensor(device, num_channels, data)
+    }
+}
+
+<span class="doccomment">/// Convert an image to a tensor without normalizing to `[0.0, 1.0]`.
+/// The tensor's shape is (channels, height, width).
+</span><span class="kw">pub struct </span>ToTensorNoNorm;
+
+<span class="kw">impl </span>ToTensorNoNorm {
     <span class="kw">fn </span>to_tensor(device: <span class="kw-2">&amp;</span>Device, channels: usize, data: Vec&lt;Vec&lt;Vec&lt;u8&gt;&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>accum = Vec::new();
         <span class="kw">for </span>row <span class="kw">in </span>data {
@@ -143,13 +224,11 @@
             <span class="kw">let </span>row = Tensor::cat(<span class="kw-2">&amp;</span>row_accum, <span class="number">0</span>)<span class="question-mark">?</span>;
             accum.push(row.t()<span class="question-mark">?</span>.unsqueeze(<span class="number">1</span>)<span class="question-mark">?</span>);
         }
-        <span class="kw">let </span>t = Tensor::cat(<span class="kw-2">&amp;</span>accum, <span class="number">1</span>)<span class="question-mark">?</span>.to_device(device)<span class="question-mark">?</span>;
-        <span class="comment">// Rescale to between 0 and 1
-        </span>t / <span class="number">255.0f64
-    </span>}
+        Tensor::cat(<span class="kw-2">&amp;</span>accum, <span class="number">1</span>)<span class="question-mark">?</span>.to_device(device)
+    }
 }
 
-<span class="kw">impl </span>ImageTransform <span class="kw">for </span>ToTensor {
+<span class="kw">impl </span>ImageTransform <span class="kw">for </span>ToTensorNoNorm {
     <span class="kw">type </span>Input = DynamicImage;
     <span class="kw">type </span>Output = Tensor;
     <span class="kw">fn </span>map(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span><span class="self">Self</span>::Input, device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::Output&gt; {
@@ -207,6 +286,39 @@
         x.unsqueeze(<span class="number">0</span>)<span class="question-mark">?
             </span>.interpolate2d(<span class="self">self</span>.target_h, <span class="self">self</span>.target_w)<span class="question-mark">?
             </span>.squeeze(<span class="number">0</span>)
+    }
+}
+
+<span class="kw">impl</span>&lt;T: ImageTransform&lt;Input = E, Output = E&gt;, E: Clone&gt; ImageTransform <span class="kw">for </span><span class="prelude-ty">Option</span>&lt;T&gt; {
+    <span class="kw">type </span>Input = T::Input;
+    <span class="kw">type </span>Output = T::Output;
+
+    <span class="kw">fn </span>map(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>T::Input, dev: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;T::Output&gt; {
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(this) = <span class="self">self </span>{
+            this.map(x, dev)
+        } <span class="kw">else </span>{
+            <span class="prelude-val">Ok</span>(x.clone())
+        }
+    }
+}
+
+<span class="doccomment">/// Multiply the pixe values by the provided factor.
+///
+/// Each pixel value is calculated as follows: x = x * factor
+</span><span class="kw">pub struct </span>Rescale {
+    <span class="kw">pub </span>factor: <span class="prelude-ty">Option</span>&lt;f64&gt;,
+}
+
+<span class="kw">impl </span>ImageTransform <span class="kw">for </span>Rescale {
+    <span class="kw">type </span>Input = Tensor;
+    <span class="kw">type </span>Output = <span class="self">Self</span>::Input;
+
+    <span class="kw">fn </span>map(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span><span class="self">Self</span>::Input, <span class="kw">_</span>: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::Output&gt; {
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(factor) = <span class="self">self</span>.factor {
+            x * factor
+        } <span class="kw">else </span>{
+            <span class="prelude-val">Ok</span>(x.clone())
+        }
     }
 }
 

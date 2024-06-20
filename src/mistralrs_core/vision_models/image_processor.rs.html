@@ -42,9 +42,9 @@
 
 <span class="attr">#[allow(dead_code)]
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>PreprocessedImages {
-    <span class="doccomment">/// Without batch size, safe to concat in dim0
+    <span class="doccomment">/// Without batch size, safe to unsqueeze &amp; concat in dim0
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) pixel_values: Tensor,
-    <span class="doccomment">/// Without batch size, safe to concat in dim0
+    <span class="doccomment">/// Without batch size, safe to unsqueeze &amp; concat in dim0
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) pixel_attention_mask: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) image_sizes: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) num_img_tokens: <span class="prelude-ty">Option</span>&lt;Vec&lt;usize&gt;&gt;,

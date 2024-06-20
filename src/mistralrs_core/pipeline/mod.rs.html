@@ -903,6 +903,8 @@
 <a href="#903" id="903">903</a>
 <a href="#904" id="904">904</a>
 <a href="#905" id="905">905</a>
+<a href="#906" id="906">906</a>
+<a href="#907" id="907">907</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>cache_manager;
 <span class="kw">pub mod </span>chat_template;
 <span class="kw">mod </span>ggml;
@@ -935,7 +937,9 @@
     NormalLoadingMetadata, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3RopeScaling, Qwen2Loader,
 };
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>paths::{get_chat_template, get_model_paths, get_xlora_paths, XLoraPaths};
-<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>processing::{BasicProcessor, MessagesAction, Processor, ProcessorCreator};
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>processing::{
+    apply_chat_template, BasicProcessor, MessagesAction, Processor, ProcessorCreator,
+};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">pub use </span>speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 <span class="kw">use </span>std::any::Any;

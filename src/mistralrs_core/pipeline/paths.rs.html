@@ -390,6 +390,18 @@
 <a href="#390" id="390">390</a>
 <a href="#391" id="391">391</a>
 <a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
+<a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
+<a href="#400" id="400">400</a>
+<a href="#401" id="401">401</a>
+<a href="#402" id="402">402</a>
+<a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fs,
@@ -405,11 +417,9 @@
 <span class="kw">use </span>tracing::{info, warn};
 
 <span class="kw">use crate</span>::{
-    api_dir_list, api_get_file, lora::LoraConfig, utils::tokens::get_token,
-    xlora_models::XLoraConfig, ModelPaths, Ordering, TokenSource,
+    api_dir_list, api_get_file, lora::LoraConfig, pipeline::chat_template::ChatTemplate,
+    utils::tokens::get_token, xlora_models::XLoraConfig, ModelPaths, Ordering, TokenSource,
 };
-
-<span class="kw">use </span><span class="kw">super</span>::chat_template::ChatTemplate;
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>XLoraPaths {
     <span class="kw">pub </span>adapter_configs: <span class="prelude-ty">Option</span>&lt;Vec&lt;((String, String), LoraConfig)&gt;&gt;,
@@ -716,7 +726,7 @@
         <span class="macro">panic!</span>(<span class="string">"Expected chat template file to end with .json, or you can specify a tokenizer model ID to load the chat template there."</span>);
     };
 
-    <span class="kw">let </span>template: ChatTemplate = <span class="kw">match </span>chat_template_ovrd {
+    <span class="kw">let </span><span class="kw-2">mut </span>template: ChatTemplate = <span class="kw">match </span>chat_template_ovrd {
         <span class="prelude-val">Some</span>(chat_template) =&gt; {
             <span class="comment">// In this case the override chat template is being used. The user must add the bos/eos/unk toks themselves.
             </span><span class="macro">info!</span>(<span class="string">"Using literal chat template."</span>);
@@ -727,6 +737,16 @@
         <span class="prelude-val">None </span>=&gt; serde_json::from_str(<span class="kw-2">&amp;</span>template_content.as_ref().unwrap().clone()).unwrap(),
     };
 
+    <span class="kw">let </span>processor_conf: <span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::vision_models::processor_config::ProcessorConfig&gt; = paths
+        .get_processor_config()
+        .as_ref()
+        .map(|f| serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap()).unwrap());
+    <span class="kw">if let </span><span class="prelude-val">Some</span>(processor_conf) = processor_conf {
+        <span class="kw">if </span>processor_conf.chat_template.is_some() {
+            template.chat_template = processor_conf.chat_template;
+        }
+    }
+
     <span class="attr">#[derive(Debug, serde::Deserialize)]
     </span><span class="kw">struct </span>SpecifiedTemplate {
         chat_template: String,
@@ -734,6 +754,10 @@
         eos_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
         unk_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
     }
+
+    <span class="kw">if </span>template.chat_template.is_some() {
+        <span class="kw">return </span>template;
+    };
 
     <span class="kw">match </span><span class="kw-2">&amp;</span>template.chat_template {
         <span class="prelude-val">Some</span>(<span class="kw">_</span>) =&gt; template,

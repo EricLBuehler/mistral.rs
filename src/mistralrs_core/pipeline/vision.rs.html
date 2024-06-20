@@ -344,8 +344,9 @@
 <a href="#344" id="344">344</a>
 <a href="#345" id="345">345</a>
 <a href="#346" id="346">346</a>
+<a href="#347" id="347">347</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
-<span class="kw">use </span><span class="kw">super</span>::vision_loaders::{Phi3VLoader, VisionLoaderType};
+<span class="kw">use </span><span class="kw">super</span>::vision_loaders::{Idefics2Loader, Phi3VLoader, VisionLoaderType};
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, Cache, CacheManager,
     CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory,
@@ -440,6 +441,7 @@
     <span class="kw">pub fn </span>build(<span class="self">self</span>, loader: VisionLoaderType) -&gt; Box&lt;<span class="kw">dyn </span>Loader&gt; {
         <span class="kw">let </span>loader: Box&lt;<span class="kw">dyn </span>VisionModelLoader&gt; = <span class="kw">match </span>loader {
             VisionLoaderType::Phi3V =&gt; Box::new(Phi3VLoader),
+            VisionLoaderType::Idefics2 =&gt; Box::new(Idefics2Loader),
         };
         Box::new(VisionLoader {
             inner: loader,
