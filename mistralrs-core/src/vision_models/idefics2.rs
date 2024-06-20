@@ -2,8 +2,8 @@
 
 use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
-    conv2d, embedding, layer_norm, linear_no_bias, Activation, Conv2d, Conv2dConfig, Embedding,
-    LayerNorm, Linear, Module, VarBuilder,
+    conv2d, embedding, layer_norm, linear, linear_no_bias, Activation, Conv2d, Conv2dConfig,
+    Embedding, LayerNorm, Linear, Module, VarBuilder,
 };
 use serde::Deserialize;
 use std::{any::Any, ops::Mul};
@@ -344,10 +344,10 @@ impl Attention {
         let head_dim = embed_dim / num_heads;
         let scale = 1.0 / (head_dim as f64).sqrt();
 
-        let q_proj = linear_no_bias(embed_dim, embed_dim, vb.pp("q_proj"))?;
-        let k_proj = linear_no_bias(embed_dim, embed_dim, vb.pp("k_proj"))?;
-        let v_proj = linear_no_bias(embed_dim, embed_dim, vb.pp("v_proj"))?;
-        let o_proj = linear_no_bias(embed_dim, embed_dim, vb.pp("out_proj"))?;
+        let q_proj = linear(embed_dim, embed_dim, vb.pp("q_proj"))?;
+        let k_proj = linear(embed_dim, embed_dim, vb.pp("k_proj"))?;
+        let v_proj = linear(embed_dim, embed_dim, vb.pp("v_proj"))?;
+        let o_proj = linear(embed_dim, embed_dim, vb.pp("out_proj"))?;
 
         Ok(Self {
             embed_dim,
@@ -419,8 +419,8 @@ struct VisionMLP {
 
 impl VisionMLP {
     fn new(config: VisionConfig, vb: VarBuilder) -> Result<Self> {
-        let fc1 = linear_no_bias(config.hidden_size, config.intermediate_size, vb.pp("fc1"))?;
-        let fc2 = linear_no_bias(config.intermediate_size, config.hidden_size, vb.pp("fc2"))?;
+        let fc1 = linear(config.hidden_size, config.intermediate_size, vb.pp("fc1"))?;
+        let fc2 = linear(config.intermediate_size, config.hidden_size, vb.pp("fc2"))?;
         Ok(Self {
             activation: config.hidden_act,
             fc1,
