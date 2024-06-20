@@ -362,12 +362,7 @@ impl Attention {
         })
     }
 
-    fn forward(
-        &self,
-        xs: &Tensor,
-        attention_mask: Option<&Tensor>,
-        vision_transformer_kv_cache: &mut Option<(Tensor, Tensor)>,
-    ) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
         let original_dtype = xs.dtype();
@@ -393,8 +388,6 @@ impl Attention {
         let v = v
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
-
-        let (k, v) = Cache::update_kv_cache(vision_transformer_kv_cache, k, v, false)?;
 
         let attn_weights =
             (q.contiguous()?.matmul(&k.transpose(2, 3)?.contiguous()?)? * self.scale)?;
@@ -483,18 +476,11 @@ impl EncoderLayer {
         })
     }
 
-    fn forward(
-        &self,
-        xs: &Tensor,
-        attention_mask: Option<&Tensor>,
-        vision_transformer_kv_cache: &mut Option<(Tensor, Tensor)>,
-    ) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
         let residual = xs.clone();
 
         let hidden_states = self.layer_norm_1.forward(xs)?;
-        let hidden_states =
-            self.attn
-                .forward(&hidden_states, attention_mask, vision_transformer_kv_cache)?;
+        let hidden_states = self.attn.forward(&hidden_states, attention_mask)?;
         let hidden_states = (hidden_states + residual)?;
 
         let residual = &hidden_states;
@@ -506,7 +492,6 @@ impl EncoderLayer {
 
 struct Encoder {
     layers: Vec<EncoderLayer>,
-    cache: Cache,
 }
 
 impl Encoder {
@@ -516,17 +501,13 @@ impl Encoder {
         for i in 0..config.num_hidden_layers {
             layers.push(EncoderLayer::new(config.clone(), vb_l.pp(i))?);
         }
-        Ok(Self {
-            layers,
-            cache: Cache::new(config.num_hidden_layers, false),
-        })
+        Ok(Self { layers })
     }
 
     fn forward(&self, xs: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
         let mut hidden_states = xs.clone();
-        let mut cache = self.cache.lock();
-        for (i, layer) in self.layers.iter().enumerate() {
-            hidden_states = layer.forward(&hidden_states, attention_mask, &mut cache[i])?;
+        for layer in &self.layers {
+            hidden_states = layer.forward(&hidden_states, attention_mask)?;
         }
         Ok(hidden_states)
     }
