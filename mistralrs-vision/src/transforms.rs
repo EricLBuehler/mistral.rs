@@ -14,6 +14,21 @@ impl ToTensor {
     }
 }
 
+impl ImageTransform for ToTensor {
+    type Input = DynamicImage;
+    type Output = Tensor;
+    fn map(&self, x: &Self::Input, device: &Device) -> Result<Self::Output> {
+        let num_channels = n_channels(x);
+        let data = get_pixel_data(
+            num_channels,
+            x.to_rgba8(),
+            x.dimensions().1 as usize,
+            x.dimensions().0 as usize,
+        );
+        Self::to_tensor(device, num_channels, data)
+    }
+}
+
 /// Convert an image to a tensor without normalizing to `[0.0, 1.0]`.
 /// The tensor's shape is (channels, height, width).
 pub struct ToTensorNoNorm;
@@ -36,7 +51,7 @@ impl ToTensorNoNorm {
     }
 }
 
-impl ImageTransform for ToTensor {
+impl ImageTransform for ToTensorNoNorm {
     type Input = DynamicImage;
     type Output = Tensor;
     fn map(&self, x: &Self::Input, device: &Device) -> Result<Self::Output> {

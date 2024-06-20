@@ -389,13 +389,6 @@ impl Attention {
         let attn_weights =
             (q.contiguous()?.matmul(&k.transpose(2, 3)?.contiguous()?)? * self.scale)?;
 
-        println!("saving `attn_weights`");
-        attn_weights
-            .to_dtype(DType::F32)?
-            .to_device(&Device::Cpu)?
-            .write_npy("pixel_values_probe_m.npy")?;
-        println!("saved it");
-
         let attn_weights = CausalMasker.apply_mask_one_and_zero(
             &attention_mask.map(|x| x.to_dtype(DType::U8).unwrap()),
             attn_weights,
