@@ -62,8 +62,42 @@ impl TryIntoDType for DType {
     }
 }
 
+#[cfg(feature = "cuda")]
+fn get_dtypes() -> Vec<DType> {
+    use std::process::Command;
+
+    // >= is supported
+    const MIN_BF16_CC: usize = 800;
+    // >= is supported
+    const MIN_F16_CC: usize = 530;
+
+    let raw_out = Command::new("nvidia-smi")
+        .arg("--query-gpu=compute_cap")
+        .arg("--format=csv")
+        .output()
+        .expect("Failed to run `nvidia-smi` but CUDA is selected.")
+        .stdout;
+    let out = String::from_utf8(raw_out).expect("`nvidia-smi` did not return valid utf8");
+    let cc = out.splitn(2, '\n').nth(1).unwrap().parse::<f32>().unwrap();
+    // 7.5 -> 750
+    let cc = (cc * 100.) as usize;
+
+    let mut dtypes = Vec::new();
+    if cc >= MIN_BF16_CC {
+        dtypes.push(DType::BF16);
+    }
+    if cc >= MIN_F16_CC {
+        dtypes.push(DType::F16);
+    }
+    dtypes
+}
+
+fn get_dtypes() -> Vec<DType> {
+    vec![DType::BF16, DType::F16]
+}
+
 fn determine_auto_dtype(device: &Device) -> candle_core::Result<DType> {
-    for dtype in [DType::BF16, DType::F16] {
+    for dtype in get_dtypes() {
         // Try a matmul
         let x = Tensor::zeros((2, 2), dtype, device)?;
         let y = x.matmul(&x);
