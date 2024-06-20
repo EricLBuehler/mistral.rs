@@ -31,6 +31,7 @@ mod model_selected;
 pub use model_selected::ModelSelected;
 pub use toml_selector::get_toml_selected_model_dtype;
 
+mod amoe;
 mod cublaslt;
 mod gguf;
 pub mod layers;

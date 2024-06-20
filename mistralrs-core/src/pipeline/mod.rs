@@ -1,3 +1,4 @@
+mod amoe;
 mod cache_manager;
 pub mod chat_template;
 mod ggml;
@@ -14,6 +15,7 @@ mod speculative;
 mod vision;
 mod vision_loaders;
 use crate::aici::toktree::TokTrie;
+use crate::amoe::AnyMoeTrainingResult;
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
 use crate::lora::{LoraConfig, Ordering};
@@ -470,6 +472,13 @@ pub trait CacheManagerMixin {
 pub trait AdapterActivationMixin {
     /// Returns the number of activated adapters.
     fn activate_adapters(&mut self, adapters: Vec<String>) -> Result<usize>;
+}
+
+pub trait AnyMoeMixin {
+    fn trainable_params(&self) -> usize {
+        unreachable!()
+    }
+    fn train(&mut self) -> Result<AnyMoeTrainingResult>;
 }
 
 pub trait MetadataMixin {
