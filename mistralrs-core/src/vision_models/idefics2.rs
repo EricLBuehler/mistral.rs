@@ -889,14 +889,21 @@ impl Idefics2 {
         normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
-        let vision_model = VisionTransformer::new(&config.vision_config, vb_m.pp("vision_model"))?;
-        let connector = Connector::new(config, vb_m.pp("connector"))?;
         let text_model = Mistral::new_inner(
             &config.text_config.clone().into(),
             vb_m.pp("text_model"),
             vb.pp("lm_head"),
             is_gptx,
             normal_loading_metadata,
+        )?;
+        let vision_model = VisionTransformer::new(
+            &config.vision_config,
+            vb_m.pp("vision_model")
+                .set_device(text_model.device().clone()),
+        )?;
+        let connector = Connector::new(
+            config,
+            vb_m.pp("connector").set_device(text_model.device().clone()),
         )?;
         Ok(Self {
             vision_model,
