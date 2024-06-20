@@ -904,9 +904,6 @@ impl Idefics2 {
     ) -> Result<Tensor> {
         let input_embeds = if let Some(pixel_values) = pixel_values {
             // == START VISUAL INPUTS INTEGRATION ==
-            let pixel_values = Tensor::read_npy("../pixel_values_start.npy")?
-                .to_dtype(pixel_values.dtype())?
-                .to_device(pixel_values.device())?;
             let (batch_size, num_images, _, _, _) = pixel_values.dims5()?;
             let mut s = vec![batch_size * num_images];
             s.extend(pixel_values.dims()[2..].to_vec());
