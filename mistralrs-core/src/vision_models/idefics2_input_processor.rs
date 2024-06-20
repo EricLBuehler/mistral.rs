@@ -5,7 +5,7 @@ use std::{any::Any, sync::Arc};
 use candle_core::{Device, Result, Tensor};
 use image::{DynamicImage, GenericImageView};
 use indexmap::IndexMap;
-use mistralrs_vision::{ApplyTransforms, Normalize, Rescale, ToTensor, Transforms};
+use mistralrs_vision::{ApplyTransforms, Normalize, Rescale, ToTensorNoNorm, Transforms};
 use tokenizers::Tokenizer;
 
 use crate::{
@@ -266,7 +266,7 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
             }
 
             let transforms = Transforms {
-                input: &ToTensor,
+                input: &ToTensorNoNorm,
                 inner_transforms: &[
                     &config
                         .do_rescale

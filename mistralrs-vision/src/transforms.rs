@@ -10,6 +10,16 @@ pub struct ToTensor;
 
 impl ToTensor {
     fn to_tensor(device: &Device, channels: usize, data: Vec<Vec<Vec<u8>>>) -> Result<Tensor> {
+        ToTensorNoNorm::to_tensor(device, channels, data)? / 255.0f64
+    }
+}
+
+/// Convert an image to a tensor without normalizing to `[0.0, 1.0]`.
+/// The tensor's shape is (channels, height, width).
+pub struct ToTensorNoNorm;
+
+impl ToTensorNoNorm {
+    fn to_tensor(device: &Device, channels: usize, data: Vec<Vec<Vec<u8>>>) -> Result<Tensor> {
         let mut accum = Vec::new();
         for row in data {
             let mut row_accum = Vec::new();
@@ -22,9 +32,7 @@ impl ToTensor {
             let row = Tensor::cat(&row_accum, 0)?;
             accum.push(row.t()?.unsqueeze(1)?);
         }
-        let t = Tensor::cat(&accum, 1)?.to_device(device)?;
-        // Rescale to between 0 and 1
-        t / 255.0f64
+        Tensor::cat(&accum, 1)?.to_device(device)
     }
 }
 
