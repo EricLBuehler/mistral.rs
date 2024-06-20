@@ -1071,34 +1071,7 @@ impl Idefics2 {
 
 impl IsqModel for Idefics2 {
     fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
-        let mut tensors = self.text_model.get_tensors();
-        tensors
-            .0
-            .push((self.connector.modality_projection.up_proj.inner(), None));
-        tensors
-            .0
-            .push((self.connector.modality_projection.down_proj.inner(), None));
-        tensors
-            .0
-            .push((self.connector.modality_projection.gate_proj.inner(), None));
-        for layer in &mut self.connector.perceiver_resampler.layers {
-            tensors.0.push((layer.self_attn.q_proj.inner(), None));
-            tensors.0.push((layer.self_attn.k_proj.inner(), None));
-            tensors.0.push((layer.self_attn.v_proj.inner(), None));
-            tensors.0.push((layer.self_attn.o_proj.inner(), None));
-            tensors.0.push((layer.mlp.gate_proj.inner(), None));
-            tensors.0.push((layer.mlp.up_proj.inner(), None));
-            tensors.0.push((layer.mlp.down_proj.inner(), None));
-        }
-        for layer in &mut self.vision_model.encoder.layers {
-            tensors.0.push((layer.attn.q_proj.inner(), None));
-            tensors.0.push((layer.attn.k_proj.inner(), None));
-            tensors.0.push((layer.attn.v_proj.inner(), None));
-            tensors.0.push((layer.attn.o_proj.inner(), None));
-            tensors.0.push((layer.mlp.fc1.inner(), None));
-            tensors.0.push((layer.mlp.fc2.inner(), None));
-        }
-        tensors
+        self.text_model.get_tensors()
     }
 }
 
