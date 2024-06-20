@@ -1,6 +1,8 @@
 # Idefics 2 Model: `HuggingFaceM4/idefics2-8b-chatty`
 
-The Idefics 2 Model has support in the Rust, Python, and HTTP APIs. The Idefics 2 Model also supports ISQ for increased performance.
+The Idefics 2 Model has support in the Rust, Python, and HTTP APIs. The Idefics 2 Model also supports ISQ for increased performance. 
+
+> Note: Some of examples use our [Cephalo model series](https://huggingface.co/collections/lamm-mit/cephalo-664f3342267c4890d2f46b33) but could be used with any model ID.
 
 The Python and HTTP APIs support sending images as:
 - URL
@@ -103,7 +105,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         },
         None,
         None,
-        Some("HuggingFaceM4/idefics2-8b-chatty".to_string()),
+        Some("lamm-mit/Cephalo-Idefics-2-vision-8b-beta".to_string()),
     )
     .build(VisionLoaderType::Idefics2);
     // Load, into a Pipeline
@@ -167,7 +169,7 @@ from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
 
 runner = Runner(
     which=Which.VisionPlain(
-        model_id="HuggingFaceM4/idefics2-8b-chatty",
+        model_id="lamm-mit/Cephalo-Idefics-2-vision-8b-beta",
         tokenizer_json=None,
         repeat_last_n=64,
         arch=VisionArchitecture.Idefics2,

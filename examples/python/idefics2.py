@@ -2,7 +2,7 @@ from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
 
 runner = Runner(
     which=Which.VisionPlain(
-        model_id="HuggingFaceM4/idefics2-8b-chatty",
+        model_id="lamm-mit/Cephalo-Idefics-2-vision-8b-beta",
         tokenizer_json=None,
         repeat_last_n=64,
         arch=VisionArchitecture.Idefics2,
