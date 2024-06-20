@@ -53,7 +53,11 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs_server --port 1234 vision-plain -m microsoft/Phi-3-vision-128k-instruct -a phi3v
     ```
 
-- Other models: [see supported models and a support matrix](#supported-models) and [how to run them](#run-with-the-cli)
+- Other models: [see a support matrix](#support-matrix) and [how to run them](#run-with-the-cli)
+
+Mistal.rs supports several model categories:
+- text
+- vision (see [the docs](docs/VISION_MODELS.md))
 
 ## Description
 **Fast**:
@@ -87,16 +91,21 @@ This is a demo of interactive mode with streaming running Mistral GGUF:
 https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95e6-aa532db09415
 
 
-**Supported models:**
-- Mistral 7B (v0.1 and v0.2)
-- Gemma
-- Llama, including Llama 3
-- Mixtral 8x7B
-- Phi 2
-- Phi 3
-- Qwen 2
+## Support matrix
 
-Please see [this section](#supported-models) for details on quantization and LoRA support.
+> Note: See [supported models](#supported-models) for more information
+
+|Model|Supports quantization|Supports adapters|Supports device mapping|
+|--|--|--|--|
+|Mistral v0.1/v0.2/v0.3|✅|✅|✅|
+|Gemma|✅|✅|✅|
+|Llama 2/3|✅|✅|✅|
+|Mixtral|✅|✅|✅|
+|Phi 2|✅|✅|✅|
+|Phi 3|✅|✅|✅|
+|Qwen 2|✅| |✅|
+|Phi 3 Vision|✅| |✅|
+|Idefics 2|✅| |✅|
 
 ## APIs and Integrations
 
@@ -431,13 +440,9 @@ Example:
 
 ## Supported models
 
-Mistal.rs supports several model categories:
-- text
-- vision (see [the docs](docs/VISION_MODELS.md))
-
 **Quantization support**
 |Model|GGUF|GGML|ISQ|
-|--|--|--|
+|--|--|--|--|
 |Mistral 7B |✅| |✅|
 |Gemma| | |✅|
 |Llama|✅|✅|✅|
@@ -454,7 +459,7 @@ Mistal.rs supports several model categories:
 |Plain|✅|
 |GGUF|✅|
 |GGML| |
-|Vision Plain| |
+|Vision Plain|✅|
 
 **X-LoRA and LoRA support**
 |Model|X-LoRA|X-LoRA+GGUF|X-LoRA+GGML|
