@@ -60,7 +60,7 @@ pub use pipeline::{
     VisionModelLoader, VisionSpecificConfig,
 };
 pub use request::{Constraint, MessageContent, NormalRequest, Request, RequestMessage};
-pub use response::Response; 
+pub use response::Response;
 pub use response::*;
 pub use sampler::{SamplingParams, StopTokens, TopLogprob};
 pub use scheduler::SchedulerMethod;
