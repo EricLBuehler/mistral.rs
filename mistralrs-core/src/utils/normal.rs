@@ -91,12 +91,14 @@ fn get_dtypes() -> Vec<DType> {
 
     let mut dtypes = Vec::new();
     if cc >= MIN_BF16_CC {
-        info!("Skipping BF16 because CC < 800");
         dtypes.push(DType::BF16);
+    } else {
+        info!("Skipping BF16 because CC < 800");
     }
     if cc >= MIN_F16_CC {
-        info!("Skipping F16 because CC < 530");
         dtypes.push(DType::F16);
+    } else {
+        info!("Skipping F16 because CC < 530");
     }
     dtypes
 }
