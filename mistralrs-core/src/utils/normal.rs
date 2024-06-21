@@ -93,12 +93,12 @@ fn get_dtypes() -> Vec<DType> {
     if cc >= MIN_BF16_CC {
         dtypes.push(DType::BF16);
     } else {
-        info!("Skipping BF16 because CC < 800");
+        info!("Skipping BF16 because CC < 8.0");
     }
     if cc >= MIN_F16_CC {
         dtypes.push(DType::F16);
     } else {
-        info!("Skipping F16 because CC < 530");
+        info!("Skipping F16 because CC < 5.3");
     }
     dtypes
 }
