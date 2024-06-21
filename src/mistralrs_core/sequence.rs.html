@@ -616,6 +616,8 @@
 <a href="#616" id="616">616</a>
 <a href="#617" id="617">617</a>
 <a href="#618" id="618">618</a>
+<a href="#619" id="619">619</a>
+<a href="#620" id="620">620</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fmt::Display,
     sync::{Arc, RwLock},
@@ -877,8 +879,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>.tokens
     }
 
-    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>set_toks(<span class="kw-2">&amp;mut </span><span class="self">self</span>, toks: Vec&lt;u32&gt;) {
+    <span class="doccomment">/// This will also set prompt_len
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>set_toks(<span class="kw-2">&amp;mut </span><span class="self">self</span>, toks: Vec&lt;u32&gt;) {
         <span class="self">self</span>.tokens = toks;
+        <span class="self">self</span>.prompt_len = <span class="self">self</span>.tokens.len();
     }
 
     <span class="kw">pub fn </span>completion_bytes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[u8] {
