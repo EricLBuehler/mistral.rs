@@ -73,7 +73,7 @@ pub mod text_models_inputs_processor {
         let mut context_lens = Vec::new();
         let mut position_ids = Vec::new();
         for (seq, mut ctxt) in input_seqs.iter().zip(toks) {
-            let offset = last_n_context_len.unwrap_or((1, ctxt.len()));
+            let offset = last_n_context_len.unwrap_or_default();
             seqlen_offsets.push(offset.1);
 
             ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));

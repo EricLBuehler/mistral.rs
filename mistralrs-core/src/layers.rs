@@ -220,14 +220,14 @@ impl PhiRotaryEmbedding {
         &self,
         q: &Tensor,
         k: &Tensor,
-        seqlen_offsets: &[usize],
+        _seqlen_offsets: &[usize],
         position_ids: &[usize],
     ) -> Result<(Tensor, Tensor)> {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let mut q_embeds = Vec::new();
         let mut k_embeds = Vec::new();
         let (sin, cos) = self.get_long_or_short_sin_cos(position_ids);
-        for (i, offset) in seqlen_offsets.iter().enumerate() {
+        for (i, offset) in position_ids.iter().enumerate() {
             let cos = cos.narrow(0, *offset, seq_len)?;
             let sin = sin.narrow(0, *offset, seq_len)?;
             let q_embed =
