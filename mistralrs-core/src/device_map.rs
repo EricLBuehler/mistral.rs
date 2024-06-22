@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
-use crate::utils::debug::DeviceRepr;
-use candle_core::{Device, Result, Tensor};
+use crate::{utils::debug::DeviceRepr, ModelDType, TryIntoDType};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::VarBuilder;
 use serde::Deserialize;
 use tracing::info;
@@ -114,8 +114,11 @@ impl DeviceMapMetadata {
 }
 
 pub trait DeviceMapper: Debug {
+    // === DURING RUNTIME ===
     /// Map during runtime
     fn map(&self, input: Tensor, layer: usize) -> Result<Tensor>;
+
+    // === DURING LOADING TIME ===
     /// If ISQ layer, then do not change the device. *They will do it later in NormalModel::quantize*
     fn set_device<'a>(
         &self,
@@ -128,6 +131,10 @@ pub trait DeviceMapper: Debug {
     /// Set non mapped layer device. This is for ISQ + device mapping support
     /// If ISQ layer, then do not change the device. *They will do it later in NormalModel::quantize*
     fn set_nm_device<'a>(&self, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a>;
+
+    // TODO(EricLBuehler): when 0.2.0, replace this with param in `into_mapper`.
+    // === IMMEDIATELY AFTER INIT ===
+    fn get_min_dtype(&self) -> Result<DType>;
 }
 
 #[derive(Debug)]
@@ -165,6 +172,11 @@ impl DeviceMapper for LayerDeviceMapper {
             varbuilder.set_device(self.nm_device.clone())
         }
     }
+    fn get_min_dtype(&self) -> Result<DType> {
+        ModelDType::Auto
+            .try_into_dtype_all(&self.mappings)
+            .map_err(|e| candle_core::Error::Msg(format!("{e:?}")))
+    }
 }
 
 #[derive(Debug)]
@@ -200,5 +212,10 @@ impl DeviceMapper for DummyDeviceMapper {
         } else {
             varbuilder.set_device(self.nm_device.clone())
         }
+    }
+    fn get_min_dtype(&self) -> Result<DType> {
+        ModelDType::Auto
+            .try_into_dtype(&self.nm_device)
+            .map_err(|e| candle_core::Error::Msg(format!("{e:?}")))
     }
 }
