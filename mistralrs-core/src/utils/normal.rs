@@ -82,6 +82,7 @@ fn get_dtypes() -> Vec<DType> {
     let min_cc = out
         .split('\n')
         .skip(1)
+        .filter(|cc| !cc.trim().is_empty())
         .map(|cc| cc.trim().parse::<f32>().unwrap())
         .reduce(|a, b| if a < b { a } else { b })
         .unwrap();
