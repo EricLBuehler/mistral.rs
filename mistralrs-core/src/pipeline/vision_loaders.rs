@@ -12,7 +12,6 @@ use serde::Deserialize;
 use super::{NormalLoadingMetadata, Processor, ProcessorCreator, VisionModel};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
-use crate::vision_models::llava_next::Config as LLaVAConfig;
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
@@ -30,6 +29,7 @@ pub trait VisionModelLoader {
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
     fn get_processor(
         &self,
+        model_config: &str,
         processor_config: Option<ProcessorConfig>,
         preprocessor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync>;
@@ -53,7 +53,6 @@ impl FromStr for VisionLoaderType {
         match s {
             "phi3v" => Ok(Self::Phi3V),
             "idefics2" => Ok(Self::Idefics2),
-            "llava_next" => Ok(Self::LLaVANext),
             a => Err(format!("Unknown architecture `{a}`")),
         }
     }
@@ -93,12 +92,14 @@ impl VisionModelLoader for Phi3VLoader {
     }
     fn get_processor(
         &self,
+        _model_config: &str,
         processor_config: Option<ProcessorConfig>,
         preprocessor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync> {
         Phi3Processor::new_processor(processor_config, preprocessor_config)
     }
 }
+
 // ======================== Idefics 2 loader
 
 /// [`VisionLoader`] for an Idefics 2 Vision model.
@@ -129,12 +130,26 @@ impl VisionModelLoader for Idefics2Loader {
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         let mut config: Idefics2Config = serde_json::from_str(config)?;
         config.text_config.use_flash_attn = use_flash_attn;
-// ======================== LLaVA loader
+        Ok(Box::new(config))
+    }
+    fn get_processor(
+        &self,
+        _model_config: &str,
+        processor_config: Option<ProcessorConfig>,
+        preprocessor_config: PreProcessorConfig,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        Arc::new(Idefics2Processor::new(
+            processor_config.unwrap(),
+            preprocessor_config,
+        ))
+    }
+}
 
-/// [`VisionLoader`] for a LLaVA-Next Vision model.
-///
-/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+// ======================== LLaVANext Loader
+
+/// [`VisionLoader`] for an LLaVANext Vision model.
 pub struct LLaVANextLoader;
+
 impl VisionModelLoader for LLaVANextLoader {
     fn load(
         &self,
@@ -143,28 +158,20 @@ impl VisionModelLoader for LLaVANextLoader {
         _vb: VarBuilder,
         _normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        //println!("config: {}", config);
-        unimplemented!()
+        todo!()
     }
     fn is_gptx(&self) -> bool {
         false
     }
-    fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        let config: LLaVAConfig = serde_json::from_str(config)?;
-        Ok(Box::new(config))
+    fn get_config_repr(&self, _config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        todo!()
     }
     fn get_processor(
         &self,
-        processor_config: Option<ProcessorConfig>,
-        preprocessor_config: PreProcessorConfig,
-    ) -> Arc<dyn Processor + Send + Sync> {
-        Arc::new(Idefics2Processor::new(
-            processor_config.unwrap(),
-            preprocessor_config,
-        ))
+        model_config: &str,
         _processor_config: Option<ProcessorConfig>,
         _preprocessor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync> {
-        unimplemented!()
+        todo!()
     }
 }

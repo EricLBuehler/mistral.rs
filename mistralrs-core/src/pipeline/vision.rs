@@ -1,5 +1,4 @@
 use super::cache_manager::DefaultCacheManager;
-use super::vision_loaders::{Idefics2Loader, Phi3VLoader, VisionLoaderType};
 use super::vision_loaders::{Idefics2Loader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, Cache, CacheManager,
@@ -180,7 +179,6 @@ impl Loader for VisionLoader {
             ),
             _ => unreachable!(),
         };
-
         let preprocessor_config: PreProcessorConfig = serde_json::from_str(
             &fs::read_to_string(
                 paths
@@ -196,9 +194,9 @@ impl Loader for VisionLoader {
             .as_ref()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
 
-        let processor = self
-            .inner
-            .get_processor(processor_config, preprocessor_config.clone());
+        let processor =
+            self.inner
+                .get_processor(&config, processor_config, preprocessor_config.clone()); //There are always some repos that don't properly handle config position, for example... LLaVA
 
         let tokenizer = get_tokenizer(
             paths.get_tokenizer_filename(),

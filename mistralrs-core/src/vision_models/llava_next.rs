@@ -201,7 +201,6 @@ pub struct Model {
     llama: Llama,
     config: Config,
     device: Device,
-    seqlen_offset: usize, // store the seqlen_offset. We use this to generate seqlen_offsets/seqlen_offsets_kernel/context_lens. It is a different approach from phi3v and other implementations in this repo, but I haven't seen any replacement for this because in LLaVA we can only get input length after image is embed. This is a workaround.
 }
 
 impl Model {
@@ -237,7 +236,6 @@ impl Model {
             llama,
             config: config.clone(),
             device,
-            seqlen_offset: 0,
         })
     }
 
@@ -380,27 +378,41 @@ impl Model {
         &mut self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
-        context_lens: Vec<(usize, usize)>,
         image_sizes: Option<Vec<(u32, u32)>>,
     ) -> Result<Tensor> {
-        if let Some(ref pixel_values) = pixel_values { // we assume(and as it should be) only first request contains image
-            let input_embed = self.prepare_inputs_labels_for_multimodal(
+        if let Some(ref pixel_values) = pixel_values {
+            // we assume(as it should be) only prompt request contains image
+            let input_embeds = self.prepare_inputs_labels_for_multimodal(
                 input_ids,
                 pixel_values,
                 &image_sizes.unwrap(),
             )?;
+            let seqlen_offsets = [0];
+            let (_, input_embeds_len, _) = input_embeds.dims3()?;
+            let start_offsets_kernel =
+                Tensor::from_iter((0..input_embeds_len).map(|x| x as i64), &self.device)?
+                    .unsqueeze(0)?;
+            let context_lens = vec![(input_embeds_len - 1, 1)];
+            self.position = input_embeds_len; // this is for next round.
             self.llama.forward_input_embed(
-                &input_embed,
-                seqlen_offsets,
+                &input_embeds,
+                &seqlen_offsets,
                 start_offsets_kernel,
                 context_lens,
             )
         } else {
+            let (_, input_len) = input_ids.shape().dims2()?;
+            let seqlen_offsets = [self.position];
+            let start_offsets_kernel = Tensor::from_iter(
+                (self.position..self.position + input_len).map(|x| x as i64),
+                &self.device,
+            )?
+            .unsqueeze(0)?;
+            let context_lens = vec![(input_len - 1, 1)];
+            self.position += input_len;
             self.llama.forward(
                 input_ids,
-                seqlen_offsets,
+                &seqlen_offsets,
                 start_offsets_kernel,
                 context_lens,
             )
@@ -409,7 +421,7 @@ impl Model {
 }
 
 pub(crate) struct LLaVANextVisionSpecificArgs {
-    pub image_sizes: Option<Vec<(u32, u32)>>,
+    pub image_sizes: Option<Vec<(usize, usize)>>,
 }
 
 impl IsqModel for Model {
@@ -424,23 +436,23 @@ impl VisionModel for Model {
         &mut self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
-        context_lens: Vec<(usize, usize)>,
+        _seqlen_offsets: &[usize],
+        _start_offsets_kernel: Tensor,
+        _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
     ) -> candle_core::Result<Tensor> {
         let LLaVANextVisionSpecificArgs { image_sizes } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `LLaVANextVisionSpecificArgs`");
-        self.forward(
-            input_ids,
-            pixel_values,
-            seqlen_offsets,
-            start_offsets_kernel,
-            context_lens,
-            image_sizes,
-        )
+        let image_sizes = Some(
+            image_sizes
+                .unwrap()
+                .iter()
+                .map(|(w, h)| (*w as u32, *h as u32))
+                .collect(),
+        );
+        self.forward(input_ids, pixel_values, image_sizes)
     }
 
     fn device(&self) -> &Device {

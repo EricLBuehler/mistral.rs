@@ -35,6 +35,8 @@ macro_rules! api_dir_list {
                     .map(|s| {
                         s.unwrap()
                             .path()
+                            .file_name() // if we don't have this, we can't use the pure local mode
+                            .unwrap()
                             .to_str()
                             .expect("Could not convert to str")
                             .to_string()
@@ -139,7 +141,6 @@ macro_rules! get_paths {
         } else {
             None
         };
-
         let preprocessor_config = if $crate::api_dir_list!(api, model_id)
             .collect::<Vec<_>>()
             .contains(&"preprocessor_config.json".to_string())

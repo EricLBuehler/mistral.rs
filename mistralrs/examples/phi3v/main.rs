@@ -19,7 +19,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         },
         None,
         None,
-        Some("microsoft/Phi-3-vision-128k-instruct".to_string()),
+        Some("/root/autodl-tmp/Phi-3-vision-128k-instruct".to_string()),
     )
     .build(VisionLoaderType::Phi3V);
     // Load, into a Pipeline
