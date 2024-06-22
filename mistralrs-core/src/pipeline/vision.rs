@@ -1,5 +1,5 @@
 use super::cache_manager::DefaultCacheManager;
-use super::vision_loaders::{Phi3VLoader, VisionLoaderType};
+use super::vision_loaders::{Idefics2Loader, Phi3VLoader, VisionLoaderType};
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, Cache, CacheManager,
     CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory,
@@ -94,6 +94,7 @@ impl VisionLoaderBuilder {
     pub fn build(self, loader: VisionLoaderType) -> Box<dyn Loader> {
         let loader: Box<dyn VisionModelLoader> = match loader {
             VisionLoaderType::Phi3V => Box::new(Phi3VLoader),
+            VisionLoaderType::Idefics2 => Box::new(Idefics2Loader),
         };
         Box::new(VisionLoader {
             inner: loader,

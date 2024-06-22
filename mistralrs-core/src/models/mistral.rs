@@ -348,6 +348,10 @@ impl Model {
         })
     }
 
+    pub fn get_input_embeddings(&self, input_ids: &Tensor) -> Result<Tensor> {
+        self.embed_tokens.forward(input_ids)
+    }
+
     pub fn forward(
         &mut self,
         input_ids: &Tensor,

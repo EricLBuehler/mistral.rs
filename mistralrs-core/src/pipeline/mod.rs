@@ -30,7 +30,9 @@ pub use normal_loaders::{
     NormalLoadingMetadata, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3RopeScaling, Qwen2Loader,
 };
 pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths, XLoraPaths};
-pub(crate) use processing::{BasicProcessor, MessagesAction, Processor, ProcessorCreator};
+pub(crate) use processing::{
+    apply_chat_template, BasicProcessor, MessagesAction, Processor, ProcessorCreator,
+};
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 use std::any::Any;
@@ -40,7 +42,7 @@ use std::{collections::HashMap, path::PathBuf, str::FromStr};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
-pub use vision_loaders::{Phi3VLoader, VisionLoaderType, VisionModelLoader};
+pub use vision_loaders::{Idefics2Loader, Phi3VLoader, VisionLoaderType, VisionModelLoader};
 
 use anyhow::Result;
 use candle_core::{Device, Tensor};

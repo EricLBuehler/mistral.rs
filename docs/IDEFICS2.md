@@ -1,6 +1,8 @@
-# Phi 3 Vision Model: `microsoft/Phi-3-vision-128k-instruct`
+# Idefics 2 Model: `HuggingFaceM4/idefics2-8b-chatty`
 
-The Phi 3 Vision Model has support in the Rust, Python, and HTTP APIs. The Phi 3 Vision Model supports ISQ for increased performance.
+The Idefics 2 Model has support in the Rust, Python, and HTTP APIs. The Idefics 2 Model also supports ISQ for increased performance. 
+
+> Note: Some of examples use our [Cephalo model series](https://huggingface.co/collections/lamm-mit/cephalo-664f3342267c4890d2f46b33) but could be used with any model ID.
 
 The Python and HTTP APIs support sending images as:
 - URL
@@ -9,13 +11,8 @@ The Python and HTTP APIs support sending images as:
 
 The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
-> Note: The Phi 3 Vision model works best with one image although it is supported to send multiple images.
-
-> Note: when sending multiple images, they will be resized to the minimum dimension by which all will fit without cropping.
-> Aspect ratio is not preserved in that case.
-
 ## HTTP server
-You can find this example [here](../examples/server/phi3v.py).
+You can find this example [here](../examples/server/idefics2.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -24,24 +21,23 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 ---
 
 **Image:**
-<img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "1000" height = "666">
-<h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
+<img src="https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg" width = "1000" height = "666">
 
 **Prompt:**
 ```
-<|image_1|>\nWhat is shown in this image?
+What is shown in this image?
 ```
 
 **Output:**
 ```
-The image shows a snow-covered mountain with a clear sky above and trees at the base. There appears to be a trail or path leading up the mountain, and some structures can be seen on the peak.
+The image depicts a group of orange ants climbing over a black pole. The ants are moving in the same direction, forming a line as they ascend the pole.
 ```
 
 ---
 
 1) Start the server
 ```
-cargo run --release --features ... -- --port 1234 vision-plain -m microsoft/Phi-3-vision-128k-instruct -a phi3v
+cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m HuggingFaceM4/idefics2-8b-chatty -a idefics2
 ```
 
 2) Send a request
@@ -49,11 +45,8 @@ cargo run --release --features ... -- --port 1234 vision-plain -m microsoft/Phi-
 ```py
 import openai
 
-openai.api_key = "EMPTY"
-openai.base_url = "http://localhost:1234/v1/"
-
 completion = openai.chat.completions.create(
-    model="phi3v",
+    model="idefics2",
     messages=[
         {
             "role": "user",
@@ -61,12 +54,12 @@ completion = openai.chat.completions.create(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                        "url": "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg"
                     },
                 },
                 {
                     "type": "text",
-                    "text": "<|image_1|>\nWhat is shown in this image?",
+                    "text": "What is shown in this image?",
                 },
             ],
         },
@@ -78,7 +71,6 @@ completion = openai.chat.completions.create(
 )
 resp = completion.choices[0].message.content
 print(resp)
-
 ```
 
 - You can find an example of encoding the [image via base64 here](../examples/server/phi3v_base64.py).
@@ -87,9 +79,9 @@ print(resp)
 ---
 
 ## Rust
-You can find this example [here](../mistralrs/examples/phi3v/main.rs).
+You can find this example [here](../mistralrs/examples/idefics2/main.rs).
 
-This is a minimal example of running the Phi 3 Vision model with a dummy image.
+This is a minimal example of running the Idefics 2 model with a dummy image.
 
 ```rust
 use either::Either;
@@ -113,9 +105,9 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         },
         None,
         None,
-        Some("microsoft/Phi-3-vision-128k-instruct".to_string()),
+        Some("lamm-mit/Cephalo-Idefics-2-vision-8b-beta".to_string()),
     )
-    .build(VisionLoaderType::Phi3V);
+    .build(VisionLoaderType::Idefics2);
     // Load, into a Pipeline
     let pipeline = loader.load_model_from_hf(
         None,
@@ -177,16 +169,16 @@ from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
 
 runner = Runner(
     which=Which.VisionPlain(
-        model_id="microsoft/Phi-3-vision-128k-instruct",
+        model_id="lamm-mit/Cephalo-Idefics-2-vision-8b-beta",
         tokenizer_json=None,
         repeat_last_n=64,
-        arch=VisionArchitecture.Phi3V,
+        arch=VisionArchitecture.Idefics2,
     ),
 )
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="phi3v",
+        model="idefics2",
         messages=[
             {
                 "role": "user",
@@ -194,15 +186,15 @@ res = runner.send_chat_completion_request(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": "https://upload.wikimedia.org/wikipedia/commons/e/e7/ Everest_North_Face_toward_Base_Camp_Tibet_Luca_Galuzzi_2006.jpg"
+                            "url": "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg"
                         },
                     },
                     {
                         "type": "text",
-                        "text": "<|image_1|>\nWhat is shown in this image?",
+                        "text": "What is shown in this image?",
                     },
                 ],
-            }
+            },
         ],
         max_tokens=256,
         presence_penalty=1.0,
