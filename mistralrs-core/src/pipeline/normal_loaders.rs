@@ -557,7 +557,7 @@ impl NormalModelLoader for Phi2Loader {
 // ======================== Phi3 loader
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct Phi3RopeScaling(#[serde(with = "either::serde_untagged")] pub Either<Vec<f32>, String>);
+pub struct Phi3RopeScaling(#[serde(with = "either::serde_untagged")] pub Either<Vec<f64>, String>);
 
 #[derive(Deserialize)]
 struct Phi3BasicConfig {
