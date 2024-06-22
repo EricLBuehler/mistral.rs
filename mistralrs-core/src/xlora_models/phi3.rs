@@ -511,7 +511,7 @@ impl Model {
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
                 seqlen_offsets,
-                &position_ids,
+                position_ids,
                 &mut cache[i],
                 scalings.clone(),
                 self.xlora_classifier
