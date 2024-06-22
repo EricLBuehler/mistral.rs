@@ -12,6 +12,7 @@ use serde::Deserialize;
 use super::{NormalLoadingMetadata, Processor, ProcessorCreator, VisionModel};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
+use crate::vision_models::llava_next::Config as LLaVAConfig;
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
@@ -42,6 +43,8 @@ pub enum VisionLoaderType {
     Phi3V,
     #[serde(rename = "idefics2")]
     Idefics2,
+    #[serde(rename = "llava_next")]
+    LLaVANext,
 }
 
 impl FromStr for VisionLoaderType {
@@ -50,6 +53,7 @@ impl FromStr for VisionLoaderType {
         match s {
             "phi3v" => Ok(Self::Phi3V),
             "idefics2" => Ok(Self::Idefics2),
+            "llava_next" => Ok(Self::LLaVANext),
             a => Err(format!("Unknown architecture `{a}`")),
         }
     }
@@ -95,7 +99,6 @@ impl VisionModelLoader for Phi3VLoader {
         Phi3Processor::new_processor(processor_config, preprocessor_config)
     }
 }
-
 // ======================== Idefics 2 loader
 
 /// [`VisionLoader`] for an Idefics 2 Vision model.
@@ -126,6 +129,28 @@ impl VisionModelLoader for Idefics2Loader {
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         let mut config: Idefics2Config = serde_json::from_str(config)?;
         config.text_config.use_flash_attn = use_flash_attn;
+// ======================== LLaVA loader
+
+/// [`VisionLoader`] for a LLaVA-Next Vision model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+pub struct LLaVANextLoader;
+impl VisionModelLoader for LLaVANextLoader {
+    fn load(
+        &self,
+        _config: &str,
+        _use_flash_attn: bool,
+        _vb: VarBuilder,
+        _normal_loading_metadata: NormalLoadingMetadata,
+    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+        //println!("config: {}", config);
+        unimplemented!()
+    }
+    fn is_gptx(&self) -> bool {
+        false
+    }
+    fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        let config: LLaVAConfig = serde_json::from_str(config)?;
         Ok(Box::new(config))
     }
     fn get_processor(
@@ -137,5 +162,9 @@ impl VisionModelLoader for Idefics2Loader {
             processor_config.unwrap(),
             preprocessor_config,
         ))
+        _processor_config: Option<ProcessorConfig>,
+        _preprocessor_config: PreProcessorConfig,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        unimplemented!()
     }
 }

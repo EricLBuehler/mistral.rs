@@ -1,5 +1,6 @@
 use super::cache_manager::DefaultCacheManager;
 use super::vision_loaders::{Idefics2Loader, Phi3VLoader, VisionLoaderType};
+use super::vision_loaders::{Idefics2Loader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, Cache, CacheManager,
     CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory,
@@ -95,6 +96,7 @@ impl VisionLoaderBuilder {
         let loader: Box<dyn VisionModelLoader> = match loader {
             VisionLoaderType::Phi3V => Box::new(Phi3VLoader),
             VisionLoaderType::Idefics2 => Box::new(Idefics2Loader),
+            VisionLoaderType::LLaVANext => Box::new(LLaVANextLoader),
         };
         Box::new(VisionLoader {
             inner: loader,
@@ -340,8 +342,7 @@ impl Pipeline for VisionPipeline {
         do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
     }
     fn category(&self) -> ModelCategory {
-        ModelCategory::Vision {
-            has_conv2d: self.model.has_conv2d(),
-        }
+        let has_conv2d = self.model.has_conv2d();
+        ModelCategory::Vision { has_conv2d }
     }
 }
