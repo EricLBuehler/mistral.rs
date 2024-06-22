@@ -81,7 +81,7 @@ impl DeviceMapMetadata {
         if self
             .device_layers
             .as_ref()
-            .is_some_and(|layers| layers.len() > 1)
+            .is_some_and(|layers| layers.len() == 1)
         {
             combined.extend(vec![device.clone(); n_device_layers]);
         } else {
