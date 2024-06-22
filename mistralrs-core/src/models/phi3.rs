@@ -361,11 +361,6 @@ impl Model {
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
         )?;
-        let past_key_values_length = CausalMasker.calculate_past_kv_len(&cache)?;
-        let position_ids = position_ids
-            .iter()
-            .map(|p| *p + past_key_values_length)
-            .collect::<Vec<_>>();
 
         for (i, layer) in self.layers.iter_mut().enumerate() {
             xs = self.mapper.map(xs, i)?;
