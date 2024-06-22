@@ -1,19 +1,38 @@
 use std::fmt::Debug;
 
+use crate::utils::debug::DeviceRepr;
 use candle_core::{Device, Result, Tensor};
 use candle_nn::VarBuilder;
 use serde::Deserialize;
 use tracing::info;
 
 #[derive(Debug, Default, Deserialize, Clone)]
+pub struct DeviceLayerMapMetadata {
+    pub ordinal: usize,
+    pub layers: usize,
+}
+
+#[derive(Debug, Default, Deserialize, Clone)]
 /// Metadata to initialize the device mapper.
 pub struct DeviceMapMetadata {
-    device_layers: Option<usize>,
+    device_layers: Option<Vec<DeviceLayerMapMetadata>>,
     host_layers: Option<usize>,
 }
 
 impl DeviceMapMetadata {
+    #[deprecated(note = "This will be replaced by a more general API to handle multi-GPU.")]
     pub fn from_num_device_layers(device_layers: usize) -> Self {
+        // TODO(EricLBuehler): Hardcoding is bad but we are creating the device on ord 0 anyway.
+        Self {
+            device_layers: Some(vec![DeviceLayerMapMetadata {
+                ordinal: 0,
+                layers: device_layers,
+            }]),
+            host_layers: None,
+        }
+    }
+    // TODO(EricLBuehler): For version 0.2.0, replace `from_num_device_layers` with this.
+    pub fn from_num_device_layers_multi_gpu(device_layers: Vec<DeviceLayerMapMetadata>) -> Self {
         Self {
             device_layers: Some(device_layers),
             host_layers: None,
@@ -36,8 +55,12 @@ impl DeviceMapMetadata {
     ) -> Result<Box<dyn DeviceMapper + Send + Sync>> {
         // How many device layers
         // Clamp to max of model layers
-        let n_device_layers = if let Some(n) = self.device_layers {
-            n.clamp(0, model_layers)
+        let n_device_layers = if let Some(layers) = &self.device_layers {
+            layers
+                .iter()
+                .map(|metadata| metadata.layers)
+                .sum::<usize>()
+                .clamp(0, model_layers)
         } else {
             return Ok(Box::new(DummyDeviceMapper {
                 nm_device: device.clone(),
@@ -49,13 +72,40 @@ impl DeviceMapMetadata {
             .host_layers
             .unwrap_or(model_layers.saturating_sub(n_device_layers));
         if n_device_layers + n_host_layers != model_layers {
-            candle_core::bail!("Expected the number of GPU ({n_device_layers}) and host layers ({n_host_layers}) to sum to the number of model hidden layers ({model_layers})");
+            candle_core::bail!("Expected the total number of GPU ({n_device_layers}) and host layers ({n_host_layers}) to sum to the number of model hidden layers ({model_layers})");
         }
         info!("Model has {model_layers} repeating layers.");
-        info!("Using {n_device_layers} repeating layers on GPU and {n_host_layers} repeating layers on host.");
-        let mut combined = vec![device.clone(); n_device_layers];
+
+        // Handle multi-GPU mapping here
+        let mut combined = Vec::with_capacity(model_layers);
+        if self
+            .device_layers
+            .as_ref()
+            .is_some_and(|layers| layers.len() > 1)
+        {
+            combined.extend(vec![device.clone(); n_device_layers]);
+        } else {
+            for DeviceLayerMapMetadata { ordinal, layers } in self.device_layers.as_ref().unwrap() {
+                let dev = match device {
+                    Device::Cpu => Device::Cpu,
+                    Device::Cuda(_) => Device::cuda_if_available(*ordinal)?,
+                    Device::Metal(_) => Device::new_metal(*ordinal)?,
+                };
+                combined.extend(vec![dev; *layers]);
+            }
+        }
+
         // Always put the CPU layers at the end so that we reduce dtoh and htod copies
         combined.extend(vec![Device::Cpu; n_host_layers]);
+
+        // Sanity
+        assert_eq!(combined.len(), model_layers);
+
+        info!("Loading model according to the following repeating layer mappings:");
+        for (i, dev) in combined.iter().enumerate() {
+            info!("Layer {i}: {}", dev.device_pretty_repr());
+        }
+
         Ok(Box::new(LayerDeviceMapper {
             mappings: combined,
             nm_device: device.clone(),

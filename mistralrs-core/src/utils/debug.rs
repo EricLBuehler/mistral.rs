@@ -1,3 +1,4 @@
+use candle_core::{Device, DeviceLocation};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
@@ -23,4 +24,18 @@ pub fn initialize_logging() {
             .from_env_lossy();
         tracing_subscriber::fmt().with_env_filter(filter).init();
     });
+}
+
+pub(crate) trait DeviceRepr {
+    fn device_pretty_repr(&self) -> String;
+}
+
+impl DeviceRepr for Device {
+    fn device_pretty_repr(&self) -> String {
+        match self.location() {
+            DeviceLocation::Cpu => format!("cpu"),
+            DeviceLocation::Cuda { gpu_id } => format!("cuda[{gpu_id}]"),
+            DeviceLocation::Metal { gpu_id } => format!("metal[{gpu_id}]"),
+        }
+    }
 }
