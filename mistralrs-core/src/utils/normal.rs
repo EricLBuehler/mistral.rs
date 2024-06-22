@@ -116,7 +116,11 @@ fn determine_auto_dtype(device: &Device) -> candle_core::Result<DType> {
         match y {
             Ok(_) => return Ok(dtype),
             Err(e) => match e {
+                // For CUDA
                 candle_core::Error::UnsupportedDTypeForOp(_, _) => continue,
+                // Accelerate backend doesn't support f16/bf16
+                // Metal backend doesn't support f16
+                candle_core::Error::Msg(_) => continue,
                 other => return Err(other),
             },
         }
