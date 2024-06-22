@@ -158,7 +158,7 @@ fn determine_auto_dtype_all(devices: &[Device]) -> candle_core::Result<DType> {
         } else {
             for result in results {
                 match result {
-                    Ok(_) => unreachable!(),
+                    Ok(_) => (),
                     Err(e) => match e {
                         // For CUDA
                         candle_core::Error::UnsupportedDTypeForOp(_, _) => continue,
