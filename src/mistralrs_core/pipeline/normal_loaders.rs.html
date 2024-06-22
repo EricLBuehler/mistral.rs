@@ -1300,7 +1300,7 @@
 <span class="comment">// ======================== Phi3 loader
 
 </span><span class="attr">#[derive(Deserialize, Debug, Clone)]
-</span><span class="kw">pub struct </span>Phi3RopeScaling(<span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span><span class="kw">pub </span>Either&lt;Vec&lt;f32&gt;, String&gt;);
+</span><span class="kw">pub struct </span>Phi3RopeScaling(<span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span><span class="kw">pub </span>Either&lt;Vec&lt;f64&gt;, String&gt;);
 
 <span class="attr">#[derive(Deserialize)]
 </span><span class="kw">struct </span>Phi3BasicConfig {
